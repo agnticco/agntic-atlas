@@ -125,8 +125,9 @@ export class OAuthClient {
    * Begin a flow. Persists state+PKCE bound to userId; returns the URL the
    * browser must visit. Caller MUST pass userId = req.user.id.
    */
-  start({ userId, connectorId, providerConfig = null }) {
+  start({ userId, tenantId, connectorId, providerConfig = null }) {
     if (!userId || !connectorId) throw new Error('start requires userId and connectorId');
+    if (!tenantId) throw new Error('start requires tenantId');
     const cfg = this._provider(connectorId, providerConfig);
     // Remember the resolved config so refresh/revoke later in this process
     // can honor it for any connector, not just the hardcoded google default.
@@ -138,7 +139,7 @@ export class OAuthClient {
     const state         = b64url(randomBytes(32));
 
     this._pending.set(state, {
-      userId, connectorId, codeVerifier,
+      userId, tenantId, connectorId, codeVerifier,
       providerConfig: cfg,
       expiresAt: Date.now() + PENDING_TTL_MS,
     });
@@ -202,6 +203,7 @@ export class OAuthClient {
     const expiry  = tok.expires_in ? Date.now() + (Number(tok.expires_in) * 1000) : 0;
 
     this._store.upsert({
+      tenantId:        pending.tenantId,
       userId:          pending.userId,
       connectorId:     pending.connectorId,
       accessTokenEnc:  this._cipher.encrypt(tok.access_token),
@@ -219,9 +221,10 @@ export class OAuthClient {
    * Return a usable access token, transparently refreshing when expired.
    * Throws if the user has not connected this connector.
    */
-  async getAccessToken({ userId, connectorId }) {
+  async getAccessToken({ userId, tenantId, connectorId }) {
     if (!userId || !connectorId) throw new Error('getAccessToken requires userId and connectorId');
-    const row = this._store.get(userId, connectorId);
+    if (!tenantId) throw new Error('getAccessToken requires tenantId');
+    const row = this._store.get({ tenantId, userId, connectorId });
     if (!row) throw new Error(`OAuth: ${connectorId} not connected for this user`);
 
     const fresh = !row.expiry || row.expiry - REFRESH_SKEW_MS > Date.now();
@@ -253,7 +256,7 @@ export class OAuthClient {
 
     const expiry = tok.expires_in ? Date.now() + (Number(tok.expires_in) * 1000) : 0;
     this._store.updateTokens({
-      userId, connectorId,
+      tenantId, userId, connectorId,
       accessTokenEnc:  this._cipher.encrypt(tok.access_token),
       // Google usually omits refresh_token on refresh — store keeps the old.
       refreshTokenEnc: tok.refresh_token ? this._cipher.encrypt(tok.refresh_token) : null,
@@ -263,9 +266,10 @@ export class OAuthClient {
   }
 
   /** Best-effort provider revoke, then delete the row regardless. */
-  async revoke({ userId, connectorId }) {
+  async revoke({ userId, tenantId, connectorId }) {
     if (!userId || !connectorId) throw new Error('revoke requires userId and connectorId');
-    const row = this._store.get(userId, connectorId);
+    if (!tenantId) throw new Error('revoke requires tenantId');
+    const row = this._store.get({ tenantId, userId, connectorId });
     if (!row) return; // already disconnected — idempotent
     try {
       const cfg = this._provider(connectorId, null);
@@ -282,14 +286,14 @@ export class OAuthClient {
     } catch (e) {
       log.warn?.(`[oauth] revoke: provider revocation best-effort failed: ${e.message}`);
     }
-    this._store.delete(userId, connectorId);
+    this._store.delete({ tenantId, userId, connectorId });
     log.info?.(`[oauth] disconnected ${connectorId} for user ${userId.slice(0, 8)}…`);
   }
 
   /** Connection status for UI. Never returns token material. */
-  status({ userId, connectorId }) {
-    if (!userId || !connectorId) return { connected: false };
-    const row = this._store.get(userId, connectorId);
+  status({ userId, tenantId, connectorId }) {
+    if (!userId || !connectorId || !tenantId) return { connected: false };
+    const row = this._store.get({ tenantId, userId, connectorId });
     if (!row) return { connected: false };
     return {
       connected: true,

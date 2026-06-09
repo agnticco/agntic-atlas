@@ -59,7 +59,7 @@ const check = (name, cond) => { console.log(`${cond ? 'ok  ' : 'FAIL'} ${name}`)
   await new Promise((r) => stub.listen(0, r));
   const tmp = mkdtempSync(join(tmpdir(), 'atlas-slackcap-'));
   for (const [k, v] of Object.entries({
-    WORKFLOWS_DB: 'w.sqlite', SOURCES_DB: 's.sqlite', VECTOR_DB: 'v.sqlite',
+    WORKFLOWS_DB: 'w.sqlite', SOURCES_DB: 's.sqlite', VECTOR_DIR: 'vectors',
     AUTH_DB: 'a.sqlite', AUTH_SECRET: '.jwt', OAUTH_DB: 'o.sqlite', OAUTH_KEY: '.okey',
   })) process.env[k] = join(tmp, v);
   process.env.SLACK_API_URL = `http://127.0.0.1:${stub.address().port}`;

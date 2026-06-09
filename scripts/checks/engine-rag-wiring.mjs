@@ -15,7 +15,7 @@ import { join, resolve } from 'node:path';
 const tmp = mkdtempSync(join(tmpdir(), 'atlas-wiring-'));
 process.env.WORKFLOWS_DB = join(tmp, 'workflows.sqlite');
 process.env.SOURCES_DB   = join(tmp, 'sources.sqlite');
-process.env.VECTOR_DB    = join(tmp, 'vectors.sqlite');
+process.env.VECTOR_DIR   = join(tmp, 'vectors');
 // Hermetic auth too — don't write to ./memory during a check.
 process.env.AUTH_DB     = join(tmp, 'auth.sqlite');
 process.env.AUTH_SECRET = join(tmp, '.jwt-secret');
@@ -53,10 +53,11 @@ try {
   console.log(`engine llm-node output: ${llmText.trim()}`);
   if (!/paris/i.test(llmText)) throw new Error(`llm-node output unexpected: ${llmText}`);
 
-  // 2. RAG via the spine helpers.
-  await spine.rag.ingest('Atlas refund policy: customers may request a full refund within 30 days of purchase.', { src: 'kb' });
-  await spine.rag.ingest('The office is open Monday through Friday, 9am to 5pm Pacific time.', { src: 'kb' });
-  const hits = await spine.rag.query('How long do I have to get my money back?', 2);
+  // 2. RAG via the spine helpers (per-tenant store).
+  const rag = await spine.rag.forTenant('default');
+  await rag.ingest('Atlas refund policy: customers may request a full refund within 30 days of purchase.', { src: 'kb' });
+  await rag.ingest('The office is open Monday through Friday, 9am to 5pm Pacific time.', { src: 'kb' });
+  const hits = await rag.query('How long do I have to get my money back?', 2);
   console.log(`rag top hit: score=${hits[0]?.score?.toFixed(3)} :: ${hits[0]?.pageContent?.slice(0, 50)}`);
   ragOk = (hits[0]?.pageContent ?? '').includes('refund policy');
 } finally {

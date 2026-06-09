@@ -13,6 +13,8 @@
  * @module src/auth/bootstrap.js
  */
 
+import { PLATFORM_TENANT_ID } from './user-store.js';
+
 /**
  * Ensure a bootstrap token exists if (and only if) no users are registered.
  * Idempotent across reboots: an unused, unexpired token is reused. A fresh
@@ -23,8 +25,11 @@
  * @param {import('./session-store.js').SessionStore} deps.sessionStore
  * @returns {{ required: boolean, token: string|null }}
  */
-export function ensureBootstrap({ userStore, sessionStore }) {
-  if (userStore.count() > 0) {
+export function ensureBootstrap({ userStore, sessionStore, tenantStore }) {
+  // Multi-tenant: bootstrap creates the first PLATFORM operator (an admin in the
+  // reserved platform tenant). "Already bootstrapped" = a platform admin exists.
+  if (tenantStore) tenantStore.ensurePlatformTenant();
+  if (userStore.countForTenant(PLATFORM_TENANT_ID) > 0) {
     sessionStore.pruneBootstrapTokens();
     return { required: false, token: null };
   }
@@ -59,21 +64,23 @@ export function ensureBootstrap({ userStore, sessionStore }) {
  * @param {string} [input.display_name]
  */
 export async function completeBootstrap(
-  { userStore, sessionStore, authProvider },
+  { userStore, sessionStore, authProvider, tenantStore },
   { token, email, password, display_name = '' },
 ) {
-  if (userStore.count() > 0) {
-    throw new Error('Bootstrap already completed — an admin account exists.');
+  if (userStore.countForTenant(PLATFORM_TENANT_ID) > 0) {
+    throw new Error('Bootstrap already completed — a platform admin exists.');
   }
   const consumed = sessionStore.consumeBootstrapToken(token);
   if (!consumed) {
     throw new Error('Setup token is invalid, already used, or expired.');
   }
+  if (tenantStore) tenantStore.ensurePlatformTenant();
   // Any validation failure past this point leaves the token consumed — which
   // is fine: the operator can restart the server to get a fresh one. This
   // prevents a race where two concurrent submissions both pass validation.
+  // The first admin is a PLATFORM operator (manages tenants).
   const user = await authProvider.register({
-    email, password, role: 'admin', display_name,
+    tenantId: PLATFORM_TENANT_ID, email, password, role: 'admin', display_name,
   });
   return user;
 }
@@ -87,10 +94,10 @@ function printSetupBanner(token) {
   const lines = [
     '',
     line,
-    ' AGNTIC — FIRST RUN',
+    ' ATLAS — FIRST RUN (platform admin)',
     '',
-    ' No admin account exists yet. Open the UI and paste this one-time',
-    ' setup token to create the first admin:',
+    ' No platform admin exists yet. Open the UI and paste this one-time',
+    ' setup token to create the first platform operator:',
     '',
     `   ${token}`,
     '',

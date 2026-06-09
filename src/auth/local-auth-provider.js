@@ -29,8 +29,8 @@ export class LocalAuthProvider extends AuthProvider {
     return await this.userStore.verifyPassword({ email, password });
   }
 
-  async register({ email, password, role = 'user', display_name = '' }) {
-    return await this.userStore.create({ email, password, role, display_name });
+  async register({ tenantId, email, password, role = 'user', display_name = '' }) {
+    return await this.userStore.create({ tenantId, email, password, role, display_name });
   }
 
   async changePassword({ userId, oldPassword, newPassword }) {

@@ -23,6 +23,7 @@ CREATE TABLE IF NOT EXISTS workflows (
   slug           TEXT NOT NULL,
   session_id     TEXT,
   user_id        TEXT,
+  tenant_id      TEXT NOT NULL DEFAULT 'default',
   user_intent    TEXT NOT NULL,
   source_id      TEXT NOT NULL DEFAULT '',
   schedule       TEXT NOT NULL DEFAULT '',
@@ -82,6 +83,7 @@ const ADDITIVE_COLUMNS = [
   { col: 'error_handling', type: "TEXT NOT NULL DEFAULT '{}'" },
   { col: 'version',        type: 'INTEGER NOT NULL DEFAULT 1' },
   { col: 'user_id',        type: 'TEXT' },
+  { col: 'tenant_id',      type: "TEXT NOT NULL DEFAULT 'default'" },
 ];
 
 export class WorkflowStore {
@@ -126,7 +128,7 @@ export class WorkflowStore {
     // exist after the additive-and-rebuild migrations above. If one is
     // missing, fail loudly rather than crash mid-query later.
     const finalCols = new Set(this.db.prepare("PRAGMA table_info(workflows)").all().map(r => r.name));
-    for (const required of ['user_id', 'kind', 'triggers', 'nodes', 'edges']) {
+    for (const required of ['user_id', 'tenant_id', 'kind', 'triggers', 'nodes', 'edges']) {
       if (!finalCols.has(required)) {
         throw new Error(`[workflow-store] migration did not produce required column "${required}". Columns present: ${[...finalCols].join(', ')}`);
       }
@@ -135,6 +137,7 @@ export class WorkflowStore {
     // Always ensure the composite index exists after any migration above
     this.db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_wf_user_slug ON workflows(user_id, slug);`);
     this.db.exec(`CREATE INDEX IF NOT EXISTS idx_wf_user ON workflows(user_id);`);
+    this.db.exec(`CREATE INDEX IF NOT EXISTS idx_wf_tenant ON workflows(tenant_id);`);
 
     // Runs table additive columns
     const runsCols = new Set(this.db.prepare("PRAGMA table_info(workflow_runs)").all().map(r => r.name));
@@ -178,25 +181,39 @@ export class WorkflowStore {
       if (!exists) continue;
 
       const cols = new Set(this.db.prepare(`PRAGMA table_info(${table})`).all().map(r => r.name));
-      if (cols.has('user_id')) continue;
-      log.info(`[workflow-store] adding user_id to ${table} + backfilling from workflows`);
-      this.db.exec(`ALTER TABLE ${table} ADD COLUMN user_id TEXT`);
-      // Backfill: each row's user_id = (SELECT user_id FROM workflows WHERE id = <table>.workflow_id)
-      this.db.exec(`
-        UPDATE ${table}
-        SET user_id = (SELECT w.user_id FROM workflows w WHERE w.id = ${table}.workflow_id)
-        WHERE workflow_id IS NOT NULL
-      `);
+      // user_id (per-user) and tenant_id (per-tenant) are both backfilled from
+      // the parent workflow so sister rows inherit the owner's scope.
+      if (!cols.has('user_id')) {
+        log.info(`[workflow-store] adding user_id to ${table} + backfilling from workflows`);
+        this.db.exec(`ALTER TABLE ${table} ADD COLUMN user_id TEXT`);
+        this.db.exec(`
+          UPDATE ${table}
+          SET user_id = (SELECT w.user_id FROM workflows w WHERE w.id = ${table}.workflow_id)
+          WHERE workflow_id IS NOT NULL
+        `);
+      }
+      if (!cols.has('tenant_id')) {
+        this.db.exec(`ALTER TABLE ${table} ADD COLUMN tenant_id TEXT NOT NULL DEFAULT 'default'`);
+        this.db.exec(`
+          UPDATE ${table}
+          SET tenant_id = COALESCE((SELECT w.tenant_id FROM workflows w WHERE w.id = ${table}.workflow_id), 'default')
+          WHERE workflow_id IS NOT NULL
+        `);
+      }
     }
-    // Indexes — safe to create now that user_id columns exist
+    // Indexes — safe to create now that the columns exist
     this.db.exec(`CREATE INDEX IF NOT EXISTS idx_wr_user_started ON workflow_runs(user_id, started_at)`);
     this.db.exec(`CREATE INDEX IF NOT EXISTS idx_wv_user         ON workflow_versions(user_id)`);
+    this.db.exec(`CREATE INDEX IF NOT EXISTS idx_wr_tenant       ON workflow_runs(tenant_id)`);
+    this.db.exec(`CREATE INDEX IF NOT EXISTS idx_wv_tenant       ON workflow_versions(tenant_id)`);
 
-    // Sanity: every sister table this store owns must have user_id after this
+    // Sanity: every sister table this store owns must have user_id + tenant_id
     for (const table of tables) {
       const cols = new Set(this.db.prepare(`PRAGMA table_info(${table})`).all().map(r => r.name));
-      if (!cols.has('user_id')) {
-        throw new Error(`[workflow-store] migration did not produce user_id on ${table}. Columns: ${[...cols].join(', ')}`);
+      for (const required of ['user_id', 'tenant_id']) {
+        if (!cols.has(required)) {
+          throw new Error(`[workflow-store] migration did not produce ${required} on ${table}. Columns: ${[...cols].join(', ')}`);
+        }
       }
     }
   }
@@ -226,6 +243,7 @@ export class WorkflowStore {
           slug           TEXT NOT NULL,
           session_id     TEXT,
           user_id        TEXT,
+          tenant_id      TEXT NOT NULL DEFAULT 'default',
           user_intent    TEXT NOT NULL,
           source_id      TEXT NOT NULL DEFAULT '',
           schedule       TEXT NOT NULL DEFAULT '',
@@ -285,6 +303,7 @@ export class WorkflowStore {
           slug           TEXT NOT NULL,
           session_id     TEXT,
           user_id        TEXT,
+          tenant_id      TEXT NOT NULL DEFAULT 'default',
           user_intent    TEXT NOT NULL,
           source_id      TEXT NOT NULL DEFAULT '',
           schedule       TEXT NOT NULL DEFAULT '',
@@ -335,6 +354,7 @@ export class WorkflowStore {
       slug:            fields.slug ?? WorkflowStore.slugify(fields.name || fields.userIntent || 'workflow'),
       session_id:      fields.sessionId ?? null,
       user_id:         fields.userId ?? null,
+      tenant_id:       fields.tenantId ?? 'default',
       user_intent:     fields.userIntent ?? fields.name ?? '',
       source_id:       fields.sourceId ?? '',
       schedule:        fields.schedule ?? '',
@@ -356,11 +376,11 @@ export class WorkflowStore {
 
     this.db.prepare(`
       INSERT INTO workflows (
-        id, slug, session_id, user_id, user_intent, source_id, schedule, output_format, delivery,
+        id, slug, session_id, user_id, tenant_id, user_intent, source_id, schedule, output_format, delivery,
         config, status, name, description, kind, triggers, nodes, edges, error_handling,
         version, created_at, updated_at
       ) VALUES (
-        @id, @slug, @session_id, @user_id, @user_intent, @source_id, @schedule, @output_format, @delivery,
+        @id, @slug, @session_id, @user_id, @tenant_id, @user_intent, @source_id, @schedule, @output_format, @delivery,
         @config, @status, @name, @description, @kind, @triggers, @nodes, @edges, @error_handling,
         @version, @created_at, @updated_at
       )
@@ -378,24 +398,20 @@ export class WorkflowStore {
    * are NOT visible. Pass `userId: null` ONLY for system-wide internal
    * operations (e.g. scheduler ticks) where ownership isn't checked.
    */
-  get(id, { userId = undefined } = {}) {
-    let row;
-    if (userId === undefined) {
-      row = this.db.prepare('SELECT * FROM workflows WHERE id = ?').get(id);
-    } else {
-      row = this.db.prepare('SELECT * FROM workflows WHERE id = ? AND user_id IS ? ').get(id, userId);
-    }
+  get(id, { userId = undefined, tenantId = undefined } = {}) {
+    const where = ['id = ?']; const args = [id];
+    if (userId !== undefined)   { where.push('user_id IS ?');   args.push(userId); }
+    if (tenantId !== undefined) { where.push('tenant_id IS ?'); args.push(tenantId); }
+    const row = this.db.prepare(`SELECT * FROM workflows WHERE ${where.join(' AND ')}`).get(...args);
     return row ? this._parse(row) : null;
   }
 
-  /** Get a workflow by slug, scoped to a user. */
-  getBySlug(slug, { userId = undefined } = {}) {
-    let row;
-    if (userId === undefined) {
-      row = this.db.prepare('SELECT * FROM workflows WHERE slug = ?').get(slug);
-    } else {
-      row = this.db.prepare('SELECT * FROM workflows WHERE slug = ? AND user_id IS ?').get(slug, userId);
-    }
+  /** Get a workflow by slug, scoped to a user and/or tenant. */
+  getBySlug(slug, { userId = undefined, tenantId = undefined } = {}) {
+    const where = ['slug = ?']; const args = [slug];
+    if (userId !== undefined)   { where.push('user_id IS ?');   args.push(userId); }
+    if (tenantId !== undefined) { where.push('tenant_id IS ?'); args.push(tenantId); }
+    const row = this.db.prepare(`SELECT * FROM workflows WHERE ${where.join(' AND ')}`).get(...args);
     return row ? this._parse(row) : null;
   }
 
@@ -404,12 +420,13 @@ export class WorkflowStore {
    * are returned — legacy NULL-owner rows are hidden. Omit `userId` (or
    * pass `undefined`) ONLY for internal callers like the scheduler.
    */
-  list({ status = null, kind = null, userId = undefined } = {}) {
+  list({ status = null, kind = null, userId = undefined, tenantId = undefined } = {}) {
     const where = [];
     const args = [];
     if (status) { where.push('status = ?'); args.push(status); }
     if (kind)   { where.push('kind = ?');   args.push(kind); }
-    if (userId !== undefined) { where.push('user_id IS ?'); args.push(userId); }
+    if (userId !== undefined)   { where.push('user_id IS ?');   args.push(userId); }
+    if (tenantId !== undefined) { where.push('tenant_id IS ?'); args.push(tenantId); }
     const sql = `SELECT * FROM workflows ${where.length ? 'WHERE ' + where.join(' AND ') : ''} ORDER BY created_at DESC`;
     return this.db.prepare(sql).all(...args).map(r => this._parse(r));
   }
@@ -505,12 +522,13 @@ export class WorkflowStore {
   startRun(workflowId, { isTest = false } = {}) {
     const id  = randomUUID();
     const now = new Date().toISOString();
-    const parent = this.db.prepare('SELECT user_id FROM workflows WHERE id = ?').get(workflowId);
+    const parent = this.db.prepare('SELECT user_id, tenant_id FROM workflows WHERE id = ?').get(workflowId);
     const userId = parent?.user_id ?? null;
+    const tenantId = parent?.tenant_id ?? 'default';
 
     this.db.prepare(`
-      INSERT INTO workflow_runs (id, workflow_id, user_id, started_at, status, is_test) VALUES (?, ?, ?, ?, 'running', ?)
-    `).run(id, workflowId, userId, now, isTest ? 1 : 0);
+      INSERT INTO workflow_runs (id, workflow_id, user_id, tenant_id, started_at, status, is_test) VALUES (?, ?, ?, ?, ?, 'running', ?)
+    `).run(id, workflowId, userId, tenantId, now, isTest ? 1 : 0);
 
     // Update last_run on the workflow only for non-test runs
     if (!isTest) {
@@ -759,9 +777,9 @@ export class WorkflowStore {
     const wf = this.get(workflowId);
     if (!wf) return;
     this.db.prepare(`
-      INSERT OR REPLACE INTO workflow_versions (id, workflow_id, user_id, version, snapshot, message, author, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(randomUUID(), workflowId, wf.user_id ?? null, version, JSON.stringify(wf), message ?? '', author ?? 'user', new Date().toISOString());
+      INSERT OR REPLACE INTO workflow_versions (id, workflow_id, user_id, tenant_id, version, snapshot, message, author, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(randomUUID(), workflowId, wf.user_id ?? null, wf.tenant_id ?? 'default', version, JSON.stringify(wf), message ?? '', author ?? 'user', new Date().toISOString());
   }
 
   // ── Helpers ──────────────────────────────────────────────────────────────

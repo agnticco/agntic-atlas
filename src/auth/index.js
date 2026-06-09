@@ -17,8 +17,9 @@ import Database from 'better-sqlite3';
 import { mkdirSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 
-import { UserStore } from './user-store.js';
+import { UserStore, PLATFORM_TENANT_ID } from './user-store.js';
 import { SessionStore } from './session-store.js';
+import { TenantStore } from './tenant-store.js';
 import { TokenService, COOKIE_TTL_MS, BEARER_TTL_MS } from './token-service.js';
 import { AuthProvider } from './auth-provider.js';
 import { LocalAuthProvider } from './local-auth-provider.js';
@@ -76,13 +77,29 @@ export async function createAuthSubsystem({
   await userStore.init();
   const sessionStore = new SessionStore({ db });
   await sessionStore.init();
+  const tenantStore  = new TenantStore({ db });
+  await tenantStore.init();
+  tenantStore.ensurePlatformTenant();
+  tenantStore.ensureDefaultTenant(); // home for migrated single-user pilot data
 
   const tokenService = TokenService.fromEnvOrFile({ secretPath });
   const authProvider = new LocalAuthProvider({ userStore });
 
   const middleware = buildAuthMiddleware({ tokenService, sessionStore, userStore });
 
-  const bootstrap = ensureBootstrap({ userStore, sessionStore });
+  const bootstrap = ensureBootstrap({ userStore, sessionStore, tenantStore });
+
+  /**
+   * Issue a session + signed JWT (carrying the tenant claim `tid`) for a user.
+   * The single place login/setup routes mint a token, so the tenant is always
+   * stamped into both the session row and the token.
+   */
+  function issueSession({ user, transport = 'bearer', userAgent = null, ip = null }) {
+    const ttlMs = transport === 'cookie' ? COOKIE_TTL_MS : BEARER_TTL_MS;
+    const session = sessionStore.create({ userId: user.id, tenantId: user.tenant_id, ttlMs, transport, userAgent, ip });
+    const token = tokenService.sign({ userId: user.id, tenantId: user.tenant_id, sessionId: session.id, role: user.role, ttlMs });
+    return { session, token, ttlMs };
+  }
 
   // OAuth subsystem (Slice 1). Dedicated SQLite file + dedicated encryption
   // key (lifecycle mirrors .jwt-secret). The token store only ever holds
@@ -113,10 +130,15 @@ export async function createAuthSubsystem({
     db,
     userStore,
     sessionStore,
+    tenantStore,
     tokenService,
     authProvider,
     middleware,
     bootstrap,
+    issueSession,
+    /** Consume a setup token + create the first platform admin. */
+    completeBootstrap: (input) => completeBootstrap({ userStore, sessionStore, authProvider, tenantStore }, input),
+    platformTenantId: PLATFORM_TENANT_ID,
     oauth,
     oauthTokenStore,
     oauthKeySource,
