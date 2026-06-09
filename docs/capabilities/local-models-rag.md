@@ -75,8 +75,43 @@ Runs `scripts/checks/rag-roundtrip.mjs` (offline embeddings → persistent sqlit
 reload → retrieval ranks the relevant doc first) and `scripts/checks/llm-gen.mjs`
 (GGUF chat model loads + generates). Fail-closed; requires the weights present.
 
-## Not wired yet (intentionally)
+## Wiring (server spine)
 
-Per the chosen scope ("port + load-verify"), this pass migrates + proves the
-subsystems. It does **not** add HTTP ingest/query routes or wire `ModelPool` as the
-engine's injectable LLM — those land when a phase needs them.
+`src/api/server.js` now wires both subsystems into the spine:
+
+- **ModelPool as the engine LLM.** `bootSpine()` builds a local `LlamaCppLLM`
+  (from `LOCAL_MODEL_PATH`), tier-wraps it in a `ModelPool`, and injects it as the
+  `llm` of `FlowTester` + `WorkflowService`. So `llm`/`summarize`/`rewrite`/`extract`
+  nodes run on the local open-source model. If no local weights are present the
+  engine still boots (`llm:"unconfigured"` in `/health`) and `llm` nodes fail at run
+  time with a clear message — not at boot. Cloud tiers can be layered in via env.
+- **RAG HTTP routes** (single-user pilot: `optionalAuth`; tighten to `requireAuth`
+  once login routes are mounted):
+  - `POST /rag/ingest` — body `{ text, metadata? }` or `{ documents: [{text, metadata?}] }`
+    → split → embed (local) → persist to the sqlite vector store (`VECTOR_DB`).
+    Returns `{ ingested, chunks }`.
+  - `POST /rag/query` — body `{ query, k? }` → embed query → top-k retrieval.
+    Returns `{ query, hits: [{ score, content, metadata }] }`.
+- `GET /health` now also reports `llm` and `rag` status.
+
+Verify: `bash scripts/gates/cap-engine-rag-wiring.sh` (runs
+`scripts/checks/engine-rag-wiring.mjs` via the real `bootSpine()` path — an `llm`
+workflow node generates, RAG ingest→query retrieves — then boots the server and
+curls `/rag/ingest` → `/rag/query`).
+
+### Known issue — Metal teardown assert (non-blocking)
+
+Freeing both a Metal embedding context and a Metal chat model at process exit can
+trip an upstream llama.cpp assert (`GGML_ASSERT [rsets->data count]==0`, ref
+node-llama-cpp PR #17869). Mitigated by **ordered disposal before exit**
+(`spine.disposeModels()` — dispose embedding context + chat model, awaited, before
+the stores close), applied in the server's SIGINT/SIGTERM shutdown and in the wiring
+check. The check additionally keys on the `WIRING-PASS` marker (its functional
+assertions are real) so a teardown-only abort on an unmitigated build can't mask a
+genuine pass/fail.
+
+## Still deferred (intentionally)
+
+Full workflow REST/CRUD surface, the scheduler's background tick (constructed but
+not started — scheduled triggers are P2/P7), and cloud-tier model config land when a
+phase needs them.
