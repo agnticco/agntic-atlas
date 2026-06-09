@@ -16,6 +16,7 @@ const SCHEMA = `
 CREATE TABLE IF NOT EXISTS sessions (
   id              TEXT PRIMARY KEY,
   user_id         TEXT NOT NULL,
+  tenant_id       TEXT NOT NULL DEFAULT 'default',
   issued_at       TEXT NOT NULL,
   expires_at      TEXT NOT NULL,
   revoked_at      TEXT,
@@ -26,6 +27,7 @@ CREATE TABLE IF NOT EXISTS sessions (
 );
 CREATE INDEX IF NOT EXISTS idx_sessions_user    ON sessions(user_id);
 CREATE INDEX IF NOT EXISTS idx_sessions_expires ON sessions(expires_at);
+-- idx_sessions_tenant is created in init() after the tenant_id column is ensured.
 
 CREATE TABLE IF NOT EXISTS bootstrap_tokens (
   token_hash      TEXT PRIMARY KEY,
@@ -57,6 +59,11 @@ export class SessionStore {
       this.db.pragma('foreign_keys = ON');
     }
     this.db.exec(SCHEMA);
+    const cols = this.db.prepare(`PRAGMA table_info(sessions)`).all().map((c) => c.name);
+    if (!cols.includes('tenant_id')) {
+      this.db.exec(`ALTER TABLE sessions ADD COLUMN tenant_id TEXT NOT NULL DEFAULT 'default'`);
+    }
+    this.db.exec(`CREATE INDEX IF NOT EXISTS idx_sessions_tenant ON sessions(tenant_id)`);
   }
 
   close() {
@@ -77,8 +84,9 @@ export class SessionStore {
    * @param {string} [opts.ip]
    * @returns {{ id, user_id, issued_at, expires_at, transport }}
    */
-  create({ userId, ttlMs, transport, userAgent = null, ip = null }) {
+  create({ userId, tenantId, ttlMs, transport, userAgent = null, ip = null }) {
     if (!userId) throw new Error('userId is required');
+    if (!tenantId) throw new Error('tenantId is required');
     if (!ttlMs || ttlMs <= 0) throw new Error('ttlMs must be positive');
     if (!['cookie', 'bearer'].includes(transport)) throw new Error('transport must be cookie or bearer');
 
@@ -87,9 +95,9 @@ export class SessionStore {
     const expiresAt  = new Date(issuedAt.getTime() + ttlMs);
 
     this.db.prepare(`
-      INSERT INTO sessions (id, user_id, issued_at, expires_at, transport, user_agent, ip)
-      VALUES (?, ?, ?, ?, ?, ?, ?)
-    `).run(id, userId, issuedAt.toISOString(), expiresAt.toISOString(), transport, userAgent, ip);
+      INSERT INTO sessions (id, user_id, tenant_id, issued_at, expires_at, transport, user_agent, ip)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(id, userId, tenantId, issuedAt.toISOString(), expiresAt.toISOString(), transport, userAgent, ip);
 
     return this.findById(id);
   }
