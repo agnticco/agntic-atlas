@@ -17,7 +17,7 @@
  */
 
 import { existsSync, mkdirSync } from 'node:fs';
-import { dirname, resolve } from 'node:path';
+import { dirname, resolve, join } from 'node:path';
 
 import express from 'express';
 import cors from 'cors';
@@ -43,7 +43,8 @@ import { registerSlackChannel, createSlackCapabilityProvider } from '../connecto
 const PORT = Number(process.env.PORT ?? 3000);
 const WORKFLOWS_DB = process.env.WORKFLOWS_DB ?? './memory/workflows/workflows.sqlite';
 const SOURCES_DB   = process.env.SOURCES_DB   ?? './memory/workflows/sources.sqlite';
-const VECTOR_DB    = process.env.VECTOR_DB    ?? './memory/vectors/company.sqlite';
+// Base directory for per-tenant RAG stores: VECTOR_DIR/<tenantId>/company.sqlite.
+const VECTOR_DIR   = process.env.VECTOR_DIR   ?? './memory/vectors';
 const LOCAL_MODEL_PATH = process.env.LOCAL_MODEL_PATH
   ?? resolve('models/qwen2.5-0.5b-instruct-q4_k_m.gguf');
 const EMBEDDING_PROVIDER   = process.env.EMBEDDING_PROVIDER ?? 'local';
@@ -110,24 +111,55 @@ async function buildEngine(workflowStore, llm) {
  * sqlite vector backend. Exposes ingest()/query() used by the HTTP routes and
  * the wiring check.
  */
-async function buildRag() {
-  ensureDir(VECTOR_DB);
+function buildRag() {
+  // Embedder + splitter are stateless compute, shared across tenants. The vector
+  // store is PHYSICALLY per tenant: each tenant's documents live in their own
+  // sqlite file under VECTOR_DIR/<tenantId>/, so cross-tenant retrieval is not even
+  // expressible — there is no shared table to leak from. The resolver is the
+  // pluggable "connector to where a tenant's RAG data lives" (could later point at
+  // a dedicated external store per tenant without changing callers).
   const embedder = new EmbeddingModel({ provider: EMBEDDING_PROVIDER, model: EMBEDDING_MODEL_PATH });
   const splitter = new TextSplitter({ chunkSize: 1000, chunkOverlap: 200 });
-  const vectorStore = new VectorStore({ sqlitePath: VECTOR_DB });
-  await vectorStore.load();
+  const handles = new Map(); // tenantId -> { vectorStore, ingest, query, dbPath }
 
-  async function ingest(text, metadata = {}) {
-    const chunks = await splitter._call([{ pageContent: text, metadata }]);
-    const embeddings = await embedder._call(chunks.map((c) => c.pageContent));
-    await vectorStore.add(chunks, embeddings);
-    return chunks.length;
+  function tenantDbPath(tenantId) {
+    // tenantId is a constrained slug / 'platform' / 'default'; guard against any
+    // path-traversal regardless.
+    const safe = String(tenantId).replace(/[^a-z0-9_-]/gi, '');
+    if (!safe) throw new Error('RAG requires a valid tenant');
+    return join(VECTOR_DIR, safe, 'company.sqlite');
   }
-  async function query(q, k = 4) {
-    const qemb = await embedder._call(q);
-    return vectorStore.search(qemb, k);
+
+  async function forTenant(tenantId) {
+    if (!tenantId) throw new Error('RAG requires a tenant (refusing unscoped access)');
+    const cached = handles.get(tenantId);
+    if (cached) return cached;
+    const dbPath = tenantDbPath(tenantId);
+    ensureDir(dbPath);
+    const vectorStore = new VectorStore({ sqlitePath: dbPath });
+    await vectorStore.load();
+    const h = {
+      vectorStore,
+      dbPath,
+      async ingest(text, metadata = {}) {
+        const chunks = await splitter._call([{ pageContent: text, metadata }]);
+        const embeddings = await embedder._call(chunks.map((c) => c.pageContent));
+        await vectorStore.add(chunks, embeddings);
+        return chunks.length;
+      },
+      async query(q, k = 4) {
+        const qemb = await embedder._call(q);
+        return vectorStore.search(qemb, k);
+      },
+    };
+    handles.set(tenantId, h);
+    return h;
   }
-  return { embedder, splitter, vectorStore, ingest, query, provider: EMBEDDING_PROVIDER };
+
+  return {
+    embedder, splitter, forTenant, provider: EMBEDDING_PROVIDER,
+    close() { for (const h of handles.values()) { try { h.vectorStore.close?.(); } catch { /* ignore */ } } },
+  };
 }
 
 /**
@@ -145,7 +177,7 @@ export async function bootSpine() {
 
   const llm = buildLocalLLM();
   const engine = await buildEngine(workflowStore, llm);
-  const rag = await buildRag();
+  const rag = buildRag();
   // Slack capability provider: auto-detects the bot token's granted scopes (cached)
   // and resolves the capability map so /capabilities + the converger see only what
   // this client's workspace actually allows.
@@ -167,7 +199,7 @@ export async function bootSpine() {
     close() {
       try { engine.workflowScheduler.stop?.(); } catch { /* ignore */ }
       try { workflowStore.close?.(); } catch { /* ignore */ }
-      try { rag.vectorStore.close?.(); } catch { /* ignore */ }
+      try { rag.close?.(); } catch { /* ignore */ }
       try { auth.close?.(); } catch { /* ignore */ }
     },
   };
@@ -183,9 +215,11 @@ export function createApp(spine) {
   app.use(cookieParser());
   app.use(express.json({ limit: '4mb' }));
 
-  // Single-user pilot: RAG routes use optionalAuth (attach user if a token is
-  // present, don't block). Tighten to requireAuth once login routes are mounted.
   const optionalAuth = spine.auth?.middleware?.optionalAuth ?? ((_req, _res, next) => next());
+  // RAG holds company context → no anonymous access. requireAuth resolves req.tenant,
+  // and every RAG call is scoped to that tenant's own physically-isolated store.
+  const requireAuth = spine.auth?.middleware?.requireAuth
+    ?? ((_req, res) => res.status(401).json({ error: 'Unauthorized' }));
 
   app.get('/health', (_req, res) => {
     res.json({
@@ -199,9 +233,10 @@ export function createApp(spine) {
     });
   });
 
-  // Ingest company context. Body: { text, metadata? } or { documents: [{text, metadata?}] }.
-  app.post('/rag/ingest', optionalAuth, async (req, res) => {
+  // Ingest company context (this tenant only). Body: { text, metadata? } or { documents: [{text, metadata?}] }.
+  app.post('/rag/ingest', requireAuth, async (req, res) => {
     try {
+      const rag = await spine.rag.forTenant(req.tenant.id);
       const docs = Array.isArray(req.body?.documents)
         ? req.body.documents
         : [{ text: req.body?.text, metadata: req.body?.metadata }];
@@ -209,20 +244,21 @@ export function createApp(spine) {
         return res.status(400).json({ error: 'each document needs a non-empty `text`' });
       }
       let chunks = 0;
-      for (const d of docs) chunks += await spine.rag.ingest(d.text, d.metadata ?? {});
-      res.json({ ingested: docs.length, chunks });
+      for (const d of docs) chunks += await rag.ingest(d.text, { ...(d.metadata ?? {}), tenant_id: req.tenant.id });
+      res.json({ ingested: docs.length, chunks, tenant: req.tenant.id });
     } catch (err) {
       res.status(500).json({ error: `ingest failed: ${err.message ?? String(err)}` });
     }
   });
 
-  // Query company context. Body: { query, k? }.
-  app.post('/rag/query', optionalAuth, async (req, res) => {
+  // Query company context (this tenant only). Body: { query, k? }.
+  app.post('/rag/query', requireAuth, async (req, res) => {
     try {
+      const rag = await spine.rag.forTenant(req.tenant.id);
       const q = req.body?.query;
       if (typeof q !== 'string' || !q.trim()) return res.status(400).json({ error: '`query` is required' });
       const k = Number(req.body?.k ?? 4);
-      const hits = await spine.rag.query(q, k);
+      const hits = await rag.query(q, k);
       res.json({
         query: q,
         hits: hits.map((h) => ({ score: h.score, content: h.pageContent, metadata: h.metadata })),
