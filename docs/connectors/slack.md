@@ -14,6 +14,21 @@ runtime. The MCP runtime stays deferred and is first exercised in **P2** via the
 existing `google` connector (Gmail). If/when Slack needs richer tool access (read,
 search, reactions), it can be re-homed on MCP without changing the spec shape.
 
+## Planned capability (beyond P1)
+
+P1 ships **post-to-channel** only — the minimum to prove the spine. The full build
+needs more, tracked here so the converger's capability schema can grow to match:
+
+- **Direct messages to users** — DM a user by Slack user ID / email (`chat.postMessage`
+  to a user, or `conversations.open` then post). Likely a second action
+  (`post_dm`) on the connector, or a `target` that accepts `@user`.
+- Threaded replies (`thread_ts`), rich blocks/attachments, file uploads.
+- Read/search/reactions — the point at which re-homing on the MCP runtime makes sense.
+- Per-user OAuth (vs a single workspace bot token) once multi-user lands.
+
+These are not built yet; each becomes a new `action` in `slackCapability` +
+`configSchema` field, surfaced via `/capabilities` so the converger can target it.
+
 ## How it works
 
 - `registerSlackChannel(channelRegistry)` adds a channel with id `slack`.
