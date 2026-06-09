@@ -1,0 +1,19 @@
+{
+  "name": "P1 Slack hello",
+  "description": "Hand-authored one-step spec: post a fixed message to a Slack channel. Proves new repo -> engine -> Slack end to end. Not the frozen canonical spec (that is the P2 UPS->Slack spec).",
+  "triggers": [],
+  "nodes": [
+    {
+      "id": "post",
+      "type": "deliver",
+      "label": "Post to Slack",
+      "config": {
+        "channel": "slack",
+        "target": "#atlas-test",
+        "body": "Hello from Atlas — P1 spine proof. If you can read this, repo -> engine -> Slack works."
+      }
+    }
+  ],
+  "edges": [],
+  "errorHandling": {}
+}
