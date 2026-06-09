@@ -18,8 +18,15 @@ executes. The hard, unbuilt IP is that **converger**.
 ## Closed decisions (do not re-litigate)
 
 - **Keep the proprietary JSON spec format.** No BPMN/DMN port.
-- **No per-business / org tenancy in the pilot.** Single-user. Parked until
-  customer #2.
+- **Multi-tenant from the foundation** *(reverses the earlier "no tenancy in
+  pilot" decision, 2026-06-09).* Each onboarding client gets a `tenant_id`; users
+  and every resource live underneath it. Data isolation is **hard and fail-closed**
+  — one tenant's data never surfaces in another's, enforced structurally (stores
+  throw on a missing tenant, never silently return all rows) and proven by
+  adversarial cross-tenant tests. Auth/workflows/vault use a **shared DB with a
+  bound tenant-scoping layer**; **RAG is physically isolated per tenant** (each
+  tenant has its own RAG datastore/connector — cross-tenant retrieval is impossible,
+  not just filtered). See [`docs/architecture/multi-tenancy.md`](docs/architecture/multi-tenancy.md).
 - **All UI is built fresh.** No reuse of the dormant in-chat builder or the old
   console. Clean design language, no entanglement.
 - **Fresh private repo** (this one), migrating salvage from `agntic-prod`. The
@@ -48,6 +55,13 @@ refactor them without an explicit decision recorded here:
 - `src/rag/embedding-model.js` — local-embedding `getLlama({gpu})` was hardcoded
   `false`; made configurable (default `'auto'`, `LLAMA_GPU` to override). Hardcoded
   `false` broke on Metal-only node-llama-cpp prebuilts (Apple Silicon). 2026-06-08.
+- **Multi-tenancy (2026-06-09)** — the salvage stores are scoped by `user_id`;
+  tenancy adds `tenant_id` as the dominant scope. Approved edits: schema +
+  fail-closed scoping in `src/auth/{user-store,session-store,oauth-token-store}.js`,
+  `src/workflows/{workflow-store,feedback-store}.js`, JWT/middleware in
+  `src/auth/{token-service,middleware,index}.js`, and per-tenant RAG resolution in
+  `src/api/server.js`. Stores now **throw** on a missing tenant rather than
+  returning unscoped rows. See [`docs/architecture/multi-tenancy.md`](docs/architecture/multi-tenancy.md).
 
 ## The frozen canonical spec
 
