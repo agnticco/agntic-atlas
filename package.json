@@ -1,0 +1,21 @@
+{
+  "name": "atlas",
+  "version": "0.1.0",
+  "description": "Atlas — conversational workflow builder (thin spine).",
+  "type": "module",
+  "main": "src/api/server.js",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "start": "node src/api/server.js"
+  },
+  "dependencies": {
+    "argon2": "^0.44.0",
+    "better-sqlite3": "^12.8.0",
+    "cookie-parser": "^1.4.7",
+    "cors": "^2.8.6",
+    "express": "^5.2.1",
+    "jsonwebtoken": "^9.0.3"
+  }
+}

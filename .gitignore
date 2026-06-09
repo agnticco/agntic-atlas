@@ -21,6 +21,7 @@ logs/
 npm-debug.log*
 
 # Runtime data
+memory/
 *.sqlite
 *.sqlite3
 *.db
