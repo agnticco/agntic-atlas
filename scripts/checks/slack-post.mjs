@@ -43,7 +43,7 @@ if (!REAL) {
 const tmp = mkdtempSync(join(tmpdir(), 'atlas-p1-'));
 process.env.WORKFLOWS_DB = join(tmp, 'workflows.sqlite');
 process.env.SOURCES_DB   = join(tmp, 'sources.sqlite');
-process.env.VECTOR_DB    = join(tmp, 'vectors.sqlite');
+process.env.VECTOR_DIR   = join(tmp, 'vectors');
 // Hermetic auth too — don't write to ./memory during a check.
 process.env.AUTH_DB     = join(tmp, 'auth.sqlite');
 process.env.AUTH_SECRET = join(tmp, '.jwt-secret');
