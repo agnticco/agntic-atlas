@@ -61,12 +61,9 @@ const port = server.address().port;
 
 let ok = false;
 try {
-  // Sanity: the Slack channel is wired and advertises its capability schema.
-  const caps = await (await fetch(`http://127.0.0.1:${port}/capabilities`)).json();
-  const slack = (caps.channels ?? []).find((c) => c.id === 'slack');
-  if (!slack) throw new Error('slack channel not present in /capabilities');
-  console.log(`capability: slack [${slack.available ? 'available' : 'not ready'}] config=${slack.configSchema.map((f) => f.key).join(',')}`);
-
+  // P1 path: unauthenticated "click run" using the dev env SLACK_BOT_TOKEN.
+  // (/capabilities is now per-tenant + auth-gated; the OAuth/per-tenant path is
+  // exercised by scripts/checks/slack-oauth.mjs.)
   // Click "run".
   const resp = await fetch(`http://127.0.0.1:${port}/workflows/run`, {
     method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ spec }),
