@@ -73,6 +73,10 @@ Phase 2; this pointer marks where it lives.)
 
 - **One deliverable per session, ending at a gate.** Rehydrate from this file +
   the module map, not from scrollback. Don't span a phase boundary in one session.
+- **Close a phase before starting the next.** A phase is *closed* only when its
+  gate-verified work is **merged to `main`** — not merely "gate passed" or "PR
+  opened". Do not begin (or branch) phase N+1 until phase N is merged; branch the
+  next phase from `main`, never from an unmerged PR.
 - **Evidence-gating (load-bearing).** No agent may report something missing,
   broken, or deleted without a file path + line range, or the exact command that
   returned nothing. Negative claims need proof of absence, not absence of proof.
