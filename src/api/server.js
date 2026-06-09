@@ -38,6 +38,7 @@ import {
 } from '../workflows/index.js';
 import { LlamaCppLLM, ModelPool } from '../llm/index.js';
 import { EmbeddingModel, TextSplitter, VectorStore } from '../rag/index.js';
+import { registerSlackChannel } from '../connectors/slack/index.js';
 
 const PORT = Number(process.env.PORT ?? 3000);
 const WORKFLOWS_DB = process.env.WORKFLOWS_DB ?? './memory/workflows/workflows.sqlite';
@@ -48,6 +49,13 @@ const LOCAL_MODEL_PATH = process.env.LOCAL_MODEL_PATH
 const EMBEDDING_PROVIDER   = process.env.EMBEDDING_PROVIDER ?? 'local';
 const EMBEDDING_MODEL_PATH = process.env.EMBEDDING_MODEL_PATH
   ?? resolve('models/nomic-embed-text-v1.5.Q4_K_M.gguf');
+// Auth store/key locations — env-overridable so checks can run hermetically
+// against a temp dir instead of writing to ./memory. Defaults match the
+// auth subsystem's own defaults.
+const AUTH_DB     = process.env.AUTH_DB     ?? './memory/auth.sqlite';
+const AUTH_SECRET = process.env.AUTH_SECRET ?? './memory/.jwt-secret';
+const OAUTH_DB    = process.env.OAUTH_DB    ?? './memory/oauth.sqlite';
+const OAUTH_KEY   = process.env.OAUTH_KEY   ?? './memory/.oauth-key';
 
 const ensureDir = (file) => { try { mkdirSync(dirname(file), { recursive: true }); } catch { /* ok */ } };
 
@@ -71,6 +79,7 @@ async function buildEngine(workflowStore, llm) {
 
   const channelRegistry = new ChannelRegistry();
   registerBuiltInChannels(channelRegistry, {});           // in-app + webhook; mcp channel is opt-in
+  registerSlackChannel(channelRegistry);                  // P1: Slack post-to-channel (chat.postMessage)
 
   const nodeTypeRegistry = new NodeTypeRegistry();
   registerBuiltInNodeTypes(nodeTypeRegistry);
@@ -130,7 +139,9 @@ export async function bootSpine() {
   const workflowStore = new WorkflowStore({ dbPath: WORKFLOWS_DB });
   await workflowStore.init();
 
-  const auth = await createAuthSubsystem();
+  const auth = await createAuthSubsystem({
+    dbPath: AUTH_DB, secretPath: AUTH_SECRET, oauthDbPath: OAUTH_DB, oauthKeyPath: OAUTH_KEY,
+  });
 
   const llm = buildLocalLLM();
   const engine = await buildEngine(workflowStore, llm);
@@ -213,6 +224,42 @@ export function createApp(spine) {
       });
     } catch (err) {
       res.status(500).json({ error: `query failed: ${err.message ?? String(err)}` });
+    }
+  });
+
+  // Expose the wired capability schemas (delivery channels + their config) — the
+  // contract the converger (P3) targets. "Connector NOT listed is not wired."
+  app.get('/capabilities', (_req, res) => {
+    res.json({ channels: spine.engine.channelRegistry.getAll() });
+  });
+
+  // Run a hand-authored spec through the engine — the "click run" path (no UI yet).
+  // Body: { spec } where spec is the proprietary { name, nodes[], edges[], … } shape.
+  app.post('/workflows/run', optionalAuth, async (req, res) => {
+    const spec = req.body?.spec;
+    if (!spec || !Array.isArray(spec.nodes)) {
+      return res.status(400).json({ error: 'body.spec with a nodes[] array is required' });
+    }
+    try {
+      let runId = null, completed = false, output = null;
+      const steps = [];
+      for await (const ev of spine.engine.flowTester.run(spec, {})) {
+        if (ev.type === 'run_started') runId = ev.runId;
+        else if (ev.type === 'step_completed') steps.push({ nodeId: ev.nodeId, output: ev.output });
+        else if (ev.type === 'run_completed') { completed = true; output = ev.output; }
+        else if (ev.type === 'run_failed') return res.status(502).json({ runId, error: ev.error, steps });
+      }
+      // step_completed outputs are shrunk to strings by the executor; coerce back
+      // to objects so delivery results (e.g. the Slack { delivered, ts }) surface.
+      const coerce = (o) => {
+        if (o && typeof o === 'object') return o;
+        if (typeof o === 'string') { try { return JSON.parse(o); } catch { /* not json */ } }
+        return null;
+      };
+      const deliveries = steps.map((s) => coerce(s.output)).filter((o) => o && o.delivered);
+      res.json({ runId, completed, output, deliveries, steps });
+    } catch (err) {
+      res.status(500).json({ error: `run failed: ${err.message ?? String(err)}` });
     }
   });
 
