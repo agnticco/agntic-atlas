@@ -46,15 +46,21 @@ export class TenantStore {
     this.db = null;
   }
 
-  /** Ensure the reserved platform tenant exists (idempotent). */
-  ensurePlatformTenant() {
-    if (!this.get(PLATFORM_TENANT_ID)) {
+  /** Idempotently ensure a reserved tenant row exists (no slug validation). */
+  _ensureReserved(id, name) {
+    if (!this.get(id)) {
       const now = new Date().toISOString();
       this.db.prepare(`INSERT INTO tenants (id, name, slug, status, created_at, updated_at)
-        VALUES (?, ?, ?, 'active', ?, ?)`).run(PLATFORM_TENANT_ID, 'Platform', PLATFORM_TENANT_ID, now, now);
+        VALUES (?, ?, ?, 'active', ?, ?)`).run(id, name, id, now, now);
     }
-    return this.get(PLATFORM_TENANT_ID);
+    return this.get(id);
   }
+
+  /** Ensure the reserved platform tenant exists (idempotent). */
+  ensurePlatformTenant() { return this._ensureReserved(PLATFORM_TENANT_ID, 'Platform'); }
+
+  /** Ensure the 'default' tenant exists — home for migrated single-user pilot data. */
+  ensureDefaultTenant() { return this._ensureReserved('default', 'Default'); }
 
   /**
    * Create a tenant. `id` defaults to the slug (stable, human-readable). Throws
