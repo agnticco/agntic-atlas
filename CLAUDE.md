@@ -68,6 +68,32 @@ Phase 2; this pointer marks where it lives.)
 - **Don't parallelize the converger.** Phases 0–3 + the spine are serial.
   Worktree-isolate only the independent connectors and the greenfield UI surfaces.
 
+## Agents & gate enforcement
+
+The build runs with four roles. **Builder is this main session** (you), governed
+by this file — not a subagent. The other three are subagents in `.claude/agents/`:
+
+- **`scout`** — read-only explorer; fan out for "where does X live", returns
+  conclusions with `file:line`, never edits.
+- **`verifier`** — fresh, independent gate checker; did *not* write the code.
+- **`adversary`** — Phase 3 only; tries to break the converger.
+
+**Gates are HARD (fail-closed).** A phase closes only through its check:
+
+- Each phase's objective "Done when" lives in `scripts/gates/p<phase>.sh`
+  (run via `scripts/gate.sh <phase>`). They ship fail-closed — an unimplemented
+  check does not pass. Fill in the real check as you build the phase.
+- Run **`/gate <phase>`** to close one: it spawns the `verifier`, which runs the
+  check, reviews the artifacts with evidence, and writes `docs/gates/p<phase>.md`
+  only on a real pass.
+- **`.githooks/pre-push`** refuses to push any commit carrying a `Gate:` trailer
+  unless that phase's check passes — so a failing gate physically blocks the
+  phase from being published.
+- **Never `--no-verify`.** A Claude Code `PreToolUse` hook
+  (`.claude/settings.json` → `.claude/hooks/block-no-verify.sh`) blocks agents
+  from bypassing the commit-msg / pre-push hooks. Don't weaken the check scripts
+  to force a pass either; if a check is wrong, fix it and record why here.
+
 ## Phase status
 
 Update as gates close. `git log --grep "^Gate:"` is the authoritative ledger.

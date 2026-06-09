@@ -1,0 +1,52 @@
+#!/usr/bin/env bash
+# Atlas hard-gate enforcement.
+# Refuses to push a gate-closing commit (one with a non-empty `Gate:` trailer)
+# unless that phase's objective check (scripts/gates/p<phase>.sh) passes.
+# Portable POSIX-ish shell — works on macOS's default bash 3.2.
+#
+# A push can still be forced with `git push --no-verify`; the Claude Code
+# PreToolUse hook (.claude/settings.json) blocks agents from doing that, and
+# humans are trusted to only bypass deliberately.
+set -eu
+
+cd "$(git rev-parse --show-toplevel)"
+
+is_zero() { case "$1" in *[!0]*) return 1 ;; *) return 0 ;; esac; }
+short() { printf '%s' "$1" | cut -c1-7; }
+
+rc=0
+while read -r local_ref local_sha remote_ref remote_sha; do
+  is_zero "$local_sha" && continue          # branch deletion — nothing to check
+
+  if is_zero "$remote_sha"; then
+    range="$local_sha --not --remotes"        # new branch — only new commits
+  else
+    range="$remote_sha..$local_sha"
+  fi
+
+  for sha in $(git rev-list $range 2>/dev/null || true); do
+    msg="$(git log -1 --format=%B "$sha")"
+    # Only gate-closing commits carry a non-empty Gate: trailer.
+    printf '%s\n' "$msg" | grep -qE '^Gate:[[:space:]]*[^[:space:]]' || continue
+
+    phase="$(printf '%s\n' "$msg" | sed -n -E 's/^Phase:[[:space:]]*([0-7]).*$/\1/p' | head -n1)"
+    if [ -z "$phase" ]; then
+      echo "x pre-push: commit $(short "$sha") closes a gate but has no Phase: trailer" >&2
+      rc=1; continue
+    fi
+
+    echo "-- pre-push: $(short "$sha") closes the Phase $phase gate -- running check --" >&2
+    if bash scripts/gate.sh "$phase" >&2; then
+      echo "   Phase $phase check passed." >&2
+    else
+      echo "x pre-push: Phase $phase check FAILED -- gate commit $(short "$sha") blocked" >&2
+      rc=1
+    fi
+  done
+done
+
+if [ "$rc" -ne 0 ]; then
+  echo "x pre-push: hard gate blocked this push. Fix the work or the check -- do not --no-verify." >&2
+  exit 1
+fi
+exit 0
