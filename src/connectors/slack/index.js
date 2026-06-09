@@ -21,6 +21,8 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 
+import { getSlackGrant, isOAuthConfigured } from './oauth.js';
+
 const DEFAULT_API_BASE = 'https://slack.com/api';
 
 const __dir = dirname(fileURLToPath(import.meta.url));
@@ -89,21 +91,37 @@ export function describeSlackForPrompt(resolved) {
 }
 
 /**
- * A cached capability provider: detects the token's scopes once and resolves the
- * map. Mounted on the spine so `/capabilities` and the converger share one view.
- * @param {{ token?: string, apiBase?: string, fetchImpl?: typeof fetch }} [opts]
+ * Per-tenant capability provider. A tenant's granted scopes come from its stored
+ * OAuth install grant (the source of truth once a client authorizes the app);
+ * falls back to a dev env bot token's scopes (via auth.test) when no grant exists.
+ * Mounted on the spine so `/capabilities` and the converger share one view.
+ * @param {{ oauthTokenStore?: object, token?: string, apiBase?: string, fetchImpl?: typeof fetch }} [opts]
  */
-export function createSlackCapabilityProvider(opts = {}) {
-  let cache = null;
-  async function resolve() {
-    if (!cache) cache = resolveSlackCapabilities(await detectGrantedScopes(opts));
-    return cache;
+export function createSlackCapabilityProvider({ oauthTokenStore = null, token = undefined, apiBase = undefined, fetchImpl = undefined } = {}) {
+  const cache = new Map(); // tenantId -> resolved capabilities
+
+  async function scopesForTenant(tenantId) {
+    if (oauthTokenStore && tenantId) {
+      const grant = getSlackGrant({ oauthTokenStore, tenantId });
+      if (grant) return grant.scopes;            // installed app grant (preferred)
+    }
+    const envToken = token ?? process.env.SLACK_BOT_TOKEN;
+    if (envToken) return detectGrantedScopes({ token: envToken, apiBase, fetchImpl }); // dev fallback
+    return [];
   }
+
+  async function resolveForTenant(tenantId) {
+    if (cache.has(tenantId)) return cache.get(tenantId);
+    const resolved = resolveSlackCapabilities(await scopesForTenant(tenantId));
+    cache.set(tenantId, resolved);
+    return resolved;
+  }
+
   return {
-    resolve,
-    async describe() { return describeSlackForPrompt(await resolve()); },
-    /** Drop the cached scopes (e.g. after a client re-installs with new scopes). */
-    refresh() { cache = null; },
+    resolveForTenant,
+    async describe(tenantId) { return describeSlackForPrompt(await resolveForTenant(tenantId)); },
+    /** Drop cached scopes for a tenant (after re-install) or all tenants. */
+    refresh(tenantId) { if (tenantId) cache.delete(tenantId); else cache.clear(); },
   };
 }
 
@@ -122,12 +140,14 @@ export function registerSlackChannel(registry, { fetchImpl = fetch } = {}) {
       { key: 'target', label: 'Slack channel', type: 'string', optional: false, hint: 'Channel ID (C…) or #name to post to.' },
       { key: 'body',   label: 'Message',       type: 'textarea', optional: true,  hint: 'Message text. Omit to deliver the previous step output.' },
     ],
-    // Ready iff a bot token is configured. (Per-node config.token also works but
-    // isn't visible to this static probe.)
-    isReady: () => !!process.env.SLACK_BOT_TOKEN,
+    // Ready if the platform can post to Slack at all — either via OAuth installs
+    // (per-tenant tokens) or a dev env bot token. Per-tenant readiness is reported
+    // by /connectors/slack/status; the per-call token is the tenant's OAuth token
+    // (injected as config.token by the authenticated run path) or the env fallback.
+    isReady: () => isOAuthConfigured() || !!process.env.SLACK_BOT_TOKEN,
     deliver: async ({ config, body, title }) => {
       const token = config.token ?? process.env.SLACK_BOT_TOKEN;
-      if (!token) throw new Error('slack channel requires a bot token (SLACK_BOT_TOKEN or config.token)');
+      if (!token) throw new Error('slack channel: no token — this tenant has not connected Slack (and no dev SLACK_BOT_TOKEN set)');
       const target = config.target;
       if (!target) throw new Error('slack channel requires config.target (channel ID or #name)');
 
