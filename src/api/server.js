@@ -60,6 +60,9 @@ const OAUTH_KEY   = process.env.OAUTH_KEY   ?? './memory/.oauth-key';
 
 const ensureDir = (file) => { try { mkdirSync(dirname(file), { recursive: true }); } catch { /* ok */ } };
 
+/** Public-safe user shape for API responses (never leaks password_hash). */
+const pubUser = (u) => ({ id: u.id, email: u.email, role: u.role, tenant_id: u.tenant_id, display_name: u.display_name });
+
 /**
  * Build the local-model LLM, tier-wrapped in a ModelPool, to inject into the
  * engine. Returns null (engine still boots) when no local weights are present —
@@ -233,8 +236,83 @@ export function createApp(spine) {
     });
   });
 
+  const requirePlatformAdmin = spine.auth?.middleware?.requirePlatformAdmin
+    ?? ((_req, res) => res.status(403).json({ error: 'Forbidden' }));
+  // requireAuth + the caller's tenant must be active (platform tenant is always active).
+  const requireActiveTenant = [requireAuth, (req, res, next) => {
+    if (req.tenant && !spine.auth.tenantStore.isActive(req.tenant.id)) {
+      return res.status(403).json({ error: 'tenant suspended' });
+    }
+    next();
+  }];
+
+  // ── First-run setup (creates the platform admin) ──────────────────────────
+  app.get('/setup/status', (_req, res) => {
+    res.json({ required: spine.auth.userStore.countForTenant(spine.auth.platformTenantId) === 0 });
+  });
+  app.post('/setup', async (req, res) => {
+    try {
+      const { token, email, password, display_name } = req.body ?? {};
+      const user = await spine.auth.completeBootstrap({ token, email, password, display_name });
+      const { token: jwt } = spine.auth.issueSession({ user });
+      res.json({ ok: true, token: jwt, user: pubUser(user) });
+    } catch (err) { res.status(400).json({ error: err.message ?? String(err) }); }
+  });
+
+  // ── Login / logout ────────────────────────────────────────────────────────
+  app.post('/auth/login', async (req, res) => {
+    try {
+      const user = await spine.auth.authProvider.authenticate({ email: req.body?.email, password: req.body?.password });
+      if (!user) return res.status(401).json({ error: 'Invalid credentials' });
+      if (!spine.auth.tenantStore.isActive(user.tenant_id)) return res.status(403).json({ error: 'tenant suspended' });
+      const { token } = spine.auth.issueSession({ user });
+      res.json({ ok: true, token, user: pubUser(user) });
+    } catch (err) { res.status(400).json({ error: err.message ?? String(err) }); }
+  });
+  app.post('/auth/logout', requireAuth, (req, res) => {
+    try { spine.auth.sessionStore.revoke(req.session.id); } catch { /* ignore */ }
+    res.json({ ok: true });
+  });
+
+  // ── Tenant management (platform operators only) ─────────────────────────────
+  app.get('/tenants', requireAuth, requirePlatformAdmin, (_req, res) => {
+    res.json({ tenants: spine.auth.tenantStore.list() });
+  });
+  app.post('/tenants', requireAuth, requirePlatformAdmin, async (req, res) => {
+    try {
+      const tenant = spine.auth.tenantStore.create({ name: req.body?.name, slug: req.body?.slug });
+      let admin = null;
+      const a = req.body?.admin;
+      if (a?.email && a?.password) {
+        admin = await spine.auth.authProvider.register({ tenantId: tenant.id, email: a.email, password: a.password, role: 'admin', display_name: a.display_name ?? '' });
+      }
+      res.json({ ok: true, tenant, admin: admin ? pubUser(admin) : null });
+    } catch (err) { res.status(400).json({ error: err.message ?? String(err) }); }
+  });
+  app.post('/tenants/:id/users', requireAuth, requirePlatformAdmin, async (req, res) => {
+    try {
+      const t = spine.auth.tenantStore.get(req.params.id);
+      if (!t) return res.status(404).json({ error: 'tenant not found' });
+      const u = await spine.auth.authProvider.register({
+        tenantId: t.id, email: req.body?.email, password: req.body?.password,
+        role: req.body?.role === 'admin' ? 'admin' : 'user', display_name: req.body?.display_name ?? '',
+      });
+      res.json({ ok: true, user: pubUser(u) });
+    } catch (err) { res.status(400).json({ error: err.message ?? String(err) }); }
+  });
+  app.post('/tenants/:id/status', requireAuth, requirePlatformAdmin, (req, res) => {
+    try { res.json({ ok: true, tenant: spine.auth.tenantStore.setStatus(req.params.id, req.body?.status) }); }
+    catch (err) { res.status(400).json({ error: err.message ?? String(err) }); }
+  });
+
+  // ── Users in the caller's own tenant (tenant admin) ─────────────────────────
+  app.get('/users', requireActiveTenant, (req, res) => {
+    if (req.user.role !== 'admin') return res.status(403).json({ error: 'Forbidden' });
+    res.json({ users: spine.auth.userStore.list(req.tenant.id) });
+  });
+
   // Ingest company context (this tenant only). Body: { text, metadata? } or { documents: [{text, metadata?}] }.
-  app.post('/rag/ingest', requireAuth, async (req, res) => {
+  app.post('/rag/ingest', requireActiveTenant, async (req, res) => {
     try {
       const rag = await spine.rag.forTenant(req.tenant.id);
       const docs = Array.isArray(req.body?.documents)
@@ -252,7 +330,7 @@ export function createApp(spine) {
   });
 
   // Query company context (this tenant only). Body: { query, k? }.
-  app.post('/rag/query', requireAuth, async (req, res) => {
+  app.post('/rag/query', requireActiveTenant, async (req, res) => {
     try {
       const rag = await spine.rag.forTenant(req.tenant.id);
       const q = req.body?.query;
