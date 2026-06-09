@@ -86,6 +86,42 @@ manifest-driven connector flow (`connector-manifest.js`), keyed per tenant — n
 secrets in env or source. That's the per-user-OAuth roadmap item and lands with
 multi-tenancy.
 
+## Capability map (what the AI may use)
+
+The AI/converger needs to know which Slack functions it can actually use — and that
+varies by client (different bot tokens grant different scopes). That map lives in
+**`src/connectors/slack/capabilities.json`** — a plain, hand-editable list of actions:
+
+```json
+{ "id": "post_message", "label": "...", "requiredScopes": ["chat:write"],
+  "config": [ ... ], "returns": ["ts","slackChannel"], "implemented": true }
+```
+
+**Availability is resolved per client.** An action is `available` to the AI iff:
+`implemented === true` **AND** the client's bot token grants every `requiredScope`.
+
+- **Per-client scopes are auto-detected** from the token — `detectGrantedScopes()`
+  calls Slack `auth.test` and reads the granted scopes off the `x-oauth-scopes`
+  response header. No per-client config to maintain; it never drifts from what Slack
+  actually granted. (Re-install with new scopes → `provider.refresh()`.)
+- **`implemented` gates honesty.** Today only `post_message` has a handler; the rest
+  (`post_dm`, `reply_in_thread`, `add_reaction`, `upload_file`) are in the map as
+  defined-but-unavailable so you see the full menu, but the AI won't propose them
+  until they're wired.
+
+**Read it:** `GET /capabilities` →
+`{ channels: [...], connectors: { slack: { grantedScopes: [...], actions: [{ ...action, available, unavailableReason }] } } }`.
+`describeSlackForPrompt()` renders the same as an AI-readable summary.
+
+**Add a capability** (e.g. enable DMs): add/locate its entry in `capabilities.json`,
+implement its handler in `index.js`, set `implemented: true`. Clients whose token
+carries the `requiredScopes` get it automatically; others see it as unavailable with
+the missing scope named.
+
+**Restrict a client:** nothing to edit — grant their bot token fewer scopes and the
+map narrows itself. (A manual per-client deny-override can be layered later if a
+client needs a capability disabled despite having the scope.)
+
 ## Run it ("click run")
 
 No UI yet (greenfield, P4/P5). The "run" path is `POST /workflows/run { spec }`:

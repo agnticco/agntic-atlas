@@ -1,0 +1,69 @@
+{
+  "connector": "slack",
+  "description": "Map of Slack functions the workflow engine can use. The AI/converger reads the AVAILABLE subset (implemented AND the client's token grants requiredScopes) so it only proposes Slack actions that genuinely work for that client. To add a capability: add an entry here, then implement its handler in index.js and flip `implemented` to true. To restrict a client, that follows automatically from the scopes their bot token was granted.",
+  "actions": [
+    {
+      "id": "post_message",
+      "label": "Post a message to a channel",
+      "description": "Post a message to a public or private channel the bot can access.",
+      "requiredScopes": ["chat:write"],
+      "config": [
+        { "key": "target", "type": "string", "required": true, "hint": "Channel ID (C…) or #name" },
+        { "key": "body", "type": "string", "required": false, "hint": "Message text; omit to use the prior step output" }
+      ],
+      "returns": ["ts", "slackChannel"],
+      "implemented": true
+    },
+    {
+      "id": "post_dm",
+      "label": "Direct-message a user",
+      "description": "Send a direct message to a single user (opens a DM conversation, then posts).",
+      "requiredScopes": ["chat:write", "im:write"],
+      "config": [
+        { "key": "user", "type": "string", "required": true, "hint": "Slack user ID (U…); resolve from email if needed" },
+        { "key": "body", "type": "string", "required": true, "hint": "Message text" }
+      ],
+      "returns": ["ts", "channel"],
+      "implemented": false
+    },
+    {
+      "id": "reply_in_thread",
+      "label": "Reply in a thread",
+      "description": "Post a threaded reply under an existing message.",
+      "requiredScopes": ["chat:write"],
+      "config": [
+        { "key": "target", "type": "string", "required": true, "hint": "Channel ID (C…) or #name" },
+        { "key": "thread_ts", "type": "string", "required": true, "hint": "ts of the parent message" },
+        { "key": "body", "type": "string", "required": true, "hint": "Reply text" }
+      ],
+      "returns": ["ts"],
+      "implemented": false
+    },
+    {
+      "id": "add_reaction",
+      "label": "Add an emoji reaction",
+      "description": "React to a message with an emoji.",
+      "requiredScopes": ["reactions:write"],
+      "config": [
+        { "key": "target", "type": "string", "required": true, "hint": "Channel ID (C…)" },
+        { "key": "timestamp", "type": "string", "required": true, "hint": "ts of the target message" },
+        { "key": "emoji", "type": "string", "required": true, "hint": "Emoji name without colons, e.g. white_check_mark" }
+      ],
+      "returns": ["ok"],
+      "implemented": false
+    },
+    {
+      "id": "upload_file",
+      "label": "Upload a file",
+      "description": "Upload a file (or snippet) to one or more channels.",
+      "requiredScopes": ["files:write"],
+      "config": [
+        { "key": "target", "type": "string", "required": true, "hint": "Channel ID (C…) or #name" },
+        { "key": "content", "type": "string", "required": true, "hint": "File contents (text) or a path/URL the handler resolves" },
+        { "key": "title", "type": "string", "required": false, "hint": "File title" }
+      ],
+      "returns": ["fileId"],
+      "implemented": false
+    }
+  ]
+}
