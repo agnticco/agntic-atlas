@@ -50,10 +50,15 @@ Phase 2; this pointer marks where it lives.)
 
 ## Known gotchas
 
-- **`server.js` encoding.** In `agntic-prod` it is stored with an encoding that
-  makes plain `grep` return zero matches — it once convinced an agent the engine
-  was deleted. When migrating it in Phase 0, **re-save as clean UTF-8**. Until
-  then use `grep -a` / `perl`.
+- **`server.js` encoding.** In `agntic-prod`, `src/api/server.js` reads as
+  `data` to `file` and plain `grep` returns zero matches — it once convinced an
+  agent the engine was deleted. **Root cause (verified):** the file is valid
+  UTF-8 with *no* BOM; it holds a single literal NUL byte (`\x00`) at offset
+  ~20198, inside a session-key template string `u:${userId}\x00${rawSessionId}`.
+  That one NUL makes macOS `grep` stop early. Fix = replace/remove that NUL, not
+  a re-encode. Until then use `grep -a` / `perl`. (P0 builds a *new* minimal
+  server.js, so this only bites when copying logic out of the salvage file.)
+  Full map: [`docs/salvage-map.md`](docs/salvage-map.md).
 
 ## Working rules
 
