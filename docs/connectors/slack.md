@@ -40,51 +40,52 @@ These are not built yet; each becomes a new `action` in `slackCapability` +
 - The capability schema is visible via `GET /capabilities` and the registry's
   `describeForPrompt()` — this is the contract the P3 converger will target.
 
-## Provisioning a workspace (client onboarding)
+## Onboarding a client — OAuth (the client authorizes our app)
 
-The connector authenticates with a **bot token** (`Authorization: Bearer …`) and
-calls `chat.postMessage`, so onboarding a workspace is: create an app → grant
-`chat:write` → install → copy the bot token → invite the bot → grab the channel ID.
+Clients **no longer give us API-console access or hand us a token.** We run **one**
+Atlas Slack app; each client authorizes it ("Add to Slack"), and we store *their*
+workspace bot token encrypted in *their* tenant's vault. **No Slack Marketplace
+listing/review is required** — this is standard public OAuth distribution (see
+docs/architecture/multi-tenancy.md and the research note below).
 
-1. **Create the app in the target workspace.** api.slack.com/apps → *Create New
-   App → From scratch* → name it (e.g. "Atlas") → pick the workspace. For a client,
-   create/install in *their* workspace — each install yields its own bot token.
-2. **Grant bot scopes.** *OAuth & Permissions → Bot Token Scopes*:
-   - `chat:write` — required (post to channels the bot is in).
-   - `chat:write.public` — optional; post to *public* channels without inviting first.
-   - (For the roadmapped DM feature: `im:write` + `users:read`/`users:read.email`.)
-   - Least privilege for clients — don't add scopes the connector doesn't use.
-3. **Install → copy the token.** *Install to Workspace* → approve → copy the
-   **Bot User OAuth Token** (`xoxb-…`). This is the secret the connector uses as
-   `SLACK_BOT_TOKEN`. Treat it like a password.
-4. **Invite the bot to each target channel.** In the channel: `/invite @Atlas`.
-   Required for private channels (and public ones unless `chat:write.public` is set).
-5. **Get the channel target.** `config.target` takes a **channel ID** (recommended,
-   e.g. `C0123ABCD`) or `#name`. Find the ID via the channel's details popover, or
-   *Copy link* (trailing segment). Prefer the ID — it survives renames.
-6. **Wire it in.** Token → `SLACK_BOT_TOKEN` (env, or per-node `config.token`);
-   channel → the deliver node's `config.target`. Leave `SLACK_API_URL` unset so it
-   hits `https://slack.com/api`.
-7. **Test against the real workspace** (token stays in your shell):
-   ```
-   SLACK_BOT_TOKEN=xoxb-… SLACK_TARGET=C0123ABCD node scripts/checks/slack-post.mjs
-   ```
-   Expect a real message + a `ts`. Common errors: `not_in_channel` → invite the bot
-   (step 4); `missing_scope` → add `chat:write` and reinstall; `channel_not_found` →
-   wrong ID or the bot can't see a private channel.
+### One-time, by us (the operator)
+1. Create one Slack app (api.slack.com/apps → *From scratch*).
+2. *OAuth & Permissions* → add **Bot Token Scopes** (e.g. `chat:write`,
+   `chat:write.public`; DM scopes later). Add the **Redirect URL** =
+   `https://<atlas-host>/connectors/slack/callback`.
+3. *Manage Distribution* → complete the checklist → **Activate Public Distribution**
+   (self-serve, no review). This yields the "Add to Slack" install link.
+4. Configure the deployment: `SLACK_CLIENT_ID`, `SLACK_CLIENT_SECRET`,
+   `SLACK_REDIRECT_URI`, `SLACK_OAUTH_SCOPES` (default `chat:write`).
 
-**Validated 2026-06-09** against a live workspace: a real post landed in channel
-`C0B3LM5V8PP`, `ts=1781019897.071609`.
+### Per client (self-serve OAuth)
+1. A tenant admin hits **`GET /connectors/slack/authorize`** → returns the
+   authorize URL ("Add to Slack"); the operator/UI sends the client there.
+2. The client approves in their workspace; Slack redirects to
+   **`GET /connectors/slack/callback?code&state`**. We exchange the code via
+   `oauth.v2.access` and store the workspace bot token encrypted in **that tenant's**
+   vault (one row per tenant, key `wsinstall:<tenantId>`). Granted scopes are stored
+   on the row (they drive the capability map).
+3. **`GET /connectors/slack/status`** → `{connected, scopes, account}`;
+   **`DELETE /connectors/slack`** disconnects.
 
-### Per-client / multi-tenant note
+Once connected, an **authenticated** `POST /workflows/run` injects that tenant's
+stored token into `slack` deliver nodes automatically — the workflow posts as the
+tenant's own connected workspace. (`SLACK_BOT_TOKEN` remains a single-workspace
+**dev fallback** for local testing only.)
 
-Today this is **one workspace token at a time via env**, matching the pilot's "no
-per-org tenancy" decision (parked until customer #2 — see CLAUDE.md). For multiple
-clients, bot tokens should not live in env: store each client's token in the
-AES-256-GCM **OAuth vault** (`createAuthSubsystem` → `oauthTokenStore`) via the
-manifest-driven connector flow (`connector-manifest.js`), keyed per tenant — no
-secrets in env or source. That's the per-user-OAuth roadmap item and lands with
-multi-tenancy.
+### Why no Marketplace review (verified 2026-06-09)
+Slack separates **OAuth distribution** (self-serve "public distribution" — no review)
+from **Marketplace listing** (reviewed, optional, only for directory discoverability).
+Per-tenant OAuth installs need only the former. The "coded workflows are not eligible
+for Marketplace listing" rule applies to Slack *automation-platform* apps
+(`workflow.steps:*`/`triggers:*` scopes) — not this connector, which is a plain Web
+API app (`chat:write`/`chat.postMessage`). Caveat: some Enterprise Grid orgs require
+admin approval for non-Marketplace apps. Sources: api.slack.com/start/distributing/public,
+docs.slack.dev/slack-marketplace/…, api.slack.com/automation/faq.
+
+**Earlier dev-token validation (2026-06-09):** a real post landed in channel
+`C0B3LM5V8PP`, `ts=1781019897.071609` (via the `SLACK_BOT_TOKEN` dev path).
 
 ## Capability map (what the AI may use)
 
@@ -137,20 +138,27 @@ Returns `{ runId, completed, deliveries: [{ delivered, ts, target, … }], … }
 
 | env | default | meaning |
 |---|---|---|
-| `SLACK_BOT_TOKEN` | — | bot token with `chat:write`. Channel is "ready" only when set. |
-| `SLACK_API_URL` | `https://slack.com/api` | API base; override to point at a stub. |
+| `SLACK_CLIENT_ID` | — | Atlas Slack app client id (OAuth). |
+| `SLACK_CLIENT_SECRET` | — | Atlas Slack app client secret (OAuth). |
+| `SLACK_REDIRECT_URI` | — | OAuth callback, e.g. `https://<host>/connectors/slack/callback`. |
+| `SLACK_OAUTH_SCOPES` | `chat:write` | bot scopes requested at install (comma/space list). |
+| `SLACK_BOT_TOKEN` | — | **dev fallback only** — a single-workspace bot token for local testing without OAuth. |
+| `SLACK_API_URL` | `https://slack.com/api` | API base (`oauth.v2.access`, `chat.postMessage`, `auth.test`); override to a stub. |
 | `SLACK_TARGET` | — | (check only) overrides the spec's target channel for a real post. |
 
-Per-node `config.token` overrides the env token.
+Token precedence at delivery: per-node `config.token` → the tenant's stored OAuth
+token (injected by the authenticated run path) → `SLACK_BOT_TOKEN` (dev).
 
 ## Verify
 
 ```
-bash scripts/gates/p1.sh
+bash scripts/gates/cap-slack-oauth.sh   # OAuth install -> per-tenant token -> post (stubbed Slack)
+bash scripts/gates/cap-slack-map.sh     # scope-gated capability map
+bash scripts/gates/p1.sh                # dev-token "click run" posts to Slack
 ```
 
-Runs `scripts/checks/slack-post.mjs`: boots the spine, mounts the HTTP app, POSTs
-`docs/specs/p1-slack-hello.json` to `/workflows/run`. By default it posts to a local
-**stub** Slack (asserts the request payload + returned `ts`) — reproducible, no
-secrets. For a **real** workspace post: set `SLACK_BOT_TOKEN`, leave `SLACK_API_URL`
-unset, and set `SLACK_TARGET` to a channel the bot is in.
+`cap-slack-oauth.sh` runs `scripts/checks/slack-oauth.mjs`: two tenants each install
+via a stubbed `oauth.v2.access`, get their own isolated token, and an authenticated
+run posts with the tenant's OWN token (no env token, no cross-tenant token). For a
+**real** dev post: set `SLACK_BOT_TOKEN`, leave `SLACK_API_URL` unset, set
+`SLACK_TARGET`, and run `node scripts/checks/slack-post.mjs`.
