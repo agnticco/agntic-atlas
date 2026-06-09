@@ -1,38 +1,111 @@
 /**
  * Slack connector (P1) — built fresh; the salvage repo had no Slack connector.
  *
- * Implemented as a delivery channel: a workflow `deliver` node with
- * `config.channel = "slack"` posts the step's content to a Slack channel via the
- * Web API (`chat.postMessage`). This is the cheapest end-to-end proof of the
- * spine (new repo -> engine -> Slack), per the Phase 1 plan. A connector via the
- * full MCP runtime is deferred (MCP is first exercised in P2 via the existing
- * `google` connector). See docs/connectors/slack.md.
+ * Two parts:
+ *   1. A delivery channel: a workflow `deliver` node with `config.channel = "slack"`
+ *      posts the step's content to a Slack channel via `chat.postMessage`.
+ *   2. A declarative CAPABILITY MAP (capabilities.json) the AI/converger reads to
+ *      understand which Slack functions it may use. Availability is resolved
+ *      per-client: an action is AVAILABLE iff it is `implemented` AND the client's
+ *      bot token actually grants its `requiredScopes` (auto-detected from Slack).
  *
- * Auth: a bot token with `chat:write` in `SLACK_BOT_TOKEN` (or per-node
- * `config.token`). `SLACK_API_URL` overrides the API base (used by the gate to
- * point at a local stub so the check is reproducible without secrets).
+ * A connector via the full MCP runtime is deferred (MCP is first exercised in P2
+ * via the existing `google` connector). See docs/connectors/slack.md.
+ *
+ * Auth: a bot token with the relevant scopes in `SLACK_BOT_TOKEN` (or per-node
+ * `config.token`). `SLACK_API_URL` overrides the API base (the gate points it at a
+ * local stub so checks are reproducible without secrets).
  */
+
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { dirname, join } from 'node:path';
 
 const DEFAULT_API_BASE = 'https://slack.com/api';
 
-/** Capability schema — what this connector can do; the contract P3's converger targets. */
-export const slackCapability = {
-  connector: 'slack',
-  kind: 'delivery-channel',
-  channelId: 'slack',
-  auth: { env: 'SLACK_BOT_TOKEN', scopes: ['chat:write'] },
-  actions: [
-    {
-      id: 'post_message',
-      label: 'Post a message to a Slack channel',
-      config: [
-        { key: 'target', type: 'string', required: true, hint: 'Channel ID (C…) or #name' },
-        { key: 'body', type: 'string', required: false, hint: 'Message text; omit to use the prior step output' },
-      ],
-      returns: ['ts', 'slackChannel'],
-    },
-  ],
-};
+const __dir = dirname(fileURLToPath(import.meta.url));
+
+/**
+ * The declarative capability map — the contract the converger targets. Loaded from
+ * capabilities.json so it stays easy to read/edit (add an entry + a handler to grow
+ * Slack support; per-client variation falls out of the token's granted scopes).
+ */
+export const slackCapabilities = JSON.parse(readFileSync(join(__dir, 'capabilities.json'), 'utf8'));
+
+/**
+ * Auto-detect the scopes a bot token was actually granted. Slack returns them in
+ * the `x-oauth-scopes` response header on any Web API call (we use auth.test).
+ * Returns [] when there's no token or the call fails — callers then see every
+ * scope-gated action as unavailable (honest, never crashes boot).
+ * @returns {Promise<string[]>}
+ */
+export async function detectGrantedScopes({
+  token = process.env.SLACK_BOT_TOKEN,
+  apiBase = process.env.SLACK_API_URL ?? DEFAULT_API_BASE,
+  fetchImpl = fetch,
+} = {}) {
+  if (!token) return [];
+  try {
+    const res = await fetchImpl(`${apiBase}/auth.test`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${token}` },
+    });
+    const header = res.headers?.get?.('x-oauth-scopes') ?? '';
+    return header.split(',').map((s) => s.trim()).filter(Boolean);
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Annotate the capability map for a given set of granted scopes. Each action gets
+ * `available` (implemented AND all requiredScopes granted) + an `unavailableReason`.
+ * Pure/synchronous — no network.
+ */
+export function resolveSlackCapabilities(grantedScopes = []) {
+  const granted = new Set(grantedScopes);
+  const actions = slackCapabilities.actions.map((a) => {
+    const missing = (a.requiredScopes ?? []).filter((s) => !granted.has(s));
+    let available = false;
+    let unavailableReason = null;
+    if (!a.implemented) unavailableReason = 'not yet implemented';
+    else if (missing.length) unavailableReason = `token missing scope(s): ${missing.join(', ')}`;
+    else available = true;
+    return { ...a, available, unavailableReason };
+  });
+  return { connector: 'slack', grantedScopes: [...granted], actions };
+}
+
+/** AI-readable summary of what Slack functions are usable right now (for prompts). */
+export function describeSlackForPrompt(resolved) {
+  const lines = ['SLACK CAPABILITIES (only AVAILABLE actions actually work for this workspace)'];
+  for (const a of resolved.actions) {
+    const status = a.available ? 'available' : `unavailable (${a.unavailableReason})`;
+    const cfg = (a.config ?? []).map((f) => `${f.key}${f.required ? '' : '?'}: ${f.type}`).join(', ');
+    lines.push(`  - ${a.id} — ${a.label} [${status}]${cfg ? ` · config: { ${cfg} }` : ''}`);
+  }
+  lines.push('Do not propose UNAVAILABLE actions. If the user asks for one, say it is not enabled for this workspace.');
+  return lines.join('\n');
+}
+
+/**
+ * A cached capability provider: detects the token's scopes once and resolves the
+ * map. Mounted on the spine so `/capabilities` and the converger share one view.
+ * @param {{ token?: string, apiBase?: string, fetchImpl?: typeof fetch }} [opts]
+ */
+export function createSlackCapabilityProvider(opts = {}) {
+  let cache = null;
+  async function resolve() {
+    if (!cache) cache = resolveSlackCapabilities(await detectGrantedScopes(opts));
+    return cache;
+  }
+  return {
+    resolve,
+    async describe() { return describeSlackForPrompt(await resolve()); },
+    /** Drop the cached scopes (e.g. after a client re-installs with new scopes). */
+    refresh() { cache = null; },
+  };
+}
 
 /**
  * Register the Slack delivery channel on a ChannelRegistry.

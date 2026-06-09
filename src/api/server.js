@@ -38,7 +38,7 @@ import {
 } from '../workflows/index.js';
 import { LlamaCppLLM, ModelPool } from '../llm/index.js';
 import { EmbeddingModel, TextSplitter, VectorStore } from '../rag/index.js';
-import { registerSlackChannel } from '../connectors/slack/index.js';
+import { registerSlackChannel, createSlackCapabilityProvider } from '../connectors/slack/index.js';
 
 const PORT = Number(process.env.PORT ?? 3000);
 const WORKFLOWS_DB = process.env.WORKFLOWS_DB ?? './memory/workflows/workflows.sqlite';
@@ -146,11 +146,16 @@ export async function bootSpine() {
   const llm = buildLocalLLM();
   const engine = await buildEngine(workflowStore, llm);
   const rag = await buildRag();
+  // Slack capability provider: auto-detects the bot token's granted scopes (cached)
+  // and resolves the capability map so /capabilities + the converger see only what
+  // this client's workspace actually allows.
+  const slack = createSlackCapabilityProvider({ token: process.env.SLACK_BOT_TOKEN, apiBase: process.env.SLACK_API_URL });
 
   return {
     auth,
     engine,
     rag,
+    slack,
     get llm() { return engine.llm; },
     // Dispose Metal contexts/models before exit — freeing an embedding context
     // and a chat model together at process exit can trip an upstream llama.cpp
@@ -227,10 +232,17 @@ export function createApp(spine) {
     }
   });
 
-  // Expose the wired capability schemas (delivery channels + their config) — the
-  // contract the converger (P3) targets. "Connector NOT listed is not wired."
-  app.get('/capabilities', (_req, res) => {
-    res.json({ channels: spine.engine.channelRegistry.getAll() });
+  // Expose the wired capability schemas — the contract the converger (P3) targets.
+  // `channels` = delivery channels; `connectors.slack` = the Slack capability map
+  // resolved for THIS client's granted scopes (actions carry `available` flags).
+  // "Connector/action NOT available is not usable — don't propose it."
+  app.get('/capabilities', async (_req, res) => {
+    try {
+      const slack = await spine.slack.resolve();
+      res.json({ channels: spine.engine.channelRegistry.getAll(), connectors: { slack } });
+    } catch (err) {
+      res.status(500).json({ error: `capabilities failed: ${err.message ?? String(err)}` });
+    }
   });
 
   // Run a hand-authored spec through the engine — the "click run" path (no UI yet).
