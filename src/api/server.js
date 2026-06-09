@@ -49,6 +49,13 @@ const LOCAL_MODEL_PATH = process.env.LOCAL_MODEL_PATH
 const EMBEDDING_PROVIDER   = process.env.EMBEDDING_PROVIDER ?? 'local';
 const EMBEDDING_MODEL_PATH = process.env.EMBEDDING_MODEL_PATH
   ?? resolve('models/nomic-embed-text-v1.5.Q4_K_M.gguf');
+// Auth store/key locations — env-overridable so checks can run hermetically
+// against a temp dir instead of writing to ./memory. Defaults match the
+// auth subsystem's own defaults.
+const AUTH_DB     = process.env.AUTH_DB     ?? './memory/auth.sqlite';
+const AUTH_SECRET = process.env.AUTH_SECRET ?? './memory/.jwt-secret';
+const OAUTH_DB    = process.env.OAUTH_DB    ?? './memory/oauth.sqlite';
+const OAUTH_KEY   = process.env.OAUTH_KEY   ?? './memory/.oauth-key';
 
 const ensureDir = (file) => { try { mkdirSync(dirname(file), { recursive: true }); } catch { /* ok */ } };
 
@@ -132,7 +139,9 @@ export async function bootSpine() {
   const workflowStore = new WorkflowStore({ dbPath: WORKFLOWS_DB });
   await workflowStore.init();
 
-  const auth = await createAuthSubsystem();
+  const auth = await createAuthSubsystem({
+    dbPath: AUTH_DB, secretPath: AUTH_SECRET, oauthDbPath: OAUTH_DB, oauthKeyPath: OAUTH_KEY,
+  });
 
   const llm = buildLocalLLM();
   const engine = await buildEngine(workflowStore, llm);

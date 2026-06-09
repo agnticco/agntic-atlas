@@ -44,6 +44,11 @@ const tmp = mkdtempSync(join(tmpdir(), 'atlas-p1-'));
 process.env.WORKFLOWS_DB = join(tmp, 'workflows.sqlite');
 process.env.SOURCES_DB   = join(tmp, 'sources.sqlite');
 process.env.VECTOR_DB    = join(tmp, 'vectors.sqlite');
+// Hermetic auth too — don't write to ./memory during a check.
+process.env.AUTH_DB     = join(tmp, 'auth.sqlite');
+process.env.AUTH_SECRET = join(tmp, '.jwt-secret');
+process.env.OAUTH_DB    = join(tmp, 'oauth.sqlite');
+process.env.OAUTH_KEY   = join(tmp, '.oauth-key');
 
 const spec = JSON.parse(readFileSync(resolve('docs/specs/p1-slack-hello.json'), 'utf8'));
 if (REAL && process.env.SLACK_TARGET) spec.nodes[0].config.target = process.env.SLACK_TARGET;

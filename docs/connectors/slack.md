@@ -40,6 +40,52 @@ These are not built yet; each becomes a new `action` in `slackCapability` +
 - The capability schema is visible via `GET /capabilities` and the registry's
   `describeForPrompt()` — this is the contract the P3 converger will target.
 
+## Provisioning a workspace (client onboarding)
+
+The connector authenticates with a **bot token** (`Authorization: Bearer …`) and
+calls `chat.postMessage`, so onboarding a workspace is: create an app → grant
+`chat:write` → install → copy the bot token → invite the bot → grab the channel ID.
+
+1. **Create the app in the target workspace.** api.slack.com/apps → *Create New
+   App → From scratch* → name it (e.g. "Atlas") → pick the workspace. For a client,
+   create/install in *their* workspace — each install yields its own bot token.
+2. **Grant bot scopes.** *OAuth & Permissions → Bot Token Scopes*:
+   - `chat:write` — required (post to channels the bot is in).
+   - `chat:write.public` — optional; post to *public* channels without inviting first.
+   - (For the roadmapped DM feature: `im:write` + `users:read`/`users:read.email`.)
+   - Least privilege for clients — don't add scopes the connector doesn't use.
+3. **Install → copy the token.** *Install to Workspace* → approve → copy the
+   **Bot User OAuth Token** (`xoxb-…`). This is the secret the connector uses as
+   `SLACK_BOT_TOKEN`. Treat it like a password.
+4. **Invite the bot to each target channel.** In the channel: `/invite @Atlas`.
+   Required for private channels (and public ones unless `chat:write.public` is set).
+5. **Get the channel target.** `config.target` takes a **channel ID** (recommended,
+   e.g. `C0123ABCD`) or `#name`. Find the ID via the channel's details popover, or
+   *Copy link* (trailing segment). Prefer the ID — it survives renames.
+6. **Wire it in.** Token → `SLACK_BOT_TOKEN` (env, or per-node `config.token`);
+   channel → the deliver node's `config.target`. Leave `SLACK_API_URL` unset so it
+   hits `https://slack.com/api`.
+7. **Test against the real workspace** (token stays in your shell):
+   ```
+   SLACK_BOT_TOKEN=xoxb-… SLACK_TARGET=C0123ABCD node scripts/checks/slack-post.mjs
+   ```
+   Expect a real message + a `ts`. Common errors: `not_in_channel` → invite the bot
+   (step 4); `missing_scope` → add `chat:write` and reinstall; `channel_not_found` →
+   wrong ID or the bot can't see a private channel.
+
+**Validated 2026-06-09** against a live workspace: a real post landed in channel
+`C0B3LM5V8PP`, `ts=1781019897.071609`.
+
+### Per-client / multi-tenant note
+
+Today this is **one workspace token at a time via env**, matching the pilot's "no
+per-org tenancy" decision (parked until customer #2 — see CLAUDE.md). For multiple
+clients, bot tokens should not live in env: store each client's token in the
+AES-256-GCM **OAuth vault** (`createAuthSubsystem` → `oauthTokenStore`) via the
+manifest-driven connector flow (`connector-manifest.js`), keyed per tenant — no
+secrets in env or source. That's the per-user-OAuth roadmap item and lands with
+multi-tenancy.
+
 ## Run it ("click run")
 
 No UI yet (greenfield, P4/P5). The "run" path is `POST /workflows/run { spec }`:
