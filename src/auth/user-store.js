@@ -14,9 +14,14 @@ import { randomUUID } from 'node:crypto';
 import argon2 from 'argon2';
 import { log } from '../utils/logger.js';
 
+// Multi-tenant: every user belongs to exactly one tenant (tenant_id). Email stays
+// GLOBALLY unique so login-by-email resolves the user's tenant without the client
+// having to name their workspace. Platform operators are `admin` users in the
+// reserved 'platform' tenant (no separate role → no CHECK-constraint rebuild).
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS users (
   id              TEXT PRIMARY KEY,
+  tenant_id       TEXT NOT NULL DEFAULT 'default',
   email           TEXT UNIQUE NOT NULL,
   password_hash   TEXT NOT NULL,
   role            TEXT NOT NULL CHECK(role IN ('admin','user')) DEFAULT 'user',
@@ -25,8 +30,22 @@ CREATE TABLE IF NOT EXISTS users (
   created_at      TEXT NOT NULL,
   updated_at      TEXT NOT NULL
 );
-CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
+CREATE INDEX IF NOT EXISTS idx_users_email  ON users(email);
 `;
+// NOTE: the tenant_id index is created in the migration (after the column is
+// guaranteed) — never in SCHEMA, or exec(SCHEMA) on a legacy table without the
+// column would fail with "no such column: tenant_id".
+
+/** Reserved tenant whose admins are platform operators (can manage tenants). */
+export const PLATFORM_TENANT_ID = 'platform';
+
+/** Fail-closed guard: a tenant-scoped op must never run without a tenant. */
+function requireTenant(tenantId, where) {
+  if (typeof tenantId !== 'string' || !tenantId.trim()) {
+    throw new Error(`tenant scope required for ${where} (refusing unscoped query)`);
+  }
+  return tenantId;
+}
 
 // Argon2id parameters — defaults from the owasp 2024 guidance.
 // See docs/multi-user-architecture.md §5.3.
@@ -59,6 +78,17 @@ export class UserStore {
       this.db.pragma('foreign_keys = ON');
     }
     this.db.exec(SCHEMA);
+    this._migrateTenantId();
+  }
+
+  /** Additive migration: add tenant_id to a legacy users table, backfilling 'default'. */
+  _migrateTenantId() {
+    const cols = this.db.prepare(`PRAGMA table_info(users)`).all().map((c) => c.name);
+    if (!cols.includes('tenant_id')) {
+      this.db.exec(`ALTER TABLE users ADD COLUMN tenant_id TEXT NOT NULL DEFAULT 'default'`);
+    }
+    // Create the index AFTER the column exists (fresh or migrated). Idempotent.
+    this.db.exec(`CREATE INDEX IF NOT EXISTS idx_users_tenant ON users(tenant_id)`);
   }
 
   close() {
@@ -78,7 +108,8 @@ export class UserStore {
    * @param {'admin'|'user'} [input.role]
    * @param {string} [input.display_name]
    */
-  async create({ email, password, role = 'user', display_name = '' }) {
+  async create({ tenantId, email, password, role = 'user', display_name = '' }) {
+    requireTenant(tenantId, 'UserStore.create');
     const normalizedEmail = normalizeEmail(email);
     validateEmail(normalizedEmail);
     validatePassword(password);
@@ -92,20 +123,34 @@ export class UserStore {
     const id  = randomUUID();
 
     this.db.prepare(`
-      INSERT INTO users (id, email, password_hash, role, display_name, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?)
-    `).run(id, normalizedEmail, password_hash, role, String(display_name ?? ''), now, now);
+      INSERT INTO users (id, tenant_id, email, password_hash, role, display_name, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(id, tenantId, normalizedEmail, password_hash, role, String(display_name ?? ''), now, now);
 
     return this.findById(id);
   }
 
-  /** Whether any user exists. Used by bootstrap logic. */
+  /** Global user count (all tenants). Used by platform bootstrap. */
   count() {
     return this.db.prepare('SELECT COUNT(*) AS n FROM users').get().n;
   }
 
+  /** Users in one tenant. Used by per-tenant bootstrap / "any admin yet?" checks. */
+  countForTenant(tenantId) {
+    requireTenant(tenantId, 'UserStore.countForTenant');
+    return this.db.prepare('SELECT COUNT(*) AS n FROM users WHERE tenant_id = ?').get(tenantId).n;
+  }
+
+  /** Resolve by primary key (global) — used by middleware for the authed user's own id. */
   findById(id) {
     const row = this.db.prepare('SELECT * FROM users WHERE id = ?').get(id);
+    return row ? publicShape(row) : null;
+  }
+
+  /** Resolve by id WITHIN a tenant — fail-closed for admin "get a user in my tenant". */
+  findByIdInTenant(id, tenantId) {
+    requireTenant(tenantId, 'UserStore.findByIdInTenant');
+    const row = this.db.prepare('SELECT * FROM users WHERE id = ? AND tenant_id = ?').get(id, tenantId);
     return row ? publicShape(row) : null;
   }
 
@@ -119,8 +164,11 @@ export class UserStore {
     return this.db.prepare('SELECT * FROM users WHERE email = ?').get(normalizeEmail(email));
   }
 
-  list() {
-    return this.db.prepare('SELECT * FROM users ORDER BY created_at').all().map(publicShape);
+  /** List users in ONE tenant. Fail-closed: throws without a tenant (no global list). */
+  list(tenantId) {
+    requireTenant(tenantId, 'UserStore.list');
+    return this.db.prepare('SELECT * FROM users WHERE tenant_id = ? ORDER BY created_at')
+      .all(tenantId).map(publicShape);
   }
 
   /**
@@ -168,8 +216,11 @@ export class UserStore {
     return this.findById(userId);
   }
 
-  update(userId, patch) {
-    const row = this.db.prepare('SELECT * FROM users WHERE id = ?').get(userId);
+  // Admin-on-user ops are tenant-guarded: an admin can only mutate users in their
+  // own tenant (WHERE id = ? AND tenant_id = ?). Fail-closed on a missing tenant.
+  update(userId, patch, tenantId) {
+    requireTenant(tenantId, 'UserStore.update');
+    const row = this.db.prepare('SELECT * FROM users WHERE id = ? AND tenant_id = ?').get(userId, tenantId);
     if (!row) throw new Error('User not found.');
 
     const updates = {};
@@ -180,30 +231,33 @@ export class UserStore {
     }
 
     const keys = Object.keys(updates);
-    if (keys.length === 0) return this.findById(userId);
+    if (keys.length === 0) return this.findByIdInTenant(userId, tenantId);
 
     const assignments = keys.map(k => `${k} = @${k}`).join(', ');
-    this.db.prepare(`UPDATE users SET ${assignments}, updated_at = @updated_at WHERE id = @id`)
-      .run({ ...updates, id: userId, updated_at: new Date().toISOString() });
-    return this.findById(userId);
+    this.db.prepare(`UPDATE users SET ${assignments}, updated_at = @updated_at WHERE id = @id AND tenant_id = @tenant_id`)
+      .run({ ...updates, id: userId, tenant_id: tenantId, updated_at: new Date().toISOString() });
+    return this.findByIdInTenant(userId, tenantId);
   }
 
   /** Soft-disable. Disabled users can't authenticate but their data remains. */
-  disable(userId) {
-    this.db.prepare('UPDATE users SET disabled_at = ?, updated_at = ? WHERE id = ?')
-      .run(new Date().toISOString(), new Date().toISOString(), userId);
-    return this.findById(userId);
+  disable(userId, tenantId) {
+    requireTenant(tenantId, 'UserStore.disable');
+    this.db.prepare('UPDATE users SET disabled_at = ?, updated_at = ? WHERE id = ? AND tenant_id = ?')
+      .run(new Date().toISOString(), new Date().toISOString(), userId, tenantId);
+    return this.findByIdInTenant(userId, tenantId);
   }
 
-  enable(userId) {
-    this.db.prepare('UPDATE users SET disabled_at = NULL, updated_at = ? WHERE id = ?')
-      .run(new Date().toISOString(), userId);
-    return this.findById(userId);
+  enable(userId, tenantId) {
+    requireTenant(tenantId, 'UserStore.enable');
+    this.db.prepare('UPDATE users SET disabled_at = NULL, updated_at = ? WHERE id = ? AND tenant_id = ?')
+      .run(new Date().toISOString(), userId, tenantId);
+    return this.findByIdInTenant(userId, tenantId);
   }
 
-  /** Hard delete. Use with care — prefer disable(). */
-  delete(userId) {
-    this.db.prepare('DELETE FROM users WHERE id = ?').run(userId);
+  /** Hard delete. Use with care — prefer disable(). Tenant-guarded. */
+  delete(userId, tenantId) {
+    requireTenant(tenantId, 'UserStore.delete');
+    this.db.prepare('DELETE FROM users WHERE id = ? AND tenant_id = ?').run(userId, tenantId);
   }
 }
 
@@ -235,6 +289,7 @@ function publicShape(row) {
   if (!row) return null;
   return {
     id:           row.id,
+    tenant_id:    row.tenant_id ?? 'default',
     email:        row.email,
     role:         row.role,
     display_name: row.display_name ?? '',

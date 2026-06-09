@@ -16,9 +16,14 @@
 
 import Database from 'better-sqlite3';
 
+// tenant_id is added as a column (user_id is a global UUID, so (user_id,
+// connector_id) is already globally unique — no PK rebuild needed). Every method
+// is fail-closed: it requires a tenant and filters `AND tenant_id = ?`, so a
+// wrong-tenant access can never read or mutate another tenant's credentials.
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS oauth_tokens (
   user_id            TEXT NOT NULL,
+  tenant_id          TEXT NOT NULL DEFAULT 'default',
   connector_id       TEXT NOT NULL,
   access_token_enc   TEXT NOT NULL,
   refresh_token_enc  TEXT,
@@ -29,8 +34,16 @@ CREATE TABLE IF NOT EXISTS oauth_tokens (
   updated_at         INTEGER NOT NULL,
   PRIMARY KEY (user_id, connector_id)
 );
-CREATE INDEX IF NOT EXISTS idx_oauth_user ON oauth_tokens(user_id);
+CREATE INDEX IF NOT EXISTS idx_oauth_user   ON oauth_tokens(user_id);
 `;
+// idx_oauth_tenant is created in init() after the tenant_id column is ensured.
+
+function requireTenant(tenantId, where) {
+  if (typeof tenantId !== 'string' || !tenantId.trim()) {
+    throw new Error(`tenant scope required for ${where} (refusing unscoped vault access)`);
+  }
+  return tenantId;
+}
 
 export class OAuthTokenStore {
   /**
@@ -50,6 +63,11 @@ export class OAuthTokenStore {
       this.db.pragma('synchronous = NORMAL');
     }
     this.db.exec(SCHEMA);
+    const cols = this.db.prepare(`PRAGMA table_info(oauth_tokens)`).all().map((c) => c.name);
+    if (!cols.includes('tenant_id')) {
+      this.db.exec(`ALTER TABLE oauth_tokens ADD COLUMN tenant_id TEXT NOT NULL DEFAULT 'default'`);
+    }
+    this.db.exec(`CREATE INDEX IF NOT EXISTS idx_oauth_tenant ON oauth_tokens(tenant_id, user_id)`);
   }
 
   close() {
@@ -68,17 +86,18 @@ export class OAuthTokenStore {
    * @param {number} [row.expiry]         - epoch ms
    * @param {string|null} [row.account]
    */
-  upsert({ userId, connectorId, accessTokenEnc, refreshTokenEnc = null, scope = '', expiry = 0, account = null }) {
+  upsert({ tenantId, userId, connectorId, accessTokenEnc, refreshTokenEnc = null, scope = '', expiry = 0, account = null }) {
+    requireTenant(tenantId, 'OAuthTokenStore.upsert');
     if (!userId || !connectorId) throw new Error('upsert requires userId and connectorId');
     if (!accessTokenEnc)         throw new Error('upsert requires accessTokenEnc');
     const now = Date.now();
     const existing = this.db
-      .prepare('SELECT created_at FROM oauth_tokens WHERE user_id = ? AND connector_id = ?')
-      .get(userId, connectorId);
+      .prepare('SELECT created_at FROM oauth_tokens WHERE user_id = ? AND connector_id = ? AND tenant_id = ?')
+      .get(userId, connectorId, tenantId);
     this.db.prepare(`
       INSERT INTO oauth_tokens
-        (user_id, connector_id, access_token_enc, refresh_token_enc, scope, expiry, account, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        (user_id, tenant_id, connector_id, access_token_enc, refresh_token_enc, scope, expiry, account, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(user_id, connector_id) DO UPDATE SET
         access_token_enc  = excluded.access_token_enc,
         -- keep the prior refresh token when the provider didn't return a new
@@ -89,39 +108,42 @@ export class OAuthTokenStore {
         account           = COALESCE(excluded.account, oauth_tokens.account),
         updated_at        = excluded.updated_at
     `).run(
-      userId, connectorId, accessTokenEnc, refreshTokenEnc, scope,
+      userId, tenantId, connectorId, accessTokenEnc, refreshTokenEnc, scope,
       // epoch-ms timestamps exceed 32 bits — `| 0` would truncate and corrupt
       // the expiry (making the fresh fast-path never fire → refresh-storm).
       (Number.isFinite(+expiry) ? Math.trunc(+expiry) : 0), account,
       existing?.created_at ?? now, now,
     );
-    return this.get(userId, connectorId);
+    return this.get({ tenantId, userId, connectorId });
   }
 
-  /** Get the raw (still-encrypted) row, or null. Strictly keyed by user_id. */
-  get(userId, connectorId) {
+  /** Get the raw (still-encrypted) row, or null. Fail-closed: tenant-scoped. */
+  get({ tenantId, userId, connectorId }) {
+    requireTenant(tenantId, 'OAuthTokenStore.get');
     if (!userId || !connectorId) return null;
     return this.db
-      .prepare('SELECT * FROM oauth_tokens WHERE user_id = ? AND connector_id = ?')
-      .get(userId, connectorId) || null;
+      .prepare('SELECT * FROM oauth_tokens WHERE user_id = ? AND connector_id = ? AND tenant_id = ?')
+      .get(userId, connectorId, tenantId) || null;
   }
 
-  /** Whether a token row exists for this owner+connector. */
-  has(userId, connectorId) {
-    return !!this.get(userId, connectorId);
+  /** Whether a token row exists for this tenant+owner+connector. */
+  has({ tenantId, userId, connectorId }) {
+    return !!this.get({ tenantId, userId, connectorId });
   }
 
-  /** Delete the row. Returns true if a row was removed. */
-  delete(userId, connectorId) {
+  /** Delete the row. Returns true if a row was removed. Tenant-scoped. */
+  delete({ tenantId, userId, connectorId }) {
+    requireTenant(tenantId, 'OAuthTokenStore.delete');
     if (!userId || !connectorId) return false;
     const r = this.db
-      .prepare('DELETE FROM oauth_tokens WHERE user_id = ? AND connector_id = ?')
-      .run(userId, connectorId);
+      .prepare('DELETE FROM oauth_tokens WHERE user_id = ? AND connector_id = ? AND tenant_id = ?')
+      .run(userId, connectorId, tenantId);
     return r.changes > 0;
   }
 
-  /** Update only the rotated token fields after a refresh. */
-  updateTokens({ userId, connectorId, accessTokenEnc, refreshTokenEnc = null, expiry = 0 }) {
+  /** Update only the rotated token fields after a refresh. Tenant-scoped. */
+  updateTokens({ tenantId, userId, connectorId, accessTokenEnc, refreshTokenEnc = null, expiry = 0 }) {
+    requireTenant(tenantId, 'OAuthTokenStore.updateTokens');
     const now = Date.now();
     this.db.prepare(`
       UPDATE oauth_tokens
@@ -129,11 +151,11 @@ export class OAuthTokenStore {
              refresh_token_enc = COALESCE(?, refresh_token_enc),
              expiry            = ?,
              updated_at        = ?
-       WHERE user_id = ? AND connector_id = ?
+       WHERE user_id = ? AND connector_id = ? AND tenant_id = ?
     `).run(accessTokenEnc, refreshTokenEnc,
       (Number.isFinite(+expiry) ? Math.trunc(+expiry) : 0),  // not `| 0` — 32-bit truncates epoch-ms
-      now, userId, connectorId);
-    return this.get(userId, connectorId);
+      now, userId, connectorId, tenantId);
+    return this.get({ tenantId, userId, connectorId });
   }
 }
 

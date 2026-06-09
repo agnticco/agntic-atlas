@@ -78,12 +78,13 @@ export class TokenService {
    * @param {number} claims.ttlMs      - lifetime in ms
    * @returns {string}
    */
-  sign({ userId, sessionId, role, ttlMs }) {
+  sign({ userId, tenantId, sessionId, role, ttlMs }) {
     if (!userId || !sessionId || !role || !ttlMs) {
       throw new Error('sign() requires userId, sessionId, role, ttlMs');
     }
+    if (!tenantId) throw new Error('sign() requires tenantId');
     return jwt.sign(
-      { sub: userId, jti: sessionId, role },
+      { sub: userId, jti: sessionId, role, tid: tenantId },
       this._secret,
       { algorithm: ALGO, expiresIn: Math.floor(ttlMs / 1000), issuer: ISSUER },
     );

@@ -9,6 +9,8 @@
  * @module src/auth/middleware.js
  */
 
+import { PLATFORM_TENANT_ID } from './user-store.js';
+
 const COOKIE_NAME = 'session';
 
 /**
@@ -47,16 +49,21 @@ export function buildAuthMiddleware({ tokenService, sessionStore, userStore }) {
     if (!token) return null;
 
     const claims = tokenService.verify(token);
-    if (!claims?.sub || !claims?.jti) return null;
+    if (!claims?.sub || !claims?.jti || !claims?.tid) return null;
 
     const session = sessionStore.touch(claims.jti);
     if (!session) return null;
     if (session.user_id !== claims.sub) return null;
+    // Tenant cross-checks: the session row's tenant and the user's tenant must
+    // both match the token's tenant claim. A token can never act in a tenant it
+    // wasn't issued for.
+    if (session.tenant_id !== claims.tid) return null;
 
     const user = userStore.findById(claims.sub);
     if (!user || user.disabled_at) return null;
+    if (user.tenant_id !== claims.tid) return null;
 
-    return { user, session };
+    return { user, session, tenant: { id: claims.tid } };
   }
 
   /** Express middleware: require a valid session. */
@@ -66,6 +73,7 @@ export function buildAuthMiddleware({ tokenService, sessionStore, userStore }) {
       if (!ctx) return res.status(401).json({ error: 'Unauthorized' });
       req.user    = ctx.user;
       req.session = ctx.session;
+      req.tenant  = ctx.tenant;
       next();
     } catch (err) {
       // Don't expose internal failures — log + 401.
@@ -90,12 +98,24 @@ export function buildAuthMiddleware({ tokenService, sessionStore, userStore }) {
   async function optionalAuth(req, _res, next) {
     try {
       const ctx = await authenticate(req);
-      if (ctx) { req.user = ctx.user; req.session = ctx.session; }
+      if (ctx) { req.user = ctx.user; req.session = ctx.session; req.tenant = ctx.tenant; }
     } catch { /* swallow; treat as anonymous */ }
     next();
   }
 
-  return { requireAuth, requireAdmin, optionalAuth, authenticate, COOKIE_NAME };
+  /**
+   * Express middleware: require a platform operator — an admin in the reserved
+   * platform tenant. Gates tenant-management endpoints (the only cross-tenant
+   * surface). Run AFTER requireAuth.
+   */
+  function requirePlatformAdmin(req, res, next) {
+    if (req.tenant?.id !== PLATFORM_TENANT_ID || req.user?.role !== 'admin') {
+      return res.status(403).json({ error: 'Forbidden' });
+    }
+    next();
+  }
+
+  return { requireAuth, requireAdmin, requirePlatformAdmin, optionalAuth, authenticate, COOKIE_NAME };
 }
 
 export { COOKIE_NAME };
