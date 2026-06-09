@@ -1,0 +1,82 @@
+# Atlas — Build Constitution
+
+Read this first, every session. It encodes the decisions that are **closed**, the
+code that is **off-limits**, and the rules that keep agents from reasoning over
+stale state. If something here is wrong, fix *this file* in the same commit —
+don't work around it.
+
+Full context: [`docs/agntic-ops-gap-and-build-plan.md`](docs/agntic-ops-gap-and-build-plan.md).
+Commit rules: [`docs/COMMIT_CONVENTION.md`](docs/COMMIT_CONVENTION.md).
+
+## What Atlas is
+
+A conversational workflow builder. The system starts from a vague intent and
+closes the gap through dialogue — propose one step, user confirms, measure the
+distance to a complete spec, repeat — then emits a JSON spec the existing engine
+executes. The hard, unbuilt IP is that **converger**.
+
+## Closed decisions (do not re-litigate)
+
+- **Keep the proprietary JSON spec format.** No BPMN/DMN port.
+- **No per-business / org tenancy in the pilot.** Single-user. Parked until
+  customer #2.
+- **All UI is built fresh.** No reuse of the dormant in-chat builder or the old
+  console. Clean design language, no entanglement.
+- **Fresh private repo** (this one), migrating salvage from `agntic-prod`. The
+  old repo is a read-only archive.
+
+## Don't touch (salvage — solid, high quality)
+
+These are the expensive, correct parts. Read them, build *against* them, do not
+refactor them without an explicit decision recorded here:
+
+- **Agent core** — compiled `StateGraph`, ReAct tool loop, two-phase parallel
+  planning, one human-in-the-loop pause. This is the substrate for the converger.
+- **Execution engine** — topological DAG executor with real inter-step data
+  threading (`{{prev}}`, `{{nodeId.output}}`, transitive fan-in), durable
+  cost-tracked run logs. Best-built part of the codebase.
+- **MCP connector runtime** — per-user subprocess isolation, isolation-tested,
+  manifest-driven (connector #N is a config edit).
+- **Auth + credential vault** — argon2id, revocable JWT sessions,
+  AES-256-GCM-encrypted OAuth tokens, per-user store scoping.
+
+## The frozen canonical spec
+
+Phase 3's correctness criterion is "the converger reproduces *this exact*
+hand-authored spec." When Phase 2 produces a runnable "UPS email → Slack" spec,
+it is frozen at `docs/specs/canonical-ups-slack.json`, committed, and **never
+regenerated**. The converger is built against that fixed target. (File appears in
+Phase 2; this pointer marks where it lives.)
+
+## Known gotchas
+
+- **`server.js` encoding.** In `agntic-prod` it is stored with an encoding that
+  makes plain `grep` return zero matches — it once convinced an agent the engine
+  was deleted. When migrating it in Phase 0, **re-save as clean UTF-8**. Until
+  then use `grep -a` / `perl`.
+
+## Working rules
+
+- **One deliverable per session, ending at a gate.** Rehydrate from this file +
+  the module map, not from scrollback. Don't span a phase boundary in one session.
+- **Evidence-gating (load-bearing).** No agent may report something missing,
+  broken, or deleted without a file path + line range, or the exact command that
+  returned nothing. Negative claims need proof of absence, not absence of proof.
+- **Fresh Verifier at every gate.** A gate is closed by an agent that did *not*
+  write the code, with a passing check. Record it with `Gate:` + `Verified-by:`
+  in the commit.
+- **Don't parallelize the converger.** Phases 0–3 + the spine are serial.
+  Worktree-isolate only the independent connectors and the greenfield UI surfaces.
+
+## Phase status
+
+Update as gates close. `git log --grep "^Gate:"` is the authoritative ledger.
+
+- [ ] **P0** — clean spine: engine boots in new repo, UI hits one health route
+- [ ] **P1** — Slack connector: clicking "run" posts to Slack
+- [ ] **P2** — event triggers + Gmail: hand-authored UPS→Slack fires on real email *(freeze the spec here)*
+- [ ] **P3** — converger reproduces the frozen spec, confirmations logged
+- [ ] **P4** — builder UI: workflow built entirely by talking
+- [ ] **P5** — console UI: inventory, live run monitoring, SOP view
+- [ ] **P6** — launcher + builder↔console toggle
+- [ ] **P7** — Airtable + Google write + error handling + sub-daily scheduling

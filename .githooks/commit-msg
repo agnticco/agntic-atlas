@@ -1,0 +1,67 @@
+#!/usr/bin/env bash
+# Enforces Atlas's commit convention: Conventional Commits + phase/gate tags.
+# Portable POSIX-ish shell — works on macOS's default bash 3.2.
+# See docs/COMMIT_CONVENTION.md. Bypass in emergencies with: git commit --no-verify
+set -eu
+
+msg_file="$1"
+
+fail() {
+  echo "x commit-msg: $1" >&2
+  echo "  see docs/COMMIT_CONVENTION.md (bypass: --no-verify)" >&2
+  exit 1
+}
+
+# Drop comment lines and trailing whitespace.
+cleaned="$(grep -vE '^[[:space:]]*#' "$msg_file" | sed -e 's/[[:space:]]*$//')"
+
+# Header = first non-blank line.
+header="$(printf '%s\n' "$cleaned" | grep -vE '^[[:space:]]*$' | head -n1)"
+
+# Exempt automated/merge commits.
+case "$header" in
+  Merge\ *|Revert\ *|Reapply\ *|"fixup! "*|"squash! "*) exit 0 ;;
+esac
+
+[ -n "$header" ] || fail "empty commit message"
+
+# 1) Header shape: type(scope)?: subject
+types='feat|fix|refactor|test|chore|docs|build|ci|perf|style'
+if ! printf '%s' "$header" | grep -qE "^($types)(\([a-z0-9-]+\))?!?: .+"; then
+  fail "header must be '<type>(<scope>): <subject>' — type one of: $types
+  got: $header"
+fi
+
+# 2) Header length <= 72.
+if [ "${#header}" -gt 72 ]; then
+  fail "header is ${#header} chars (max 72): $header"
+fi
+
+# 3) Subject must not end with a period.
+subject="${header#*: }"
+case "$subject" in
+  *.) fail "subject should not end with a period: $subject" ;;
+esac
+
+# 4) Type (strip scope/colon) drives the trailer rules.
+type="${header%%[(:]*}"
+
+has_phase=no
+if printf '%s\n' "$cleaned" | grep -qE '^Phase:[[:space:]]*[0-7][[:space:]]*$'; then
+  has_phase=yes
+fi
+
+# 5) feat/fix/refactor/test must carry a valid Phase trailer.
+case "$type" in
+  feat|fix|refactor|test)
+    [ "$has_phase" = yes ] || fail "$type commits require a 'Phase: <0-7>' trailer" ;;
+esac
+
+# 6) A Gate: trailer must be non-empty and accompanied by a Phase: trailer.
+if printf '%s\n' "$cleaned" | grep -qE '^Gate:'; then
+  printf '%s\n' "$cleaned" | grep -qE '^Gate:[[:space:]]*[^[:space:]]' \
+    || fail "Gate: trailer is present but empty"
+  [ "$has_phase" = yes ] || fail "a Gate: trailer requires a Phase: trailer too"
+fi
+
+exit 0

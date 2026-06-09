@@ -1,0 +1,17 @@
+# <type>(<scope>): <subject>            # max 72 chars, imperative, no period
+#
+# <body — what changed and why, wrap ~72 cols. Required for feat/fix.>
+#
+# Phase: <0-7>                          # required for feat/fix/refactor/test
+# Gate: <the "Done when" this closes>   # only when closing a phase gate
+# Verified-by: <agent|self>             # optional
+#
+# ── types ──────────────────────────────────────────────────────────────
+#  feat refactor fix test chore docs build ci perf
+# ── scopes ─────────────────────────────────────────────────────────────
+#  phase:   p0 p1 p2 p3 p4 p5 p6 p7
+#  parts:   engine converger mcp auth vault slack gmail airtable
+#           triggers ui-builder ui-console launcher schema
+#  combine: feat(p1-slack): ...
+# ───────────────────────────────────────────────────────────────────────
+# See docs/COMMIT_CONVENTION.md
