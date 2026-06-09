@@ -20,8 +20,13 @@ logs/
 *.log
 npm-debug.log*
 
-# Runtime data
+# Runtime data (root-level runtime dir only; NOT src/memory/ source)
+/memory/
 *.sqlite
+
+# Local model weights (GGUF) — large binaries, fetched out-of-band (see docs)
+models/
+*.gguf
 *.sqlite3
 *.db
 

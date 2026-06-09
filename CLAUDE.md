@@ -39,6 +39,15 @@ refactor them without an explicit decision recorded here:
   manifest-driven (connector #N is a config edit).
 - **Auth + credential vault** — argon2id, revocable JWT sessions,
   AES-256-GCM-encrypted OAuth tokens, per-user store scoping.
+- **RAG + local inference** (migrated 2026-06-08, pulled forward from the deferred
+  list) — `src/rag/` + `src/llm/{llama-cpp-llm,model-pool,chat-model}.js`. Local
+  open-source models via node-llama-cpp + company-context RAG. See
+  [`docs/capabilities/local-models-rag.md`](docs/capabilities/local-models-rag.md).
+
+**Recorded salvage edits** (the only intentional changes to salvage code):
+- `src/rag/embedding-model.js` — local-embedding `getLlama({gpu})` was hardcoded
+  `false`; made configurable (default `'auto'`, `LLAMA_GPU` to override). Hardcoded
+  `false` broke on Metal-only node-llama-cpp prebuilts (Apple Silicon). 2026-06-08.
 
 ## The frozen canonical spec
 
@@ -50,10 +59,15 @@ Phase 2; this pointer marks where it lives.)
 
 ## Known gotchas
 
-- **`server.js` encoding.** In `agntic-prod` it is stored with an encoding that
-  makes plain `grep` return zero matches — it once convinced an agent the engine
-  was deleted. When migrating it in Phase 0, **re-save as clean UTF-8**. Until
-  then use `grep -a` / `perl`.
+- **`server.js` encoding.** In `agntic-prod`, `src/api/server.js` reads as
+  `data` to `file` and plain `grep` returns zero matches — it once convinced an
+  agent the engine was deleted. **Root cause (verified):** the file is valid
+  UTF-8 with *no* BOM; it holds a single literal NUL byte (`\x00`) at offset
+  ~20198, inside a session-key template string `u:${userId}\x00${rawSessionId}`.
+  That one NUL makes macOS `grep` stop early. Fix = replace/remove that NUL, not
+  a re-encode. Until then use `grep -a` / `perl`. (P0 builds a *new* minimal
+  server.js, so this only bites when copying logic out of the salvage file.)
+  Full map: [`docs/salvage-map.md`](docs/salvage-map.md).
 
 ## Working rules
 
@@ -98,7 +112,7 @@ by this file — not a subagent. The other three are subagents in `.claude/agent
 
 Update as gates close. `git log --grep "^Gate:"` is the authoritative ledger.
 
-- [ ] **P0** — clean spine: engine boots in new repo, UI hits one health route
+- [x] **P0** — clean spine: engine boots in new repo, UI hits one health route
 - [ ] **P1** — Slack connector: clicking "run" posts to Slack
 - [ ] **P2** — event triggers + Gmail: hand-authored UPS→Slack fires on real email *(freeze the spec here)*
 - [ ] **P3** — converger reproduces the frozen spec, confirmations logged
