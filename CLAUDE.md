@@ -39,6 +39,15 @@ refactor them without an explicit decision recorded here:
   manifest-driven (connector #N is a config edit).
 - **Auth + credential vault** — argon2id, revocable JWT sessions,
   AES-256-GCM-encrypted OAuth tokens, per-user store scoping.
+- **RAG + local inference** (migrated 2026-06-08, pulled forward from the deferred
+  list) — `src/rag/` + `src/llm/{llama-cpp-llm,model-pool,chat-model}.js`. Local
+  open-source models via node-llama-cpp + company-context RAG. See
+  [`docs/capabilities/local-models-rag.md`](docs/capabilities/local-models-rag.md).
+
+**Recorded salvage edits** (the only intentional changes to salvage code):
+- `src/rag/embedding-model.js` — local-embedding `getLlama({gpu})` was hardcoded
+  `false`; made configurable (default `'auto'`, `LLAMA_GPU` to override). Hardcoded
+  `false` broke on Metal-only node-llama-cpp prebuilts (Apple Silicon). 2026-06-08.
 
 ## The frozen canonical spec
 

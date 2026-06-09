@@ -135,9 +135,16 @@ phases that need them.
 - `src/auth/` (login + vault)
 - **A new minimal `src/api/server.js`** that mounts only what P0 needs and exposes `GET /health`.
 
-**Defer to later phases**: `src/rag/`, `src/llm/llama-cpp-llm.js` + `model-pool.js` (local inference),
-`src/agents/agent-graph.js` (the monolith — extract the converger pieces in P3/P4, don't bulk-port),
-`src/mcp/` + `src/connectors/` (P1 Slack), `src/conversations/`, `src/artifacts/`, `src/memory/`.
+**Defer to later phases**: `src/agents/agent-graph.js` (the monolith — extract the converger pieces
+in P3/P4, don't bulk-port), `src/mcp/` + `src/connectors/` (P1 Slack), `src/conversations/`,
+`src/artifacts/`, most of `src/memory/`.
+
+> **Pulled forward (decision 2026-06-08):** `src/rag/` and `src/llm/llama-cpp-llm.js` +
+> `model-pool.js` (local inference) were originally deferred here but are now migrated —
+> the product needs local open-source models + company-context RAG. Also brought:
+> `src/llm/{chat-model.js, cost-tracker.js}` and `src/memory/{stores.js, base-store.js}`
+> (RAG's only `memory/` reach-in). See
+> [`docs/capabilities/local-models-rag.md`](capabilities/local-models-rag.md).
 
 **P0 "Done when" (per `scripts/gates/p0.sh`)**: server boots; `curl /health` → 200 with expected
 payload; the migrated `server.js` is clean UTF-8 (no NUL/encoding that breaks plain `grep`).
