@@ -141,6 +141,7 @@ export async function createAuthSubsystem({
     platformTenantId: PLATFORM_TENANT_ID,
     oauth,
     oauthTokenStore,
+    tokenCipher: oauthCipher, // AES-256-GCM cipher for connector tokens (e.g. Slack OAuth)
     oauthKeySource,
     /** Tear down — call on shutdown. */
     close() {

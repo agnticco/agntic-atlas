@@ -39,6 +39,9 @@ import {
 import { LlamaCppLLM, ModelPool } from '../llm/index.js';
 import { EmbeddingModel, TextSplitter, VectorStore } from '../rag/index.js';
 import { registerSlackChannel, createSlackCapabilityProvider } from '../connectors/slack/index.js';
+import {
+  createSlackOAuthFlow, storeSlackToken, getSlackToken, getSlackGrant, disconnectSlack, isOAuthConfigured,
+} from '../connectors/slack/oauth.js';
 
 const PORT = Number(process.env.PORT ?? 3000);
 const WORKFLOWS_DB = process.env.WORKFLOWS_DB ?? './memory/workflows/workflows.sqlite';
@@ -184,13 +187,15 @@ export async function bootSpine() {
   // Slack capability provider: auto-detects the bot token's granted scopes (cached)
   // and resolves the capability map so /capabilities + the converger see only what
   // this client's workspace actually allows.
-  const slack = createSlackCapabilityProvider({ token: process.env.SLACK_BOT_TOKEN, apiBase: process.env.SLACK_API_URL });
+  const slack = createSlackCapabilityProvider({ oauthTokenStore: auth.oauthTokenStore, apiBase: process.env.SLACK_API_URL });
+  const slackOAuth = createSlackOAuthFlow();
 
   return {
     auth,
     engine,
     rag,
     slack,
+    slackOAuth,
     get llm() { return engine.llm; },
     // Dispose Metal contexts/models before exit — freeing an embedding context
     // and a chat model together at process exit can trip an upstream llama.cpp
@@ -350,21 +355,68 @@ export function createApp(spine) {
   // `channels` = delivery channels; `connectors.slack` = the Slack capability map
   // resolved for THIS client's granted scopes (actions carry `available` flags).
   // "Connector/action NOT available is not usable — don't propose it."
-  app.get('/capabilities', async (_req, res) => {
+  app.get('/capabilities', requireActiveTenant, async (req, res) => {
     try {
-      const slack = await spine.slack.resolve();
+      const slack = await spine.slack.resolveForTenant(req.tenant.id);
       res.json({ channels: spine.engine.channelRegistry.getAll(), connectors: { slack } });
     } catch (err) {
       res.status(500).json({ error: `capabilities failed: ${err.message ?? String(err)}` });
     }
   });
 
+  // ── Slack connector OAuth (client authorizes the Atlas app; per-tenant token) ──
+  // Start the install — returns the "Add to Slack" authorize URL (UI/redirect later).
+  app.get('/connectors/slack/authorize', requireActiveTenant, (req, res) => {
+    try {
+      if (!isOAuthConfigured()) return res.status(501).json({ error: 'Slack OAuth is not configured on this deployment' });
+      const { authorizeUrl } = spine.slackOAuth.start({ tenantId: req.tenant.id, userId: req.user.id });
+      res.json({ authorizeUrl });
+    } catch (err) { res.status(400).json({ error: err.message ?? String(err) }); }
+  });
+  // OAuth callback. NOT auth-gated: Slack redirects the browser here; the `state`
+  // (issued at /authorize, bound to a tenant) is the trust anchor. Stores the
+  // workspace bot token encrypted in that tenant's vault.
+  app.get('/connectors/slack/callback', async (req, res) => {
+    try {
+      const grant = await spine.slackOAuth.complete({ state: req.query?.state, code: req.query?.code });
+      storeSlackToken({
+        oauthTokenStore: spine.auth.oauthTokenStore, cipher: spine.auth.tokenCipher,
+        tenantId: grant.tenantId, botToken: grant.botToken, scopes: grant.scopes, account: grant.account,
+      });
+      spine.slack.refresh(grant.tenantId);
+      res.json({ ok: true, connected: true, team: grant.account, scopes: grant.scopes });
+    } catch (err) { res.status(400).json({ error: err.message ?? String(err) }); }
+  });
+  // Is Slack connected for this tenant?
+  app.get('/connectors/slack/status', requireActiveTenant, (req, res) => {
+    const grant = getSlackGrant({ oauthTokenStore: spine.auth.oauthTokenStore, tenantId: req.tenant.id });
+    res.json({ connected: !!grant, scopes: grant?.scopes ?? [], account: grant?.account ?? null, oauthConfigured: isOAuthConfigured() });
+  });
+  // Disconnect this tenant's Slack install.
+  app.delete('/connectors/slack', requireActiveTenant, (req, res) => {
+    const removed = disconnectSlack({ oauthTokenStore: spine.auth.oauthTokenStore, tenantId: req.tenant.id });
+    spine.slack.refresh(req.tenant.id);
+    res.json({ ok: true, removed });
+  });
+
   // Run a hand-authored spec through the engine — the "click run" path (no UI yet).
   // Body: { spec } where spec is the proprietary { name, nodes[], edges[], … } shape.
   app.post('/workflows/run', optionalAuth, async (req, res) => {
-    const spec = req.body?.spec;
+    let spec = req.body?.spec;
     if (!spec || !Array.isArray(spec.nodes)) {
       return res.status(400).json({ error: 'body.spec with a nodes[] array is required' });
+    }
+    // If authenticated, run in the caller's tenant: inject that tenant's stored
+    // Slack OAuth token into slack deliver nodes (so the workflow posts as the
+    // tenant's connected workspace, not a shared env token). Unauthenticated runs
+    // fall back to the dev env token in the channel handler.
+    if (req.tenant) {
+      const tok = getSlackToken({ oauthTokenStore: spine.auth.oauthTokenStore, cipher: spine.auth.tokenCipher, tenantId: req.tenant.id });
+      if (tok) {
+        spec = { ...spec, nodes: spec.nodes.map((n) =>
+          (n?.type === 'deliver' && n?.config?.channel === 'slack' && !n?.config?.token)
+            ? { ...n, config: { ...n.config, token: tok.botToken } } : n) };
+      }
     }
     try {
       let runId = null, completed = false, output = null;
