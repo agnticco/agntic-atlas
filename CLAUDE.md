@@ -113,7 +113,7 @@ by this file — not a subagent. The other three are subagents in `.claude/agent
 Update as gates close. `git log --grep "^Gate:"` is the authoritative ledger.
 
 - [x] **P0** — clean spine: engine boots in new repo, UI hits one health route
-- [ ] **P1** — Slack connector: clicking "run" posts to Slack
+- [x] **P1** — Slack connector: clicking "run" posts to Slack
 - [ ] **P2** — event triggers + Gmail: hand-authored UPS→Slack fires on real email *(freeze the spec here)*
 - [ ] **P3** — converger reproduces the frozen spec, confirmations logged
 - [ ] **P4** — builder UI: workflow built entirely by talking
