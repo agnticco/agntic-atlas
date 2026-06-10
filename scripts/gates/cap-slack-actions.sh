@@ -15,5 +15,5 @@ out="$(node scripts/checks/slack-actions.mjs 2>&1 || true)"
 echo "$out" | grep -E '^(ok|FAIL)|tests:' || true
 echo "$out" | grep -q 'SLACK-ACTIONS-PASS' || { echo "$out" | tail -20 >&2; fail "Slack action tests did not all pass"; }
 
-echo "cap-slack-actions PASS: all 14 Slack action handlers verified (29 tests)"
+echo "cap-slack-actions PASS: all 16 Slack action handlers verified (30 tests)"
 exit 0
