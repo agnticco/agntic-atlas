@@ -414,7 +414,7 @@ export function createApp(spine) {
       const tok = getSlackToken({ oauthTokenStore: spine.auth.oauthTokenStore, cipher: spine.auth.tokenCipher, tenantId: req.tenant.id });
       if (tok) {
         spec = { ...spec, nodes: spec.nodes.map((n) =>
-          (n?.type === 'deliver' && n?.config?.channel === 'slack' && !n?.config?.token)
+          (n?.type === 'deliver' && String(n?.config?.channel ?? '').startsWith('slack') && !n?.config?.token)
             ? { ...n, config: { ...n.config, token: tok.botToken } } : n) };
       }
     }

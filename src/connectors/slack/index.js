@@ -150,6 +150,18 @@ export function registerSlackChannel(registry, { fetchImpl = fetch } = {}) {
     };
   }
 
+  // Resolve a channel arg (#name or ID) to a Slack channel ID.
+  // Most Slack APIs require an ID; chat.postMessage is the exception that accepts #name.
+  async function resolveChannel(api, target) {
+    if (!target) throw new Error('slack: channel target is required');
+    if (/^[CGDW][A-Z0-9]+$/i.test(target)) return target; // already an ID
+    const name = target.startsWith('#') ? target.slice(1) : target;
+    const d = await api('conversations.list', { exclude_archived: true, limit: 200 });
+    const ch = (d.channels ?? []).find((c) => c.name === name || c.name_normalized === name);
+    if (!ch) throw new Error(`slack: channel "${target}" not found — pass a channel ID (C…) or verify the name`);
+    return ch.id;
+  }
+
   // Resolve a user arg (Slack ID or email) to a Slack user ID.
   async function resolveUser(api, user) {
     if (!user) throw new Error('slack: user (ID or email) is required');
@@ -217,15 +229,16 @@ export function registerSlackChannel(registry, { fetchImpl = fetch } = {}) {
       const api = makeApi(config);
       if (!config.target)    throw new Error('slack_reply: target channel is required');
       if (!config.thread_ts) throw new Error('slack_reply: thread_ts is required');
+      const channelId = await resolveChannel(api, config.target);
       const text = title ? `*${title}*\n${body}` : body;
-      const d = await api('chat.postMessage', { channel: config.target, thread_ts: config.thread_ts, text });
-      return { delivered: true, channel: 'slack_reply', target: config.target, ts: d.ts };
+      const d = await api('chat.postMessage', { channel: channelId, thread_ts: config.thread_ts, text });
+      return { delivered: true, channel: 'slack_reply', target: channelId, ts: d.ts };
     },
   });
 
   // ── add_reaction ───────────────────────────────────────────────────────────
   registry.register({
-    id: 'slack_reaction', name: 'Slack Reaction', icon: 'slack',
+    id: 'slack_reaction', name: 'Slack Reaction', icon: 'slack', actionOnly: true,
     description: 'Adds an emoji reaction to a message.',
     configSchema: [
       { key: 'target',    label: 'Channel',    type: 'string', optional: false },
@@ -236,7 +249,8 @@ export function registerSlackChannel(registry, { fetchImpl = fetch } = {}) {
     deliver: async ({ config }) => {
       const api = makeApi(config);
       if (!config.target || !config.timestamp || !config.emoji) throw new Error('slack_reaction: target, timestamp, and emoji are required');
-      await api('reactions.add', { channel: config.target, timestamp: config.timestamp, name: config.emoji });
+      const channelId = await resolveChannel(api, config.target);
+      await api('reactions.add', { channel: channelId, timestamp: config.timestamp, name: config.emoji });
       return { delivered: true, channel: 'slack_reaction' };
     },
   });
@@ -256,6 +270,7 @@ export function registerSlackChannel(registry, { fetchImpl = fetch } = {}) {
     deliver: async ({ config, body }) => {
       const api = makeApi(config);
       if (!config.target) throw new Error('slack_file: target channel is required');
+      const channelId = await resolveChannel(api, config.target);
       const content = config.content ?? body ?? '';
       const filename = config.filename ?? 'output.txt';
       const title = config.title ?? filename;
@@ -271,14 +286,14 @@ export function registerSlackChannel(registry, { fetchImpl = fetch } = {}) {
         body: content,
       });
       // Step 3: complete and share to the channel
-      await api('files.completeUploadExternal', { files: [{ id: fileId, title }], channel_id: config.target });
-      return { delivered: true, channel: 'slack_file', target: config.target, fileId };
+      await api('files.completeUploadExternal', { files: [{ id: fileId, title }], channel_id: channelId });
+      return { delivered: true, channel: 'slack_file', target: channelId, fileId };
     },
   });
 
   // ── create_channel ─────────────────────────────────────────────────────────
   registry.register({
-    id: 'slack_create_channel', name: 'Slack Create Channel', icon: 'slack',
+    id: 'slack_create_channel', name: 'Slack Create Channel', icon: 'slack', actionOnly: true,
     description: 'Creates a new public or private Slack channel.',
     configSchema: [
       { key: 'name',       label: 'Channel name', type: 'string',  optional: false, hint: 'Lowercase, no spaces' },
@@ -295,7 +310,7 @@ export function registerSlackChannel(registry, { fetchImpl = fetch } = {}) {
 
   // ── invite_to_channel ──────────────────────────────────────────────────────
   registry.register({
-    id: 'slack_invite', name: 'Slack Invite to Channel', icon: 'slack',
+    id: 'slack_invite', name: 'Slack Invite to Channel', icon: 'slack', actionOnly: true,
     description: 'Invites one or more users to a channel.',
     configSchema: [
       { key: 'target', label: 'Channel',                      type: 'string', optional: false },
@@ -305,14 +320,15 @@ export function registerSlackChannel(registry, { fetchImpl = fetch } = {}) {
     deliver: async ({ config }) => {
       const api = makeApi(config);
       if (!config.target || !config.users) throw new Error('slack_invite: target and users are required');
-      await api('conversations.invite', { channel: config.target, users: config.users });
-      return { delivered: true, channel: 'slack_invite', target: config.target };
+      const channelId = await resolveChannel(api, config.target);
+      await api('conversations.invite', { channel: channelId, users: config.users });
+      return { delivered: true, channel: 'slack_invite', target: channelId };
     },
   });
 
   // ── set_channel_topic ──────────────────────────────────────────────────────
   registry.register({
-    id: 'slack_topic', name: 'Slack Set Topic', icon: 'slack',
+    id: 'slack_topic', name: 'Slack Set Topic', icon: 'slack', actionOnly: true,
     description: 'Sets the topic of a Slack channel.',
     configSchema: [
       { key: 'target', label: 'Channel', type: 'string',   optional: false },
@@ -322,16 +338,17 @@ export function registerSlackChannel(registry, { fetchImpl = fetch } = {}) {
     deliver: async ({ config, body }) => {
       const api = makeApi(config);
       if (!config.target) throw new Error('slack_topic: target channel is required');
+      const channelId = await resolveChannel(api, config.target);
       const topic = config.topic ?? body;
       if (!topic) throw new Error('slack_topic: topic text is required');
-      await api('conversations.setTopic', { channel: config.target, topic });
-      return { delivered: true, channel: 'slack_topic', target: config.target };
+      await api('conversations.setTopic', { channel: channelId, topic });
+      return { delivered: true, channel: 'slack_topic', target: channelId };
     },
   });
 
   // ── pin_message ────────────────────────────────────────────────────────────
   registry.register({
-    id: 'slack_pin', name: 'Slack Pin Message', icon: 'slack',
+    id: 'slack_pin', name: 'Slack Pin Message', icon: 'slack', actionOnly: true,
     description: 'Pins a message in a channel.',
     configSchema: [
       { key: 'target',    label: 'Channel',    type: 'string', optional: false },
@@ -341,21 +358,25 @@ export function registerSlackChannel(registry, { fetchImpl = fetch } = {}) {
     deliver: async ({ config }) => {
       const api = makeApi(config);
       if (!config.target || !config.timestamp) throw new Error('slack_pin: target and timestamp are required');
-      await api('pins.add', { channel: config.target, timestamp: config.timestamp });
-      return { delivered: true, channel: 'slack_pin', target: config.target };
+      const channelId = await resolveChannel(api, config.target);
+      await api('pins.add', { channel: channelId, timestamp: config.timestamp });
+      return { delivered: true, channel: 'slack_pin', target: channelId };
     },
   });
 
   // ── set_reminder ───────────────────────────────────────────────────────────
+  // NOTE: reminders.add requires a USER token (xoxp-), not a bot token. This
+  // channel is registered so the AI knows it exists but is unavailable until
+  // per-user OAuth tokens are added in a later phase.
   registry.register({
-    id: 'slack_reminder', name: 'Slack Set Reminder', icon: 'slack',
-    description: 'Creates a reminder for a user or the bot.',
+    id: 'slack_reminder', name: 'Slack Set Reminder', icon: 'slack', actionOnly: true,
+    description: 'Creates a reminder for a user. NOTE: requires a user OAuth token — not available with a bot token alone.',
     configSchema: [
       { key: 'text', label: 'Reminder text', type: 'textarea', optional: false },
       { key: 'time', label: 'When',          type: 'string',   optional: false, hint: 'Unix timestamp or natural language e.g. "in 30 minutes"' },
-      { key: 'user', label: 'User ID',       type: 'string',   optional: true,  hint: 'Omit to remind the bot itself' },
+      { key: 'user', label: 'User ID',       type: 'string',   optional: true  },
     ],
-    isReady: ready,
+    isReady: () => false, // requires user token, not bot token
     deliver: async ({ config, body }) => {
       const api = makeApi(config);
       const text = config.text ?? body;
@@ -369,7 +390,7 @@ export function registerSlackChannel(registry, { fetchImpl = fetch } = {}) {
 
   // ── lookup_user ────────────────────────────────────────────────────────────
   registry.register({
-    id: 'slack_lookup_user', name: 'Slack Lookup User', icon: 'slack',
+    id: 'slack_lookup_user', name: 'Slack Lookup User', icon: 'slack', actionOnly: true,
     description: 'Resolves a Slack user ID and display name from an email address.',
     configSchema: [
       { key: 'email', label: 'Email address', type: 'string', optional: false },
@@ -384,14 +405,15 @@ export function registerSlackChannel(registry, { fetchImpl = fetch } = {}) {
   });
 
   // ── search_messages ────────────────────────────────────────────────────────
+  // NOTE: search.messages requires a USER token (xoxp-), not a bot token.
   registry.register({
-    id: 'slack_search', name: 'Slack Search Messages', icon: 'slack',
-    description: 'Searches messages across the workspace.',
+    id: 'slack_search', name: 'Slack Search Messages', icon: 'slack', actionOnly: true,
+    description: 'Searches messages across the workspace. NOTE: requires a user OAuth token — not available with a bot token alone.',
     configSchema: [
       { key: 'query', label: 'Search query', type: 'string', optional: false, hint: 'Supports modifiers: in:#channel from:@user' },
       { key: 'limit', label: 'Max results',  type: 'number', optional: true  },
     ],
-    isReady: ready,
+    isReady: () => false, // requires user token, not bot token
     deliver: async ({ config }) => {
       const api = makeApi(config);
       if (!config.query) throw new Error('slack_search: query is required');
@@ -403,7 +425,7 @@ export function registerSlackChannel(registry, { fetchImpl = fetch } = {}) {
 
   // ── get_channel_history ────────────────────────────────────────────────────
   registry.register({
-    id: 'slack_history', name: 'Slack Channel History', icon: 'slack',
+    id: 'slack_history', name: 'Slack Channel History', icon: 'slack', actionOnly: true,
     description: 'Fetches recent messages from a channel (useful for digest or summarization workflows).',
     configSchema: [
       { key: 'target', label: 'Channel',           type: 'string', optional: false },
@@ -414,11 +436,51 @@ export function registerSlackChannel(registry, { fetchImpl = fetch } = {}) {
     deliver: async ({ config }) => {
       const api = makeApi(config);
       if (!config.target) throw new Error('slack_history: target channel is required');
-      const payload = { channel: config.target, limit: config.limit ?? 20 };
+      const channelId = await resolveChannel(api, config.target);
+      const payload = { channel: channelId, limit: config.limit ?? 20 };
       if (config.oldest) payload.oldest = config.oldest;
       const d = await api('conversations.history', payload);
       const messages = (d.messages ?? []).map((m) => ({ ts: m.ts, text: m.text, user: m.user }));
-      return { delivered: true, channel: 'slack_history', target: config.target, messages };
+      return { delivered: true, channel: 'slack_history', target: channelId, messages };
+    },
+  });
+
+  // ── list_channels ─────────────────────────────────────────────────────────
+  registry.register({
+    id: 'slack_list_channels', name: 'Slack List Channels', icon: 'slack', actionOnly: true,
+    description: 'Lists all public (and joined private) channels in the workspace with their IDs and names. Useful for the AI to discover valid channel targets.',
+    configSchema: [
+      { key: 'limit',            label: 'Max channels',    type: 'number',  optional: true, hint: 'Default 200' },
+      { key: 'exclude_archived', label: 'Exclude archived',type: 'boolean', optional: true, hint: 'Default true' },
+    ],
+    isReady: ready,
+    deliver: async ({ config }) => {
+      const api = makeApi(config);
+      const d = await api('conversations.list', {
+        exclude_archived: config.exclude_archived !== false,
+        limit: config.limit ?? 200,
+        types: 'public_channel,private_channel',
+      });
+      const channels = (d.channels ?? []).map((c) => ({ id: c.id, name: c.name, is_private: !!c.is_private, is_member: !!c.is_member }));
+      return { delivered: true, channel: 'slack_list_channels', channels };
+    },
+  });
+
+  // ── list_users ─────────────────────────────────────────────────────────────
+  registry.register({
+    id: 'slack_list_users', name: 'Slack List Users', icon: 'slack', actionOnly: true,
+    description: 'Lists workspace members with their IDs, names, and emails. Useful for the AI to discover user IDs for DMs or lookups.',
+    configSchema: [
+      { key: 'limit', label: 'Max users', type: 'number', optional: true, hint: 'Default 200' },
+    ],
+    isReady: ready,
+    deliver: async ({ config }) => {
+      const api = makeApi(config);
+      const d = await api('users.list', { limit: config.limit ?? 200 });
+      const users = (d.members ?? [])
+        .filter((u) => !u.deleted && !u.is_bot && u.id !== 'USLACKBOT')
+        .map((u) => ({ id: u.id, name: u.real_name || u.name, email: u.profile?.email ?? null, display_name: u.profile?.display_name ?? u.name }));
+      return { delivered: true, channel: 'slack_list_users', users };
     },
   });
 
