@@ -58,6 +58,14 @@ const stub = http.createServer((req, res) => {
       'files.list':                 { ...ok, files: [{ id: 'F001', name: 'report.pdf', title: 'Report', filetype: 'pdf', permalink: 'https://slack.com/f/F001' }] },
       'dnd.info':                   { ...ok, dnd_enabled: false, next_dnd_start_ts: null, next_dnd_end_ts: null },
       'emoji.list':                 { ...ok, emoji: { party_parrot: 'https://emoji.slack-edge.com/...', success: 'https://emoji.slack-edge.com/...' } },
+      'reminders.list':             { ...ok, reminders: [{ id: 'R001', text: 'test reminder', time: 1700000000, complete_ts: 0 }] },
+      'search.messages':            { ...ok, messages: { matches: [{ ts: '100.001', channel: { name: 'general' }, text: 'found it', permalink: 'https://slack.com/x' }] } },
+      'search.files':               { ...ok, files: { matches: [{ id: 'F001', name: 'report.pdf', title: 'Report', permalink: 'https://slack.com/f/F001' }] } },
+      'users.profile.set':          ok,
+      'dnd.setSnooze':              { ...ok, snooze_enabled: true, snooze_end_time: 1700001800 },
+      'dnd.endSnooze':              ok,
+      'stars.add':                  ok,
+      'stars.list':                 { ...ok, items: [{ type: 'message', message: { ts: '100.001', text: 'starred message' } }] },
       'users.list':                 { ...ok, members: [
         { id: 'U001', deleted: false, is_bot: false, real_name: 'Alice Smith', name: 'alice', profile: { email: 'alice@example.com', display_name: 'alice' } },
         { id: 'U002', deleted: false, is_bot: false, real_name: 'Bob Jones',  name: 'bob',   profile: { email: 'bob@example.com',   display_name: 'bob' } },
@@ -455,6 +463,108 @@ await test('list_users: calls users.list, returns member list (bots filtered)', 
   assert(r.users[0].id === 'U001' && r.users[0].name === 'Alice Smith');
   assert(r.users[0].email === 'alice@example.com');
   assert(!r.users.some((u) => u.id === 'USLACKBOT'), 'Slackbot should be filtered');
+  assert(r.delivered === true);
+});
+
+// ══ User-token actions (requires SLACK_USER_TOKEN) ═══════════════════════════
+// Set a test user token so user-token channels report isReady:true in the stub.
+process.env.SLACK_USER_TOKEN = 'xoxp-test-user-token';
+
+// ── send_as_user ──────────────────────────────────────────────────────────────
+await test('send_as_user: posts as user via user token', async () => {
+  delete calls['chat.postMessage'];
+  const r = await deliver('slack_send_as_user', { target: 'C001' }, 'message as user');
+  assertCalled('chat.postMessage');
+  assertPayload('chat.postMessage', 'channel', 'C001');
+  assert(r.ts === '111.001');
+  assert(r.delivered === true);
+});
+
+// ── send_dm_as_user ───────────────────────────────────────────────────────────
+await test('send_dm_as_user: opens DM and posts as user (appears in Direct Messages)', async () => {
+  delete calls['conversations.open']; delete calls['chat.postMessage'];
+  const r = await deliver('slack_dm_as_user', { user: 'U001' }, 'dm as user');
+  assertCalled('conversations.open');
+  assertCalled('chat.postMessage');
+  assert(r.ts === '111.001');
+  assert(r.delivered === true);
+});
+
+// ── set_reminder (user token) ─────────────────────────────────────────────────
+await test('set_reminder: calls reminders.add with user token', async () => {
+  delete calls['reminders.add'];
+  const r = await deliver('slack_reminder', { text: 'check the logs', time: 'in 1 hour' });
+  assertCalled('reminders.add');
+  assertPayload('reminders.add', 'text', 'check the logs');
+  assert(r.reminderId === 'R001');
+  assert(r.delivered === true);
+});
+
+// ── list_reminders ────────────────────────────────────────────────────────────
+await test('list_reminders: calls reminders.list (GET)', async () => {
+  delete calls['reminders.list'];
+  const r = await deliver('slack_list_reminders', {});
+  assertCalled('reminders.list');
+  assert(Array.isArray(r.reminders) && r.reminders.length === 1);
+  assert(r.delivered === true);
+});
+
+// ── search_messages (user token) ─────────────────────────────────────────────
+await test('search_messages: calls search.messages with user token', async () => {
+  delete calls['search.messages'];
+  const r = await deliver('slack_search', { query: 'test query' });
+  assertCalled('search.messages');
+  assert(Array.isArray(r.messages) && r.messages.length === 1);
+  assert(r.delivered === true);
+});
+
+// ── search_files (user token) ─────────────────────────────────────────────────
+await test('search_files: calls search.files with user token', async () => {
+  delete calls['search.files'];
+  const r = await deliver('slack_search_files', { query: 'report' });
+  assertCalled('search.files');
+  assert(Array.isArray(r.files) && r.files.length === 1);
+  assert(r.delivered === true);
+});
+
+// ── set_status ────────────────────────────────────────────────────────────────
+await test('set_status: calls users.profile.set', async () => {
+  delete calls['users.profile.set'];
+  const r = await deliver('slack_set_status', { status_text: 'In a meeting', status_emoji: ':calendar:' });
+  assertCalled('users.profile.set');
+  assert(r.status_text === 'In a meeting');
+  assert(r.delivered === true);
+});
+
+// ── set_dnd ───────────────────────────────────────────────────────────────────
+await test('set_dnd: snooze calls dnd.setSnooze', async () => {
+  delete calls['dnd.setSnooze'];
+  const r = await deliver('slack_set_dnd', { num_minutes: 30 });
+  assertCalled('dnd.setSnooze');
+  assert(r.snoozed === true);
+  assert(r.delivered === true);
+});
+await test('set_dnd: 0 minutes calls dnd.endSnooze', async () => {
+  delete calls['dnd.endSnooze'];
+  const r = await deliver('slack_set_dnd', { num_minutes: 0 });
+  assertCalled('dnd.endSnooze');
+  assert(r.snoozed === false);
+});
+
+// ── star_message ──────────────────────────────────────────────────────────────
+await test('star_message: calls stars.add', async () => {
+  delete calls['stars.add'];
+  const r = await deliver('slack_star_message', { target: 'C001', timestamp: '111.001' });
+  assertCalled('stars.add');
+  assert(r.delivered === true);
+});
+
+// ── list_stars ────────────────────────────────────────────────────────────────
+await test('list_stars: calls stars.list (GET)', async () => {
+  delete calls['stars.list'];
+  const r = await deliver('slack_list_stars', {});
+  assertCalled('stars.list');
+  assert(Array.isArray(r.items) && r.items.length === 1);
   assert(r.delivered === true);
 });
 
