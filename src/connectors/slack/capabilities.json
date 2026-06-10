@@ -155,7 +155,7 @@
     {
       "id": "get_channel_history",
       "label": "Read recent messages from a channel",
-      "description": "Fetch the most recent messages from a channel (useful for summarization or digest workflows).",
+      "description": "Fetch the most recent messages from any channel type: public (channels:history), private (groups:history), DMs (im:history), or group DMs (mpim:history).",
       "requiredScopes": ["channels:history"],
       "config": [
         { "key": "target", "type": "string", "required": true, "hint": "Channel ID (C…) or #name" },
@@ -168,7 +168,7 @@
     {
       "id": "list_channels",
       "label": "List channels in the workspace",
-      "description": "Returns all channels with their IDs and names. The AI uses this to discover valid channel targets before posting.",
+      "description": "Returns all channels (public and private) with their IDs and names. The AI uses this to discover valid channel targets before posting. Requires channels:read for public; groups:read for private.",
       "requiredScopes": ["channels:read"],
       "config": [
         { "key": "limit", "type": "number", "required": false, "hint": "Max channels to return (default 200)" },
@@ -187,6 +187,196 @@
       ],
       "returns": ["users"],
       "implemented": true
+    },
+    {
+      "id": "join_channel",
+      "label": "Join a channel",
+      "description": "Have the bot join a public channel (useful before posting without chat:write.public).",
+      "requiredScopes": ["channels:join"],
+      "config": [{ "key": "target", "type": "string", "required": true, "hint": "Channel ID (C…) or #name" }],
+      "returns": ["channelId"],
+      "implemented": true
+    },
+    {
+      "id": "leave_channel",
+      "label": "Leave a channel",
+      "description": "Remove the bot from a channel.",
+      "requiredScopes": ["channels:manage"],
+      "config": [{ "key": "target", "type": "string", "required": true, "hint": "Channel ID (C…) or #name" }],
+      "returns": ["channelId"],
+      "implemented": true
+    },
+    {
+      "id": "remove_reaction",
+      "label": "Remove an emoji reaction from a message",
+      "description": "Remove a previously added emoji reaction.",
+      "requiredScopes": ["reactions:write"],
+      "config": [
+        { "key": "target",    "type": "string", "required": true, "hint": "Channel ID (C…) or #name" },
+        { "key": "timestamp", "type": "string", "required": true, "hint": "ts of the message" },
+        { "key": "emoji",     "type": "string", "required": true, "hint": "Emoji name without colons" }
+      ],
+      "returns": ["ok"],
+      "implemented": true
+    },
+    {
+      "id": "get_reactions",
+      "label": "Get reactions on a message",
+      "description": "Read all emoji reactions on a specific message (useful for trigger/condition logic).",
+      "requiredScopes": ["reactions:read"],
+      "config": [
+        { "key": "target",    "type": "string", "required": true, "hint": "Channel ID (C…) or #name" },
+        { "key": "timestamp", "type": "string", "required": true, "hint": "ts of the message" }
+      ],
+      "returns": ["reactions"],
+      "implemented": true
+    },
+    {
+      "id": "list_pins",
+      "label": "List pinned items in a channel",
+      "description": "Get all pinned messages and files in a channel.",
+      "requiredScopes": ["pins:read"],
+      "config": [{ "key": "target", "type": "string", "required": true, "hint": "Channel ID (C…) or #name" }],
+      "returns": ["pins"],
+      "implemented": true
+    },
+    {
+      "id": "get_user_profile",
+      "label": "Get a user's detailed profile",
+      "description": "Fetch full profile: title, phone, avatar, email, custom fields.",
+      "requiredScopes": ["users.profile:read"],
+      "config": [{ "key": "user", "type": "string", "required": true, "hint": "Slack user ID (U…)" }],
+      "returns": ["displayName", "realName", "title", "phone", "email"],
+      "implemented": true
+    },
+    {
+      "id": "list_usergroups",
+      "label": "List user groups",
+      "description": "Get all user groups (teams) in the workspace with their IDs and handles.",
+      "requiredScopes": ["usergroups:read"],
+      "config": [{ "key": "include_disabled", "type": "boolean", "required": false }],
+      "returns": ["groups"],
+      "implemented": true
+    },
+    {
+      "id": "get_workspace_info",
+      "label": "Get workspace info",
+      "description": "Get the workspace name, domain, and ID.",
+      "requiredScopes": ["team:read"],
+      "config": [],
+      "returns": ["name", "domain", "id"],
+      "implemented": true
+    },
+    {
+      "id": "list_files",
+      "label": "List files in the workspace or a channel",
+      "description": "Browse files shared in the workspace, optionally filtered to a channel.",
+      "requiredScopes": ["files:read"],
+      "config": [
+        { "key": "target", "type": "string", "required": false, "hint": "Filter to a specific channel (optional)" },
+        { "key": "limit",  "type": "number", "required": false, "hint": "Max results (default 20)" }
+      ],
+      "returns": ["files"],
+      "implemented": true
+    },
+    {
+      "id": "get_dnd_status",
+      "label": "Check a user's Do Not Disturb status",
+      "description": "Check whether a user's DND is active — useful before sending a DM.",
+      "requiredScopes": ["dnd:read"],
+      "config": [{ "key": "user", "type": "string", "required": true, "hint": "Slack user ID (U…)" }],
+      "returns": ["dndEnabled", "nextStartTs", "nextEndTs"],
+      "implemented": true
+    },
+    {
+      "id": "list_emoji",
+      "label": "List custom emoji",
+      "description": "Get all custom emoji names in the workspace (useful for picking valid reaction names).",
+      "requiredScopes": ["emoji:read"],
+      "config": [],
+      "returns": ["emoji", "count"],
+      "implemented": true
+    },
+    {
+      "id": "manage_usergroup",
+      "label": "Create or update a user group",
+      "description": "Create a new user group or update its members. Useful for managing teams.",
+      "requiredScopes": ["usergroups:write"],
+      "config": [
+        { "key": "handle",  "type": "string", "required": true,  "hint": "Group handle (no @)" },
+        { "key": "name",    "type": "string", "required": false },
+        { "key": "users",   "type": "string", "required": false, "hint": "Comma-separated user IDs to set as members" }
+      ],
+      "returns": ["groupId"],
+      "implemented": false
+    },
+    {
+      "id": "list_bookmarks",
+      "label": "List channel bookmarks",
+      "description": "Get all bookmarks in a channel.",
+      "requiredScopes": ["bookmarks:read"],
+      "config": [{ "key": "target", "type": "string", "required": true }],
+      "returns": ["bookmarks"],
+      "implemented": false
+    },
+    {
+      "id": "add_bookmark",
+      "label": "Add a bookmark to a channel",
+      "description": "Add a URL bookmark to a channel's bookmarks bar.",
+      "requiredScopes": ["bookmarks:write"],
+      "config": [
+        { "key": "target", "type": "string", "required": true },
+        { "key": "title",  "type": "string", "required": true },
+        { "key": "link",   "type": "string", "required": true, "hint": "URL to bookmark" }
+      ],
+      "returns": ["bookmarkId"],
+      "implemented": false
+    },
+    {
+      "id": "read_canvas",
+      "label": "Read a Slack canvas",
+      "description": "Read the content of a Slack canvas document.",
+      "requiredScopes": ["canvases:read"],
+      "config": [{ "key": "canvas_id", "type": "string", "required": true }],
+      "returns": ["content"],
+      "implemented": false
+    },
+    {
+      "id": "write_canvas",
+      "label": "Create or update a Slack canvas",
+      "description": "Create a new canvas or update an existing one.",
+      "requiredScopes": ["canvases:write"],
+      "config": [
+        { "key": "title",   "type": "string",   "required": true },
+        { "key": "content", "type": "textarea", "required": false },
+        { "key": "canvas_id", "type": "string", "required": false, "hint": "Omit to create new" }
+      ],
+      "returns": ["canvasId"],
+      "implemented": false
+    },
+    {
+      "id": "search_files",
+      "label": "Search files in Slack",
+      "description": "Search files across the workspace. Requires a user OAuth token — not available with a bot token alone.",
+      "requiredScopes": ["search:read.files"],
+      "config": [
+        { "key": "query", "type": "string", "required": true },
+        { "key": "limit", "type": "number", "required": false }
+      ],
+      "returns": ["files"],
+      "implemented": false
+    },
+    {
+      "id": "search_private",
+      "label": "Search private/DM content",
+      "description": "Search messages in private channels, DMs, and group DMs. Requires a user OAuth token — not available with a bot token alone.",
+      "requiredScopes": ["search:read.private", "search:read.im", "search:read.mpim"],
+      "config": [
+        { "key": "query", "type": "string", "required": true },
+        { "key": "limit", "type": "number", "required": false }
+      ],
+      "returns": ["messages"],
+      "implemented": false
     },
     {
       "id": "post_group_dm",

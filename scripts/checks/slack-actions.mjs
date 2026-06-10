@@ -43,6 +43,17 @@ const stub = http.createServer((req, res) => {
         { id: 'C001', name: 'general', is_private: false, is_member: true },
         { id: 'C002', name: 'social',  is_private: false, is_member: true },
       ]},
+      'conversations.join':         { ...ok, channel: { id: 'C002' } },
+      'conversations.leave':        ok,
+      'reactions.remove':           ok,
+      'reactions.get':              { ...ok, message: { reactions: [{ name: 'white_check_mark', count: 1, users: ['U001'] }] } },
+      'pins.list':                  { ...ok, items: [{ type: 'message', message: { ts: '100.001', text: 'pinned message' } }] },
+      'users.profile.get':          { ...ok, profile: { display_name: 'Alice', real_name: 'Alice Smith', title: 'Engineer', phone: '555-0100', email: 'alice@example.com' } },
+      'usergroups.list':            { ...ok, usergroups: [{ id: 'G001', handle: 'eng', name: 'Engineering', user_count: 5 }] },
+      'team.info':                  { ...ok, team: { id: 'T001', name: 'Test Workspace', domain: 'test' } },
+      'files.list':                 { ...ok, files: [{ id: 'F001', name: 'report.pdf', title: 'Report', filetype: 'pdf', permalink: 'https://slack.com/f/F001' }] },
+      'dnd.info':                   { ...ok, dnd_enabled: false, next_dnd_start_ts: null, next_dnd_end_ts: null },
+      'emoji.list':                 { ...ok, emoji: { party_parrot: 'https://emoji.slack-edge.com/...', success: 'https://emoji.slack-edge.com/...' } },
       'users.list':                 { ...ok, members: [
         { id: 'U001', deleted: false, is_bot: false, real_name: 'Alice Smith', name: 'alice', profile: { email: 'alice@example.com', display_name: 'alice' } },
         { id: 'U002', deleted: false, is_bot: false, real_name: 'Bob Jones',  name: 'bob',   profile: { email: 'bob@example.com',   display_name: 'bob' } },
@@ -296,6 +307,117 @@ await test('post_group_dm: opens MPIM and posts', async () => {
 await test('post_group_dm: throws without users', async () => {
   let threw = false; try { await deliver('slack_group_dm', {}); } catch { threw = true; }
   assert(threw);
+});
+
+// ── join_channel ─────────────────────────────────────────────────────────────
+await test('join_channel: calls conversations.join with resolved ID', async () => {
+  delete calls['conversations.join']; delete calls['conversations.list'];
+  const r = await deliver('slack_join_channel', { target: '#social' });
+  assertCalled('conversations.join');
+  assertPayload('conversations.join', 'channel', 'C002');
+  assert(r.delivered === true);
+});
+
+// ── leave_channel ─────────────────────────────────────────────────────────────
+await test('leave_channel: calls conversations.leave', async () => {
+  delete calls['conversations.leave'];
+  const r = await deliver('slack_leave_channel', { target: 'C001' });
+  assertCalled('conversations.leave');
+  assertPayload('conversations.leave', 'channel', 'C001');
+  assert(r.delivered === true);
+});
+
+// ── remove_reaction ───────────────────────────────────────────────────────────
+await test('remove_reaction: calls reactions.remove', async () => {
+  delete calls['reactions.remove'];
+  const r = await deliver('slack_remove_reaction', { target: 'C001', timestamp: '111.001', emoji: 'thumbsup' });
+  assertCalled('reactions.remove');
+  assertPayload('reactions.remove', 'name', 'thumbsup');
+  assert(r.delivered === true);
+});
+
+// ── get_reactions ─────────────────────────────────────────────────────────────
+await test('get_reactions: calls reactions.get and returns reaction list', async () => {
+  delete calls['reactions.get'];
+  const r = await deliver('slack_get_reactions', { target: 'C001', timestamp: '111.001' });
+  assertCalled('reactions.get');
+  assertPayload('reactions.get', 'timestamp', '111.001');
+  assert(Array.isArray(r.reactions));
+  assert(r.delivered === true);
+});
+
+// ── list_pins ─────────────────────────────────────────────────────────────────
+await test('list_pins: calls pins.list with resolved channel', async () => {
+  delete calls['pins.list'];
+  const r = await deliver('slack_list_pins', { target: 'C001' });
+  assertCalled('pins.list');
+  assertPayload('pins.list', 'channel', 'C001');
+  assert(Array.isArray(r.pins));
+  assert(r.delivered === true);
+});
+
+// ── get_user_profile ──────────────────────────────────────────────────────────
+await test('get_user_profile: calls users.profile.get', async () => {
+  delete calls['users.profile.get'];
+  const r = await deliver('slack_get_user_profile', { user: 'U001' });
+  assertCalled('users.profile.get');
+  assertPayload('users.profile.get', 'user', 'U001');
+  assert(r.delivered === true);
+  assert(r.userId === 'U001');
+});
+
+// ── list_usergroups ───────────────────────────────────────────────────────────
+await test('list_usergroups: calls usergroups.list', async () => {
+  delete calls['usergroups.list'];
+  const r = await deliver('slack_list_usergroups', {});
+  assertCalled('usergroups.list');
+  assert(Array.isArray(r.groups));
+  assert(r.delivered === true);
+});
+
+// ── get_workspace_info ────────────────────────────────────────────────────────
+await test('get_workspace_info: calls team.info', async () => {
+  delete calls['team.info'];
+  const r = await deliver('slack_get_workspace_info', {});
+  assertCalled('team.info');
+  assert(r.name === 'Test Workspace');
+  assert(r.domain === 'test');
+  assert(r.delivered === true);
+});
+
+// ── list_files ────────────────────────────────────────────────────────────────
+await test('list_files: calls files.list', async () => {
+  delete calls['files.list'];
+  const r = await deliver('slack_list_files', { limit: 10 });
+  assertCalled('files.list');
+  assert(calls['files.list'].body.count === 10);
+  assert(Array.isArray(r.files) && r.files.length === 1);
+  assert(r.delivered === true);
+});
+await test('list_files: resolves channel when provided', async () => {
+  delete calls['files.list'];
+  await deliver('slack_list_files', { target: 'C001' });
+  assertPayload('files.list', 'channel', 'C001');
+});
+
+// ── get_dnd_status ────────────────────────────────────────────────────────────
+await test('get_dnd_status: calls dnd.info', async () => {
+  delete calls['dnd.info'];
+  const r = await deliver('slack_get_dnd_status', { user: 'U001' });
+  assertCalled('dnd.info');
+  assertPayload('dnd.info', 'user', 'U001');
+  assert(typeof r.dndEnabled === 'boolean');
+  assert(r.delivered === true);
+});
+
+// ── list_emoji ────────────────────────────────────────────────────────────────
+await test('list_emoji: calls emoji.list and returns names', async () => {
+  delete calls['emoji.list'];
+  const r = await deliver('slack_list_emoji', {});
+  assertCalled('emoji.list');
+  assert(Array.isArray(r.emoji));
+  assert(r.count === r.emoji.length);
+  assert(r.delivered === true);
 });
 
 // ── list_channels ─────────────────────────────────────────────────────────────
