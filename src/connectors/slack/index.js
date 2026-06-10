@@ -219,6 +219,10 @@ export function registerSlackChannel(registry, { fetchImpl = fetch } = {}) {
       const payload = { channel: config.target, text };
       if (config.username)   payload.username   = config.username;
       if (config.icon_emoji) payload.icon_emoji = config.icon_emoji;
+      // Optional rich blocks (Slack Block Kit). Pass as a JSON string or array.
+      if (config.blocks) {
+        payload.blocks = typeof config.blocks === 'string' ? JSON.parse(config.blocks) : config.blocks;
+      }
       const d = await api('chat.postMessage', payload);
       return { delivered: true, channel: 'slack', target: config.target, ts: d.ts, slackChannel: d.channel ?? config.target };
     },
