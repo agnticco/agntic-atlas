@@ -19,8 +19,12 @@ import { join } from 'node:path';
 const calls = {};  // endpoint -> { method, path, headers, body }
 const stub = http.createServer((req, res) => {
   let buf = ''; req.on('data', (d) => { buf += d; }); req.on('end', () => {
-    const endpoint = req.url.replace(/^\//, '');
-    let body = {}; try { body = JSON.parse(buf); } catch { try { body = Object.fromEntries(new URLSearchParams(buf)); } catch { /* ignore */ } }
+    // Parse both GET query-string params and POST JSON/form bodies
+    const [rawPath, qs] = req.url.split('?');
+    const endpoint = rawPath.replace(/^\//, '');
+    let body = {};
+    if (qs) { try { body = Object.fromEntries(new URLSearchParams(qs)); } catch { /* ignore */ } }
+    if (buf) { try { body = { ...body, ...JSON.parse(buf) }; } catch { try { body = { ...body, ...Object.fromEntries(new URLSearchParams(buf)) }; } catch { /* ignore */ } } }
     calls[endpoint] = { body };
 
     const ok = { ok: true };
@@ -390,7 +394,7 @@ await test('list_files: calls files.list', async () => {
   delete calls['files.list'];
   const r = await deliver('slack_list_files', { limit: 10 });
   assertCalled('files.list');
-  assert(calls['files.list'].body.count === 10);
+  assert(Number(calls['files.list'].body.count) === 10);
   assert(Array.isArray(r.files) && r.files.length === 1);
   assert(r.delivered === true);
 });

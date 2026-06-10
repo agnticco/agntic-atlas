@@ -133,21 +133,38 @@ export function createSlackCapabilityProvider({ oauthTokenStore = null, token = 
 export function registerSlackChannel(registry, { fetchImpl = fetch } = {}) {
   const ready = () => isOAuthConfigured() || !!process.env.SLACK_BOT_TOKEN;
 
-  // Shared helper — resolves the token, builds a typed Slack API caller.
+  // Shared helper — resolves the token, builds typed Slack API callers.
+  // postApi: for methods that accept JSON body (most write APIs).
+  // getApi:  for methods that require query-string params (reactions.get, pins.list,
+  //          files.getUploadURLExternal, etc.) — Slack's read APIs often use GET.
   function makeApi(config) {
     const token = config.token ?? process.env.SLACK_BOT_TOKEN;
     if (!token) throw new Error('slack: no token — this tenant has not connected Slack');
     const apiBase = process.env.SLACK_API_URL ?? DEFAULT_API_BASE;
-    return async function api(method, payload) {
-      const r = await fetchImpl(`${apiBase}/${method}`, {
-        method: 'POST',
-        headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json; charset=utf-8' },
-        body: JSON.stringify(payload),
-      });
+
+    async function call(method, payload, useGet = false) {
+      let url = `${apiBase}/${method}`;
+      const opts = { headers: { authorization: `Bearer ${token}` } };
+      if (useGet) {
+        const qs = new URLSearchParams(
+          Object.fromEntries(Object.entries(payload ?? {}).filter(([, v]) => v !== undefined && v !== null))
+        ).toString();
+        if (qs) url += `?${qs}`;
+        opts.method = 'GET';
+      } else {
+        opts.method = 'POST';
+        opts.headers['content-type'] = 'application/json; charset=utf-8';
+        opts.body = JSON.stringify(payload);
+      }
+      const r = await fetchImpl(url, opts);
       let d; try { d = await r.json(); } catch { d = { ok: false, error: 'invalid_json_response' }; }
       if (!d.ok) throw new Error(`slack ${method} failed: ${d.error ?? `HTTP ${r.status}`}`);
       return d;
-    };
+    }
+
+    const api = (method, payload) => call(method, payload, false);
+    api.get = (method, payload) => call(method, payload, true);
+    return api;
   }
 
   // Resolve a channel arg (#name or ID) to a Slack channel ID.
@@ -275,8 +292,8 @@ export function registerSlackChannel(registry, { fetchImpl = fetch } = {}) {
       const filename = config.filename ?? 'output.txt';
       const title = config.title ?? filename;
       const length = Buffer.byteLength(content, 'utf8');
-      // Step 1: get an upload URL
-      const urlRes = await api('files.getUploadURLExternal', { filename, length });
+      // Step 1: get an upload URL — Slack's v2 upload API uses GET with query params
+      const urlRes = await api.get('files.getUploadURLExternal', { filename, length });
       const uploadUrl = urlRes.upload_url;
       const fileId = urlRes.file_id;
       // Step 2: upload the content directly
@@ -476,7 +493,7 @@ export function registerSlackChannel(registry, { fetchImpl = fetch } = {}) {
     isReady: ready,
     deliver: async ({ config }) => {
       const api = makeApi(config);
-      const d = await api('users.list', { limit: config.limit ?? 200 });
+      const d = await api.get('users.list', { limit: config.limit ?? 200 });
       const users = (d.members ?? [])
         .filter((u) => !u.deleted && !u.is_bot && u.id !== 'USLACKBOT')
         .map((u) => ({ id: u.id, name: u.real_name || u.name, email: u.profile?.email ?? null, display_name: u.profile?.display_name ?? u.name }));
@@ -546,7 +563,7 @@ export function registerSlackChannel(registry, { fetchImpl = fetch } = {}) {
       const api = makeApi(config);
       if (!config.target || !config.timestamp) throw new Error('slack_get_reactions: target and timestamp are required');
       const channelId = await resolveChannel(api, config.target);
-      const d = await api('reactions.get', { channel: channelId, timestamp: config.timestamp, full: true });
+      const d = await api.get('reactions.get', { channel: channelId, timestamp: config.timestamp, full: true });
       const reactions = (d.message?.reactions ?? []).map((r) => ({ emoji: r.name, count: r.count, users: r.users ?? [] }));
       return { delivered: true, channel: 'slack_get_reactions', reactions };
     },
@@ -562,7 +579,7 @@ export function registerSlackChannel(registry, { fetchImpl = fetch } = {}) {
       const api = makeApi(config);
       if (!config.target) throw new Error('slack_list_pins: target is required');
       const channelId = await resolveChannel(api, config.target);
-      const d = await api('pins.list', { channel: channelId });
+      const d = await api.get('pins.list', { channel: channelId });
       const pins = (d.items ?? []).map((i) => ({ type: i.type, ts: i.message?.ts ?? i.file?.id, text: i.message?.text ?? i.file?.name }));
       return { delivered: true, channel: 'slack_list_pins', target: channelId, pins };
     },
@@ -577,7 +594,7 @@ export function registerSlackChannel(registry, { fetchImpl = fetch } = {}) {
     deliver: async ({ config }) => {
       const api = makeApi(config);
       if (!config.user) throw new Error('slack_get_user_profile: user is required');
-      const d = await api('users.profile.get', { user: config.user });
+      const d = await api.get('users.profile.get', { user: config.user });
       const p = d.profile ?? {};
       return { delivered: true, channel: 'slack_get_user_profile', userId: config.user, displayName: p.display_name, realName: p.real_name, title: p.title ?? null, phone: p.phone ?? null, email: p.email ?? null };
     },
@@ -593,7 +610,7 @@ export function registerSlackChannel(registry, { fetchImpl = fetch } = {}) {
     isReady: ready,
     deliver: async ({ config }) => {
       const api = makeApi(config);
-      const d = await api('usergroups.list', { include_disabled: !!config.include_disabled });
+      const d = await api.get('usergroups.list', { include_disabled: !!config.include_disabled });
       const groups = (d.usergroups ?? []).map((g) => ({ id: g.id, handle: g.handle, name: g.name, count: g.user_count }));
       return { delivered: true, channel: 'slack_list_usergroups', groups };
     },
@@ -607,7 +624,7 @@ export function registerSlackChannel(registry, { fetchImpl = fetch } = {}) {
     isReady: ready,
     deliver: async ({ config }) => {
       const api = makeApi(config);
-      const d = await api('team.info', {});
+      const d = await api.get('team.info', {});
       const t = d.team ?? {};
       return { delivered: true, channel: 'slack_get_workspace_info', name: t.name, domain: t.domain, id: t.id };
     },
@@ -626,7 +643,7 @@ export function registerSlackChannel(registry, { fetchImpl = fetch } = {}) {
       const api = makeApi(config);
       const payload = { count: config.limit ?? 20 };
       if (config.target) payload.channel = await resolveChannel(api, config.target);
-      const d = await api('files.list', payload);
+      const d = await api.get('files.list', payload);
       const files = (d.files ?? []).map((f) => ({ id: f.id, name: f.name, title: f.title, type: f.filetype, url: f.permalink }));
       return { delivered: true, channel: 'slack_list_files', files };
     },
@@ -641,7 +658,7 @@ export function registerSlackChannel(registry, { fetchImpl = fetch } = {}) {
     deliver: async ({ config }) => {
       const api = makeApi(config);
       if (!config.user) throw new Error('slack_get_dnd_status: user is required');
-      const d = await api('dnd.info', { user: config.user });
+      const d = await api.get('dnd.info', { user: config.user });
       return { delivered: true, channel: 'slack_get_dnd_status', userId: config.user, dndEnabled: !!d.dnd_enabled, nextStartTs: d.next_dnd_start_ts ?? null, nextEndTs: d.next_dnd_end_ts ?? null };
     },
   });
@@ -654,7 +671,7 @@ export function registerSlackChannel(registry, { fetchImpl = fetch } = {}) {
     isReady: ready,
     deliver: async ({ config }) => {
       const api = makeApi(config);
-      const d = await api('emoji.list', {});
+      const d = await api.get('emoji.list', {});
       const emoji = Object.keys(d.emoji ?? {});
       return { delivered: true, channel: 'slack_list_emoji', emoji, count: emoji.length };
     },
