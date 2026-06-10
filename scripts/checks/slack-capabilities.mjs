@@ -25,12 +25,19 @@ const check = (name, cond) => { console.log(`${cond ? 'ok  ' : 'FAIL'} ${name}`)
     'reminders:write','users:read','users:read.email','users.profile:read',
     'search:read.public','mpim:write','usergroups:read','team:read','dnd:read','emoji:read',
     'groups:read','groups:history','im:history','mpim:history'];
-  const r = resolveSlackCapabilities(allScopes);
+  // Without a user token: only bot-token actions available; user-token ones show "requires user token"
+  const r = resolveSlackCapabilities(allScopes, { hasUserToken: false });
   const botAvailable = r.actions.filter((a) => a.available);
-  check('25 actions available with full bot scope grant', botAvailable.length === 25);
-  check('set_reminder unavailable (user token only)', r.actions.find((a) => a.id === 'set_reminder')?.available === false);
-  check('search_messages unavailable (user token only)', r.actions.find((a) => a.id === 'search_messages')?.available === false);
-  check('action count is 34', r.actions.length === 34);
+  check('25 bot-token actions available (no user token)', botAvailable.length === 25);
+  check('set_reminder unavailable without user token', r.actions.find((a) => a.id === 'set_reminder')?.available === false);
+  check('search_messages unavailable without user token', r.actions.find((a) => a.id === 'search_messages')?.available === false);
+  check('user-token actions have correct unavailableReason', r.actions.filter((a) => a.tokenType === 'user').every((a) => /requires user OAuth/.test(a.unavailableReason ?? '')));
+
+  // With a user token: all implemented actions (bot + user) available
+  const rUser = resolveSlackCapabilities(allScopes, { hasUserToken: true });
+  const allAvailable = rUser.actions.filter((a) => a.available);
+  check('36 actions available with user token + full scopes', allAvailable.length === 36);
+  check('action count is 41', r.actions.length === 41);
 }
 {
   const pm = resolveSlackCapabilities([]).actions.find((a) => a.id === 'post_message');
@@ -92,7 +99,7 @@ const check = (name, cond) => { console.log(`${cond ? 'ok  ' : 'FAIL'} ${name}`)
   check('grantedScopes auto-detected via endpoint', !!slack?.grantedScopes?.includes('chat:write'));
   check('post_message available over endpoint', pm?.available === true);
   const botAvail = (caps.connectors?.slack?.actions ?? []).filter((a) => a.available);
-  check('25 actions available over endpoint (excl user-token-only)', botAvail.length === 25);
+  check('25 bot-token actions available over endpoint (no user token in test)', botAvail.length === 25);
   console.log(`  menu: ${slack?.actions?.map((a) => `${a.id}${a.available ? '✓' : '✗'}`).join(' ')}`);
 }
 
