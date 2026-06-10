@@ -119,7 +119,7 @@
     {
       "id": "set_reminder",
       "label": "Set a reminder for a user",
-      "description": "Create a reminder for a user or the bot.",
+      "description": "Create a reminder for a user. Requires a user OAuth token — not available with a bot token. Will be enabled when per-user OAuth is added.",
       "requiredScopes": ["reminders:write"],
       "config": [
         { "key": "text", "type": "string", "required": true, "hint": "Reminder text" },
@@ -127,7 +127,7 @@
         { "key": "user", "type": "string", "required": false, "hint": "Slack user ID to remind (omit for the bot itself)" }
       ],
       "returns": ["reminderId"],
-      "implemented": true
+      "implemented": false
     },
     {
       "id": "lookup_user",
@@ -143,14 +143,14 @@
     {
       "id": "search_messages",
       "label": "Search messages in Slack",
-      "description": "Search across messages and return matching results.",
+      "description": "Search across messages and return matching results. Requires a user OAuth token — not available with a bot token. Will be enabled when per-user OAuth is added.",
       "requiredScopes": ["search:read.public"],
       "config": [
         { "key": "query", "type": "string", "required": true, "hint": "Search query, supports Slack modifiers e.g. in:#channel from:@user" },
         { "key": "limit", "type": "number", "required": false, "hint": "Max results to return (default 10)" }
       ],
       "returns": ["messages"],
-      "implemented": true
+      "implemented": false
     },
     {
       "id": "get_channel_history",
@@ -163,6 +163,29 @@
         { "key": "oldest", "type": "string", "required": false, "hint": "Fetch messages after this unix timestamp" }
       ],
       "returns": ["messages"],
+      "implemented": true
+    },
+    {
+      "id": "list_channels",
+      "label": "List channels in the workspace",
+      "description": "Returns all channels with their IDs and names. The AI uses this to discover valid channel targets before posting.",
+      "requiredScopes": ["channels:read"],
+      "config": [
+        { "key": "limit", "type": "number", "required": false, "hint": "Max channels to return (default 200)" },
+        { "key": "exclude_archived", "type": "boolean", "required": false, "hint": "Exclude archived channels (default true)" }
+      ],
+      "returns": ["channels"],
+      "implemented": true
+    },
+    {
+      "id": "list_users",
+      "label": "List workspace members",
+      "description": "Returns workspace members with IDs, names, and emails. The AI uses this to discover user IDs for DMs or lookups.",
+      "requiredScopes": ["users:read", "users:read.email"],
+      "config": [
+        { "key": "limit", "type": "number", "required": false, "hint": "Max users to return (default 200)" }
+      ],
+      "returns": ["users"],
       "implemented": true
     },
     {

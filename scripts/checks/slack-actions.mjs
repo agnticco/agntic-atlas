@@ -1,5 +1,5 @@
 /**
- * Slack actions test suite — exercises all 14 channel handlers against a
+ * Slack actions test suite — exercises all 16 channel handlers against a
  * stub Slack server. Verifies each handler:
  *   - calls the correct Slack API endpoint(s),
  *   - sends the correct payload shape,
@@ -39,6 +39,15 @@ const stub = http.createServer((req, res) => {
       'reminders.add':              { ...ok, reminder: { id: 'R001' } },
       'search.messages':            { ...ok, messages: { matches: [{ ts: '100.001', channel: { name: 'general' }, text: 'hello', permalink: 'https://slack.com/x' }] } },
       'conversations.history':      { ...ok, messages: [{ ts: '200.001', text: 'hi', user: 'U001' }] },
+      'conversations.list':         { ...ok, channels: [
+        { id: 'C001', name: 'general', is_private: false, is_member: true },
+        { id: 'C002', name: 'social',  is_private: false, is_member: true },
+      ]},
+      'users.list':                 { ...ok, members: [
+        { id: 'U001', deleted: false, is_bot: false, real_name: 'Alice Smith', name: 'alice', profile: { email: 'alice@example.com', display_name: 'alice' } },
+        { id: 'U002', deleted: false, is_bot: false, real_name: 'Bob Jones',  name: 'bob',   profile: { email: 'bob@example.com',   display_name: 'bob' } },
+        { id: 'USLACKBOT', deleted: false, is_bot: true, real_name: 'Slackbot', name: 'slackbot', profile: {} },
+      ]},
     };
     const reply = responses[endpoint] ?? { ok: false, error: 'unknown_endpoint' };
     res.writeHead(200, { 'content-type': 'application/json' });
@@ -198,13 +207,20 @@ await test('invite_to_channel: calls conversations.invite', async () => {
 });
 
 // ── set_channel_topic ─────────────────────────────────────────────────────────
-await test('set_channel_topic: calls conversations.setTopic', async () => {
-  delete calls['conversations.setTopic'];
-  const r = await deliver('slack_topic', { target: 'C001', topic: 'Sprint 42 in progress' });
+await test('set_channel_topic: calls conversations.setTopic with resolved channel ID', async () => {
+  delete calls['conversations.setTopic']; delete calls['conversations.list'];
+  const r = await deliver('slack_topic', { target: '#social', topic: 'Sprint 42 in progress' });
+  assertCalled('conversations.list');  // #social resolved via conversations.list
   assertCalled('conversations.setTopic');
-  assertPayload('conversations.setTopic', 'channel', 'C001');
+  assertPayload('conversations.setTopic', 'channel', 'C002');  // resolved from stub: social -> C002
   assertPayload('conversations.setTopic', 'topic', 'Sprint 42 in progress');
   assert(r.delivered === true);
+});
+await test('set_channel_topic: channel ID passthrough (no lookup needed)', async () => {
+  delete calls['conversations.list'];
+  await deliver('slack_topic', { target: 'C001', topic: 'already an ID' });
+  assert(!calls['conversations.list'], 'should not call conversations.list for an ID');
+  assertPayload('conversations.setTopic', 'channel', 'C001');
 });
 await test('set_channel_topic: uses body when topic not in config', async () => {
   await deliver('slack_topic', { target: 'C001' }, 'topic from prior step');
@@ -221,23 +237,12 @@ await test('pin_message: calls pins.add', async () => {
   assert(r.delivered === true);
 });
 
-// ── set_reminder ──────────────────────────────────────────────────────────────
-await test('set_reminder: calls reminders.add', async () => {
-  delete calls['reminders.add'];
-  const r = await deliver('slack_reminder', { text: 'Follow up on proposal', time: 'in 1 hour' });
-  assertCalled('reminders.add');
-  assertPayload('reminders.add', 'text', 'Follow up on proposal');
-  assertPayload('reminders.add', 'time', 'in 1 hour');
-  assert(r.reminderId === 'R001');
-  assert(r.delivered === true);
-});
-await test('set_reminder: user param forwarded when set', async () => {
-  await deliver('slack_reminder', { text: 'remind them', time: 'tomorrow', user: 'U007' });
-  assertPayload('reminders.add', 'user', 'U007');
-});
-await test('set_reminder: uses body as text when config.text absent', async () => {
-  await deliver('slack_reminder', { time: 'in 5 minutes' }, 'check the dashboard');
-  assertPayload('reminders.add', 'text', 'check the dashboard');
+// ── set_reminder (user token only — isReady:false) ───────────────────────────
+await test('set_reminder: channel registered but not ready (user token required)', async () => {
+  const ch = reg.get('slack_reminder');
+  assert(ch !== null, 'channel should be registered');
+  assert(ch.available === false, 'should be unavailable (user token only)');
+  assert(/dependency not ready/.test(ch.unavailableReason ?? ''), `reason was: ${ch.unavailableReason}`);
 });
 
 // ── lookup_user ───────────────────────────────────────────────────────────────
@@ -255,19 +260,11 @@ await test('lookup_user: throws without email', async () => {
   assert(threw);
 });
 
-// ── search_messages ───────────────────────────────────────────────────────────
-await test('search_messages: calls search.messages', async () => {
-  delete calls['search.messages'];
-  const r = await deliver('slack_search', { query: 'from:@alice in:#general' });
-  assertCalled('search.messages');
-  assertPayload('search.messages', 'query', 'from:@alice in:#general');
-  assert(Array.isArray(r.messages) && r.messages.length === 1);
-  assert(r.messages[0].ts === '100.001');
-  assert(r.delivered === true);
-});
-await test('search_messages: forwards limit as count', async () => {
-  await deliver('slack_search', { query: 'test', limit: 5 });
-  assert(calls['search.messages'].body.count === 5);
+// ── search_messages (user token only — isReady:false) ────────────────────────
+await test('search_messages: channel registered but not ready (user token required)', async () => {
+  const ch = reg.get('slack_search');
+  assert(ch !== null, 'channel should be registered');
+  assert(ch.available === false, 'should be unavailable (user token only)');
 });
 
 // ── get_channel_history ───────────────────────────────────────────────────────
@@ -299,6 +296,34 @@ await test('post_group_dm: opens MPIM and posts', async () => {
 await test('post_group_dm: throws without users', async () => {
   let threw = false; try { await deliver('slack_group_dm', {}); } catch { threw = true; }
   assert(threw);
+});
+
+// ── list_channels ─────────────────────────────────────────────────────────────
+await test('list_channels: calls conversations.list, returns channel list', async () => {
+  delete calls['conversations.list'];
+  const r = await deliver('slack_list_channels', { limit: 200 });
+  assertCalled('conversations.list');
+  assert(Array.isArray(r.channels) && r.channels.length === 2, `expected 2 channels, got ${r.channels?.length}`);
+  assert(r.channels[0].id === 'C001' && r.channels[0].name === 'general');
+  assert(r.channels[1].id === 'C002' && r.channels[1].name === 'social');
+  assert(r.delivered === true);
+});
+await test('list_channels: exclude_archived defaults to true', async () => {
+  await deliver('slack_list_channels', {});
+  assert(calls['conversations.list'].body.exclude_archived === true);
+});
+
+// ── list_users ────────────────────────────────────────────────────────────────
+await test('list_users: calls users.list, returns member list (bots filtered)', async () => {
+  delete calls['users.list'];
+  const r = await deliver('slack_list_users', {});
+  assertCalled('users.list');
+  // Slackbot and deleted users should be filtered out
+  assert(Array.isArray(r.users) && r.users.length === 2, `expected 2 users, got ${r.users?.length}`);
+  assert(r.users[0].id === 'U001' && r.users[0].name === 'Alice Smith');
+  assert(r.users[0].email === 'alice@example.com');
+  assert(!r.users.some((u) => u.id === 'USLACKBOT'), 'Slackbot should be filtered');
+  assert(r.delivered === true);
 });
 
 // ── Cleanup + summary ─────────────────────────────────────────────────────────

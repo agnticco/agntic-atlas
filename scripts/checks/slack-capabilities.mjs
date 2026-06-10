@@ -17,14 +17,19 @@ const check = (name, cond) => { console.log(`${cond ? 'ok  ' : 'FAIL'} ${name}`)
 
 // 1. Pure resolver (no network).
 {
-  // With all scopes granted, all 14 actions should be available.
+  // With all bot-token scopes granted, implemented + scoped actions should be available.
+  // set_reminder + search_messages are isReady:false (user token only) → always unavailable.
   const allScopes = ['chat:write','chat:write.public','im:write','reactions:write',
     'files:write','channels:manage','channels:write.invites','channels:write.topic',
     'pins:write','reminders:write','users:read','users:read.email',
-    'search:read.public','channels:history','mpim:write'];
+    'search:read.public','channels:history','mpim:write','channels:read'];
   const r = resolveSlackCapabilities(allScopes);
-  check('all 14 actions available with full scope grant', r.actions.every((a) => a.available === true));
-  check('action count is 14', r.actions.length === 14);
+  const botAvailable = r.actions.filter((a) => a.available);
+  const unavailableReasons = r.actions.filter((a) => !a.available).map((a) => `${a.id}:${a.unavailableReason}`);
+  check('14 actions available with full bot scope grant (excl user-token-only)', botAvailable.length === 14);
+  check('set_reminder unavailable (user token only)', r.actions.find((a) => a.id === 'set_reminder')?.available === false);
+  check('search_messages unavailable (user token only)', r.actions.find((a) => a.id === 'search_messages')?.available === false);
+  check('action count is 16', r.actions.length === 16);
 }
 {
   const pm = resolveSlackCapabilities([]).actions.find((a) => a.id === 'post_message');
@@ -54,7 +59,7 @@ const check = (name, cond) => { console.log(`${cond ? 'ok  ' : 'FAIL'} ${name}`)
 {
   const stub = http.createServer((req, res) => {
     if (req.url.endsWith('/auth.test')) {
-      res.writeHead(200, { 'content-type': 'application/json', 'x-oauth-scopes': 'chat:write,chat:write.public,im:write,reactions:write,files:write,channels:manage,channels:write.invites,channels:write.topic,pins:write,reminders:write,users:read,users:read.email,search:read.public,channels:history,mpim:write' });
+      res.writeHead(200, { 'content-type': 'application/json', 'x-oauth-scopes': 'chat:write,chat:write.public,im:write,reactions:write,files:write,channels:manage,channels:write.invites,channels:write.topic,pins:write,reminders:write,users:read,users:read.email,search:read.public,channels:history,mpim:write,channels:read' });
       res.end(JSON.stringify({ ok: true }));
     } else { res.writeHead(404); res.end(); }
   });
@@ -85,7 +90,8 @@ const check = (name, cond) => { console.log(`${cond ? 'ok  ' : 'FAIL'} ${name}`)
   check('/capabilities exposes connectors.slack', !!slack);
   check('grantedScopes auto-detected via endpoint', !!slack?.grantedScopes?.includes('chat:write'));
   check('post_message available over endpoint', pm?.available === true);
-  check('all 14 actions available over endpoint (full scope grant)', caps.connectors?.slack?.actions?.every((a) => a.available === true));
+  const botAvail = (caps.connectors?.slack?.actions ?? []).filter((a) => a.available);
+  check('14 actions available over endpoint (excl user-token-only)', botAvail.length === 14);
   console.log(`  menu: ${slack?.actions?.map((a) => `${a.id}${a.available ? '✓' : '✗'}`).join(' ')}`);
 }
 
