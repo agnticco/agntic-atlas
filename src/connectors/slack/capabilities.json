@@ -119,7 +119,8 @@
     {
       "id": "set_reminder",
       "label": "Set a reminder for a user",
-      "description": "Create a reminder for a user. Requires a user OAuth token — not available with a bot token. Will be enabled when per-user OAuth is added.",
+      "description": "Create a reminder for the authorized user. Requires a user OAuth token (xoxp-).",
+      "tokenType": "user",
       "requiredScopes": ["reminders:write"],
       "config": [
         { "key": "text", "type": "string", "required": true, "hint": "Reminder text" },
@@ -127,7 +128,7 @@
         { "key": "user", "type": "string", "required": false, "hint": "Slack user ID to remind (omit for the bot itself)" }
       ],
       "returns": ["reminderId"],
-      "implemented": false
+      "implemented": true
     },
     {
       "id": "lookup_user",
@@ -143,14 +144,15 @@
     {
       "id": "search_messages",
       "label": "Search messages in Slack",
-      "description": "Search across messages and return matching results. Requires a user OAuth token — not available with a bot token. Will be enabled when per-user OAuth is added.",
-      "requiredScopes": ["search:read.public"],
+      "description": "Search messages across the workspace including private channels and DMs. Requires a user OAuth token (xoxp-).",
+      "tokenType": "user",
+      "requiredScopes": ["search:read"],
       "config": [
         { "key": "query", "type": "string", "required": true, "hint": "Search query, supports Slack modifiers e.g. in:#channel from:@user" },
         { "key": "limit", "type": "number", "required": false, "hint": "Max results to return (default 10)" }
       ],
       "returns": ["messages"],
-      "implemented": false
+      "implemented": true
     },
     {
       "id": "get_channel_history",
@@ -357,26 +359,115 @@
     {
       "id": "search_files",
       "label": "Search files in Slack",
-      "description": "Search files across the workspace. Requires a user OAuth token — not available with a bot token alone.",
+      "description": "Search files across the workspace. Requires a user OAuth token (xoxp-).",
+      "tokenType": "user",
       "requiredScopes": ["search:read.files"],
       "config": [
         { "key": "query", "type": "string", "required": true },
         { "key": "limit", "type": "number", "required": false }
       ],
       "returns": ["files"],
-      "implemented": false
+      "implemented": true
     },
     {
       "id": "search_private",
       "label": "Search private/DM content",
-      "description": "Search messages in private channels, DMs, and group DMs. Requires a user OAuth token — not available with a bot token alone.",
+      "description": "Search messages in private channels, DMs, and group DMs. Requires a user OAuth token (xoxp-).",
+      "tokenType": "user",
       "requiredScopes": ["search:read.private", "search:read.im", "search:read.mpim"],
       "config": [
         { "key": "query", "type": "string", "required": true },
         { "key": "limit", "type": "number", "required": false }
       ],
       "returns": ["messages"],
-      "implemented": false
+      "implemented": true
+    },
+    {
+      "id": "send_as_user",
+      "label": "Send a message as the user",
+      "description": "Post a message that appears FROM the authorized user's account — not from the bot. Requires a user OAuth token.",
+      "tokenType": "user",
+      "requiredScopes": ["chat:write"],
+      "config": [
+        { "key": "target", "type": "string",   "required": true,  "hint": "Channel ID (C…) or #name" },
+        { "key": "body",   "type": "string",    "required": false }
+      ],
+      "returns": ["ts"],
+      "implemented": true
+    },
+    {
+      "id": "send_dm_as_user",
+      "label": "Send a DM as the user",
+      "description": "Send a direct message that appears under 'Direct Messages' (not 'Apps') in the recipient's sidebar. Requires a user OAuth token.",
+      "tokenType": "user",
+      "requiredScopes": ["im:write"],
+      "config": [
+        { "key": "user", "type": "string",   "required": true, "hint": "Slack user ID (U…) or email" },
+        { "key": "body", "type": "textarea", "required": false }
+      ],
+      "returns": ["ts", "slackChannel"],
+      "implemented": true
+    },
+    {
+      "id": "list_reminders",
+      "label": "List reminders",
+      "description": "List all reminders for the authorized user. Requires a user OAuth token.",
+      "tokenType": "user",
+      "requiredScopes": ["reminders:read"],
+      "config": [],
+      "returns": ["reminders"],
+      "implemented": true
+    },
+    {
+      "id": "set_status",
+      "label": "Set user status",
+      "description": "Set the authorized user's status emoji and status text. Requires a user OAuth token.",
+      "tokenType": "user",
+      "requiredScopes": ["users.profile:write"],
+      "config": [
+        { "key": "status_text",       "type": "string", "required": true,  "hint": "e.g. In a meeting" },
+        { "key": "status_emoji",      "type": "string", "required": false, "hint": "e.g. :calendar:" },
+        { "key": "status_expiration", "type": "number", "required": false, "hint": "Unix timestamp when status clears (0 = never)" }
+      ],
+      "returns": ["status_text", "status_emoji"],
+      "implemented": true
+    },
+    {
+      "id": "set_dnd",
+      "label": "Set Do Not Disturb",
+      "description": "Enable DND snooze for a given number of minutes (0 to turn off). Requires a user OAuth token.",
+      "tokenType": "user",
+      "requiredScopes": ["dnd:write"],
+      "config": [
+        { "key": "num_minutes", "type": "number", "required": false, "hint": "Minutes to snooze; 0 turns DND off" }
+      ],
+      "returns": ["snoozed", "snoozeEndTs"],
+      "implemented": true
+    },
+    {
+      "id": "star_message",
+      "label": "Star a message",
+      "description": "Star a message on behalf of the authorized user. Requires a user OAuth token.",
+      "tokenType": "user",
+      "requiredScopes": ["stars:write"],
+      "config": [
+        { "key": "target",    "type": "string", "required": true },
+        { "key": "timestamp", "type": "string", "required": true }
+      ],
+      "returns": ["ok"],
+      "implemented": true
+    },
+    {
+      "id": "list_stars",
+      "label": "List starred items",
+      "description": "List items starred by the authorized user. Requires a user OAuth token.",
+      "tokenType": "user",
+      "requiredScopes": ["stars:read"],
+      "config": [
+        { "key": "limit", "type": "number", "required": false }
+      ],
+      "returns": ["items"],
+      "implemented": true
     },
     {
       "id": "post_group_dm",
