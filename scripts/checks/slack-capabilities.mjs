@@ -17,23 +17,23 @@ const check = (name, cond) => { console.log(`${cond ? 'ok  ' : 'FAIL'} ${name}`)
 
 // 1. Pure resolver (no network).
 {
-  const r = resolveSlackCapabilities(['chat:write', 'im:write']);
-  const pm = r.actions.find((a) => a.id === 'post_message');
-  const dm = r.actions.find((a) => a.id === 'post_dm');
-  const rt = r.actions.find((a) => a.id === 'reply_in_thread');
-  check('post_message AVAILABLE with chat:write', pm?.available === true);
-  check('post_dm AVAILABLE with chat:write+im:write (implemented)', dm?.available === true);
-  check('reply_in_thread unavailable (not yet implemented)', rt?.available === false && /not yet implemented/.test(rt.unavailableReason));
+  // With all scopes granted, all 14 actions should be available.
+  const allScopes = ['chat:write','chat:write.public','im:write','reactions:write',
+    'files:write','channels:manage','channels:write.invites','channels:write.topic',
+    'pins:write','reminders:write','users:read','users:read.email',
+    'search:read.public','channels:history','mpim:write'];
+  const r = resolveSlackCapabilities(allScopes);
+  check('all 14 actions available with full scope grant', r.actions.every((a) => a.available === true));
+  check('action count is 14', r.actions.length === 14);
 }
 {
   const pm = resolveSlackCapabilities([]).actions.find((a) => a.id === 'post_message');
   check('post_message unavailable without scope', pm?.available === false && /missing scope/.test(pm.unavailableReason));
 }
 {
-  // reply_in_thread: scoped (chat:write) but unimplemented — proves implemented-gating
-  // so the AI can't propose a capability with no handler even if the token allows it.
-  const rt = resolveSlackCapabilities(['chat:write']).actions.find((a) => a.id === 'reply_in_thread');
-  check('reply_in_thread unavailable even when scoped (unimplemented)', rt?.available === false && /not yet implemented/.test(rt.unavailableReason));
+  // Scope-gating still works: post_dm needs im:write; without it, unavailable.
+  const dm = resolveSlackCapabilities(['chat:write']).actions.find((a) => a.id === 'post_dm');
+  check('post_dm unavailable without im:write scope', dm?.available === false && /missing scope/.test(dm.unavailableReason));
 }
 
 // 2. Scope auto-detect from the x-oauth-scopes header.
@@ -54,7 +54,7 @@ const check = (name, cond) => { console.log(`${cond ? 'ok  ' : 'FAIL'} ${name}`)
 {
   const stub = http.createServer((req, res) => {
     if (req.url.endsWith('/auth.test')) {
-      res.writeHead(200, { 'content-type': 'application/json', 'x-oauth-scopes': 'chat:write,im:write' });
+      res.writeHead(200, { 'content-type': 'application/json', 'x-oauth-scopes': 'chat:write,chat:write.public,im:write,reactions:write,files:write,channels:manage,channels:write.invites,channels:write.topic,pins:write,reminders:write,users:read,users:read.email,search:read.public,channels:history,mpim:write' });
       res.end(JSON.stringify({ ok: true }));
     } else { res.writeHead(404); res.end(); }
   });
@@ -85,7 +85,7 @@ const check = (name, cond) => { console.log(`${cond ? 'ok  ' : 'FAIL'} ${name}`)
   check('/capabilities exposes connectors.slack', !!slack);
   check('grantedScopes auto-detected via endpoint', !!slack?.grantedScopes?.includes('chat:write'));
   check('post_message available over endpoint', pm?.available === true);
-  check('post_dm available over endpoint (implemented)', !!dm && dm.available === true);
+  check('all 14 actions available over endpoint (full scope grant)', caps.connectors?.slack?.actions?.every((a) => a.available === true));
   console.log(`  menu: ${slack?.actions?.map((a) => `${a.id}${a.available ? '✓' : '✗'}`).join(' ')}`);
 }
 

@@ -39,7 +39,7 @@
         { "key": "body", "type": "string", "required": false, "hint": "Reply text; omit to use the prior step output" }
       ],
       "returns": ["ts"],
-      "implemented": false
+      "implemented": true
     },
     {
       "id": "add_reaction",
@@ -52,7 +52,7 @@
         { "key": "emoji", "type": "string", "required": true, "hint": "Emoji name without colons, e.g. white_check_mark" }
       ],
       "returns": ["ok"],
-      "implemented": false
+      "implemented": true
     },
     {
       "id": "upload_file",
@@ -66,7 +66,7 @@
         { "key": "filename", "type": "string", "required": false, "hint": "Filename with extension, e.g. report.txt" }
       ],
       "returns": ["fileId"],
-      "implemented": false
+      "implemented": true
     },
     {
       "id": "create_channel",
@@ -78,7 +78,7 @@
         { "key": "is_private", "type": "boolean", "required": false, "hint": "true to create a private channel" }
       ],
       "returns": ["channelId", "name"],
-      "implemented": false
+      "implemented": true
     },
     {
       "id": "invite_to_channel",
@@ -90,7 +90,7 @@
         { "key": "users", "type": "string", "required": true, "hint": "Comma-separated Slack user IDs to invite" }
       ],
       "returns": ["ok"],
-      "implemented": false
+      "implemented": true
     },
     {
       "id": "set_channel_topic",
@@ -102,7 +102,7 @@
         { "key": "topic", "type": "string", "required": true, "hint": "New topic text" }
       ],
       "returns": ["ok"],
-      "implemented": false
+      "implemented": true
     },
     {
       "id": "pin_message",
@@ -114,7 +114,7 @@
         { "key": "timestamp", "type": "string", "required": true, "hint": "ts of the message to pin" }
       ],
       "returns": ["ok"],
-      "implemented": false
+      "implemented": true
     },
     {
       "id": "set_reminder",
@@ -127,7 +127,7 @@
         { "key": "user", "type": "string", "required": false, "hint": "Slack user ID to remind (omit for the bot itself)" }
       ],
       "returns": ["reminderId"],
-      "implemented": false
+      "implemented": true
     },
     {
       "id": "lookup_user",
@@ -138,7 +138,7 @@
         { "key": "email", "type": "string", "required": true, "hint": "Email address to look up" }
       ],
       "returns": ["userId", "displayName"],
-      "implemented": false
+      "implemented": true
     },
     {
       "id": "search_messages",
@@ -150,7 +150,7 @@
         { "key": "limit", "type": "number", "required": false, "hint": "Max results to return (default 10)" }
       ],
       "returns": ["messages"],
-      "implemented": false
+      "implemented": true
     },
     {
       "id": "get_channel_history",
@@ -163,7 +163,7 @@
         { "key": "oldest", "type": "string", "required": false, "hint": "Fetch messages after this unix timestamp" }
       ],
       "returns": ["messages"],
-      "implemented": false
+      "implemented": true
     },
     {
       "id": "post_group_dm",
@@ -175,7 +175,7 @@
         { "key": "body", "type": "string", "required": false, "hint": "Message text; omit to use the prior step output" }
       ],
       "returns": ["ts", "channel"],
-      "implemented": false
+      "implemented": true
     }
   ]
 }
