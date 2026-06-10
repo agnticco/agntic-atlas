@@ -64,18 +64,20 @@ export async function detectGrantedScopes({
  * `available` (implemented AND all requiredScopes granted) + an `unavailableReason`.
  * Pure/synchronous — no network.
  */
-export function resolveSlackCapabilities(grantedScopes = []) {
+export function resolveSlackCapabilities(grantedScopes = [], { hasUserToken = false } = {}) {
   const granted = new Set(grantedScopes);
   const actions = slackCapabilities.actions.map((a) => {
+    const needsUser = a.tokenType === 'user';
     const missing = (a.requiredScopes ?? []).filter((s) => !granted.has(s));
     let available = false;
     let unavailableReason = null;
     if (!a.implemented) unavailableReason = 'not yet implemented';
-    else if (missing.length) unavailableReason = `token missing scope(s): ${missing.join(', ')}`;
+    else if (needsUser && !hasUserToken) unavailableReason = 'requires user OAuth token (user OAuth coming soon)';
+    else if (!needsUser && missing.length) unavailableReason = `bot token missing scope(s): ${missing.join(', ')}`;
     else available = true;
     return { ...a, available, unavailableReason };
   });
-  return { connector: 'slack', grantedScopes: [...granted], actions };
+  return { connector: 'slack', grantedScopes: [...granted], hasUserToken, actions };
 }
 
 /** AI-readable summary of what Slack functions are usable right now (for prompts). */
@@ -112,7 +114,8 @@ export function createSlackCapabilityProvider({ oauthTokenStore = null, token = 
 
   async function resolveForTenant(tenantId) {
     if (cache.has(tenantId)) return cache.get(tenantId);
-    const resolved = resolveSlackCapabilities(await scopesForTenant(tenantId));
+    const hasUserToken = !!(process.env.SLACK_USER_TOKEN);
+    const resolved = resolveSlackCapabilities(await scopesForTenant(tenantId), { hasUserToken });
     cache.set(tenantId, resolved);
     return resolved;
   }
@@ -132,6 +135,9 @@ export function createSlackCapabilityProvider({ oauthTokenStore = null, token = 
  */
 export function registerSlackChannel(registry, { fetchImpl = fetch } = {}) {
   const ready = () => isOAuthConfigured() || !!process.env.SLACK_BOT_TOKEN;
+  // User-token actions require an xoxp- token (per-user OAuth). Ready when SLACK_USER_TOKEN
+  // is set. Per-user OAuth wiring lands in a later phase; for now, set via env for testing.
+  const userReady = () => !!process.env.SLACK_USER_TOKEN;
 
   // Shared helper — resolves the token, builds typed Slack API callers.
   // postApi: for methods that accept JSON body (most write APIs).
@@ -165,6 +171,13 @@ export function registerSlackChannel(registry, { fetchImpl = fetch } = {}) {
     const api = (method, payload) => call(method, payload, false);
     api.get = (method, payload) => call(method, payload, true);
     return api;
+  }
+
+  // User-token API helper: uses SLACK_USER_TOKEN (xoxp-) instead of the bot token.
+  function makeUserApi(config) {
+    const token = config.token ?? process.env.SLACK_USER_TOKEN;
+    if (!token) throw new Error('slack: this action requires a user OAuth token (xoxp-) — set SLACK_USER_TOKEN or wire per-user OAuth');
+    return makeApi({ ...config, token });
   }
 
   // Resolve a channel arg (#name or ID) to a Slack channel ID.
@@ -703,6 +716,202 @@ export function registerSlackChannel(registry, { fetchImpl = fetch } = {}) {
       const text = title ? `*${title}*\n${body}` : body;
       const d = await api('chat.postMessage', { channel, text });
       return { delivered: true, channel: 'slack_group_dm', ts: d.ts, slackChannel: channel };
+    },
+  });
+
+  // ══════════════════════════════════════════════════════════════════════════
+  // USER TOKEN ACTIONS (xoxp-) — act on behalf of a user, not the bot.
+  // These require SLACK_USER_TOKEN (or config.token with an xoxp- token).
+  // Per-user OAuth wiring lands in a later phase; set SLACK_USER_TOKEN for dev.
+  // Messages sent via these actions appear FROM the user, not from "Atlas Demo".
+  // ══════════════════════════════════════════════════════════════════════════
+
+  // ── send_as_user ───────────────────────────────────────────────────────────
+  registry.register({
+    id: 'slack_send_as_user', name: 'Slack Send as User', icon: 'slack',
+    description: 'Post a message as the authorized user (not the bot). Message appears in channels/DMs from the user\'s own account.',
+    configSchema: [
+      { key: 'target', label: 'Channel or DM', type: 'string',   optional: false, hint: 'Channel ID (C…) or #name' },
+      { key: 'body',   label: 'Message',        type: 'textarea', optional: true },
+    ],
+    isReady: userReady,
+    deliver: async ({ config, body, title }) => {
+      const api = makeUserApi(config);
+      if (!config.target) throw new Error('slack_send_as_user: target is required');
+      const channelId = await resolveChannel(api, config.target);
+      const text = title ? `*${title}*\n${body}` : body;
+      const d = await api('chat.postMessage', { channel: channelId, text });
+      return { delivered: true, channel: 'slack_send_as_user', target: channelId, ts: d.ts };
+    },
+  });
+
+  // ── send_dm_as_user ────────────────────────────────────────────────────────
+  // This is the one that appears under "Direct Messages" (not "Apps") in Slack.
+  registry.register({
+    id: 'slack_dm_as_user', name: 'Slack DM as User', icon: 'slack',
+    description: 'Send a direct message on behalf of the authorized user. Appears under Direct Messages (not Apps) in the recipient\'s sidebar.',
+    configSchema: [
+      { key: 'user', label: 'Recipient (ID or email)', type: 'string',   optional: false },
+      { key: 'body', label: 'Message',                 type: 'textarea', optional: true },
+    ],
+    isReady: userReady,
+    deliver: async ({ config, body, title }) => {
+      const api = makeUserApi(config);
+      const userId = await resolveUser(api, config.user);
+      const conv = await api('conversations.open', { users: userId });
+      const dmChannel = conv.channel?.id;
+      if (!dmChannel) throw new Error('slack_dm_as_user: conversations.open did not return a channel');
+      const text = title ? `*${title}*\n${body}` : body;
+      const d = await api('chat.postMessage', { channel: dmChannel, text });
+      return { delivered: true, channel: 'slack_dm_as_user', target: userId, ts: d.ts, slackChannel: dmChannel };
+    },
+  });
+
+  // ── set_reminder (user token) ──────────────────────────────────────────────
+  registry.register({
+    id: 'slack_reminder', name: 'Slack Set Reminder', icon: 'slack', actionOnly: true,
+    description: 'Create a reminder for the authorized user (or another user). Requires a user OAuth token.',
+    configSchema: [
+      { key: 'text', label: 'Reminder text', type: 'textarea', optional: false },
+      { key: 'time', label: 'When',          type: 'string',   optional: false, hint: 'Unix timestamp or natural language e.g. "in 30 minutes"' },
+      { key: 'user', label: 'User ID',       type: 'string',   optional: true  },
+    ],
+    isReady: userReady,
+    deliver: async ({ config, body }) => {
+      const api = makeUserApi(config);
+      const text = config.text ?? body;
+      if (!text || !config.time) throw new Error('slack_reminder: text and time are required');
+      const payload = { text, time: config.time };
+      if (config.user) payload.user = config.user;
+      const d = await api('reminders.add', payload);
+      return { delivered: true, channel: 'slack_reminder', reminderId: d.reminder?.id };
+    },
+  });
+
+  // ── list_reminders ─────────────────────────────────────────────────────────
+  registry.register({
+    id: 'slack_list_reminders', name: 'Slack List Reminders', icon: 'slack', actionOnly: true,
+    description: 'List all reminders for the authorized user.',
+    configSchema: [],
+    isReady: userReady,
+    deliver: async ({ config }) => {
+      const api = makeUserApi(config);
+      const d = await api.get('reminders.list', {});
+      const reminders = (d.reminders ?? []).map((r) => ({ id: r.id, text: r.text, time: r.time, complete: !!r.complete_ts }));
+      return { delivered: true, channel: 'slack_list_reminders', reminders };
+    },
+  });
+
+  // ── search_messages (user token) ───────────────────────────────────────────
+  registry.register({
+    id: 'slack_search', name: 'Slack Search Messages', icon: 'slack', actionOnly: true,
+    description: 'Search messages across the workspace (including private channels and DMs). Requires a user OAuth token.',
+    configSchema: [
+      { key: 'query', label: 'Search query', type: 'string', optional: false, hint: 'Supports modifiers: in:#channel from:@user' },
+      { key: 'limit', label: 'Max results',  type: 'number', optional: true  },
+    ],
+    isReady: userReady,
+    deliver: async ({ config }) => {
+      const api = makeUserApi(config);
+      if (!config.query) throw new Error('slack_search: query is required');
+      const d = await api.get('search.messages', { query: config.query, count: config.limit ?? 10 });
+      const messages = (d.messages?.matches ?? []).map((m) => ({ ts: m.ts, channel: m.channel?.name, text: m.text, permalink: m.permalink }));
+      return { delivered: true, channel: 'slack_search', messages };
+    },
+  });
+
+  // ── search_files (user token) ──────────────────────────────────────────────
+  registry.register({
+    id: 'slack_search_files', name: 'Slack Search Files', icon: 'slack', actionOnly: true,
+    description: 'Search files across the workspace. Requires a user OAuth token.',
+    configSchema: [
+      { key: 'query', label: 'Search query', type: 'string', optional: false },
+      { key: 'limit', label: 'Max results',  type: 'number', optional: true  },
+    ],
+    isReady: userReady,
+    deliver: async ({ config }) => {
+      const api = makeUserApi(config);
+      if (!config.query) throw new Error('slack_search_files: query is required');
+      const d = await api.get('search.files', { query: config.query, count: config.limit ?? 10 });
+      const files = (d.files?.matches ?? []).map((f) => ({ id: f.id, name: f.name, title: f.title, permalink: f.permalink }));
+      return { delivered: true, channel: 'slack_search_files', files };
+    },
+  });
+
+  // ── set_status ─────────────────────────────────────────────────────────────
+  registry.register({
+    id: 'slack_set_status', name: 'Slack Set Status', icon: 'slack', actionOnly: true,
+    description: 'Set the authorized user\'s status emoji and status text.',
+    configSchema: [
+      { key: 'status_text',       label: 'Status text',  type: 'string', optional: false, hint: 'e.g. "In a meeting"' },
+      { key: 'status_emoji',      label: 'Status emoji', type: 'string', optional: true,  hint: 'e.g. :calendar:' },
+      { key: 'status_expiration', label: 'Expiry (unix ts)', type: 'number', optional: true, hint: '0 = never expires' },
+    ],
+    isReady: userReady,
+    deliver: async ({ config }) => {
+      const api = makeUserApi(config);
+      const profile = {
+        status_text: config.status_text ?? '',
+        status_emoji: config.status_emoji ?? '',
+        status_expiration: config.status_expiration ?? 0,
+      };
+      await api('users.profile.set', { profile: JSON.stringify(profile) });
+      return { delivered: true, channel: 'slack_set_status', status_text: profile.status_text, status_emoji: profile.status_emoji };
+    },
+  });
+
+  // ── set_dnd ────────────────────────────────────────────────────────────────
+  registry.register({
+    id: 'slack_set_dnd', name: 'Slack Set Do Not Disturb', icon: 'slack', actionOnly: true,
+    description: 'Enable Do Not Disturb for the authorized user for a given number of minutes.',
+    configSchema: [
+      { key: 'num_minutes', label: 'Duration (minutes)', type: 'number', optional: true, hint: '0 to turn DND off, otherwise minutes to snooze' },
+    ],
+    isReady: userReady,
+    deliver: async ({ config }) => {
+      const api = makeUserApi(config);
+      const mins = config.num_minutes ?? 0;
+      if (mins > 0) {
+        const d = await api('dnd.setSnooze', { num_minutes: mins });
+        return { delivered: true, channel: 'slack_set_dnd', snoozed: true, snoozeEndTs: d.snooze_end_time };
+      } else {
+        await api('dnd.endSnooze', {});
+        return { delivered: true, channel: 'slack_set_dnd', snoozed: false };
+      }
+    },
+  });
+
+  // ── star_message ───────────────────────────────────────────────────────────
+  registry.register({
+    id: 'slack_star_message', name: 'Slack Star Message', icon: 'slack', actionOnly: true,
+    description: 'Star a message on behalf of the authorized user.',
+    configSchema: [
+      { key: 'target',    label: 'Channel',    type: 'string', optional: false },
+      { key: 'timestamp', label: 'Message ts', type: 'string', optional: false },
+    ],
+    isReady: userReady,
+    deliver: async ({ config }) => {
+      const api = makeUserApi(config);
+      if (!config.target || !config.timestamp) throw new Error('slack_star_message: target and timestamp are required');
+      const channelId = await resolveChannel(api, config.target);
+      await api('stars.add', { channel: channelId, timestamp: config.timestamp });
+      return { delivered: true, channel: 'slack_star_message' };
+    },
+  });
+
+  // ── list_stars ─────────────────────────────────────────────────────────────
+  registry.register({
+    id: 'slack_list_stars', name: 'Slack List Stars', icon: 'slack', actionOnly: true,
+    description: 'List items starred by the authorized user.',
+    configSchema: [
+      { key: 'limit', label: 'Max results', type: 'number', optional: true },
+    ],
+    isReady: userReady,
+    deliver: async ({ config }) => {
+      const api = makeUserApi(config);
+      const d = await api.get('stars.list', { count: config.limit ?? 20 });
+      const items = (d.items ?? []).map((i) => ({ type: i.type, ts: i.message?.ts ?? null, text: i.message?.text ?? i.file?.name ?? null }));
+      return { delivered: true, channel: 'slack_list_stars', items };
     },
   });
 
