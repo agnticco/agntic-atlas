@@ -1,6 +1,6 @@
 {
   "connector": "slack",
-  "description": "Map of Slack functions the workflow engine can use. The AI/converger reads the AVAILABLE subset (implemented AND the client's token grants requiredScopes) so it only proposes Slack actions that genuinely work for that client. To add a capability: add an entry here, then implement its handler in index.js and flip `implemented` to true. To restrict a client, that follows automatically from the scopes their bot token was granted.",
+  "description": "Map of Slack functions the workflow engine can use. The AI/converger reads the AVAILABLE subset (implemented AND the client's token grants requiredScopes) so it only proposes actions that genuinely work. To add a capability: add an entry here, implement its handler in index.js, and flip `implemented` to true. Actions not listed are not proposable.",
   "actions": [
     {
       "id": "post_message",
@@ -9,22 +9,24 @@
       "requiredScopes": ["chat:write"],
       "config": [
         { "key": "target", "type": "string", "required": true, "hint": "Channel ID (C…) or #name" },
-        { "key": "body", "type": "string", "required": false, "hint": "Message text; omit to use the prior step output" }
+        { "key": "body", "type": "string", "required": false, "hint": "Message text; omit to use the prior step output" },
+        { "key": "username", "type": "string", "required": false, "hint": "Override the bot display name (requires chat:write.customize)" },
+        { "key": "icon_emoji", "type": "string", "required": false, "hint": "Override the bot icon emoji e.g. :robot_face: (requires chat:write.customize)" }
       ],
       "returns": ["ts", "slackChannel"],
       "implemented": true
     },
     {
       "id": "post_dm",
-      "label": "Direct-message a user",
-      "description": "Send a direct message to a single user (opens a DM conversation, then posts).",
+      "label": "Send a direct message to a user",
+      "description": "Open a DM with a user (by Slack user ID or email) and send them a message.",
       "requiredScopes": ["chat:write", "im:write"],
       "config": [
-        { "key": "user", "type": "string", "required": true, "hint": "Slack user ID (U…); resolve from email if needed" },
-        { "key": "body", "type": "string", "required": true, "hint": "Message text" }
+        { "key": "user", "type": "string", "required": true, "hint": "Slack user ID (U…) or email address" },
+        { "key": "body", "type": "string", "required": false, "hint": "Message text; omit to use the prior step output" }
       ],
       "returns": ["ts", "channel"],
-      "implemented": false
+      "implemented": true
     },
     {
       "id": "reply_in_thread",
@@ -33,20 +35,20 @@
       "requiredScopes": ["chat:write"],
       "config": [
         { "key": "target", "type": "string", "required": true, "hint": "Channel ID (C…) or #name" },
-        { "key": "thread_ts", "type": "string", "required": true, "hint": "ts of the parent message" },
-        { "key": "body", "type": "string", "required": true, "hint": "Reply text" }
+        { "key": "thread_ts", "type": "string", "required": true, "hint": "ts of the parent message to reply under" },
+        { "key": "body", "type": "string", "required": false, "hint": "Reply text; omit to use the prior step output" }
       ],
       "returns": ["ts"],
       "implemented": false
     },
     {
       "id": "add_reaction",
-      "label": "Add an emoji reaction",
+      "label": "Add an emoji reaction to a message",
       "description": "React to a message with an emoji.",
       "requiredScopes": ["reactions:write"],
       "config": [
-        { "key": "target", "type": "string", "required": true, "hint": "Channel ID (C…)" },
-        { "key": "timestamp", "type": "string", "required": true, "hint": "ts of the target message" },
+        { "key": "target", "type": "string", "required": true, "hint": "Channel ID (C…) or #name" },
+        { "key": "timestamp", "type": "string", "required": true, "hint": "ts of the message to react to" },
         { "key": "emoji", "type": "string", "required": true, "hint": "Emoji name without colons, e.g. white_check_mark" }
       ],
       "returns": ["ok"],
@@ -54,15 +56,125 @@
     },
     {
       "id": "upload_file",
-      "label": "Upload a file",
-      "description": "Upload a file (or snippet) to one or more channels.",
+      "label": "Upload a file or snippet to a channel",
+      "description": "Upload text content or a file to one or more channels.",
       "requiredScopes": ["files:write"],
       "config": [
         { "key": "target", "type": "string", "required": true, "hint": "Channel ID (C…) or #name" },
-        { "key": "content", "type": "string", "required": true, "hint": "File contents (text) or a path/URL the handler resolves" },
-        { "key": "title", "type": "string", "required": false, "hint": "File title" }
+        { "key": "content", "type": "string", "required": true, "hint": "File text content or prior step output" },
+        { "key": "title", "type": "string", "required": false, "hint": "File title shown in Slack" },
+        { "key": "filename", "type": "string", "required": false, "hint": "Filename with extension, e.g. report.txt" }
       ],
       "returns": ["fileId"],
+      "implemented": false
+    },
+    {
+      "id": "create_channel",
+      "label": "Create a Slack channel",
+      "description": "Create a new public or private channel.",
+      "requiredScopes": ["channels:manage"],
+      "config": [
+        { "key": "name", "type": "string", "required": true, "hint": "Channel name (lowercase, no spaces)" },
+        { "key": "is_private", "type": "boolean", "required": false, "hint": "true to create a private channel" }
+      ],
+      "returns": ["channelId", "name"],
+      "implemented": false
+    },
+    {
+      "id": "invite_to_channel",
+      "label": "Invite a user to a channel",
+      "description": "Invite one or more users to a channel.",
+      "requiredScopes": ["channels:write.invites"],
+      "config": [
+        { "key": "target", "type": "string", "required": true, "hint": "Channel ID (C…) or #name" },
+        { "key": "users", "type": "string", "required": true, "hint": "Comma-separated Slack user IDs to invite" }
+      ],
+      "returns": ["ok"],
+      "implemented": false
+    },
+    {
+      "id": "set_channel_topic",
+      "label": "Set a channel topic",
+      "description": "Update the topic of a channel.",
+      "requiredScopes": ["channels:write.topic"],
+      "config": [
+        { "key": "target", "type": "string", "required": true, "hint": "Channel ID (C…) or #name" },
+        { "key": "topic", "type": "string", "required": true, "hint": "New topic text" }
+      ],
+      "returns": ["ok"],
+      "implemented": false
+    },
+    {
+      "id": "pin_message",
+      "label": "Pin a message in a channel",
+      "description": "Pin an existing message to a channel.",
+      "requiredScopes": ["pins:write"],
+      "config": [
+        { "key": "target", "type": "string", "required": true, "hint": "Channel ID (C…) or #name" },
+        { "key": "timestamp", "type": "string", "required": true, "hint": "ts of the message to pin" }
+      ],
+      "returns": ["ok"],
+      "implemented": false
+    },
+    {
+      "id": "set_reminder",
+      "label": "Set a reminder for a user",
+      "description": "Create a reminder for a user or the bot.",
+      "requiredScopes": ["reminders:write"],
+      "config": [
+        { "key": "text", "type": "string", "required": true, "hint": "Reminder text" },
+        { "key": "time", "type": "string", "required": true, "hint": "When to send — unix timestamp or natural language e.g. 'in 30 minutes'" },
+        { "key": "user", "type": "string", "required": false, "hint": "Slack user ID to remind (omit for the bot itself)" }
+      ],
+      "returns": ["reminderId"],
+      "implemented": false
+    },
+    {
+      "id": "lookup_user",
+      "label": "Look up a user by email",
+      "description": "Resolve a Slack user ID from an email address.",
+      "requiredScopes": ["users:read", "users:read.email"],
+      "config": [
+        { "key": "email", "type": "string", "required": true, "hint": "Email address to look up" }
+      ],
+      "returns": ["userId", "displayName"],
+      "implemented": false
+    },
+    {
+      "id": "search_messages",
+      "label": "Search messages in Slack",
+      "description": "Search across messages and return matching results.",
+      "requiredScopes": ["search:read.public"],
+      "config": [
+        { "key": "query", "type": "string", "required": true, "hint": "Search query, supports Slack modifiers e.g. in:#channel from:@user" },
+        { "key": "limit", "type": "number", "required": false, "hint": "Max results to return (default 10)" }
+      ],
+      "returns": ["messages"],
+      "implemented": false
+    },
+    {
+      "id": "get_channel_history",
+      "label": "Read recent messages from a channel",
+      "description": "Fetch the most recent messages from a channel (useful for summarization or digest workflows).",
+      "requiredScopes": ["channels:history"],
+      "config": [
+        { "key": "target", "type": "string", "required": true, "hint": "Channel ID (C…) or #name" },
+        { "key": "limit", "type": "number", "required": false, "hint": "Number of messages to fetch (default 20, max 100)" },
+        { "key": "oldest", "type": "string", "required": false, "hint": "Fetch messages after this unix timestamp" }
+      ],
+      "returns": ["messages"],
+      "implemented": false
+    },
+    {
+      "id": "post_group_dm",
+      "label": "Send a group direct message",
+      "description": "Open a multi-person DM (MPIM) and send a message.",
+      "requiredScopes": ["mpim:write"],
+      "config": [
+        { "key": "users", "type": "string", "required": true, "hint": "Comma-separated Slack user IDs (2–8 people)" },
+        { "key": "body", "type": "string", "required": false, "hint": "Message text; omit to use the prior step output" }
+      ],
+      "returns": ["ts", "channel"],
       "implemented": false
     }
   ]
