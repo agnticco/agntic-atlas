@@ -17,21 +17,23 @@ const check = (name, cond) => { console.log(`${cond ? 'ok  ' : 'FAIL'} ${name}`)
 
 // 1. Pure resolver (no network).
 {
-  const r = resolveSlackCapabilities(['chat:write']);
+  const r = resolveSlackCapabilities(['chat:write', 'im:write']);
   const pm = r.actions.find((a) => a.id === 'post_message');
   const dm = r.actions.find((a) => a.id === 'post_dm');
+  const rt = r.actions.find((a) => a.id === 'reply_in_thread');
   check('post_message AVAILABLE with chat:write', pm?.available === true);
-  check('post_dm unavailable (not implemented)', dm?.available === false && /not yet implemented/.test(dm.unavailableReason));
+  check('post_dm AVAILABLE with chat:write+im:write (implemented)', dm?.available === true);
+  check('reply_in_thread unavailable (not yet implemented)', rt?.available === false && /not yet implemented/.test(rt.unavailableReason));
 }
 {
   const pm = resolveSlackCapabilities([]).actions.find((a) => a.id === 'post_message');
   check('post_message unavailable without scope', pm?.available === false && /missing scope/.test(pm.unavailableReason));
 }
 {
-  // Scoped but unimplemented stays unavailable — proves implemented-gating, so the
-  // AI can't propose a capability that has no handler even if the token allows it.
-  const dm = resolveSlackCapabilities(['chat:write', 'im:write']).actions.find((a) => a.id === 'post_dm');
-  check('post_dm unavailable even when scoped (unimplemented)', dm?.available === false && /not yet implemented/.test(dm.unavailableReason));
+  // reply_in_thread: scoped (chat:write) but unimplemented — proves implemented-gating
+  // so the AI can't propose a capability with no handler even if the token allows it.
+  const rt = resolveSlackCapabilities(['chat:write']).actions.find((a) => a.id === 'reply_in_thread');
+  check('reply_in_thread unavailable even when scoped (unimplemented)', rt?.available === false && /not yet implemented/.test(rt.unavailableReason));
 }
 
 // 2. Scope auto-detect from the x-oauth-scopes header.
@@ -52,7 +54,7 @@ const check = (name, cond) => { console.log(`${cond ? 'ok  ' : 'FAIL'} ${name}`)
 {
   const stub = http.createServer((req, res) => {
     if (req.url.endsWith('/auth.test')) {
-      res.writeHead(200, { 'content-type': 'application/json', 'x-oauth-scopes': 'chat:write' });
+      res.writeHead(200, { 'content-type': 'application/json', 'x-oauth-scopes': 'chat:write,im:write' });
       res.end(JSON.stringify({ ok: true }));
     } else { res.writeHead(404); res.end(); }
   });
@@ -83,7 +85,7 @@ const check = (name, cond) => { console.log(`${cond ? 'ok  ' : 'FAIL'} ${name}`)
   check('/capabilities exposes connectors.slack', !!slack);
   check('grantedScopes auto-detected via endpoint', !!slack?.grantedScopes?.includes('chat:write'));
   check('post_message available over endpoint', pm?.available === true);
-  check('full menu present incl. unavailable post_dm', !!dm && dm.available === false);
+  check('post_dm available over endpoint (implemented)', !!dm && dm.available === true);
   console.log(`  menu: ${slack?.actions?.map((a) => `${a.id}${a.available ? '✓' : '✗'}`).join(' ')}`);
 }
 

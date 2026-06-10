@@ -168,6 +168,55 @@ export function registerSlackChannel(registry, { fetchImpl = fetch } = {}) {
       return { delivered: true, channel: 'slack', target, ts: data.ts, slackChannel: data.channel ?? target };
     },
   });
+
+  // slack_dm — direct-message a user by Slack ID or email address.
+  // Uses conversations.open (im:write) + chat.postMessage.
+  registry.register({
+    id: 'slack_dm',
+    name: 'Slack DM',
+    description: 'Sends a direct message to a user (by Slack user ID or email). Requires im:write.',
+    icon: 'slack',
+    configSchema: [
+      { key: 'user', label: 'User (ID or email)', type: 'string', optional: false, hint: 'Slack user ID (U…) or email address.' },
+      { key: 'body', label: 'Message', type: 'textarea', optional: true, hint: 'Message text. Omit to deliver the previous step output.' },
+    ],
+    isReady: () => isOAuthConfigured() || !!process.env.SLACK_BOT_TOKEN,
+    deliver: async ({ config, body, title }) => {
+      const token = config.token ?? process.env.SLACK_BOT_TOKEN;
+      if (!token) throw new Error('slack_dm channel: no token — this tenant has not connected Slack');
+      let user = config.user;
+      if (!user) throw new Error('slack_dm requires config.user (Slack user ID or email)');
+
+      const apiBase = process.env.SLACK_API_URL ?? DEFAULT_API_BASE;
+      const slackApi = async (method, payload) => {
+        const r = await fetchImpl(`${apiBase}/${method}`, {
+          method: 'POST',
+          headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json; charset=utf-8' },
+          body: JSON.stringify(payload),
+        });
+        let d; try { d = await r.json(); } catch { d = { ok: false, error: 'invalid_json_response' }; }
+        if (!d.ok) throw new Error(`slack ${method} failed: ${d.error ?? `HTTP ${r.status}`}`);
+        return d;
+      };
+
+      // If user looks like an email, resolve to a Slack user ID first.
+      if (user.includes('@')) {
+        const lookup = await slackApi('users.lookupByEmail', { email: user });
+        user = lookup.user?.id;
+        if (!user) throw new Error(`slack_dm: could not resolve email to a Slack user ID`);
+      }
+
+      // Open (or reuse) a DM conversation.
+      const conv = await slackApi('conversations.open', { users: user });
+      const dmChannel = conv.channel?.id;
+      if (!dmChannel) throw new Error('slack_dm: conversations.open did not return a channel');
+
+      const text = title ? `*${title}*\n${body}` : body;
+      const msg = await slackApi('chat.postMessage', { channel: dmChannel, text });
+      return { delivered: true, channel: 'slack_dm', target: user, ts: msg.ts, slackChannel: dmChannel };
+    },
+  });
+
   return registry;
 }
 
