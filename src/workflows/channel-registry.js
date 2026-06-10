@@ -49,6 +49,7 @@ export class ChannelRegistry {
       description: def.description ?? '',
       icon: def.icon ?? 'send',
       configSchema: def.configSchema ?? [],
+      actionOnly: def.actionOnly ?? false,
       deliver: def.deliver,
       isReady: def.isReady ?? (() => true),
     });
@@ -97,7 +98,7 @@ export class ChannelRegistry {
   get(id) {
     const ch = this._channels.get(id);
     if (!ch) return null;
-    const { deliver, isReady, ...pub } = ch;
+    const { deliver, isReady, ...pub } = ch; // pub includes actionOnly
     let available = true, reason = null;
     try { if (!isReady()) { available = false; reason = 'dependency not ready'; } }
     catch (e) { available = false; reason = e.message; }

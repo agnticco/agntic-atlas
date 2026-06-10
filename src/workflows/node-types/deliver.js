@@ -35,6 +35,11 @@ export const deliverNodeType = {
     const handler = services.channelRegistry.getHandler(channelId);
     if (!handler) throw new Error(`Channel "${channelId}" has no handler`);
 
+    // Action channels (lookup, search, reaction, reminder, etc.) don't deliver
+    // body content — their parameters come entirely from config. Skip body
+    // validation so they can run without an upstream content-producing step.
+    if (ch.actionOnly) return handler({ config: cfg, body: cfg.body ?? '', title: null, lastOutput: ctx.lastOutput });
+
     // ── Body resolution (delivery-threading fix) ──────────────────────────
     //
     // History: `body` originally meant "if set, deliver this verbatim;
