@@ -21,6 +21,7 @@ cleanup() {
   [ -n "$SRV_PID" ] && kill "$SRV_PID" 2>/dev/null || true
   [ -n "$SRV_PID" ] && wait "$SRV_PID" 2>/dev/null || true
   rm -f "$LOG"
+  rm -rf "${P0_TMP:-}" 2>/dev/null || true
 }
 trap cleanup EXIT
 
@@ -45,7 +46,11 @@ forced_count="$(grep -ac 'express' "$SERVER" || true)"
 [ "$plain_count" = "$forced_count" ] || fail "plain grep ($plain_count) != grep -a ($forced_count) — $SERVER not clean text"
 
 # --- Conditions 1 & 2: boot + health route ---
-PORT="$PORT" node "$SERVER" >"$LOG" 2>&1 &
+# Use temp dirs so the gate never touches the real ./memory (which holds OAuth tokens).
+P0_TMP="$(mktemp -d -t atlas-p0-data.XXXXXX)"
+WORKFLOWS_DB="$P0_TMP/w.sqlite" SOURCES_DB="$P0_TMP/s.sqlite" VECTOR_DIR="$P0_TMP/v" \
+  AUTH_DB="$P0_TMP/a.sqlite" AUTH_SECRET="$P0_TMP/.jwt" OAUTH_DB="$P0_TMP/o.sqlite" OAUTH_KEY="$P0_TMP/.okey" \
+  PORT="$PORT" node "$SERVER" >"$LOG" 2>&1 &
 SRV_PID=$!
 
 # Poll for the listener (up to ~10s).
