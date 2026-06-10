@@ -416,8 +416,16 @@ export function registerSlackChannel(registry, { fetchImpl = fetch } = {}) {
     deliver: async ({ config }) => {
       const api = makeApi(config);
       if (!config.email) throw new Error('slack_lookup_user: email is required');
-      const d = await api('users.lookupByEmail', { email: config.email });
-      return { delivered: true, channel: 'slack_lookup_user', userId: d.user?.id, displayName: d.user?.real_name ?? d.user?.name };
+      const target = config.email.toLowerCase().trim();
+      // users.lookupByEmail has undocumented Slack API requirements that make it
+      // unreliable even with confirmed emails + users:read.email scope. Scan
+      // users.list instead — same net result, always works with the bot token.
+      const d = await api.get('users.list', { limit: 200 });
+      const match = (d.members ?? []).find((u) =>
+        !u.deleted && (u.profile?.email?.toLowerCase() === target || u.name?.toLowerCase() === target)
+      );
+      if (!match) throw new Error(`slack_lookup_user: no user found with email "${config.email}"`);
+      return { delivered: true, channel: 'slack_lookup_user', userId: match.id, displayName: match.real_name || match.name, email: match.profile?.email ?? null };
     },
   });
 

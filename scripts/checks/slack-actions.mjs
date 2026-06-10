@@ -261,14 +261,20 @@ await test('set_reminder: channel registered but not ready (user token required)
 });
 
 // ── lookup_user ───────────────────────────────────────────────────────────────
-await test('lookup_user: calls users.lookupByEmail', async () => {
-  delete calls['users.lookupByEmail'];
-  const r = await deliver('slack_lookup_user', { email: 'bob@example.com' });
-  assertCalled('users.lookupByEmail');
-  assertPayload('users.lookupByEmail', 'email', 'bob@example.com');
-  assert(r.userId === 'U999');
-  assert(r.displayName === 'Test User');
+await test('lookup_user: scans users.list to find user by email', async () => {
+  delete calls['users.list']; delete calls['users.lookupByEmail']; // clear stale state from post_dm test
+  const r = await deliver('slack_lookup_user', { email: 'alice@example.com' });
+  assertCalled('users.list');                         // scans list, NOT lookupByEmail
+  assert(!calls['users.lookupByEmail'], 'must NOT call users.lookupByEmail');
+  assert(r.userId === 'U001', `expected U001 got ${r.userId}`);
+  assert(r.displayName === 'Alice Smith');
+  assert(r.email === 'alice@example.com');
   assert(r.delivered === true);
+});
+await test('lookup_user: throws when email not found in workspace', async () => {
+  let threw = false;
+  try { await deliver('slack_lookup_user', { email: 'nobody@nowhere.com' }); } catch { threw = true; }
+  assert(threw, 'should throw when no match found');
 });
 await test('lookup_user: throws without email', async () => {
   let threw = false; try { await deliver('slack_lookup_user', {}); } catch { threw = true; }

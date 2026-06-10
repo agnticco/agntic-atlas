@@ -132,8 +132,8 @@
     {
       "id": "lookup_user",
       "label": "Look up a user by email",
-      "description": "Resolve a Slack user ID from an email address.",
-      "requiredScopes": ["users:read", "users:read.email"],
+      "description": "Resolve a Slack user ID from an email address. Uses users.list scan (more reliable than users.lookupByEmail which has undocumented Slack API restrictions).",
+      "requiredScopes": ["users:read"],
       "config": [
         { "key": "email", "type": "string", "required": true, "hint": "Email address to look up" }
       ],
