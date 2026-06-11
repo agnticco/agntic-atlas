@@ -75,25 +75,54 @@ export class WorkflowScheduler {
     this.fetchers[name] = fetcherModule;
   }
 
-  /** Single tick — find and execute all due workflows. */
+  /** Single tick — find and execute all due workflows + poll email triggers. */
   async _tick() {
     if (this._running) return; // prevent overlapping ticks
     this._running = true;
 
     try {
+      // 1. Schedule-triggered workflows (existing behaviour).
       const due = this.workflowStore.getDue();
-      if (due.length === 0) { this._running = false; return; }
+      if (due.length > 0) {
+        log.info(`[workflow-scheduler] ${due.length} workflow(s) due`);
+        for (const workflow of due) {
+          await this._execute(workflow);
+        }
+      }
 
-      log.info(`[workflow-scheduler] ${due.length} workflow(s) due`);
-
-      for (const workflow of due) {
-        await this._execute(workflow);
+      // 2. Email-triggered workflows — poll Gmail for each active flow with
+      //    an `email` trigger type. Requires the gmail poll function to be
+      //    registered via registerEmailPoller().
+      if (this._pollEmail) {
+        const emailFlows = this.workflowStore.list({ kind: 'flow', status: 'active' })
+          .filter((w) => (w.triggers ?? []).some((t) => t.type === 'email'));
+        for (const workflow of emailFlows) {
+          try {
+            const newEmails = await this._pollEmail(workflow);
+            for (const email of newEmails) {
+              log.info(`[workflow-scheduler] email trigger: "${workflow.slug}" — new message from ${email.from}`);
+              await this._executeFlow(workflow, { trigger: 'event', emailContext: email });
+            }
+          } catch (err) {
+            log.error(`[workflow-scheduler] email poll error for "${workflow.slug}": ${err.message}`);
+          }
+        }
       }
     } catch (err) {
       log.error(`[workflow-scheduler] tick error: ${err.message}`);
     } finally {
       this._running = false;
     }
+  }
+
+  /**
+   * Register the Gmail polling function. Called by server.js after the Google
+   * connector is available. The function receives a workflow and returns an
+   * array of new email objects (empty = nothing new).
+   * @param {(workflow: object) => Promise<object[]>} fn
+   */
+  registerEmailPoller(fn) {
+    this._pollEmail = fn;
   }
 
   /**
@@ -145,8 +174,14 @@ export class WorkflowScheduler {
     }
   }
 
-  /** Execute a flow-kind workflow via the FlowTester DAG executor. */
-  async _executeFlow(workflow, { trigger = 'scheduled', sessionId = null } = {}) {
+  /** Execute a flow-kind workflow via the FlowTester DAG executor.
+   * @param {object} workflow
+   * @param {object} [opts]
+   * @param {string} [opts.trigger]
+   * @param {string|null} [opts.sessionId]
+   * @param {object|null} [opts.emailContext] — pre-fetched email to inject as initial context
+   */
+  async _executeFlow(workflow, { trigger = 'scheduled', sessionId = null, emailContext = null } = {}) {
     if (!this.flowTester) {
       log.error(`[workflow-scheduler] flow-kind workflow "${workflow.slug}" is due but no flowTester is configured`);
       return;
@@ -160,9 +195,13 @@ export class WorkflowScheduler {
     let failed = null;
     let failedStep = null;
     try {
+      // For email-triggered flows, inject the fetched email as the initial
+      // lastOutput so summarize/llm nodes see it without a separate fetch step.
+      const runOpts = { runId: run.id, costContext: `workflow:${workflow.slug}` };
+      if (emailContext) runOpts.initialContext = emailContext;
       for await (const evt of this.flowTester.run(
         { nodes: workflow.nodes, edges: workflow.edges },
-        { runId: run.id, costContext: `workflow:${workflow.slug}` },
+        runOpts,
       )) {
         if (evt.type === 'step_started' || evt.type === 'step_completed' || evt.type === 'step_failed') {
           this.workflowStore.appendStep(run.id, evt);

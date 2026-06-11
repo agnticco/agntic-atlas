@@ -1,0 +1,284 @@
+{
+  "connector": "google",
+  "description": "G-Suite capability map. The AI/converger reads the AVAILABLE subset (implemented AND the connected account grants the requiredScopes) so it only proposes actions that work for this client. To add a capability: add an entry + implement its handler, then flip `implemented` to true.",
+  "services": {
+    "gmail":    "https://www.googleapis.com/auth/gmail",
+    "calendar": "https://www.googleapis.com/auth/calendar",
+    "drive":    "https://www.googleapis.com/auth/drive",
+    "sheets":   "https://www.googleapis.com/auth/spreadsheets",
+    "docs":     "https://www.googleapis.com/auth/documents",
+    "tasks":    "https://www.googleapis.com/auth/tasks"
+  },
+  "actions": [
+    {
+      "id": "gmail_search",
+      "label": "Search Gmail messages",
+      "description": "Search inbox messages with a Gmail query (e.g. from:ups.com is:unread). Also the engine's email-trigger source — polls for new matching messages.",
+      "service": "gmail",
+      "requiredScopes": ["https://www.googleapis.com/auth/gmail.readonly"],
+      "config": [
+        { "key": "query",      "type": "string", "required": true,  "hint": "Gmail search query, e.g. from:ups.com is:unread" },
+        { "key": "maxResults", "type": "number", "required": false, "hint": "Max messages to return (default 10)" }
+      ],
+      "returns": ["messages"],
+      "implemented": true
+    },
+    {
+      "id": "gmail_get_message",
+      "label": "Get a Gmail message",
+      "description": "Fetch the full content (subject, body, sender, date) of a specific Gmail message by ID.",
+      "service": "gmail",
+      "requiredScopes": ["https://www.googleapis.com/auth/gmail.readonly"],
+      "config": [
+        { "key": "messageId", "type": "string", "required": true, "hint": "Gmail message ID" }
+      ],
+      "returns": ["subject", "from", "date", "body", "snippet"],
+      "implemented": true
+    },
+    {
+      "id": "gmail_send",
+      "label": "Send an email",
+      "description": "Send an email from the connected Gmail account.",
+      "service": "gmail",
+      "requiredScopes": ["https://www.googleapis.com/auth/gmail.send"],
+      "config": [
+        { "key": "to",      "type": "string",   "required": true },
+        { "key": "subject", "type": "string",   "required": true },
+        { "key": "body",    "type": "textarea", "required": false, "hint": "Email body; omit to use prior step output" }
+      ],
+      "returns": ["messageId", "threadId"],
+      "implemented": true
+    },
+    {
+      "id": "gmail_mark_read",
+      "label": "Mark a Gmail message as read",
+      "description": "Remove the UNREAD label from a message.",
+      "service": "gmail",
+      "requiredScopes": ["https://www.googleapis.com/auth/gmail.modify"],
+      "config": [
+        { "key": "messageId", "type": "string", "required": true }
+      ],
+      "returns": ["ok"],
+      "implemented": true
+    },
+    {
+      "id": "gmail_create_draft",
+      "label": "Create a Gmail draft",
+      "description": "Save a message as a draft without sending it.",
+      "service": "gmail",
+      "requiredScopes": ["https://www.googleapis.com/auth/gmail.modify"],
+      "config": [
+        { "key": "to",      "type": "string",   "required": true },
+        { "key": "subject", "type": "string",   "required": true },
+        { "key": "body",    "type": "textarea", "required": false }
+      ],
+      "returns": ["draftId"],
+      "implemented": false
+    },
+    {
+      "id": "calendar_list_events",
+      "label": "List upcoming calendar events",
+      "description": "Fetch upcoming events from the connected Google Calendar.",
+      "service": "calendar",
+      "requiredScopes": ["https://www.googleapis.com/auth/calendar"],
+      "config": [
+        { "key": "maxResults",  "type": "number", "required": false, "hint": "Default 10" },
+        { "key": "timeMin",     "type": "string", "required": false, "hint": "ISO datetime; defaults to now" },
+        { "key": "calendarId",  "type": "string", "required": false, "hint": "Defaults to primary" }
+      ],
+      "returns": ["events"],
+      "implemented": true
+    },
+    {
+      "id": "calendar_create_event",
+      "label": "Create a calendar event",
+      "description": "Add an event to the connected Google Calendar.",
+      "service": "calendar",
+      "requiredScopes": ["https://www.googleapis.com/auth/calendar"],
+      "config": [
+        { "key": "title",       "type": "string", "required": true },
+        { "key": "start",       "type": "string", "required": true,  "hint": "ISO datetime" },
+        { "key": "end",         "type": "string", "required": true,  "hint": "ISO datetime" },
+        { "key": "description", "type": "string", "required": false },
+        { "key": "attendees",   "type": "string", "required": false, "hint": "Comma-separated email addresses" }
+      ],
+      "returns": ["eventId", "link"],
+      "implemented": true
+    },
+    {
+      "id": "calendar_update_event",
+      "label": "Update a calendar event",
+      "description": "Modify an existing calendar event.",
+      "service": "calendar",
+      "requiredScopes": ["https://www.googleapis.com/auth/calendar"],
+      "config": [
+        { "key": "eventId",     "type": "string", "required": true },
+        { "key": "title",       "type": "string", "required": false },
+        { "key": "start",       "type": "string", "required": false },
+        { "key": "end",         "type": "string", "required": false },
+        { "key": "description", "type": "string", "required": false }
+      ],
+      "returns": ["eventId"],
+      "implemented": false
+    },
+    {
+      "id": "drive_list_files",
+      "label": "List Google Drive files",
+      "description": "List files in Google Drive, optionally filtered by name or type.",
+      "service": "drive",
+      "requiredScopes": ["https://www.googleapis.com/auth/drive"],
+      "config": [
+        { "key": "query",      "type": "string", "required": false, "hint": "Drive query e.g. name contains 'report'" },
+        { "key": "maxResults", "type": "number", "required": false }
+      ],
+      "returns": ["files"],
+      "implemented": true
+    },
+    {
+      "id": "drive_get_file",
+      "label": "Get a Drive file's content",
+      "description": "Download or read the content of a Google Drive file.",
+      "service": "drive",
+      "requiredScopes": ["https://www.googleapis.com/auth/drive"],
+      "config": [
+        { "key": "fileId", "type": "string", "required": true }
+      ],
+      "returns": ["name", "content", "mimeType"],
+      "implemented": false
+    },
+    {
+      "id": "drive_create_file",
+      "label": "Create a Drive file",
+      "description": "Create a new file in Google Drive.",
+      "service": "drive",
+      "requiredScopes": ["https://www.googleapis.com/auth/drive"],
+      "config": [
+        { "key": "name",    "type": "string",   "required": true },
+        { "key": "content", "type": "textarea", "required": false },
+        { "key": "mimeType","type": "string",   "required": false, "hint": "e.g. text/plain" }
+      ],
+      "returns": ["fileId", "link"],
+      "implemented": false
+    },
+    {
+      "id": "sheets_read",
+      "label": "Read a Google Sheet",
+      "description": "Read data from a spreadsheet range.",
+      "service": "sheets",
+      "requiredScopes": ["https://www.googleapis.com/auth/spreadsheets"],
+      "config": [
+        { "key": "spreadsheetId", "type": "string", "required": true },
+        { "key": "range",         "type": "string", "required": false, "hint": "e.g. Sheet1!A1:D10; defaults to first sheet" }
+      ],
+      "returns": ["values", "rows"],
+      "implemented": true
+    },
+    {
+      "id": "sheets_append",
+      "label": "Append rows to a Google Sheet",
+      "description": "Add rows of data to a spreadsheet.",
+      "service": "sheets",
+      "requiredScopes": ["https://www.googleapis.com/auth/spreadsheets"],
+      "config": [
+        { "key": "spreadsheetId", "type": "string",   "required": true },
+        { "key": "range",         "type": "string",   "required": false, "hint": "Sheet name or range; defaults to first sheet" },
+        { "key": "values",        "type": "string",   "required": true,  "hint": "JSON array of rows, e.g. [[\"a\",\"b\"],[\"c\",\"d\"]]" }
+      ],
+      "returns": ["updatedRange", "updatedRows"],
+      "implemented": true
+    },
+    {
+      "id": "sheets_update",
+      "label": "Update cells in a Google Sheet",
+      "description": "Write data to a specific cell range in a spreadsheet.",
+      "service": "sheets",
+      "requiredScopes": ["https://www.googleapis.com/auth/spreadsheets"],
+      "config": [
+        { "key": "spreadsheetId", "type": "string", "required": true },
+        { "key": "range",         "type": "string", "required": true, "hint": "e.g. Sheet1!A1" },
+        { "key": "values",        "type": "string", "required": true, "hint": "JSON array of rows" }
+      ],
+      "returns": ["updatedRange"],
+      "implemented": false
+    },
+    {
+      "id": "docs_read",
+      "label": "Read a Google Doc",
+      "description": "Read the text content of a Google Doc.",
+      "service": "docs",
+      "requiredScopes": ["https://www.googleapis.com/auth/documents"],
+      "config": [
+        { "key": "documentId", "type": "string", "required": true }
+      ],
+      "returns": ["title", "content"],
+      "implemented": true
+    },
+    {
+      "id": "docs_create",
+      "label": "Create a Google Doc",
+      "description": "Create a new Google Doc with optional initial content.",
+      "service": "docs",
+      "requiredScopes": ["https://www.googleapis.com/auth/documents"],
+      "config": [
+        { "key": "title",   "type": "string",   "required": true },
+        { "key": "content", "type": "textarea", "required": false }
+      ],
+      "returns": ["documentId", "link"],
+      "implemented": true
+    },
+    {
+      "id": "docs_append",
+      "label": "Append content to a Google Doc",
+      "description": "Add text to the end of an existing Google Doc.",
+      "service": "docs",
+      "requiredScopes": ["https://www.googleapis.com/auth/documents"],
+      "config": [
+        { "key": "documentId", "type": "string",   "required": true },
+        { "key": "content",    "type": "textarea", "required": false, "hint": "Text to append; omit to use prior step output" }
+      ],
+      "returns": ["ok"],
+      "implemented": false
+    },
+    {
+      "id": "tasks_list",
+      "label": "List Google Tasks",
+      "description": "List tasks from a Google Tasks list.",
+      "service": "tasks",
+      "requiredScopes": ["https://www.googleapis.com/auth/tasks"],
+      "config": [
+        { "key": "tasklistId", "type": "string", "required": false, "hint": "Defaults to the default task list" },
+        { "key": "showCompleted", "type": "boolean", "required": false }
+      ],
+      "returns": ["tasks"],
+      "implemented": true
+    },
+    {
+      "id": "tasks_create",
+      "label": "Create a Google Task",
+      "description": "Add a task to a Google Tasks list.",
+      "service": "tasks",
+      "requiredScopes": ["https://www.googleapis.com/auth/tasks"],
+      "config": [
+        { "key": "title",      "type": "string", "required": true },
+        { "key": "notes",      "type": "string", "required": false },
+        { "key": "due",        "type": "string", "required": false, "hint": "ISO datetime" },
+        { "key": "tasklistId", "type": "string", "required": false }
+      ],
+      "returns": ["taskId"],
+      "implemented": true
+    },
+    {
+      "id": "tasks_complete",
+      "label": "Complete a Google Task",
+      "description": "Mark a task as completed.",
+      "service": "tasks",
+      "requiredScopes": ["https://www.googleapis.com/auth/tasks"],
+      "config": [
+        { "key": "taskId",     "type": "string", "required": true },
+        { "key": "tasklistId", "type": "string", "required": false }
+      ],
+      "returns": ["ok"],
+      "implemented": false
+    }
+  ]
+}
