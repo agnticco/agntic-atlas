@@ -62,7 +62,11 @@ export class FlowTester {
     const edges = flow.edges ?? [];
     const order = this._topoSort(nodes, edges);
     const outputs = new Map();
-    let lastOutput = null;
+    // Allow a caller (e.g. the scheduler's email-trigger path) to inject an
+    // initial value that downstream nodes see as ctx.lastOutput before any
+    // node has run. This is how a fetched email becomes the input to a
+    // summarize or deliver node without a separate fetch step in the spec.
+    let lastOutput = options.initialContext ?? null;
 
     // Reverse adjacency + transitive-ancestor resolver. Transform nodes
     // (summarize/rewrite/extract) and deliver use this so they can gather

@@ -42,6 +42,14 @@ import { registerSlackChannel, createSlackCapabilityProvider } from '../connecto
 import {
   createSlackOAuthFlow, storeSlackToken, getSlackToken, getSlackGrant, disconnectSlack, isOAuthConfigured,
 } from '../connectors/slack/oauth.js';
+import {
+  googleCapabilities, resolveGoogleCapabilities, makeGoogleApi, createGoogleCapabilityProvider,
+  gmailSearch, gmailGetMessage, gmailSend, gmailMarkRead,
+  calendarListEvents, calendarCreateEvent,
+  driveListFiles, sheetsRead, sheetsAppend, docsRead, docsCreate,
+  tasksList, tasksCreate, GOOGLE_CONNECTOR_ID,
+} from '../connectors/google/index.js';
+import { pollGmail, formatEmailContext } from '../connectors/google/gmail-source.js';
 
 const PORT = Number(process.env.PORT ?? 3000);
 const WORKFLOWS_DB = process.env.WORKFLOWS_DB ?? './memory/workflows/workflows.sqlite';
@@ -187,8 +195,22 @@ export async function bootSpine() {
   // Slack capability provider: auto-detects the bot token's granted scopes (cached)
   // and resolves the capability map so /capabilities + the converger see only what
   // this client's workspace actually allows.
+  // Wire the Gmail email poller into the scheduler so email-trigger flows fire.
+  // The poller is a closure over auth (oauthTokenStore + cipher) and resolves
+  // the per-tenant/per-user Google token at poll time.
+  engine.workflowScheduler.registerEmailPoller(async (workflow) => {
+    // Email triggers store the userId of the connected Google account in trigger.userId.
+    const trigger = (workflow.triggers ?? []).find((t) => t.type === 'email');
+    const userId = trigger?.userId ?? workflow.user_id;
+    const tenantId = workflow.tenant_id ?? 'default';
+    if (!userId) return [];
+    const emails = await pollGmail({ workflow, tenantId, userId, oauthTokenStore: auth.oauthTokenStore, cipher: auth.tokenCipher });
+    return emails.map(formatEmailContext); // strings — injected as initialContext
+  });
+
   const slack = createSlackCapabilityProvider({ oauthTokenStore: auth.oauthTokenStore, apiBase: process.env.SLACK_API_URL });
   const slackOAuth = createSlackOAuthFlow();
+  const google = createGoogleCapabilityProvider({ oauthTokenStore: auth.oauthTokenStore });
 
   return {
     auth,
@@ -196,6 +218,7 @@ export async function bootSpine() {
     rag,
     slack,
     slackOAuth,
+    google,
     get llm() { return engine.llm; },
     // Dispose Metal contexts/models before exit — freeing an embedding context
     // and a chat model together at process exit can trip an upstream llama.cpp
@@ -397,6 +420,66 @@ export function createApp(spine) {
     const removed = disconnectSlack({ oauthTokenStore: spine.auth.oauthTokenStore, tenantId: req.tenant.id });
     spine.slack.refresh(req.tenant.id);
     res.json({ ok: true, removed });
+  });
+
+  // ── Google / G-Suite connector ─────────────────────────────────────────────
+  // OAuth install (reuses the generic OAuthClient with googleProviderConfig).
+  app.get('/connectors/google/authorize', requireActiveTenant, (req, res) => {
+    try {
+      const cfg = spine.auth.oauth._provider(GOOGLE_CONNECTOR_ID);
+      if (!cfg?.clientId) return res.status(501).json({ error: 'Google OAuth not configured (set GOOGLE_OAUTH_CLIENT_ID + GOOGLE_OAUTH_CLIENT_SECRET)' });
+      const { authorizationUrl } = spine.auth.oauth.start({ userId: req.user.id, tenantId: req.tenant.id, connectorId: GOOGLE_CONNECTOR_ID });
+      res.json({ authorizeUrl: authorizationUrl });
+    } catch (err) { res.status(400).json({ error: err.message }); }
+  });
+  app.get('/connectors/google/callback', async (req, res) => {
+    try {
+      // The state encodes the userId from the authorize step — extract it so
+      // the callback can complete without an active session cookie.
+      const pending = spine.auth.oauth._pending?.get(req.query?.state);
+      const sessionUser = pending ? { id: pending.userId } : null;
+      if (!sessionUser) return res.status(400).json({ error: 'Google callback: unknown or expired state — restart the connection' });
+      const result = await spine.auth.oauth.handleCallback({ query: req.query, sessionUser });
+      spine.google.refresh(pending.tenantId, pending.userId);
+      res.json({ ok: true, connected: true, connector: 'google', account: result?.account });
+    } catch (err) { res.status(400).json({ error: err.message }); }
+  });
+  app.get('/connectors/google/status', requireActiveTenant, (req, res) => {
+    const row = spine.auth.oauthTokenStore.get({ tenantId: req.tenant.id, userId: req.user.id, connectorId: GOOGLE_CONNECTOR_ID });
+    res.json({ connected: !!row, account: row?.account ?? null, scopes: (row?.scope ?? '').split(/\s+/).filter(Boolean) });
+  });
+  app.delete('/connectors/google', requireActiveTenant, (req, res) => {
+    const removed = spine.auth.oauthTokenStore.delete({ tenantId: req.tenant.id, userId: req.user.id, connectorId: GOOGLE_CONNECTOR_ID });
+    spine.google.refresh(req.tenant.id, req.user.id);
+    res.json({ ok: true, removed });
+  });
+
+  // G-Suite action routes — each mirrors a capability map action.
+  // All require auth; the Google token is resolved per (tenant, user).
+  function gapi(req) {
+    return makeGoogleApi({ oauthTokenStore: spine.auth.oauthTokenStore, cipher: spine.auth.tokenCipher, tenantId: req.tenant.id, userId: req.user.id });
+  }
+
+  app.post('/google/gmail/search',    requireActiveTenant, async (req, res) => { try { res.json(await gmailSearch(gapi(req), req.body)); } catch (e) { res.status(500).json({ error: e.message }); } });
+  app.post('/google/gmail/get',       requireActiveTenant, async (req, res) => { try { res.json(await gmailGetMessage(gapi(req), req.body)); } catch (e) { res.status(500).json({ error: e.message }); } });
+  app.post('/google/gmail/send',      requireActiveTenant, async (req, res) => { try { res.json(await gmailSend(gapi(req), req.body)); } catch (e) { res.status(500).json({ error: e.message }); } });
+  app.post('/google/gmail/mark-read', requireActiveTenant, async (req, res) => { try { res.json(await gmailMarkRead(gapi(req), req.body)); } catch (e) { res.status(500).json({ error: e.message }); } });
+  app.post('/google/calendar/events', requireActiveTenant, async (req, res) => { try { res.json(await calendarListEvents(gapi(req), req.body)); } catch (e) { res.status(500).json({ error: e.message }); } });
+  app.post('/google/calendar/create', requireActiveTenant, async (req, res) => { try { res.json(await calendarCreateEvent(gapi(req), req.body)); } catch (e) { res.status(500).json({ error: e.message }); } });
+  app.post('/google/drive/files',     requireActiveTenant, async (req, res) => { try { res.json(await driveListFiles(gapi(req), req.body)); } catch (e) { res.status(500).json({ error: e.message }); } });
+  app.post('/google/sheets/read',     requireActiveTenant, async (req, res) => { try { res.json(await sheetsRead(gapi(req), req.body)); } catch (e) { res.status(500).json({ error: e.message }); } });
+  app.post('/google/sheets/append',   requireActiveTenant, async (req, res) => { try { res.json(await sheetsAppend(gapi(req), req.body)); } catch (e) { res.status(500).json({ error: e.message }); } });
+  app.post('/google/docs/read',       requireActiveTenant, async (req, res) => { try { res.json(await docsRead(gapi(req), req.body)); } catch (e) { res.status(500).json({ error: e.message }); } });
+  app.post('/google/docs/create',     requireActiveTenant, async (req, res) => { try { res.json(await docsCreate(gapi(req), req.body)); } catch (e) { res.status(500).json({ error: e.message }); } });
+  app.post('/google/tasks/list',      requireActiveTenant, async (req, res) => { try { res.json(await tasksList(gapi(req), req.body)); } catch (e) { res.status(500).json({ error: e.message }); } });
+  app.post('/google/tasks/create',    requireActiveTenant, async (req, res) => { try { res.json(await tasksCreate(gapi(req), req.body)); } catch (e) { res.status(500).json({ error: e.message }); } });
+
+  // G-Suite capabilities (per user, since Google tokens are per-user not per-tenant bot).
+  app.get('/connectors/google/capabilities', requireActiveTenant, async (req, res) => {
+    try {
+      const resolved = await spine.google.resolveForTenant(req.tenant.id, req.user.id);
+      res.json(resolved);
+    } catch (err) { res.status(500).json({ error: err.message }); }
   });
 
   // Run a hand-authored spec through the engine — the "click run" path (no UI yet).

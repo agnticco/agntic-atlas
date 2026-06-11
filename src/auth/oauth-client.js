@@ -58,17 +58,34 @@ export function googleProviderConfig() {
     configured: !!(clientId && clientSecret),
     clientId,
     clientSecret,
-    redirectUri: `${redirectBase}/auth/oauth/google/callback`,
+    redirectUri: process.env.GOOGLE_REDIRECT_URI ?? `${redirectBase}/connectors/google/callback`,
     authorizationEndpoint: 'https://accounts.google.com/o/oauth2/v2/auth',
     tokenEndpoint:         'https://oauth2.googleapis.com/token',
     revocationEndpoint:    'https://oauth2.googleapis.com/revoke',
-    // Read-only v1 canon + openid/email so we can show which account connected.
-    scopes: [
-      'openid', 'email',
+    // Full G-Suite scope set. Per-client restriction is done at the Google
+    // OAuth consent screen (user can deselect) or by narrowing this list per
+    // deployment via GOOGLE_OAUTH_SCOPES env. All are requested so one
+    // install covers the full connector capability map; Atlas only uses what's
+    // actually granted (detected from token info after install).
+    scopes: (process.env.GOOGLE_OAUTH_SCOPES ?? [
+      'openid', 'email', 'profile',
+      // Gmail
       'https://www.googleapis.com/auth/gmail.readonly',
-      'https://www.googleapis.com/auth/calendar.readonly',
-      'https://www.googleapis.com/auth/drive.readonly',
-    ],
+      'https://www.googleapis.com/auth/gmail.send',
+      'https://www.googleapis.com/auth/gmail.modify',
+      // Calendar
+      'https://www.googleapis.com/auth/calendar',
+      // Drive
+      'https://www.googleapis.com/auth/drive',
+      // Sheets
+      'https://www.googleapis.com/auth/spreadsheets',
+      // Docs
+      'https://www.googleapis.com/auth/documents',
+      // Tasks
+      'https://www.googleapis.com/auth/tasks',
+      // Contacts
+      'https://www.googleapis.com/auth/contacts.readonly',
+    ].join(' ')).split(/\s+/).filter(Boolean),
     // Google needs these to return a refresh_token.
     extraAuthParams: { access_type: 'offline', prompt: 'consent' },
   };
