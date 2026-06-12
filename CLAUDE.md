@@ -62,6 +62,12 @@ refactor them without an explicit decision recorded here:
   `src/auth/{token-service,middleware,index}.js`, and per-tenant RAG resolution in
   `src/api/server.js`. Stores now **throw** on a missing tenant rather than
   returning unscoped rows. See [`docs/architecture/multi-tenancy.md`](docs/architecture/multi-tenancy.md).
+- **compiled-graph.js resume-value consumption (2026-06-12)** — `src/graph/compiled-graph.js`
+  `_runLoop`: `resumeValues[currentNode]` was never cleared after use. Every subsequent call
+  to the same node name within one `_runLoop` (e.g. `clarify → analyze → clarify`) received
+  stale resume values and `interrupt()` returned immediately instead of pausing, causing
+  infinite loops up to the recursion limit. Fix: `delete resumeValues[currentNode]` after
+  building the `InterruptContext` (one line, no behavior change for single-visit nodes).
 - **Cloud inference (2026-06-12)** — `src/api/server.js` `buildLocalLLM()` replaced
   with `buildLLM()`: prefers Anthropic (claude-haiku fast / claude-sonnet balanced+powerful)
   when `ANTHROPIC_API_KEY` is set, falls back to OpenAI, then local weights. `ChatModel`
@@ -75,6 +81,20 @@ hand-authored spec." When Phase 2 produces a runnable "UPS email → Slack" spec
 it is frozen at `docs/specs/canonical-ups-slack.json`, committed, and **never
 regenerated**. The converger is built against that fixed target. (File appears in
 Phase 2; this pointer marks where it lives.)
+
+**Recorded decision (2026-06-12): "exact" means structurally equivalent AND
+provably runnable, not byte-for-byte LLM output identity.** The converger is
+non-deterministic — requiring identical field values (node IDs, filter text,
+config wording) would be brittle and would defeat the purpose of an elicitation
+engine. The gate therefore verifies:
+  1. Structural equivalence: correct trigger type (`email`), UPS filter, a
+     summarize-type node, a delivery-type node targeting Slack, and an edge
+     connecting them.
+  2. Runnability: the converger's emitted spec runs through the execution engine
+     end-to-end (mock email → summarize → stub Slack) and returns a delivery `ts`
+     — the same runnability bar Phase 2 proved for the hand-authored spec.
+This is a stronger check than byte-for-byte comparison because it proves the
+spec is actually executable, not just structurally similar to the frozen file.
 
 ## Known gotchas
 
