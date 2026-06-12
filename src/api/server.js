@@ -50,6 +50,7 @@ import {
   tasksList, tasksCreate, GOOGLE_CONNECTOR_ID,
 } from '../connectors/google/index.js';
 import { pollGmail, formatEmailContext } from '../connectors/google/gmail-source.js';
+import { InteractionStore } from '../converger/interaction-store.js';
 
 const PORT = Number(process.env.PORT ?? 3000);
 const WORKFLOWS_DB = process.env.WORKFLOWS_DB ?? './memory/workflows/workflows.sqlite';
@@ -64,6 +65,7 @@ const EMBEDDING_MODEL_PATH = process.env.EMBEDDING_MODEL_PATH
 // Auth store/key locations — env-overridable so checks can run hermetically
 // against a temp dir instead of writing to ./memory. Defaults match the
 // auth subsystem's own defaults.
+const INTERACTIONS_DB = process.env.INTERACTIONS_DB ?? './memory/interactions.sqlite';
 const AUTH_DB     = process.env.AUTH_DB     ?? './memory/auth.sqlite';
 const AUTH_SECRET = process.env.AUTH_SECRET ?? './memory/.jwt-secret';
 const OAUTH_DB    = process.env.OAUTH_DB    ?? './memory/oauth.sqlite';
@@ -228,6 +230,9 @@ export async function bootSpine() {
   const slackOAuth = createSlackOAuthFlow();
   const google = createGoogleCapabilityProvider({ oauthTokenStore: auth.oauthTokenStore });
 
+  const interactionStore = new InteractionStore({ dbPath: INTERACTIONS_DB });
+  interactionStore.init();
+
   return {
     auth,
     engine,
@@ -235,6 +240,7 @@ export async function bootSpine() {
     slack,
     slackOAuth,
     google,
+    interactionStore,
     get llm() { return engine.llm; },
     // Dispose Metal contexts/models before exit — freeing an embedding context
     // and a chat model together at process exit can trip an upstream llama.cpp
@@ -396,8 +402,9 @@ export function createApp(spine) {
   // "Connector/action NOT available is not usable — don't propose it."
   app.get('/capabilities', requireActiveTenant, async (req, res) => {
     try {
-      const slack = await spine.slack.resolveForTenant(req.tenant.id);
-      res.json({ channels: spine.engine.channelRegistry.getAll(), connectors: { slack } });
+      const slack  = await spine.slack.resolveForTenant(req.tenant.id);
+      const google = await spine.google.resolveForTenant(req.tenant.id, req.user.id);
+      res.json({ channels: spine.engine.channelRegistry.getAll(), connectors: { slack, google } });
     } catch (err) {
       res.status(500).json({ error: `capabilities failed: ${err.message ?? String(err)}` });
     }
@@ -495,6 +502,42 @@ export function createApp(spine) {
     try {
       const resolved = await spine.google.resolveForTenant(req.tenant.id, req.user.id);
       res.json(resolved);
+    } catch (err) { res.status(500).json({ error: err.message }); }
+  });
+
+  // ── Interaction log ───────────────────────────────────────────────────────
+  // Tenant-scoped: own sessions only.
+  // Platform-admin: all tenants via ?tenant_id= filter or unfiltered.
+
+  app.get('/interactions', requireAuth, (req, res) => {
+    try {
+      const isPlatformAdmin = req.user?.role === 'admin' && req.user?.tenant_id === spine.auth.platformTenantId;
+      if (isPlatformAdmin) {
+        const { tenant_id, limit = 200, offset = 0 } = req.query;
+        return res.json({ sessions: spine.interactionStore.listAllSessions({ tenantId: tenant_id, limit: Number(limit), offset: Number(offset) }) });
+      }
+      if (!req.tenant) return res.status(403).json({ error: 'Unauthorized' });
+      const { limit = 50, offset = 0 } = req.query;
+      res.json({ sessions: spine.interactionStore.listSessions(req.tenant.id, { limit: Number(limit), offset: Number(offset) }) });
+    } catch (err) { res.status(500).json({ error: err.message }); }
+  });
+
+  app.get('/interactions/:sessionId', requireAuth, (req, res) => {
+    try {
+      const tenantId = req.tenant?.id;
+      if (!tenantId) return res.status(403).json({ error: 'Unauthorized' });
+      const session = spine.interactionStore.getSession(tenantId, req.params.sessionId);
+      if (!session) return res.status(404).json({ error: 'not found' });
+      const events  = spine.interactionStore.getEvents(tenantId, req.params.sessionId);
+      res.json({ session, events });
+    } catch (err) { res.status(500).json({ error: err.message }); }
+  });
+
+  // Platform-admin: aggregate signals for closed-loop inference.
+  app.get('/interactions/signals', requireAuth, requirePlatformAdmin, (req, res) => {
+    try {
+      const { since = 0, tenant_id } = req.query;
+      res.json(spine.interactionStore.querySignals({ since: Number(since), tenantId: tenant_id }));
     } catch (err) { res.status(500).json({ error: err.message }); }
   });
 
