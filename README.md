@@ -19,8 +19,9 @@ built on.
 | **P1** | Slack connector — hand-authored spec posts to Slack; scope-aware capability map; per-tenant OAuth install | ✅ merged |
 | — | **Multi-tenancy** — hard, fail-closed per-tenant data isolation (foundational) | ✅ merged |
 | **P2** | Event triggers + Gmail — UPS→Slack spec fires on real email; G-Suite connector (20 actions); cloud inference | ✅ merged |
-| **P3** | The **converger** (the IP) | ▶ next |
-| P4–P7 | Builder UI · console UI · launcher · third connector + reliability | planned |
+| **P3** | The **converger** (the IP) — elicitation engine, interaction store | ✅ merged |
+| **P4** | Builder UI — workflow built entirely by talking | ▶ next |
+| P5–P7 | Console UI · launcher · third connector + reliability | planned |
 
 Each ✅ was closed by an independent **Verifier** against a fail-closed gate; the
 evidence lives in [`docs/gates/`](docs/gates/) and `git log --grep "^Gate:"`.
