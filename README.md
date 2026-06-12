@@ -18,8 +18,8 @@ built on.
 | **P0** | Clean spine — execution engine + auth/credential vault boot in the new repo; `GET /health` | ✅ merged |
 | **P1** | Slack connector — hand-authored spec posts to Slack; scope-aware capability map; per-tenant OAuth install | ✅ merged |
 | — | **Multi-tenancy** — hard, fail-closed per-tenant data isolation (foundational) | ✅ merged |
-| **P2** | Event triggers + Gmail — a UPS→Slack spec fires on a real email *(freeze the canonical spec)* | ▶ next |
-| P3 | The **converger** (the IP) | planned |
+| **P2** | Event triggers + Gmail — UPS→Slack spec fires on real email; G-Suite connector (20 actions); cloud inference | ✅ merged |
+| **P3** | The **converger** (the IP) | ▶ next |
 | P4–P7 | Builder UI · console UI · launcher · third connector + reliability | planned |
 
 Each ✅ was closed by an independent **Verifier** against a fail-closed gate; the
@@ -29,7 +29,7 @@ evidence lives in [`docs/gates/`](docs/gates/) and `git log --grep "^Gate:"`.
 
 - **Execution engine** (`src/workflows/`) — topological DAG executor with real
   inter-step data threading (`{{prev}}`, `{{nodeId.output}}`, transitive fan-in),
-  11 node types, durable cost-tracked run logs. A local-model `ModelPool` is
+  11 node types, durable cost-tracked run logs. A `ModelPool` (Anthropic/OpenAI cloud or local GGUF) is
   injected as the engine's LLM.
 - **Auth + credential vault** (`src/auth/`) — argon2id passwords, revocable JWT
   sessions (with a tenant claim), AES-256-GCM-encrypted OAuth tokens. Every store
@@ -50,6 +50,15 @@ evidence lives in [`docs/gates/`](docs/gates/) and `git log --grep "^Gate:"`.
   and an authenticated run posts as that tenant's workspace. A declarative,
   scope-aware **capability map** tells the converger exactly which Slack actions
   are usable for a given client. See [`docs/connectors/slack.md`](docs/connectors/slack.md).
+- **G-Suite connector** (`src/connectors/google/`) — Gmail (search, send, read,
+  mark-read), Google Docs (create, read), Sheets (read, append), Drive, Calendar,
+  and Tasks. Full OAuth 2.0 install flow with PKCE; tokens stored encrypted per
+  tenant. Gmail trigger fires on incoming email matching a filter, watermarked per
+  workflow. 20-action capability map.
+- **Cloud inference** (`src/llm/`) — `buildLLM()` in the server prefers Anthropic
+  (haiku/sonnet tiers) when `ANTHROPIC_API_KEY` is set, falls back to OpenAI, then
+  local GGUF weights. The frozen canonical spec (`docs/specs/canonical-ups-slack.json`)
+  is the P3 correctness target — the converger must reproduce it exactly.
 
 > The per-subprocess **MCP runtime is intentionally deferred.** Connectors are
 > currently direct-API + per-tenant OAuth (cheapest path that proves the spine);
@@ -78,6 +87,8 @@ for the embedding model + a chat model. The engine boots without them
 - **Tenant management** (platform admin): `GET|POST /tenants`, `POST /tenants/:id/users`, `POST /tenants/:id/status`.
 - **RAG** (per tenant, auth required): `POST /rag/ingest`, `POST /rag/query`.
 - **Slack OAuth:** `GET /connectors/slack/authorize`, `GET /connectors/slack/callback`, `GET /connectors/slack/status`, `DELETE /connectors/slack`.
+- **Google OAuth:** `GET /connectors/google/authorize`, `GET /connectors/google/callback`, `GET /connectors/google/status`.
+- **Google actions** (auth required): `POST /google/gmail/{search,get,send,mark-read}`, `POST /google/docs/{create,read}`, `POST /google/sheets/{read,append}`, `POST /google/calendar/{events,create}`, `POST /google/tasks/{list,create}`.
 - **Capabilities / run:** `GET /capabilities` (per-tenant), `POST /workflows/run`.
 
 ## Verification & gates
@@ -103,7 +114,7 @@ src/
   auth/        users, sessions, tenants, JWT, AES-256-GCM OAuth vault
   llm/         local (node-llama-cpp) + cloud models, ModelPool, cost tracker
   rag/         embeddings + per-tenant vector store, retrievers, ingestion
-  connectors/  Slack (channel + OAuth) + connector manifest
+  connectors/  Slack (channel + OAuth) · Google/G-Suite (Gmail, Docs, Sheets, Drive, Calendar, Tasks) + connector manifest
   graph/       custom StateGraph + HITL interrupt/resume (converger substrate)
   core/ utils/ memory/   shared primitives
 docs/          build plan, architecture, connector + capability docs, gate ledgers
