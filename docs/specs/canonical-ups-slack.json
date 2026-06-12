@@ -1,0 +1,39 @@
+{
+  "name": "UPS tracking email → Slack",
+  "description": "When a new UPS tracking email arrives, summarize it and post to Slack #social.",
+  "kind": "flow",
+  "triggers": [
+    {
+      "type": "email",
+      "filter": "from:ups.com",
+      "maxResults": 5,
+      "userId": "__replace_with_google_user_id__",
+      "comment": "Polls Gmail every tick (60s) for new messages matching the filter. Replace userId with the Slack user ID of the connected Google account."
+    }
+  ],
+  "nodes": [
+    {
+      "id": "summarize",
+      "type": "summarize",
+      "label": "Summarize the UPS email",
+      "config": {
+        "instructions": "Extract: package status, expected delivery date, and any action required. Be concise — 2-3 sentences.",
+        "format": "plain"
+      }
+    },
+    {
+      "id": "post",
+      "type": "deliver",
+      "label": "Post to Slack #social",
+      "config": {
+        "channel": "slack",
+        "target": "#social",
+        "title": "📦 UPS Update"
+      }
+    }
+  ],
+  "edges": [
+    { "from": "summarize", "to": "post" }
+  ],
+  "errorHandling": {}
+}
