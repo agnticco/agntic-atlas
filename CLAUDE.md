@@ -62,6 +62,12 @@ refactor them without an explicit decision recorded here:
   `src/auth/{token-service,middleware,index}.js`, and per-tenant RAG resolution in
   `src/api/server.js`. Stores now **throw** on a missing tenant rather than
   returning unscoped rows. See [`docs/architecture/multi-tenancy.md`](docs/architecture/multi-tenancy.md).
+- **compiled-graph.js resume-value consumption (2026-06-12)** — `src/graph/compiled-graph.js`
+  `_runLoop`: `resumeValues[currentNode]` was never cleared after use. Every subsequent call
+  to the same node name within one `_runLoop` (e.g. `clarify → analyze → clarify`) received
+  stale resume values and `interrupt()` returned immediately instead of pausing, causing
+  infinite loops up to the recursion limit. Fix: `delete resumeValues[currentNode]` after
+  building the `InterruptContext` (one line, no behavior change for single-visit nodes).
 - **Cloud inference (2026-06-12)** — `src/api/server.js` `buildLocalLLM()` replaced
   with `buildLLM()`: prefers Anthropic (claude-haiku fast / claude-sonnet balanced+powerful)
   when `ANTHROPIC_API_KEY` is set, falls back to OpenAI, then local weights. `ChatModel`
