@@ -62,6 +62,11 @@ refactor them without an explicit decision recorded here:
   `src/auth/{token-service,middleware,index}.js`, and per-tenant RAG resolution in
   `src/api/server.js`. Stores now **throw** on a missing tenant rather than
   returning unscoped rows. See [`docs/architecture/multi-tenancy.md`](docs/architecture/multi-tenancy.md).
+- **Cloud inference (2026-06-12)** — `src/api/server.js` `buildLocalLLM()` replaced
+  with `buildLLM()`: prefers Anthropic (claude-haiku fast / claude-sonnet balanced+powerful)
+  when `ANTHROPIC_API_KEY` is set, falls back to OpenAI, then local weights. `ChatModel`
+  import added. Startup log now reflects actual provider. No logic changes to engine or
+  salvage LLM modules.
 
 ## The frozen canonical spec
 
@@ -132,7 +137,7 @@ Update as gates close. `git log --grep "^Gate:"` is the authoritative ledger.
 
 - [x] **P0** — clean spine: engine boots in new repo, UI hits one health route
 - [x] **P1** — Slack connector: clicking "run" posts to Slack
-- [ ] **P2** — event triggers + Gmail: hand-authored UPS→Slack fires on real email *(freeze the spec here)*
+- [x] **P2** — event triggers + Gmail: hand-authored UPS→Slack fires on real email *(freeze the spec here)*
 - [ ] **P3** — converger reproduces the frozen spec, confirmations logged
 - [ ] **P4** — builder UI: workflow built entirely by talking
 - [ ] **P5** — console UI: inventory, live run monitoring, SOP view

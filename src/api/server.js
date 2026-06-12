@@ -36,7 +36,7 @@ import {
   FlowTester,
   WorkflowService,
 } from '../workflows/index.js';
-import { LlamaCppLLM, ModelPool } from '../llm/index.js';
+import { LlamaCppLLM, ModelPool, ChatModel } from '../llm/index.js';
 import { EmbeddingModel, TextSplitter, VectorStore } from '../rag/index.js';
 import { registerSlackChannel, createSlackCapabilityProvider } from '../connectors/slack/index.js';
 import {
@@ -75,14 +75,30 @@ const ensureDir = (file) => { try { mkdirSync(dirname(file), { recursive: true }
 const pubUser = (u) => ({ id: u.id, email: u.email, role: u.role, tenant_id: u.tenant_id, display_name: u.display_name });
 
 /**
- * Build the local-model LLM, tier-wrapped in a ModelPool, to inject into the
- * engine. Returns null (engine still boots) when no local weights are present —
- * `llm` nodes then fail at run time with a clear message, not at boot.
+ * Build the LLM pool. Priority: Anthropic (cloud) → OpenAI (cloud) → local weights.
+ * Returns null only when nothing is configured — engine still boots but llm nodes
+ * fail at run time with a clear message.
  */
-function buildLocalLLM() {
+function buildLLM() {
+  const anthropicKey = process.env.ANTHROPIC_API_KEY?.trim();
+  const openaiKey    = process.env.OPENAI_API_KEY?.trim();
+
+  if (anthropicKey) {
+    const fast      = new ChatModel({ provider: 'anthropic', model: 'claude-haiku-4-5-20251001', apiKey: anthropicKey });
+    const balanced  = new ChatModel({ provider: 'anthropic', model: 'claude-sonnet-4-6',         apiKey: anthropicKey });
+    const powerful  = new ChatModel({ provider: 'anthropic', model: 'claude-sonnet-4-6',         apiKey: anthropicKey });
+    return new ModelPool({ tiers: { fast, balanced, powerful }, defaultTier: 'balanced' });
+  }
+
+  if (openaiKey) {
+    const fast      = new ChatModel({ provider: 'openai', model: 'gpt-4o-mini', apiKey: openaiKey });
+    const balanced  = new ChatModel({ provider: 'openai', model: 'gpt-4o',      apiKey: openaiKey });
+    const powerful  = new ChatModel({ provider: 'openai', model: 'gpt-4o',      apiKey: openaiKey });
+    return new ModelPool({ tiers: { fast, balanced, powerful }, defaultTier: 'balanced' });
+  }
+
   if (!existsSync(LOCAL_MODEL_PATH)) return null;
   const local = new LlamaCppLLM({ modelPath: LOCAL_MODEL_PATH, contextSize: 2048 });
-  // One local model serves every tier; cloud tiers can be layered in later via env.
   return new ModelPool({ tiers: { fast: local, balanced: local, powerful: local }, defaultTier: 'balanced' });
 }
 
@@ -189,7 +205,7 @@ export async function bootSpine() {
     dbPath: AUTH_DB, secretPath: AUTH_SECRET, oauthDbPath: OAUTH_DB, oauthKeyPath: OAUTH_KEY,
   });
 
-  const llm = buildLocalLLM();
+  const llm = buildLLM();
   const engine = await buildEngine(workflowStore, llm);
   const rag = buildRag();
   // Slack capability provider: auto-detects the bot token's granted scopes (cached)
@@ -532,7 +548,10 @@ export async function start() {
   const app = createApp(spine);
 
   const server = app.listen(PORT, () => {
-    const llmState = spine.engine.llm ? 'local-model' : 'no-model';
+    const llmState = !spine.engine.llm ? 'no-model'
+      : process.env.ANTHROPIC_API_KEY ? 'anthropic'
+      : process.env.OPENAI_API_KEY    ? 'openai'
+      : 'local-model';
     console.log(`atlas spine listening on :${PORT} (engine ok, auth ok, llm ${llmState}, rag ${spine.rag.provider})`);
   });
 
