@@ -60,9 +60,9 @@ AVAILABLE NODE TYPES:
 - llm: Run a custom AI prompt (config: prompt, model)
 - extract: Extract structured fields from text (config: fields[])
 - rewrite: Rewrite/transform text (config: instructions, tone)
-- deliver: Send result to a destination (config: channel ["slack","in_app","webhook"], target, title)
+- deliver: Send the final result to a destination (config: channel ["slack","in_app","webhook"], target, title). Use this for the LAST step that delivers output to the user.
 - fetch: Fetch a URL (config: url, method)
-- tool: Call a specific connector action (config: connector, action, params)
+- tool: Call a specific connector action mid-workflow (config: connector, action, params). Use this for processing steps, NOT for final delivery to Slack — use deliver for that.
 
 RULES:
 - NEVER propose an action or connector that is not listed under AVAILABLE CONNECTOR ACTIONS

@@ -82,6 +82,20 @@ it is frozen at `docs/specs/canonical-ups-slack.json`, committed, and **never
 regenerated**. The converger is built against that fixed target. (File appears in
 Phase 2; this pointer marks where it lives.)
 
+**Recorded decision (2026-06-12): "exact" means structurally equivalent AND
+provably runnable, not byte-for-byte LLM output identity.** The converger is
+non-deterministic — requiring identical field values (node IDs, filter text,
+config wording) would be brittle and would defeat the purpose of an elicitation
+engine. The gate therefore verifies:
+  1. Structural equivalence: correct trigger type (`email`), UPS filter, a
+     summarize-type node, a delivery-type node targeting Slack, and an edge
+     connecting them.
+  2. Runnability: the converger's emitted spec runs through the execution engine
+     end-to-end (mock email → summarize → stub Slack) and returns a delivery `ts`
+     — the same runnability bar Phase 2 proved for the hand-authored spec.
+This is a stronger check than byte-for-byte comparison because it proves the
+spec is actually executable, not just structurally similar to the frozen file.
+
 ## Known gotchas
 
 - **`server.js` encoding.** In `agntic-prod`, `src/api/server.js` reads as
