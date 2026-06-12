@@ -334,8 +334,13 @@ export class CompiledGraph extends Runnable {
         throw new Error(`CompiledGraph: node "${currentNode}" not found in graph`);
       }
 
-      // Build interrupt context for this node (replaying if we have resume values for it)
-      const nodeResumes    = resumeValues[currentNode] ?? [];
+      // Build interrupt context for this node (replaying if we have resume values for it).
+      // Consume the resume values immediately — a node's stored resume is valid only for
+      // the single execution it was saved against. Leaving it in place would cause every
+      // subsequent call to the same node name within this _runLoop to return stale values
+      // instead of throwing GraphInterruptSignal.
+      const nodeResumes = resumeValues[currentNode] ?? [];
+      delete resumeValues[currentNode];
       const interruptCtx   = new InterruptContext(nodeResumes);
 
       let update, command;

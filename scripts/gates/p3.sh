@@ -1,21 +1,27 @@
 #!/usr/bin/env bash
 # Phase 3 — the converger (the IP; long pole).
+#
 # Done when: from a vague typed intent, the converger reproduces the EXACT
 # frozen spec (docs/specs/canonical-ups-slack.json), with each step's
 # confirmation logged.
-#
-# Replace with the real check, e.g. run the headless converger on the canonical
-# intent and diff its emitted spec against the frozen file; assert no diff and
-# that a confirmation was logged per committed step.
 set -eu
 cd "$(git rev-parse --show-toplevel)"
 
-frozen="docs/specs/canonical-ups-slack.json"
-if [ ! -f "$frozen" ]; then
-  echo "p3: $frozen missing — freeze it in Phase 2 first. Gate fails." >&2
-  exit 1
-fi
+fail() { echo "p3 FAIL: $*" >&2; exit 1; }
 
-echo "p3: check not yet implemented — gate fails closed" >&2
-echo "    implement: converger(canonical intent) == $frozen, confirmations logged" >&2
-exit 1
+# ── 1. Frozen spec exists ─────────────────────────────────────────────────────
+frozen="docs/specs/canonical-ups-slack.json"
+[ -f "$frozen" ] || fail "$frozen missing — freeze it in Phase 2 first"
+
+# ── 2. Headless converger run ─────────────────────────────────────────────────
+echo "── p3: running converger headless on canonical UPS→Slack intent ──"
+
+RESULT=$(node --env-file=.env scripts/checks/p3-converger-run.mjs 2>/dev/null | tail -1)
+echo "  converger result: $RESULT"
+echo "$RESULT" | grep -q "^P3-CONVERGER-PASS" || fail "converger did not reproduce spec (got: $RESULT)"
+
+# ── 3. P2 non-regression ──────────────────────────────────────────────────────
+bash scripts/gates/p2.sh >/dev/null 2>&1 || fail "P2 regressed"
+
+echo "p3 PASS: converger reproduced UPS→Slack spec from intent; confirmations logged; P2 green"
+exit 0

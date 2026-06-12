@@ -13,7 +13,18 @@ import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 
 const __dir = dirname(fileURLToPath(import.meta.url));
-const GOOGLE_API = 'https://www.googleapis.com';
+// Some Google APIs have their own subdomain hosts and drop the service prefix.
+// e.g. /docs/v1/documents → https://docs.googleapis.com/v1/documents
+const GOOGLE_API_HOSTS = [
+  { prefix: '/docs/',   host: 'https://docs.googleapis.com'   },
+  { prefix: '/sheets/', host: 'https://sheets.googleapis.com' },
+];
+function googleApiUrl(path) {
+  for (const { prefix, host } of GOOGLE_API_HOSTS) {
+    if (path.startsWith(prefix)) return `${host}${path.slice(prefix.length - 1)}`;
+  }
+  return `https://www.googleapis.com${path}`;
+}
 
 export const googleCapabilities = JSON.parse(
   readFileSync(join(__dir, 'capabilities.json'), 'utf8')
@@ -96,7 +107,7 @@ export function makeGoogleApi({ oauthTokenStore, cipher, tenantId, userId }) {
   const token = cipher.decrypt(row.access_token_enc);
 
   return async function gapi(method, path, { body, params } = {}) {
-    let url = `${GOOGLE_API}${path}`;
+    let url = googleApiUrl(path);
     if (params) {
       const qs = new URLSearchParams(
         Object.fromEntries(Object.entries(params).filter(([, v]) => v !== undefined && v !== null))
