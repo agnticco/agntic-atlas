@@ -396,8 +396,9 @@ export function createApp(spine) {
   // "Connector/action NOT available is not usable — don't propose it."
   app.get('/capabilities', requireActiveTenant, async (req, res) => {
     try {
-      const slack = await spine.slack.resolveForTenant(req.tenant.id);
-      res.json({ channels: spine.engine.channelRegistry.getAll(), connectors: { slack } });
+      const slack  = await spine.slack.resolveForTenant(req.tenant.id);
+      const google = await spine.google.resolveForTenant(req.tenant.id, req.user.id);
+      res.json({ channels: spine.engine.channelRegistry.getAll(), connectors: { slack, google } });
     } catch (err) {
       res.status(500).json({ error: `capabilities failed: ${err.message ?? String(err)}` });
     }
