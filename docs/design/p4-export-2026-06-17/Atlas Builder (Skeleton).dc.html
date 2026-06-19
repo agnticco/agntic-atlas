@@ -1,0 +1,1028 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link href="https://fonts.googleapis.com/css2?family=Inter+Tight:wght@400;500;600&family=Instrument+Serif:ital@0;1&display=swap" rel="stylesheet"/>
+<style>
+  *{box-sizing:border-box}
+  body{margin:0;background:#000;color:#fff;font-family:'Inter Tight',-apple-system,BlinkMacSystemFont,'Helvetica Neue',sans-serif;-webkit-font-smoothing:antialiased;letter-spacing:-0.005em}
+  input::placeholder{color:rgba(255,255,255,.34)}
+  ::selection{background:#fff;color:#0a0a0a}
+  .ab-scroll::-webkit-scrollbar{width:8px}
+  .ab-scroll::-webkit-scrollbar-thumb{background:rgba(255,255,255,.09);border-radius:8px}
+  .ab-scroll::-webkit-scrollbar-track{background:transparent}
+  @keyframes msgIn{from{transform:translateY(10px);opacity:.4}to{transform:none;opacity:1}}
+  @keyframes thinkdot{0%,80%,100%{opacity:.25;transform:translateY(0)}40%{opacity:1;transform:translateY(-3px)}}
+  @keyframes flowPulse{0%,100%{opacity:.5}50%{opacity:1}}
+  @keyframes spin{to{transform:rotate(360deg)}}
+  @keyframes liveRing{0%,100%{box-shadow:0 0 0 rgba(127,194,138,0)}50%{box-shadow:0 0 30px rgba(127,194,138,.22)}}
+  @media (prefers-reduced-motion:reduce){*{animation:none!important}}
+</style>
+</helmet>
+
+<div style="min-height:100vh;background:#000;display:flex;align-items:center;justify-content:center;padding:24px">
+
+  <div style="position:relative;z-index:2;width:min(1500px,98vw);height:min(940px,95vh);background:#0A0A0A;border-radius:16px;border:1px solid rgba(255,255,255,.1);box-shadow:0 60px 150px rgba(0,0,0,.72),0 18px 50px rgba(0,0,0,.55),inset 0 1px 0 rgba(255,255,255,.06);display:flex;flex-direction:column;overflow:hidden">
+
+    <!-- TITLE BAR · workflow name ← GET /workflows/:id (name) -->
+    <div style="flex:none;height:48px;display:flex;align-items:center;padding:0 18px;background:#0E0E10;border-bottom:1px solid rgba(255,255,255,.07)">
+      <div style="display:flex;gap:8px;align-items:center">
+        <span style="width:12px;height:12px;border-radius:50%;background:#FF5F57"></span>
+        <span style="width:12px;height:12px;border-radius:50%;background:#FEBC2E"></span>
+        <span style="width:12px;height:12px;border-radius:50%;background:#28C840"></span>
+      </div>
+      <div style="flex:1;display:flex;align-items:center;justify-content:center;gap:9px;font-size:12.5px;color:rgba(255,255,255,.42);letter-spacing:-0.01em">
+        <img src="assets/atlas-globe-white.svg" alt="" style="width:14px;height:14px;opacity:.7"/>{{ windowTitle }}
+      </div>
+      <div style="width:52px"></div>
+    </div>
+
+    <!-- BODY -->
+    <div style="flex:1;display:flex;min-height:0">
+
+      <!-- ░ LEFT (collapsible) ░ · sidebar: GET /workflows (list) · GET /connections (count) · + New → POST /workflows -->
+      <aside style="flex:none;width:{{ leftWidth }};background:#101012;border-right:1px solid rgba(255,255,255,.07);display:flex;flex-direction:column;overflow:hidden;transition:width .34s cubic-bezier(.4,.8,.3,1)">
+
+        <sc-if value="{{ leftOpen }}" hint-placeholder-val="{{ true }}">
+          <div style="display:flex;flex-direction:column;height:100%;width:248px;padding:20px 16px">
+            <div style="display:flex;align-items:center;justify-content:space-between;padding:2px 4px 0">
+              <div style="display:flex;align-items:center;gap:9px">
+                <img src="assets/atlas-globe-white.svg" alt="atlas" style="height:21px;width:21px"/>
+                <span style="font-size:16px;font-weight:500;letter-spacing:-0.03em">atlas</span>
+              </div>
+              <button onClick="{{ onToggleLeft }}" title="Collapse" style="border:none;background:none;cursor:pointer;color:rgba(255,255,255,.4);width:26px;height:26px;border-radius:7px;display:flex;align-items:center;justify-content:center" style-hover="background:rgba(255,255,255,.06)"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M10 4v16"/><path d="M16.5 9.5 14 12l2.5 2.5"/></svg></button>
+            </div>
+
+            <div style="font-size:11px;font-weight:500;letter-spacing:.22em;text-transform:uppercase;color:#6B6B6B;margin:28px 6px 13px">Workflows</div>
+            <div style="display:flex;flex-direction:column;gap:1px">
+              <sc-for list="{{ sidebarWorkflows }}" as="w" hint-placeholder-count="4">
+                <div style="display:flex;align-items:center;gap:10px;padding:10px;border-radius:9px;background:{{ w.bg }};border:1px solid {{ w.border }}">
+                  <span style="flex:none;width:7px;height:7px;border-radius:50%;background:{{ w.dot }};box-shadow:0 0 8px {{ w.glow }}"></span>
+                  <span style="font-size:13px;color:{{ w.nameColor }};letter-spacing:-0.01em;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ w.name }}</span>
+                </div>
+              </sc-for>
+            </div>
+
+            <div style="flex:1"></div>
+            <button onClick="{{ onReset }}" style="width:100%;border:none;cursor:pointer;background:#fff;color:#0a0a0a;font-family:inherit;font-weight:500;font-size:13.5px;letter-spacing:-0.01em;padding:12px;border-radius:999px">+ New workflow</button>
+
+            <div style="height:1px;background:rgba(255,255,255,.07);margin:16px 2px 12px"></div>
+
+            <button onClick="{{ onToggleConnections }}" style="display:flex;align-items:center;gap:11px;width:100%;border:1px solid {{ connBorder }};cursor:pointer;background:{{ connBg }};color:{{ connFg }};font-family:inherit;font-size:13.5px;font-weight:500;letter-spacing:-0.01em;padding:10px 12px;border-radius:11px;text-align:left" style-hover="background:rgba(255,255,255,.06)">
+              <span style="flex:none;display:flex;align-items:center;justify-content:center;color:inherit"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M9 7V4a1 1 0 0 1 1-1h0a1 1 0 0 1 1 1v3M14 7V4a1 1 0 0 1 1-1h0a1 1 0 0 1 1 1v3M7 7h11v4a5 5 0 0 1-5 5h-1a5 5 0 0 1-5-5V7ZM12 16v5"/></svg></span>
+              <span style="flex:1">Connections</span>
+              <span style="flex:none;font-size:11px;font-weight:500;color:#9fd6a8;background:rgba(127,194,138,.14);border:1px solid rgba(127,194,138,.3);border-radius:999px;padding:1px 8px">2</span>
+            </button>
+
+            <div style="position:relative;margin-top:8px">
+              <button onClick="{{ onToggleProfile }}" style="display:flex;align-items:center;gap:11px;width:100%;border:1px solid {{ profBorder }};cursor:pointer;background:{{ profBg }};font-family:inherit;padding:7px 9px;border-radius:13px;text-align:left;transition:background .2s,border .2s,box-shadow .2s;box-shadow:{{ profShadow }}" style-hover="background:rgba(255,255,255,.07)">
+                <span style="position:relative;flex:none;width:32px;height:32px;border-radius:50%;background:linear-gradient(150deg,#43434B 0%,#23232A 60%,#191920 100%);box-shadow:inset 0 1px 0 rgba(255,255,255,.22),inset 0 -1px 1px rgba(0,0,0,.4),0 1px 2px rgba(0,0,0,.35);display:flex;align-items:center;justify-content:center">
+                  <span style="font-size:12px;font-weight:600;letter-spacing:.02em;color:rgba(255,255,255,.92)">JL</span>
+                  <span style="position:absolute;right:-1px;bottom:-1px;width:9px;height:9px;border-radius:50%;background:#7fc28a;border:2px solid #101012;box-shadow:0 0 6px rgba(127,194,138,.6)"></span>
+                </span>
+                <span style="flex:1;min-width:0"><span style="display:block;font-size:13px;color:#fff;font-weight:500;letter-spacing:-0.01em;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">Jordan Lee</span></span>
+                <svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="rgba(255,255,255,.4)" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="flex:none"><path d="M5.5 6.5 8 4l2.5 2.5M5.5 9.5 8 12l2.5-2.5"/></svg>
+              </button>
+
+              <sc-if value="{{ profileOpen }}" hint-placeholder-val="{{ false }}">
+                <div style="position:absolute;bottom:calc(100% + 10px);left:0;right:0;border-radius:16px;border:1px solid rgba(255,255,255,.1);background:linear-gradient(180deg,rgba(34,34,40,.92),rgba(22,22,26,.92));backdrop-filter:blur(30px) saturate(160%);-webkit-backdrop-filter:blur(30px) saturate(160%);box-shadow:0 24px 60px rgba(0,0,0,.6),0 2px 8px rgba(0,0,0,.4),inset 0 1px 0 rgba(255,255,255,.08);padding:7px;z-index:30">
+                  <div style="display:flex;align-items:center;gap:11px;padding:11px 11px 13px;border-bottom:1px solid rgba(255,255,255,.07);margin-bottom:6px">
+                    <span style="position:relative;flex:none;width:40px;height:40px;border-radius:50%;background:linear-gradient(150deg,#43434B 0%,#23232A 60%,#191920 100%);box-shadow:inset 0 1px 0 rgba(255,255,255,.22),inset 0 -1px 1px rgba(0,0,0,.4),0 1px 3px rgba(0,0,0,.4);display:flex;align-items:center;justify-content:center"><span style="font-size:14px;font-weight:600;color:rgba(255,255,255,.92)">JL</span></span>
+                    <div style="min-width:0;flex:1"><div style="font-size:13.5px;color:#fff;font-weight:500;letter-spacing:-0.01em">Jordan Lee</div><div style="font-size:11.5px;color:rgba(255,255,255,.42);margin-top:1px">jordan@acme.co</div></div>
+                    <span style="flex:none;font-size:10px;font-weight:600;letter-spacing:.06em;color:#9fd6a8;background:rgba(127,194,138,.12);border:1px solid rgba(127,194,138,.28);border-radius:6px;padding:3px 7px">PRO</span>
+                  </div>
+                  <div style="display:flex;align-items:center;gap:11px;padding:9px 11px;border-radius:9px;cursor:pointer;font-size:13px;color:rgba(255,255,255,.85);letter-spacing:-0.005em" style-hover="background:rgba(255,255,255,.07)">
+                    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="rgba(255,255,255,.55)" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" style="flex:none"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1Z"/></svg>
+                    Account settings
+                  </div>
+                  <div onClick="{{ onToggleConnections }}" style="display:flex;align-items:center;gap:11px;padding:9px 11px;border-radius:9px;cursor:pointer;font-size:13px;color:rgba(255,255,255,.85);letter-spacing:-0.005em" style-hover="background:rgba(255,255,255,.07)">
+                    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="rgba(255,255,255,.55)" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" style="flex:none"><path d="M9 7V4a1 1 0 0 1 1-1h0a1 1 0 0 1 1 1v3M14 7V4a1 1 0 0 1 1-1h0a1 1 0 0 1 1 1v3M7 7h11v4a5 5 0 0 1-5 5h-1a5 5 0 0 1-5-5V7ZM12 16v5"/></svg>
+                    Connections
+                  </div>
+                  <div style="height:1px;background:rgba(255,255,255,.07);margin:6px 6px"></div>
+                  <div style="display:flex;align-items:center;gap:11px;padding:9px 11px;border-radius:9px;cursor:pointer;font-size:13px;color:rgba(255,255,255,.62);letter-spacing:-0.005em" style-hover="background:rgba(255,255,255,.07)">
+                    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="rgba(255,255,255,.45)" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" style="flex:none"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9"/></svg>
+                    Sign out
+                  </div>
+                </div>
+              </sc-if>
+            </div>
+          </div>
+        </sc-if>
+
+        <sc-if value="{{ leftCollapsed }}" hint-placeholder-val="{{ false }}">
+          <div style="display:flex;flex-direction:column;align-items:center;height:100%;width:56px;padding:18px 0;gap:18px">
+            <img src="assets/atlas-globe-white.svg" alt="atlas" style="height:22px;width:22px"/>
+            <button onClick="{{ onToggleLeft }}" title="Expand" style="border:none;background:rgba(255,255,255,.05);cursor:pointer;color:rgba(255,255,255,.55);width:30px;height:30px;border-radius:8px;display:flex;align-items:center;justify-content:center" style-hover="background:rgba(255,255,255,.1)"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M10 4v16"/><path d="M14 9.5 16.5 12 14 14.5"/></svg></button>
+            <div style="display:flex;flex-direction:column;gap:14px;margin-top:6px;align-items:center">
+              <sc-for list="{{ sidebarWorkflows }}" as="w" hint-placeholder-count="4">
+                <span style="width:8px;height:8px;border-radius:50%;background:{{ w.dot }};box-shadow:0 0 8px {{ w.glow }}"></span>
+              </sc-for>
+            </div>
+            <div style="flex:1"></div>
+            <button onClick="{{ onReset }}" title="New workflow" style="border:none;cursor:pointer;background:#fff;color:#0a0a0a;width:34px;height:34px;border-radius:50%;font-size:18px;display:flex;align-items:center;justify-content:center">+</button>
+            <button onClick="{{ onToggleConnections }}" title="Connections" style="border:1px solid {{ connBorder }};cursor:pointer;background:{{ connBg }};color:{{ connFg }};width:34px;height:34px;border-radius:9px;display:flex;align-items:center;justify-content:center;margin-top:4px"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M9 7V4a1 1 0 0 1 1-1h0a1 1 0 0 1 1 1v3M14 7V4a1 1 0 0 1 1-1h0a1 1 0 0 1 1 1v3M7 7h11v4a5 5 0 0 1-5 5h-1a5 5 0 0 1-5-5V7ZM12 16v5"/></svg></button>
+            <button onClick="{{ onToggleProfile }}" title="Jordan Lee" style="border:1px solid {{ profBorder }};cursor:pointer;background:none;padding:0;width:34px;height:34px;border-radius:50%;margin-top:4px;display:flex;align-items:center;justify-content:center"><span style="position:relative;width:32px;height:32px;border-radius:50%;background:linear-gradient(150deg,#43434B 0%,#23232A 60%,#191920 100%);box-shadow:inset 0 1px 0 rgba(255,255,255,.22),inset 0 -1px 1px rgba(0,0,0,.4);display:flex;align-items:center;justify-content:center"><span style="font-size:12px;font-weight:600;color:rgba(255,255,255,.92)">JL</span><span style="position:absolute;right:-1px;bottom:-1px;width:9px;height:9px;border-radius:50%;background:#7fc28a;border:2px solid #101012"></span></span></button>
+          </div>
+        </sc-if>
+      </aside>
+
+      <!-- ░ MODE: BUILD (conversation + live pipeline) ░ -->
+      <sc-if value="{{ modeBuild }}" hint-placeholder-val="{{ true }}">
+      <div style="flex:1;display:flex;min-width:0;min-height:0">
+
+      <!-- ░ CONVERSATION (center) ░ · the build dialogue: submitIntent → POST /plan, advance → POST /plan/step, proposal actions = planner turns -->
+      <section style="flex:1;min-width:0;background:#0A0A0A;display:flex;flex-direction:column">
+        <div style="flex:none;display:flex;align-items:center;justify-content:space-between;padding:16px 28px;border-bottom:1px solid rgba(255,255,255,.07)">
+          <div></div>
+          <div style="display:flex;align-items:center;gap:18px">
+          </div>
+        </div>
+
+        <div class="ab-scroll" ref="{{ scrollRef }}" style="flex:1;overflow-y:auto;padding:34px 28px">
+          <div style="max-width:680px;margin:0 auto;display:flex;flex-direction:column;gap:26px">
+
+            <sc-for list="{{ thread }}" as="item" hint-placeholder-count="1">
+
+              <sc-if value="{{ item.isGreeting }}" hint-placeholder-val="{{ false }}">
+                <div style="display:flex;gap:13px;align-items:flex-start;animation:msgIn .45s ease both">
+                  <div style="flex:none;width:32px;height:32px;border-radius:50%;background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.12);display:flex;align-items:center;justify-content:center"><img src="assets/atlas-globe-white.svg" alt="Atlas" style="width:21px;height:21px"/></div>
+                  <div style="padding-top:5px">
+                    <div style="font-size:16.5px;line-height:1.5;color:rgba(255,255,255,.9);max-width:52ch">{{ item.text }}</div>
+                  </div>
+                </div>
+              </sc-if>
+
+              <sc-if value="{{ item.isOperator }}" hint-placeholder-val="{{ false }}">
+                <div style="display:flex;justify-content:flex-end;animation:msgIn .4s ease both">
+                  <div style="max-width:80%;background:rgba(255,255,255,.07);border:1px solid rgba(255,255,255,.09);border-radius:16px 16px 4px 16px;padding:12px 17px;font-size:15px;line-height:1.5;color:rgba(255,255,255,.92)">{{ item.text }}</div>
+                </div>
+              </sc-if>
+
+              <sc-if value="{{ item.isAtlas }}" hint-placeholder-val="{{ false }}">
+                <div style="display:flex;gap:13px;align-items:flex-start;animation:msgIn .45s ease both">
+                  <div style="flex:none;width:32px;height:32px;border-radius:50%;background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.12);display:flex;align-items:center;justify-content:center"><img src="assets/atlas-globe-white.svg" alt="Atlas" style="width:21px;height:21px"/></div>
+                  <div style="padding-top:4px;min-width:0">
+                    <div style="font-size:15px;line-height:1.5;color:rgba(255,255,255,.9)">{{ item.text }}</div>
+                    <sc-if value="{{ item.hasReason }}" hint-placeholder-val="{{ false }}">
+                      <div style="display:flex;gap:8px;align-items:flex-start;margin-top:8px;color:rgba(255,255,255,.45)">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" style="flex:none;margin-top:2px"><path d="M9 18h6M10 21h4M12 3a6 6 0 0 0-4 10.5c.6.6 1 1.3 1 2.5h6c0-1.2.4-1.9 1-2.5A6 6 0 0 0 12 3Z"/></svg>
+                        <div style="font-size:13px;line-height:1.5;font-style:italic">{{ item.reason }}</div>
+                      </div>
+                    </sc-if>
+                  </div>
+                </div>
+              </sc-if>
+
+              <!-- CLARIFY -->
+              <sc-if value="{{ item.isClarify }}" hint-placeholder-val="{{ false }}">
+                <div style="display:flex;gap:13px;align-items:flex-start;animation:msgIn .45s ease both">
+                  <div style="flex:none;width:32px;height:32px"></div>
+                  <div style="min-width:0;flex:1">
+                    <div style="font-size:15px;line-height:1.5;color:#fff;font-weight:500">{{ item.q }}</div>
+                    <div style="display:flex;flex-wrap:wrap;gap:10px;margin-top:14px">
+                      <sc-for list="{{ item.chips }}" as="chip" hint-placeholder-count="3">
+                        <button onClick="{{ chip.onPick }}" style="border:1px solid rgba(240,191,107,.4);background:rgba(240,191,107,.08);color:#f3cd86;font-family:inherit;font-size:14px;font-weight:500;padding:10px 18px;border-radius:999px;cursor:pointer" style-hover="background:rgba(240,191,107,.16)">{{ chip.label }}</button>
+                      </sc-for>
+                    </div>
+                  </div>
+                </div>
+              </sc-if>
+
+              <!-- PROPOSAL (pending) -->
+              <sc-if value="{{ item.isProposal }}" hint-placeholder-val="{{ false }}">
+                <div style="display:flex;gap:13px;align-items:flex-start;animation:msgIn .45s ease both">
+                  <div style="flex:none;width:32px;height:32px"></div>
+                  <div style="flex:1;min-width:0">
+                    <div style="position:relative;overflow:hidden;border-radius:20px;padding:22px;background:linear-gradient(170deg,rgba(255,255,255,.15) 0%,rgba(255,255,255,.035) 42%,rgba(255,255,255,.07) 100%),rgba(18,18,20,.42);border:1px solid rgba(255,255,255,.14);backdrop-filter:blur(40px) saturate(140%);-webkit-backdrop-filter:blur(40px) saturate(140%);box-shadow:0 24px 48px rgba(0,0,0,.45),inset 0 1px 0 rgba(255,255,255,.2)">
+                      <span style="position:absolute;top:0;left:14%;right:14%;height:1px;background:linear-gradient(90deg,transparent,rgba(255,255,255,.65),transparent);pointer-events:none"></span>
+                      <div style="display:flex;align-items:center;gap:9px;margin-bottom:13px">
+                        <span style="width:18px;height:1px;background:rgba(255,255,255,.4)"></span>
+                        <span style="width:6px;height:6px;border-radius:50%;background:#f0bf6b;box-shadow:0 0 8px rgba(240,191,107,.55)"></span>
+                        <span style="font-size:11px;font-weight:500;letter-spacing:.2em;text-transform:uppercase;color:#8A8A8A">Proposal · {{ item.tag }}</span>
+                      </div>
+                      <div style="font-size:18.5px;font-weight:500;letter-spacing:-0.02em;color:#fff;line-height:1.25">{{ item.heading }}</div>
+                      <div style="margin-top:15px;border-radius:11px;background:rgba(0,0,0,.3);border:1px solid rgba(255,255,255,.07);padding:13px 15px;display:flex;flex-direction:column;gap:8px">
+                        <sc-for list="{{ item.specPairs }}" as="p" hint-placeholder-count="3">
+                          <div style="display:flex;justify-content:space-between;gap:16px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11.5px">
+                            <span style="color:#6B6B6B">{{ p.k }}</span>
+                            <span style="color:rgba(255,255,255,.82);text-align:right">{{ p.v }}</span>
+                          </div>
+                        </sc-for>
+                      </div>
+
+                      <sc-if value="{{ item.actionsVisible }}" hint-placeholder-val="{{ true }}">
+                        <div style="display:flex;align-items:center;gap:12px;margin-top:18px">
+                          <button onClick="{{ item.onConfirm }}" style="border:none;cursor:pointer;background:#fff;color:#0a0a0a;font-family:inherit;font-weight:500;font-size:13.5px;letter-spacing:-0.01em;padding:11px 24px;border-radius:999px">Confirm</button>
+                          <button onClick="{{ item.onChange }}" style="border:1px solid rgba(255,255,255,.16);cursor:pointer;background:none;color:rgba(255,255,255,.8);font-family:inherit;font-weight:500;font-size:13.5px;padding:11px 20px;border-radius:999px">Change it</button>
+                          <button onClick="{{ item.onReject }}" style="border:none;cursor:pointer;background:none;color:rgba(255,255,255,.45);font-family:inherit;font-size:13px;padding:6px 4px">Not this</button>
+                        </div>
+                      </sc-if>
+
+                      <sc-if value="{{ item.changeOpen }}" hint-placeholder-val="{{ false }}">
+                        <div style="margin-top:18px;border-top:1px solid rgba(255,255,255,.1);padding-top:16px">
+                          <div style="font-size:11px;font-weight:500;letter-spacing:.18em;text-transform:uppercase;color:#8A8A8A;margin-bottom:11px">What should change?</div>
+                          <div style="display:flex;align-items:center;gap:9px">
+                            <input value="{{ item.changeValue }}" onInput="{{ item.onChangeInput }}" onKeyDown="{{ item.onChangeKey }}" placeholder="Describe it in plain language…" style="flex:1;background:rgba(0,0,0,.3);border:1px solid rgba(255,255,255,.14);border-radius:12px;padding:11px 14px;color:#fff;font-family:inherit;font-size:14px;outline:none"/>
+                            <button onClick="{{ item.onSubmitChange }}" style="flex:none;border:none;cursor:pointer;background:#fff;color:#0a0a0a;font-family:inherit;font-weight:500;font-size:13.5px;padding:11px 20px;border-radius:999px">Update</button>
+                          </div>
+                        </div>
+                      </sc-if>
+                    </div>
+                  </div>
+                </div>
+              </sc-if>
+
+              <!-- CONFIRMED slim row -->
+              <sc-if value="{{ item.isConfirmed }}" hint-placeholder-val="{{ false }}">
+                <div style="display:flex;gap:13px;align-items:center;animation:msgIn .4s ease both">
+                  <div style="flex:none;width:32px;height:32px;display:flex;align-items:center;justify-content:center"><div style="width:22px;height:22px;border-radius:50%;background:rgba(127,194,138,.16);border:1px solid rgba(127,194,138,.5);display:flex;align-items:center;justify-content:center;color:#9fd6a8;font-size:12px">✓</div></div>
+                  <div style="flex:1;min-width:0;display:flex;align-items:center;gap:12px;padding:11px 16px;border-radius:13px;background:rgba(127,194,138,.07);border:1px solid rgba(127,194,138,.2)">
+                    <span style="font-size:10px;font-weight:500;letter-spacing:.18em;text-transform:uppercase;color:rgba(127,194,138,.8);flex:none">{{ item.tag }}</span>
+                    <span style="font-size:14px;color:rgba(255,255,255,.85);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ item.heading }}</span>
+                    <span onClick="{{ item.onUndo }}" style="flex:none;font-size:12.5px;color:rgba(255,255,255,.45);cursor:pointer;border-bottom:1px solid rgba(255,255,255,.22)">Undo</span>
+                  </div>
+                </div>
+              </sc-if>
+
+              <!-- CTA -->
+              <sc-if value="{{ item.isCta }}" hint-placeholder-val="{{ false }}">
+                <div style="display:flex;gap:13px;align-items:flex-start;animation:msgIn .45s ease both">
+                  <div style="flex:none;width:32px;height:32px;border-radius:50%;background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.12);display:flex;align-items:center;justify-content:center"><img src="assets/atlas-globe-white.svg" alt="Atlas" style="width:21px;height:21px"/></div>
+                  <div style="padding-top:2px">
+                    <div style="font-size:15px;line-height:1.5;color:rgba(255,255,255,.9);max-width:48ch">{{ item.text }}</div>
+                    <button onClick="{{ item.onClick }}" style="margin-top:14px;border:none;cursor:pointer;background:{{ item.btnBg }};color:{{ item.btnFg }};font-family:inherit;font-weight:500;font-size:14px;letter-spacing:-0.01em;padding:12px 24px;border-radius:999px;display:inline-flex;align-items:center;gap:9px">{{ item.btn }}</button>
+                  </div>
+                </div>
+              </sc-if>
+
+              <!-- NOTE -->
+              <sc-if value="{{ item.isNote }}" hint-placeholder-val="{{ false }}">
+                <div style="display:flex;gap:13px;align-items:flex-start;animation:msgIn .45s ease both">
+                  <div style="flex:none;width:32px;height:32px;border-radius:50%;background:rgba(127,194,138,.1);border:1px solid rgba(127,194,138,.3);display:flex;align-items:center;justify-content:center"><img src="assets/atlas-globe-white.svg" alt="Atlas" style="width:21px;height:21px"/></div>
+                  <div style="padding-top:5px;font-size:15px;line-height:1.5;color:#9fd6a8;max-width:48ch">{{ item.text }}</div>
+                </div>
+              </sc-if>
+
+            </sc-for>
+
+
+            <sc-if value="{{ thinking }}" hint-placeholder-val="{{ false }}">
+              <div style="display:flex;gap:13px;align-items:center">
+                <div style="flex:none;width:32px;height:32px;border-radius:50%;background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.12);display:flex;align-items:center;justify-content:center"><img src="assets/atlas-globe-white.svg" alt="Atlas" style="width:21px;height:21px"/></div>
+                <div style="display:flex;gap:5px;padding:10px 4px">
+                  <span style="width:6px;height:6px;border-radius:50%;background:rgba(255,255,255,.6);animation:thinkdot 1.2s infinite"></span>
+                  <span style="width:6px;height:6px;border-radius:50%;background:rgba(255,255,255,.6);animation:thinkdot 1.2s infinite .18s"></span>
+                  <span style="width:6px;height:6px;border-radius:50%;background:rgba(255,255,255,.6);animation:thinkdot 1.2s infinite .36s"></span>
+                </div>
+              </div>
+            </sc-if>
+
+          </div>
+        </div>
+
+        <div style="flex:none;padding:18px 28px 22px;border-top:1px solid rgba(255,255,255,.07)">
+          <div style="max-width:680px;margin:0 auto">
+            <div style="display:flex;align-items:center;gap:10px;border-radius:16px;padding:8px 8px 8px 18px;background:linear-gradient(170deg,rgba(255,255,255,.1),rgba(255,255,255,.03));border:1px solid rgba(255,255,255,.14);box-shadow:inset 0 1px 0 rgba(255,255,255,.12)">
+              <input value="{{ inputValue }}" onInput="{{ onIntentInput }}" onKeyDown="{{ onIntentKey }}" disabled="{{ inputDisabled }}" placeholder="{{ inputPlaceholder }}" style="flex:1;background:none;border:none;outline:none;color:#fff;font-family:inherit;font-size:15px"/>
+              <button onClick="{{ onIntentSubmit }}" style="flex:none;width:34px;height:34px;border-radius:10px;border:none;background:#fff;color:#0a0a0a;cursor:pointer;opacity:{{ sendOpacity }};display:flex;align-items:center;justify-content:center"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h13M13 6l6 6-6 6"/></svg></button>
+            </div>
+            <div style="font-size:11.5px;color:rgba(255,255,255,.32);margin-top:10px;padding-left:4px">Atlas proposes one step at a time. Confirm, tweak, or undo any step — nothing goes live until you publish.</div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ░ RIGHT (collapsible) ░ · TEST ENVIRONMENT: runTest → POST /workflows/:id/test, stream per-step results into testStep/testState -->
+      <aside style="flex:none;width:{{ rightWidth }};background:#0A0A0A;border-left:1px solid rgba(255,255,255,.07);overflow:hidden;transition:width .34s cubic-bezier(.4,.8,.3,1)">
+
+        <sc-if value="{{ rightCollapsed }}" hint-placeholder-val="{{ false }}">
+          <div style="width:52px;height:100%;display:flex;flex-direction:column;align-items:center;padding:18px 0">
+            <button onClick="{{ onToggleRight }}" title="Expand" style="border:none;background:rgba(255,255,255,.05);cursor:pointer;color:rgba(255,255,255,.55);width:30px;height:30px;border-radius:8px;display:flex;align-items:center;justify-content:center" style-hover="background:rgba(255,255,255,.1)"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M14 4v16"/><path d="M10 9.5 7.5 12 10 14.5"/></svg></button>
+            <div style="flex:1"></div>
+            <span style="width:7px;height:7px;border-radius:50%;background:{{ statusDotColor }};box-shadow:0 0 8px {{ statusDotGlow }}"></span>
+          </div>
+        </sc-if>
+
+        <sc-if value="{{ rightOpen }}" hint-placeholder-val="{{ true }}">
+          <div style="width:400px;height:100%;padding:20px 22px;display:flex">
+            <div style="position:relative;flex:1;min-width:0;display:flex;flex-direction:column;overflow:hidden">
+              <sc-if value="{{ isPublished }}" hint-placeholder-val="{{ false }}"><div style="position:absolute;inset:-20px -22px;border-left:2px solid rgba(127,194,138,.4);pointer-events:none;animation:liveRing 3s ease-in-out infinite"></div></sc-if>
+
+              <!-- header -->
+              <div style="position:relative;display:flex;align-items:center;justify-content:space-between">
+                <div></div>
+                <button onClick="{{ onToggleRight }}" title="Collapse" style="border:none;background:none;cursor:pointer;color:rgba(255,255,255,.4);width:26px;height:26px;border-radius:7px;display:flex;align-items:center;justify-content:center" style-hover="background:rgba(255,255,255,.06)"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M14 4v16"/><path d="M7.5 9.5 10 12 7.5 14.5"/></svg></button>
+              </div>
+              <div style="position:relative;font-size:20px;font-weight:500;letter-spacing:-0.025em;color:{{ titleColor }};margin:14px 0 0;line-height:1.2">{{ workflowTitle }}</div>
+
+              <!-- test environment header -->
+              <div style="position:relative;display:flex;align-items:center;justify-content:space-between;margin-top:18px">
+                <span style="font-size:11px;font-weight:600;letter-spacing:.18em;text-transform:uppercase;color:#8A8A8A">Test environment</span>
+                <span style="display:inline-flex;align-items:center;gap:7px;font-size:11.5px;font-weight:500;color:{{ testStatusColor }}"><span style="width:7px;height:7px;border-radius:50%;background:{{ testStatusColor }};box-shadow:0 0 8px {{ testStatusGlow }}"></span>{{ testStatusLabel }}</span>
+              </div>
+              <div style="position:relative;font-size:12.5px;color:rgba(255,255,255,.5);margin-top:9px;line-height:1.5">{{ testCaption }}</div>
+
+              <div class="ab-scroll" style="position:relative;flex:1;overflow-y:auto;margin-top:18px;min-height:0">
+
+                <!-- STEP FIRING PIPELINE -->
+                <sc-for list="{{ testSteps }}" as="s" hint-placeholder-count="3">
+                  <div>
+                    <sc-if value="{{ s.showConnector }}" hint-placeholder-val="{{ false }}">
+                      <div style="display:flex;justify-content:center;padding:3px 0"><div style="width:2px;height:15px;border-radius:2px;background:{{ s.connColor }};transition:background .4s"></div></div>
+                    </sc-if>
+                    <div style="border-radius:15px;border:1px solid {{ s.border }};background:{{ s.bg }};padding:14px 15px;transition:border .35s,background .35s">
+                      <div style="display:flex;align-items:center;gap:12px">
+                        <span style="flex:none;width:30px;height:30px;border-radius:50%;border:1px solid {{ s.border }};background:{{ s.iconBg }};display:flex;align-items:center;justify-content:center;color:{{ s.iconColor }};font-size:13px">{{ s.icon }}</span>
+                        <div style="flex:1;min-width:0">
+                          <div style="font-size:10px;font-weight:600;letter-spacing:.16em;text-transform:uppercase;color:{{ s.labelColor }};margin-bottom:3px">{{ s.label }}</div>
+                          <div style="font-size:14px;font-weight:500;color:{{ s.titleColor }};letter-spacing:-0.01em;line-height:1.25;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ s.title }}</div>
+                        </div>
+                        <span style="flex:none;font-size:11.5px;font-weight:500;color:{{ s.statusColor }};text-align:right;white-space:nowrap">{{ s.statusText }}</span>
+                      </div>
+                      <sc-if value="{{ s.showCheck }}" hint-placeholder-val="{{ false }}">
+                        <div style="display:flex;align-items:center;gap:8px;margin-top:11px;padding-top:11px;border-top:1px solid rgba(255,255,255,.06);font-size:11.5px;color:{{ s.checkColor }}"><span style="flex:none">{{ s.checkIcon }}</span>{{ s.checkText }}</div>
+                      </sc-if>
+                      <sc-if value="{{ s.showOutput }}" hint-placeholder-val="{{ false }}">
+                        <div style="margin-top:12px;border-radius:11px;border:1px solid rgba(127,194,138,.22);background:rgba(0,0,0,.3);padding:13px">
+                          <div style="display:flex;align-items:center;gap:7px;margin-bottom:10px;font-size:12px;border-bottom:1px solid rgba(255,255,255,.07);padding-bottom:9px"><span style="color:#7fc28a;font-size:14px">#</span><span style="font-weight:600;color:#fff">{{ slackChannel }}</span><span style="margin-left:auto;font-size:9.5px;font-weight:500;letter-spacing:.1em;text-transform:uppercase;color:#6B6B6B">Test output</span></div>
+                          <div style="display:flex;gap:9px;align-items:flex-start">
+                            <div style="flex:none;width:26px;height:26px;border-radius:7px;background:#101012;border:1px solid rgba(255,255,255,.12);display:flex;align-items:center;justify-content:center"><img src="assets/atlas-globe-white.svg" alt="" style="width:15px;height:15px"/></div>
+                            <div style="min-width:0;flex:1"><div style="font-size:12.5px;color:#fff;font-weight:600;display:flex;align-items:center;gap:6px">Atlas <span style="font-size:8.5px;font-weight:500;color:rgba(255,255,255,.5);background:rgba(255,255,255,.08);padding:1px 5px;border-radius:4px">APP</span></div><div style="font-size:12.5px;color:rgba(255,255,255,.85);line-height:1.45;margin-top:3px">{{ summaryText }}</div></div>
+                          </div>
+                        </div>
+                      </sc-if>
+                    </div>
+                  </div>
+                </sc-for>
+
+                <!-- verdict -->
+                <sc-if value="{{ showVerdict }}" hint-placeholder-val="{{ false }}">
+                  <div style="margin-top:16px;border-radius:13px;border:1px solid {{ verdictBorder }};background:{{ verdictBg }};padding:13px 15px;display:flex;align-items:center;gap:11px">
+                    <span style="flex:none;width:24px;height:24px;border-radius:50%;background:{{ verdictIconBg }};border:1px solid {{ verdictBorder }};display:flex;align-items:center;justify-content:center;color:{{ verdictColor }};font-size:12px">{{ verdictIcon }}</span>
+                    <span style="font-size:12.5px;color:{{ verdictColor }};line-height:1.4;font-weight:500">{{ verdictText }}</span>
+                  </div>
+                </sc-if>
+              </div>
+
+              <!-- footer -->
+              <div style="position:relative;margin-top:16px">
+                <sc-if value="{{ footRunTest }}" hint-placeholder-val="{{ false }}">
+                  <button onClick="{{ onRunTest }}" style="width:100%;border:none;cursor:pointer;background:#fff;color:#0a0a0a;font-family:inherit;font-weight:500;font-size:15px;letter-spacing:-0.01em;padding:14px;border-radius:999px;display:flex;align-items:center;justify-content:center;gap:9px"><span style="font-size:11px">▶</span>Run test</button>
+                </sc-if>
+                <sc-if value="{{ footTesting }}" hint-placeholder-val="{{ false }}">
+                  <button disabled="{{ true }}" style="width:100%;border:1px solid rgba(255,255,255,.1);background:rgba(255,255,255,.04);color:rgba(255,255,255,.7);font-family:inherit;font-weight:500;font-size:15px;padding:14px;border-radius:999px;cursor:progress;display:flex;align-items:center;justify-content:center;gap:10px"><span style="width:15px;height:15px;border-radius:50%;border:2px solid rgba(255,255,255,.25);border-top-color:#fff;animation:spin .7s linear infinite;display:inline-block"></span>Testing…</button>
+                </sc-if>
+                <sc-if value="{{ footProceed }}" hint-placeholder-val="{{ false }}">
+                  <button onClick="{{ onReviewDraft }}" style="width:100%;border:none;cursor:pointer;background:#7fc28a;color:#06210d;font-family:inherit;font-weight:600;font-size:15px;letter-spacing:-0.01em;padding:14px;border-radius:999px">See the draft →</button>
+                  <div style="text-align:center;font-size:11.5px;color:rgba(255,255,255,.4);margin-top:9px">No breaks detected · safe to publish</div>
+                </sc-if>
+                <sc-if value="{{ footLocked }}" hint-placeholder-val="{{ true }}">
+                  <button disabled="{{ true }}" style="width:100%;border:1px solid rgba(255,255,255,.08);background:rgba(255,255,255,.03);color:rgba(255,255,255,.3);font-family:inherit;font-weight:500;font-size:15px;padding:14px;border-radius:999px;cursor:not-allowed">Run test</button>
+                  <div style="text-align:center;font-size:11.5px;color:rgba(255,255,255,.32);margin-top:9px">Confirm every step to start testing</div>
+                </sc-if>
+              </div>
+
+            </div>
+          </div>
+        </sc-if>
+      </aside>
+
+      </div>
+      </sc-if>
+
+      <!-- ░ MODE: DRAFT (visual review) ░ · mirrors Atlas - Draft Review.dc.html · Approve → POST /workflows/:id/publish -->
+      <sc-if value="{{ modeDraft }}" hint-placeholder-val="{{ false }}">
+      <div style="flex:1;min-width:0;background:#0A0A0A;display:flex;flex-direction:column">
+        <div style="flex:none;display:flex;align-items:center;justify-content:space-between;padding:16px 28px;border-bottom:1px solid rgba(255,255,255,.07)">
+          <div style="display:flex;align-items:center;gap:10px;font-size:11px;font-weight:500;letter-spacing:.2em;text-transform:uppercase;color:#f3cd86"><span style="width:14px;height:1px;background:currentColor;opacity:.6"></span>Draft · review</div>
+          <div style="display:flex;align-items:center;gap:18px">
+          </div>
+        </div>
+
+        <div class="ab-scroll" style="flex:1;overflow-y:auto;padding:36px 28px">
+          <div style="max-width:880px;margin:0 auto">
+            <div style="font-size:12.5px;color:#f3cd86;font-weight:500;letter-spacing:.04em;margin-bottom:10px">Ready for your approval</div>
+            <div style="font-family:'Instrument Serif',serif;font-size:38px;letter-spacing:-0.01em;color:#fff;line-height:1.05">{{ workflowTitle }}</div>
+            <p style="font-size:15px;color:rgba(255,255,255,.55);margin:14px 0 0;max-width:62ch;line-height:1.55">Here's the full workflow Atlas assembled — what triggers it, the steps it runs, and exactly what your team will see. Approve to turn it on, or keep building to adjust.</p>
+
+            <div style="margin-top:30px;border-radius:20px;border:1px solid rgba(255,255,255,.1);background:linear-gradient(170deg,rgba(255,255,255,.05),rgba(255,255,255,.015));padding:24px">
+              <div style="font-size:11px;font-weight:500;letter-spacing:.2em;text-transform:uppercase;color:#8A8A8A;margin-bottom:18px">The workflow</div>
+              <div style="display:flex;align-items:stretch">
+                <sc-for list="{{ draftNodes }}" as="n" hint-placeholder-count="3">
+                  <div style="display:flex;align-items:stretch;flex:1;min-width:0">
+                    <sc-if value="{{ n.showArrow }}" hint-placeholder-val="{{ false }}"><div style="display:flex;align-items:center;padding:0 12px;color:rgba(127,194,138,.5);font-size:18px">→</div></sc-if>
+                    <div style="flex:1;min-width:0;border-radius:14px;border:1px solid rgba(127,194,138,.25);background:rgba(127,194,138,.06);padding:16px">
+                      <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px"><span style="flex:none;width:20px;height:20px;border-radius:50%;background:rgba(127,194,138,.16);border:1px solid rgba(127,194,138,.5);display:flex;align-items:center;justify-content:center;color:#9fd6a8;font-size:11px">✓</span><span style="font-size:10px;font-weight:500;letter-spacing:.18em;text-transform:uppercase;color:rgba(127,194,138,.85)">{{ n.label }}</span></div>
+                      <div style="font-size:14.5px;font-weight:500;color:#fff;letter-spacing:-0.01em;line-height:1.3">{{ n.title }}</div>
+                      <div style="font-family:ui-monospace,Menlo,monospace;font-size:10.5px;color:#6B6B6B;margin-top:8px;line-height:1.6">{{ n.spec }}</div>
+                    </div>
+                  </div>
+                </sc-for>
+              </div>
+            </div>
+
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:18px;margin-top:18px">
+              <div style="border-radius:18px;border:1px solid rgba(255,255,255,.1);background:rgba(255,255,255,.02);padding:20px">
+                <div style="font-size:11px;font-weight:500;letter-spacing:.2em;text-transform:uppercase;color:#8A8A8A;margin-bottom:14px">Sample trigger</div>
+                <div style="border-radius:11px;border:1px solid rgba(255,255,255,.1);background:rgba(0,0,0,.25);padding:14px">
+                  <div style="display:flex;align-items:center;gap:9px;margin-bottom:10px"><span style="flex:none;width:28px;height:28px;border-radius:7px;background:#52351b;border:1px solid rgba(240,191,107,.3);display:flex;align-items:center;justify-content:center;color:#f0bf6b;font-size:11px;font-weight:600">UP</span><div style="min-width:0;flex:1"><div style="font-size:13px;color:#fff;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ emailFrom }}</div><div style="font-size:11px;color:#6B6B6B">to you · Gmail inbox</div></div></div>
+                  <div style="font-size:13px;color:rgba(255,255,255,.9);font-weight:500;margin-bottom:5px">{{ emailSubj }}</div>
+                  <div style="font-size:12.5px;color:rgba(255,255,255,.55);line-height:1.5">{{ emailBody }}</div>
+                </div>
+              </div>
+              <div style="border-radius:18px;border:1px solid rgba(127,194,138,.28);background:rgba(127,194,138,.05);padding:20px;box-shadow:0 0 36px rgba(127,194,138,.1)">
+                <div style="font-size:11px;font-weight:600;letter-spacing:.16em;text-transform:uppercase;color:#9fd6a8;margin-bottom:14px">What your team sees</div>
+                <div style="border-radius:11px;border:1px solid rgba(255,255,255,.1);background:rgba(0,0,0,.3);padding:14px">
+                  <div style="display:flex;align-items:center;gap:7px;margin-bottom:11px;font-size:12.5px;border-bottom:1px solid rgba(255,255,255,.07);padding-bottom:10px"><span style="color:#7fc28a;font-size:14px">#</span><span style="font-weight:600;color:#fff">{{ slackChannel }}</span></div>
+                  <div style="display:flex;gap:10px;align-items:flex-start">
+                    <div style="flex:none;width:30px;height:30px;border-radius:8px;background:#101012;border:1px solid rgba(255,255,255,.12);display:flex;align-items:center;justify-content:center"><img src="assets/atlas-globe-white.svg" alt="" style="width:18px;height:18px"/></div>
+                    <div style="min-width:0;flex:1">
+                      <div style="font-size:13px;color:#fff;font-weight:600;display:flex;align-items:center;gap:7px">Atlas <span style="font-size:9px;font-weight:500;color:rgba(255,255,255,.5);background:rgba(255,255,255,.08);padding:1px 5px;border-radius:4px">APP</span><span style="font-size:11px;color:#6B6B6B;font-weight:400">now</span></div>
+                      <div style="font-size:13px;color:rgba(255,255,255,.88);line-height:1.5;margin-top:4px">{{ summaryText }}</div>
+                      <div style="display:inline-flex;align-items:center;gap:7px;margin-top:11px;border:1px solid rgba(255,255,255,.12);background:rgba(255,255,255,.04);border-radius:9px;padding:7px 11px;font-size:12px;color:rgba(255,255,255,.78)"><span>📦</span>Track package · 1Z999AA1…</div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div style="flex:none;display:flex;align-items:center;justify-content:space-between;gap:18px;padding:18px 28px;border-top:1px solid rgba(255,255,255,.09);background:#0E0E10">
+          <div style="font-size:13px;color:rgba(255,255,255,.5);max-width:46ch">Approving turns this on — Atlas runs it automatically from here, and this pane becomes your live dashboard.</div>
+          <div style="display:flex;align-items:center;gap:12px;flex:none">
+            <button onClick="{{ onKeepBuilding }}" style="border:1px solid rgba(255,255,255,.16);background:none;color:rgba(255,255,255,.82);font-family:inherit;font-weight:500;font-size:14px;padding:13px 22px;border-radius:999px;cursor:pointer">Keep building</button>
+            <button onClick="{{ onApprove }}" style="border:none;background:#7fc28a;color:#06210d;font-family:inherit;font-weight:600;font-size:14px;padding:13px 26px;border-radius:999px;cursor:pointer">Approve & go live →</button>
+          </div>
+        </div>
+      </div>
+      </sc-if>
+
+      <!-- ░ MODE: LIVE (observability dashboard) ░ · mirrors Atlas - Live Dashboard.dc.html · GET /workflows/:id/metrics + /runs -->
+      <sc-if value="{{ modeLive }}" hint-placeholder-val="{{ false }}">
+      <div style="flex:1;min-width:0;background:#0A0A0A;display:flex;flex-direction:column">
+        <div style="flex:none;display:flex;align-items:center;justify-content:space-between;padding:16px 28px;border-bottom:1px solid rgba(255,255,255,.07)">
+          <div></div>
+          <div style="display:flex;align-items:center;gap:18px">
+          </div>
+        </div>
+
+        <div class="ab-scroll" style="flex:1;overflow-y:auto;padding:30px 28px">
+          <div style="max-width:1000px;margin:0 auto">
+            <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:20px">
+              <div>
+                <div style="font-family:'Instrument Serif',serif;font-size:32px;color:#fff;line-height:1.05">{{ workflowTitle }}</div>
+                <div style="display:flex;align-items:center;gap:8px;margin-top:9px;font-size:13px;color:#9fd6a8"><span style="width:8px;height:8px;border-radius:50%;background:#7fc28a;box-shadow:0 0 8px rgba(127,194,138,.6);animation:flowPulse 1.8s infinite"></span>Live · watching Gmail → {{ slackChannel }}</div>
+              </div>
+              <div style="display:flex;align-items:center;gap:10px;flex:none">
+                <button style="border:1px solid rgba(255,255,255,.16);background:rgba(255,255,255,.04);color:rgba(255,255,255,.8);font-family:inherit;font-size:13px;font-weight:500;padding:10px 18px;border-radius:999px;cursor:pointer">❙❙ Pause</button>
+                <button onClick="{{ onKeepBuilding }}" style="border:1px solid rgba(255,255,255,.16);background:none;color:rgba(255,255,255,.7);font-family:inherit;font-size:13px;font-weight:500;padding:10px 18px;border-radius:999px;cursor:pointer">Edit workflow</button>
+              </div>
+            </div>
+
+            <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-top:26px">
+              <div style="border-radius:16px;border:1px solid rgba(255,255,255,.1);background:rgba(255,255,255,.03);padding:18px"><div style="font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:#8A8A8A">Runs today</div><div style="font-size:30px;font-weight:600;color:#fff;letter-spacing:-0.02em;margin-top:8px">{{ runsLabel }}</div></div>
+              <div style="border-radius:16px;border:1px solid rgba(255,255,255,.1);background:rgba(255,255,255,.03);padding:18px"><div style="font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:#8A8A8A">Success rate</div><div style="font-size:30px;font-weight:600;color:#9fd6a8;letter-spacing:-0.02em;margin-top:8px">100%</div></div>
+              <div style="border-radius:16px;border:1px solid rgba(255,255,255,.1);background:rgba(255,255,255,.03);padding:18px"><div style="font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:#8A8A8A">Avg latency</div><div style="font-size:30px;font-weight:600;color:#fff;letter-spacing:-0.02em;margin-top:8px">0.8<span style="font-size:16px;color:rgba(255,255,255,.5)">s</span></div></div>
+              <div style="border-radius:16px;border:1px solid rgba(127,194,138,.25);background:rgba(127,194,138,.07);padding:18px"><div style="font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:rgba(127,194,138,.8)">Status</div><div style="font-size:24px;font-weight:600;color:#9fd6a8;letter-spacing:-0.02em;margin-top:10px;display:flex;align-items:center;gap:8px"><span style="width:9px;height:9px;border-radius:50%;background:#7fc28a;box-shadow:0 0 8px rgba(127,194,138,.6)"></span>Healthy</div></div>
+            </div>
+
+            <div style="margin-top:18px;border-radius:18px;border:1px solid rgba(255,255,255,.1);background:rgba(255,255,255,.02);padding:22px">
+              <div style="font-size:11px;font-weight:500;letter-spacing:.2em;text-transform:uppercase;color:#8A8A8A;margin-bottom:18px">Pipeline · all systems go</div>
+              <div style="display:flex;align-items:stretch">
+                <sc-for list="{{ draftNodes }}" as="n" hint-placeholder-count="3">
+                  <div style="display:flex;align-items:stretch;flex:1;min-width:0">
+                    <sc-if value="{{ n.showArrow }}" hint-placeholder-val="{{ false }}"><div style="display:flex;align-items:center;padding:0 12px;color:rgba(127,194,138,.55);font-size:18px">→</div></sc-if>
+                    <div style="flex:1;min-width:0;border-radius:14px;border:1px solid rgba(127,194,138,.25);background:rgba(127,194,138,.06);padding:15px">
+                      <div style="display:flex;align-items:center;gap:8px;margin-bottom:9px"><span style="flex:none;width:9px;height:9px;border-radius:50%;background:#7fc28a;box-shadow:0 0 8px rgba(127,194,138,.55);animation:flowPulse 2s infinite"></span><span style="font-size:10px;font-weight:500;letter-spacing:.18em;text-transform:uppercase;color:rgba(127,194,138,.85)">{{ n.label }}</span></div>
+                      <div style="font-size:14px;font-weight:500;color:#fff;letter-spacing:-0.01em;line-height:1.3">{{ n.title }}</div>
+                    </div>
+                  </div>
+                </sc-for>
+              </div>
+            </div>
+
+            <div style="display:grid;grid-template-columns:1.1fr .9fr;gap:18px;margin-top:18px;align-items:start">
+              <div style="border-radius:18px;border:1px solid rgba(255,255,255,.1);background:rgba(255,255,255,.02);padding:20px">
+                <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px"><div style="font-size:11px;font-weight:500;letter-spacing:.2em;text-transform:uppercase;color:#8A8A8A">Recent activity</div><div style="display:flex;align-items:center;gap:7px;font-size:11.5px;color:#9fd6a8"><span style="width:6px;height:6px;border-radius:50%;background:#7fc28a;animation:flowPulse 1.8s infinite"></span>Live feed</div></div>
+                <div style="display:flex;flex-direction:column;gap:8px">
+                  <sc-for list="{{ activity }}" as="a" hint-placeholder-count="4">
+                    <div style="display:flex;align-items:center;gap:12px;padding:13px 15px;border-radius:12px;background:rgba(255,255,255,.03);border:1px solid rgba(255,255,255,.07);animation:msgIn .4s ease both">
+                      <span style="flex:none;width:24px;height:24px;border-radius:50%;background:rgba(127,194,138,.16);border:1px solid rgba(127,194,138,.45);display:flex;align-items:center;justify-content:center;color:#9fd6a8;font-size:11px">✓</span>
+                      <div style="flex:1;min-width:0"><div style="font-size:13px;color:rgba(255,255,255,.88)">UPS email summarized → posted to {{ a.ch }}</div><div style="font-size:11px;color:#6B6B6B;margin-top:2px">{{ a.ago }}</div></div>
+                      <span style="flex:none;font-family:ui-monospace,Menlo,monospace;font-size:11px;color:rgba(255,255,255,.4)">{{ a.dur }}</span>
+                    </div>
+                  </sc-for>
+                </div>
+              </div>
+
+              <div style="border-radius:18px;border:1px solid rgba(127,194,138,.28);background:rgba(127,194,138,.05);padding:20px">
+                <div style="font-size:11px;font-weight:600;letter-spacing:.16em;text-transform:uppercase;color:#9fd6a8;margin-bottom:14px">Latest output</div>
+                <div style="border-radius:11px;border:1px solid rgba(255,255,255,.1);background:rgba(0,0,0,.3);padding:14px">
+                  <div style="display:flex;align-items:center;gap:7px;margin-bottom:11px;font-size:12.5px;border-bottom:1px solid rgba(255,255,255,.07);padding-bottom:10px"><span style="color:#7fc28a;font-size:14px">#</span><span style="font-weight:600;color:#fff">{{ slackChannel }}</span></div>
+                  <div style="display:flex;gap:10px;align-items:flex-start">
+                    <div style="flex:none;width:30px;height:30px;border-radius:8px;background:#101012;border:1px solid rgba(255,255,255,.12);display:flex;align-items:center;justify-content:center"><img src="assets/atlas-globe-white.svg" alt="" style="width:18px;height:18px"/></div>
+                    <div style="min-width:0;flex:1">
+                      <div style="font-size:13px;color:#fff;font-weight:600;display:flex;align-items:center;gap:7px">Atlas <span style="font-size:9px;font-weight:500;color:rgba(255,255,255,.5);background:rgba(255,255,255,.08);padding:1px 5px;border-radius:4px">APP</span><span style="font-size:11px;color:#6B6B6B;font-weight:400">now</span></div>
+                      <div style="font-size:13px;color:rgba(255,255,255,.88);line-height:1.5;margin-top:4px">{{ summaryText }}</div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      </sc-if>
+
+      <!-- ░ MODE: CONNECTIONS (own page) ░ · GET /connections · Connect → POST /connections/:provider -->
+      <sc-if value="{{ modeConnections }}" hint-placeholder-val="{{ false }}">
+      <div style="flex:1;min-width:0;background:#0A0A0A;display:flex;flex-direction:column">
+        <div style="flex:none;display:flex;align-items:center;justify-content:space-between;padding:16px 28px;border-bottom:1px solid rgba(255,255,255,.07)">
+          <div></div>
+          <button onClick="{{ onCloseConnections }}" style="border:1px solid rgba(255,255,255,.16);background:rgba(255,255,255,.04);color:rgba(255,255,255,.82);font-family:inherit;font-size:13px;font-weight:500;padding:9px 18px;border-radius:999px;cursor:pointer">Done</button>
+        </div>
+
+        <div class="ab-scroll" style="flex:1;overflow-y:auto;padding:36px 28px">
+          <div style="max-width:780px;margin:0 auto">
+            <div style="font-family:'Instrument Serif',serif;font-size:36px;letter-spacing:-0.01em;color:#fff;line-height:1.05">Connections</div>
+            <p style="font-size:15px;color:rgba(255,255,255,.55);margin:12px 0 0;max-width:60ch;line-height:1.55">Apps Atlas can read from and write to. Connect a service once and any workflow can use it as a trigger or a destination.</p>
+
+            <div style="display:flex;align-items:center;gap:9px;margin:34px 2px 14px;font-size:11px;font-weight:500;letter-spacing:.2em;text-transform:uppercase;color:#6B6B6B"><span style="width:14px;height:1px;background:currentColor;opacity:.6"></span>Connected · 2</div>
+            <div style="display:flex;flex-direction:column;gap:10px">
+              <sc-for list="{{ connectedList }}" as="c" hint-placeholder-count="2">
+                <div style="display:flex;align-items:center;gap:15px;padding:16px 18px;border-radius:15px;border:1px solid rgba(127,194,138,.22);background:rgba(127,194,138,.05)">
+                  <span style="flex:none;width:42px;height:42px;border-radius:11px;background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.12);display:flex;align-items:center;justify-content:center;font-size:18px;color:#fff;font-weight:500">{{ c.glyph }}</span>
+                  <div style="flex:1;min-width:0"><div style="font-size:15px;color:#fff;font-weight:500;letter-spacing:-0.01em">{{ c.name }}</div><div style="font-size:12.5px;color:rgba(255,255,255,.5);margin-top:2px">{{ c.meta }}</div></div>
+                  <span style="flex:none;display:inline-flex;align-items:center;gap:7px;font-size:12.5px;font-weight:500;color:#9fd6a8"><span style="width:7px;height:7px;border-radius:50%;background:#7fc28a;box-shadow:0 0 8px rgba(127,194,138,.55)"></span>Connected</span>
+                  <button style="flex:none;border:1px solid rgba(255,255,255,.14);background:none;color:rgba(255,255,255,.7);font-family:inherit;font-size:12.5px;font-weight:500;padding:8px 14px;border-radius:999px;cursor:pointer">Manage</button>
+                </div>
+              </sc-for>
+            </div>
+
+            <div style="display:flex;align-items:center;gap:9px;margin:30px 2px 14px;font-size:11px;font-weight:500;letter-spacing:.2em;text-transform:uppercase;color:#6B6B6B"><span style="width:14px;height:1px;background:currentColor;opacity:.6"></span>Available</div>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+              <sc-for list="{{ availableList }}" as="c" hint-placeholder-count="4">
+                <div style="display:flex;align-items:center;gap:13px;padding:15px 16px;border-radius:15px;border:1px solid rgba(255,255,255,.1);background:rgba(255,255,255,.02)">
+                  <span style="flex:none;width:38px;height:38px;border-radius:10px;background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.1);display:flex;align-items:center;justify-content:center;font-size:16px;color:rgba(255,255,255,.85);font-weight:500">{{ c.glyph }}</span>
+                  <div style="flex:1;min-width:0"><div style="font-size:14px;color:#fff;font-weight:500;letter-spacing:-0.01em;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ c.name }}</div><div style="font-size:12px;color:rgba(255,255,255,.45);margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ c.meta }}</div></div>
+                  <button style="flex:none;border:1px solid rgba(255,255,255,.16);background:rgba(255,255,255,.05);color:#fff;font-family:inherit;font-size:12.5px;font-weight:500;padding:8px 16px;border-radius:999px;cursor:pointer" style-hover="background:rgba(255,255,255,.1)">Connect</button>
+                </div>
+              </sc-for>
+            </div>
+          </div>
+        </div>
+      </div>
+      </sc-if>
+
+    </div>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script>
+class Component extends DCLogic {
+  // =====================================================================
+  // ATLAS BUILDER — production skeleton for backend wiring.
+  // The conversation → test → draft → live flow and all layout are real UI.
+  // All data tagged INTEGRATION is neutral/example — replace with API calls.
+  // Full element↔endpoint map: see INTEGRATION.md at the project root.
+  //
+  // INTEGRATION MAP (region → seam method → endpoint)
+  //   Sidebar list ........ sidebarWorkflows → GET /workflows
+  //   + New workflow ...... reset()          → POST /workflows
+  //   Conversation in ..... submitIntent()   → POST /workflows/:id/plan
+  //   Next step ........... advance()        → POST /workflows/:id/plan/step
+  //   Confirm/Change/No ... confirm()/submitChange()/reject() → planner turns
+  //   Test environment .... runTest()        → POST /workflows/:id/test (stream)
+  //   Approve draft ....... approveDraft()    → POST /workflows/:id/publish
+  //   Live pane ........... (seed in approveDraft) → GET /workflows/:id/metrics + /runs
+  //   Connections ......... CONNECTED/AVAILABLE → GET /connections
+  // The draft & live panes mirror the standalone Draft Review / Live Dashboard
+  // DCs — treat those files as the canonical full versions of those screens.
+  // Every after()/`*_DELAY_MS` stub stands in for an `await` — no real timers.
+  // =====================================================================
+  GREETING = "Hi — I'm Atlas. Tell me what you'd like to automate in plain language, and we'll build it together, one step at a time.";
+  PLAN_DELAY_MS = 650; // simulates planner latency — replace timers with real awaits
+
+  // Starter prompts for the empty state. INTEGRATION: backend-suggested templates.
+  SUGGESTIONS = [
+    "Summarize UPS tracking emails to Slack",
+    "Route new leads to the right rep",
+    "Send a weekly metrics digest"
+  ];
+
+  // Other workflows shown in the sidebar. Boots empty — a fresh account has none.
+  // INTEGRATION: GET /workflows → map each to { name, dot, glow } (status → dot color), e.g.
+  //   { name: "Invoice digest", dot: "#7fc28a", glow: "rgba(127,194,138,.5)" }  // healthy
+  //   { name: "Lead router",    dot: "#e87461", glow: "rgba(232,116,97,.6)" }   // error
+  //   { name: "Weekly report",  dot: "rgba(255,255,255,.28)", glow: "rgba(255,255,255,0)" } // paused
+  MOCK_WORKFLOWS = [];
+
+  // Integrations. INTEGRATION: GET /connections.
+  CONNECTED = [
+    { name: "Slack", meta: "acme.slack.com · 4 channels", glyph: "#" },
+    { name: "Gmail", meta: "jordan@acme.co", glyph: "@" }
+  ];
+  AVAILABLE = [
+    { name: "Notion", meta: "Docs & databases", glyph: "N" },
+    { name: "Google Sheets", meta: "Spreadsheets", glyph: "⌸" },
+    { name: "HubSpot", meta: "CRM & contacts", glyph: "H" },
+    { name: "Linear", meta: "Issues & projects", glyph: "L" }
+  ];
+
+  // Sample trigger + run history used by the draft/live previews. INTEGRATION: real data.
+  EMAIL = { from: "UPS Quantum View", subj: "Your package is out for delivery", body: "Tracking 1Z999AA10123456784 — out for delivery, arriving Thursday by 7:00 PM." };
+  RUNS = [
+    { time: "Today, 9:41 AM", dur: "0.8s" },
+    { time: "Today, 8:12 AM", dur: "0.7s" },
+    { time: "Today, 7:03 AM", dur: "0.9s" }
+  ];
+
+  // MOCK PLAN — example one-step-at-a-time proposals (base / alternate / changed
+  // variants). INTEGRATION: replace with the planner's proposal for the next step
+  // given the conversation so far. Shape per step: { tag, intro, clarify?, base, alt }.
+  STEPS = [
+    { tag: "Trigger", clarify: null,
+      intro: "First, I'll watch for the email.",
+      base: { heading: "Watch Gmail for UPS emails", reason: "Gmail is your connected inbox, so I can start the flow the moment a UPS update lands — no forwarding needed.", spec: [["source","Gmail"],["match","from: ups.com"],["on","new email"]], node: "Gmail · UPS emails" },
+      alt:  { heading: "Watch a shared shipping inbox", reason: "If tracking goes to a team alias instead, I'll watch that address.", spec: [["source","shipping@acme"],["match","subject: tracking"],["on","new email"]], node: "Shared shipping inbox" } },
+
+    { tag: "Summarize", clarify: null,
+      intro: "Then I'll condense what it says.",
+      base: { heading: "Summarize each update", reason: "A short summary keeps the channel skimmable — I'll keep the status, ETA, and tracking number.", spec: [["action","summarize"],["length","1–2 lines"],["keep","status · ETA · tracking #"]], node: "Summarize update" },
+      changed: { heading: "Summarize in one tight line", reason: "Even leaner — just delivery status and ETA, nothing else.", spec: [["action","summarize"],["length","one line"],["keep","status · ETA"]], node: "One-line summary" },
+      alt:  { heading: "Forward the full email", reason: "Skip summarizing and pass the original message straight through.", spec: [["action","forward"],["body","full email"]], node: "Forward full email" } },
+
+    { tag: "Deliver", clarify: { q: "Which channel should the summary go to?", chips: ["#social","#shipping","#ops"] },
+      intro: "Now, where should it land?",
+      base: { heading: "Post the summary to {channel}", reason: "Slack is where your team already watches for updates, so the summary shows up in {channel}.", spec: [["app","Slack"],["channel","{channel}"],["as","message"]], node: "Post to {channel}" },
+      alt:  { heading: "Email the summary to you", reason: "Prefer your inbox? I'll send it as a digest instead of posting to Slack.", spec: [["app","Gmail"],["to","you@acme"],["as","digest"]], node: "Email summary" } },
+
+    { tag: "Finish", clarify: null,
+      intro: "Last thing — let's name it.",
+      base: { heading: "Name it “UPS tracking → Slack”", reason: "A clear name so you can find it and re-run it later.", spec: [["name","UPS tracking → Slack"]], node: "UPS tracking → Slack" },
+      alt:  { heading: "Name it “Shipping updates → Slack”", reason: "Broader, in case you add more carriers later.", spec: [["name","Shipping updates → Slack"]], node: "Shipping updates → Slack" } }
+  ];
+  DELIVER = 2; LAST = 3;
+
+  _timers = [];
+  state = this.fresh();
+
+  fresh() {
+    return {
+      phase: "empty", intent: null,
+      steps: [0,1,2,3].map(() => ({ confirmed: false, rejected: false, changed: false, note: null })),
+      cursor: 0, channel: null, stepReady: true, thinking: false,
+      changeOpenIndex: null, changeText: "",
+      rightTab: "preview", testState: "idle", testStep: 0,
+      leftOpen: true, rightOpen: true,
+      inputValue: "",
+      reopenNote: false, liveRuns: 0, activity: [],
+      connectionsOpen: false, profileOpen: false
+    };
+  }
+
+  componentWillUnmount() { this.clearTimers(); }
+  componentDidUpdate() { if (this.el) this.el.scrollTop = this.el.scrollHeight; }
+  after(ms, fn) { const id = setTimeout(fn, ms); this._timers.push(id); return id; }
+  clearTimers() { this._timers.forEach(clearTimeout); this._timers = []; }
+
+  sub(s) { return (s || "").split("{channel}").join(this.state.channel || "#social"); }
+
+  variant(i) {
+    const def = this.STEPS[i], st = this.state.steps[i];
+    let v;
+    if (st.rejected) v = def.alt;
+    else if (st.changed) {
+      if (i === 1 && def.changed) v = def.changed;
+      else if (i === this.LAST) v = { heading: "Name it “" + st.note + "”", reason: "Using the name you gave it.", spec: [["name", st.note]], node: st.note };
+      else v = { heading: def.base.heading, reason: "Adjusted to your note — " + st.note, spec: def.base.spec.concat([["note", st.note]]), node: def.base.node };
+    } else v = def.base;
+    return { heading: this.sub(v.heading), reason: this.sub(v.reason), spec: v.spec.map(p => [p[0], this.sub(p[1])]), node: this.sub(v.node || v.heading) };
+  }
+
+  confirmedCount() { return this.state.steps.filter(s => s.confirmed).length; }
+  getName() { const v = this.variant(this.LAST); const p = v.spec.find(x => x[0] === "name"); return p ? p[1] : "UPS tracking → Slack"; }
+
+  // Reveal the next step. The "thinking" delay simulates the planner round-trip.
+  // INTEGRATION: replace the timer with `await proposeStep(conversation)` and set
+  // the returned proposal into state before clearing `thinking`.
+  advance(i) {
+    this.setState({ thinking: true, stepReady: false, testState: "idle", testStep: 0 });
+    this.after(this.PLAN_DELAY_MS, () => this.setState({ cursor: i, thinking: false, stepReady: true }));
+  }
+
+  TEST_CHECKS = [
+    { firing: "Connecting to Gmail…", ok: "Inbox reachable · sample matched", dur: "0.3s" },
+    { firing: "Running summarizer…", ok: "Model responded · summary built", dur: "0.6s" },
+    { firing: "Posting to Slack…", ok: "Channel writable · message delivered", dur: "0.4s" }
+  ];
+  // INTEGRATION: replace this simulated sequence with a real end-to-end test run.
+  // POST /workflows/:id/test, then stream per-step results: advance `testStep` as
+  // each step fires and finish with testState "passed" or "failed" (+ failIndex).
+  runTest() {
+    if (this.confirmedCount() !== 4 || this.state.testState === "running") return;
+    this.setState({ testState: "running", testStep: 0 });
+    this.after(950,  () => this.setState({ testStep: 1 }));
+    this.after(1950, () => this.setState({ testStep: 2 }));
+    this.after(2900, () => this.setState({ testState: "passed", testStep: 3 }));
+  }
+
+  // INTEGRATION: send the user's intent to the planner; when the first proposal
+  // returns, reveal step 0 (replace the timer with the awaited response).
+  submitIntent(text) {
+    if (this.state.phase !== "empty") return;
+    const t = (text || this.state.inputValue || "").trim();
+    if (!t) return;
+    this.setState({ phase: "building", intent: t, inputValue: "", thinking: true, stepReady: false });
+    this.after(this.PLAN_DELAY_MS, () => this.setState({ cursor: 0, thinking: false, stepReady: true }));
+  }
+
+  confirm(i) {
+    if (this.state.steps[i].confirmed) return;
+    const steps = this.state.steps.map((s, j) => j === i ? { ...s, confirmed: true } : s);
+    if (i === this.LAST) this.setState({ steps, phase: "ready" });
+    else { this.setState({ steps }); this.advance(i + 1); }
+  }
+  openChange(i) { this.setState({ changeOpenIndex: i, changeText: "" }); }
+  submitChange(i) {
+    const note = (this.state.changeText || "").trim();
+    if (!note) { this.setState({ changeOpenIndex: null }); return; }
+    const steps = this.state.steps.map((s, j) => j === i ? { ...s, changed: true, rejected: false, note } : s);
+    this.setState({ steps, changeOpenIndex: null, changeText: "" });
+    this.advance(i);
+  }
+  reject(i) {
+    const steps = this.state.steps.map((s, j) => j === i ? { ...s, rejected: !s.rejected, changed: false, note: null } : s);
+    this.setState({ steps });
+    this.advance(i);
+  }
+  pickChannel(ch) { this.setState({ channel: ch }); this.advance(this.DELIVER); }
+
+  undo(i) {
+    const steps = this.state.steps.map((s, j) => j >= i ? { confirmed: false, rejected: false, changed: false, note: null } : s);
+    this.setState({
+      steps, cursor: i, phase: "building", stepReady: true, thinking: false,
+      channel: i <= this.DELIVER ? null : this.state.channel,
+      testState: "idle", testStep: 0, changeOpenIndex: null,
+      rightTab: "preview"
+    });
+  }
+
+  LIVE_LABELS = ["just now", "1m ago", "4m ago", "9m ago", "14m ago", "22m ago"];
+  reviewDraft() {
+    if (this.confirmedCount() !== 4) return;
+    this.setState({ phase: "draft", reopenNote: false });
+  }
+  keepBuilding() {
+    this.setState({ phase: "building", reopenNote: true, testState: "idle", testStep: 0 });
+  }
+  approveDraft() {
+    if (this.state.phase !== "draft") return;
+    const seed = [{ id: 1, dur: "0.8s" }, { id: 2, dur: "0.7s" }, { id: 3, dur: "0.9s" }, { id: 4, dur: "0.8s" }];
+    this.setState({ phase: "live", liveRuns: 12, activity: seed });
+    this.scheduleRun();
+  }
+  scheduleRun() {
+    this.after(4200, () => {
+      if (this.state.phase !== "live") return;
+      const dur = (0.6 + Math.random() * 0.5).toFixed(1) + "s";
+      this.setState(s => ({ liveRuns: s.liveRuns + 1, activity: [{ id: Date.now(), dur }, ...s.activity].slice(0, 6) }));
+      this.scheduleRun();
+    });
+  }
+  reset() { this.clearTimers(); this.setState(this.fresh()); }
+  setTab(t) { this.setState({ rightTab: t }); }
+  toggleLeft() { this.setState(s => ({ leftOpen: !s.leftOpen })); }
+  toggleRight() { this.setState(s => ({ rightOpen: !s.rightOpen })); }
+  toggleConnections() { this.setState(s => ({ connectionsOpen: !s.connectionsOpen, profileOpen: false })); }
+  closeConnections() { this.setState({ connectionsOpen: false }); }
+  toggleProfile() { this.setState(s => ({ profileOpen: !s.profileOpen })); }
+
+  buildThread() {
+    const S = this.state, out = [];
+    out.push({ isGreeting: true, text: this.GREETING });
+    if (S.phase === "empty") return out;
+    out.push({ isOperator: true, text: S.intent });
+
+    for (let i = 0; i <= S.cursor; i++) {
+      const st = S.steps[i], def = this.STEPS[i], v = this.variant(i);
+      if (st.confirmed) { out.push({ isConfirmed: true, tag: def.tag, heading: v.heading, onUndo: () => this.undo(i) }); continue; }
+      // active step
+      if (!S.stepReady) break;
+      if (def.clarify && S.channel === null) {
+        out.push({ isAtlas: true, text: def.intro, hasReason: false });
+        out.push({ isClarify: true, q: def.clarify.q, chips: def.clarify.chips.map(c => ({ label: c, onPick: () => this.pickChannel(c) })) });
+        break;
+      }
+      if (st.rejected) { out.push({ isOperator: true, text: "Not this — show me another option." }); out.push({ isAtlas: true, text: "Sure, here's a different approach:", hasReason: true, reason: v.reason }); }
+      else if (st.changed) { out.push({ isOperator: true, text: st.note }); out.push({ isAtlas: true, text: "Updated:", hasReason: true, reason: v.reason }); }
+      else { out.push({ isAtlas: true, text: def.intro, hasReason: true, reason: v.reason }); }
+      const changeOpen = S.changeOpenIndex === i;
+      out.push({
+        isProposal: true, tag: def.tag, heading: v.heading,
+        specPairs: v.spec.map(p => ({ k: p[0], v: p[1] })),
+        actionsVisible: !changeOpen, changeOpen, changeValue: changeOpen ? S.changeText : "",
+        onConfirm: () => this.confirm(i), onChange: () => this.openChange(i), onReject: () => this.reject(i),
+        onSubmitChange: () => this.submitChange(i),
+        onChangeInput: (e) => this.setState({ changeText: e.target.value }),
+        onChangeKey: (e) => { if (e.key === "Enter") { e.preventDefault(); this.submitChange(i); } }
+      });
+      break;
+    }
+
+    if (this.confirmedCount() === 4 && (S.phase === "ready" || S.phase === "building")) {
+      if (S.reopenNote)
+        out.push({ isAtlas: true, text: "No problem — undo any step above to adjust it, then we'll re-test.", hasReason: false });
+      if (S.testState === "idle")
+        out.push({ isCta: true, text: "That's the full workflow. Let's fire a test to make sure every step works before publishing.", btn: "Run the test", btnBg: "#fff", btnFg: "#0a0a0a", onClick: () => this.runTest() });
+      if (S.testState === "running")
+        out.push({ isAtlas: true, text: "Testing each step — watch them fire on the right →", hasReason: false });
+      if (S.testState === "passed")
+        out.push({ isCta: true, text: "No breaks — all three steps passed. Here's the draft for you to review.", btn: "See the draft →", btnBg: "#fff", btnFg: "#0a0a0a", onClick: () => this.reviewDraft() });
+    }
+    return out;
+  }
+
+  flowNodes() {
+    const S = this.state;
+    return this.STEPS.map((def, i) => {
+      const st = S.steps[i], v = this.variant(i);
+      const done = st.confirmed;
+      const active = i === S.cursor && !done && S.phase !== "empty";
+      const lit = S.testState === "running" && S.testNode >= i;
+      let bg, border, mark, markColor, titleColor, title, specLine, hasSpec;
+      if (done) {
+        bg = lit ? "rgba(127,194,138,.22)" : "rgba(127,194,138,.1)"; border = "rgba(127,194,138,.32)";
+        mark = "✓"; markColor = "#9fd6a8"; titleColor = "#fff"; title = v.node;
+        specLine = v.spec.map(p => p[0] + ": " + p[1]).join("   ·   "); hasSpec = true;
+      } else if (active) {
+        bg = "rgba(240,191,107,.08)"; border = "rgba(240,191,107,.3)";
+        mark = "•"; markColor = "#f0bf6b"; titleColor = "#fff";
+        title = S.stepReady ? (def.clarify && S.channel === null ? "Awaiting your choice" : v.node) : "Proposing…";
+        specLine = ""; hasSpec = false;
+      } else {
+        bg = "transparent"; border = "rgba(255,255,255,.12)";
+        mark = String(i + 1); markColor = "rgba(255,255,255,.3)"; titleColor = "rgba(255,255,255,.32)";
+        title = "Upcoming"; specLine = ""; hasSpec = false;
+      }
+      return {
+        label: def.tag, title, specLine, hasSpec, mark, markColor, bg, border, titleColor,
+        showConnector: i > 0,
+        connectorColor: (i > 0 && S.steps[i-1].confirmed) ? "rgba(127,194,138,.4)" : "rgba(255,255,255,.12)",
+        clickable: done, cursor: done ? "pointer" : "default",
+        onClick: done ? () => this.undo(i) : () => {}
+      };
+    });
+  }
+
+  renderVals() {
+    const S = this.state;
+    const cc = this.confirmedCount();
+    const published = S.phase === "published";
+    const ready = S.phase === "ready", tested = S.phase === "tested";
+    const tab = S.rightTab;
+
+    const summaryText = S.steps[1].changed ? "📦 Out for delivery — arrives Thu by 7 PM."
+      : (S.steps[1].rejected ? "Forwarding the full UPS email through to Slack." : "📦 Out for delivery — arriving Thursday by 7 PM. Tracking 1Z999AA10123456784.");
+
+    // ── test environment: per-step firing status ──
+    const TS = S.testState, TI = S.testStep;
+    const stepStatus = (i) => {
+      if (cc !== 4) return "blocked";
+      if (TS === "idle") return "ready";
+      if (TS === "running") return i < TI ? "passed" : (i === TI ? "firing" : "queued");
+      if (TS === "passed") return "passed";
+      if (TS === "failed") return i < S.failIndex ? "passed" : (i === S.failIndex ? "failed" : "queued");
+      return "ready";
+    };
+    const STEP_META = [
+      { label: "Trigger", title: () => this.variant(0).node },
+      { label: "Step",    title: () => this.variant(1).node },
+      { label: "Deliver", title: () => this.variant(2).node }
+    ];
+    const testSteps = [0,1,2].map(i => {
+      const st = stepStatus(i), chk = this.TEST_CHECKS[i];
+      const M = { ready:   { border:"rgba(255,255,255,.1)",   bg:"rgba(255,255,255,.02)", iconBg:"rgba(255,255,255,.05)", iconColor:"rgba(255,255,255,.5)", icon:String(i+1), labelColor:"rgba(255,255,255,.4)", titleColor:"rgba(255,255,255,.78)", statusColor:"rgba(255,255,255,.4)", statusText:"Ready" },
+                queued:  { border:"rgba(255,255,255,.08)",  bg:"transparent",            iconBg:"rgba(255,255,255,.04)", iconColor:"rgba(255,255,255,.3)", icon:String(i+1), labelColor:"rgba(255,255,255,.28)", titleColor:"rgba(255,255,255,.42)", statusColor:"rgba(255,255,255,.3)", statusText:"Queued" },
+                firing:  { border:"rgba(240,191,107,.4)",   bg:"rgba(240,191,107,.06)",  iconBg:"rgba(240,191,107,.14)", iconColor:"#f0bf6b", icon:"◐", labelColor:"#f3cd86", titleColor:"#fff", statusColor:"#f3cd86", statusText:"Firing…" },
+                passed:  { border:"rgba(127,194,138,.32)",  bg:"rgba(127,194,138,.06)",  iconBg:"rgba(127,194,138,.16)", iconColor:"#9fd6a8", icon:"✓", labelColor:"rgba(127,194,138,.85)", titleColor:"#fff", statusColor:"#9fd6a8", statusText:"Passed · " + chk.dur },
+                failed:  { border:"rgba(232,116,97,.45)",   bg:"rgba(232,116,97,.08)",   iconBg:"rgba(232,116,97,.16)", iconColor:"#f0a896", icon:"✕", labelColor:"#f0a896", titleColor:"#fff", statusColor:"#f0a896", statusText:"Break" },
+                blocked: { border:"rgba(255,255,255,.07)",  bg:"transparent",            iconBg:"rgba(255,255,255,.03)", iconColor:"rgba(255,255,255,.25)", icon:String(i+1), labelColor:"rgba(255,255,255,.22)", titleColor:"rgba(255,255,255,.34)", statusColor:"rgba(255,255,255,.25)", statusText:"—" } }[st];
+      const showCheck = st === "firing" || st === "passed" || st === "failed";
+      return {
+        ...M, label: STEP_META[i].label, title: cc === 4 ? STEP_META[i].title() : "Upcoming",
+        showConnector: i > 0,
+        connColor: stepStatus(i-1) === "passed" ? "rgba(127,194,138,.5)" : (stepStatus(i-1) === "firing" ? "rgba(240,191,107,.4)" : "rgba(255,255,255,.1)"),
+        showCheck,
+        checkIcon: st === "firing" ? "◌" : (st === "failed" ? "✕" : "✓"),
+        checkText: st === "firing" ? chk.firing : (st === "failed" ? chk.firing.replace("…", " — no response") : chk.ok),
+        checkColor: st === "firing" ? "#f3cd86" : (st === "failed" ? "#f0a896" : "rgba(127,194,138,.8)"),
+        showOutput: i === 2 && (st === "passed")
+      };
+    });
+    const verdict =
+      TS === "running" ? { show:true, icon:"◐", color:"#f3cd86", border:"rgba(240,191,107,.3)", bg:"rgba(240,191,107,.06)", iconBg:"rgba(240,191,107,.14)", text:"Testing… firing step " + Math.min(TI+1,3) + " of 3" }
+      : TS === "passed" ? { show:true, icon:"✓", color:"#9fd6a8", border:"rgba(127,194,138,.32)", bg:"rgba(127,194,138,.07)", iconBg:"rgba(127,194,138,.16)", text:"No breaks detected — all 3 steps passed. Safe to publish." }
+      : TS === "failed" ? { show:true, icon:"✕", color:"#f0a896", border:"rgba(232,116,97,.4)", bg:"rgba(232,116,97,.08)", iconBg:"rgba(232,116,97,.16)", text:"Break detected at step " + (S.failIndex+1) + ". Fix it before publishing." }
+      : { show:false };
+
+    const accent = published ? "#7fc28a" : (S.phase !== "empty" ? "#f0bf6b" : "rgba(255,255,255,.3)");
+    const accentGlow = published ? "rgba(127,194,138,.55)" : (S.phase !== "empty" ? "rgba(240,191,107,.55)" : "rgba(255,255,255,0)");
+    const tabBg = (on) => on ? "rgba(255,255,255,.1)" : "transparent";
+    const tabFg = (on) => on ? "#fff" : "rgba(255,255,255,.5)";
+
+    return {
+      // panels
+      leftOpen: S.leftOpen, leftCollapsed: !S.leftOpen, leftWidth: S.leftOpen ? "248px" : "56px",
+      rightOpen: S.rightOpen, rightCollapsed: !S.rightOpen, rightWidth: S.rightOpen ? "400px" : "52px",
+      onToggleLeft: () => this.toggleLeft(), onToggleRight: () => this.toggleRight(),
+
+      // chrome status
+      statusLabel: published ? "Live" : (S.phase === "empty" ? "Ready" : "Building"),
+      statusDotColor: accent, statusDotGlow: accentGlow,
+      activeDotColor: published ? "#7fc28a" : "#f0bf6b",
+      activeDotGlow: published ? "rgba(127,194,138,.55)" : "rgba(240,191,107,.55)",
+      sidebarActiveName: cc === 4 ? this.getName() : (S.phase === "empty" ? "New workflow" : "Untitled workflow"),
+      windowTitle: cc === 4 ? this.getName() : (S.phase === "empty" ? "New workflow" : "Untitled workflow"),
+      sidebarWorkflows: (() => {
+        const curName = cc === 4 ? this.getName() : (S.phase === "empty" ? "New workflow" : "Untitled workflow");
+        const cur = { name: curName, dot: published ? "#7fc28a" : "#f0bf6b", glow: published ? "rgba(127,194,138,.55)" : "rgba(240,191,107,.55)", bg: "rgba(255,255,255,.06)", border: "rgba(255,255,255,.06)", nameColor: "#fff" };
+        const rest = this.MOCK_WORKFLOWS.map(w => ({ name: w.name, dot: w.dot, glow: w.glow, bg: "transparent", border: "transparent", nameColor: "rgba(255,255,255,.6)" }));
+        return [cur, ...rest];
+      })(),
+
+      onReset: () => this.reset(),
+
+      // conversation
+      thread: this.buildThread(), thinking: S.thinking, scrollRef: (el) => { this.el = el; },
+      phaseEmpty: S.phase === "empty",
+      suggestions: this.SUGGESTIONS.map(s => ({ label: s, onPick: () => this.submitIntent(s) })),
+
+      // input
+      inputValue: S.inputValue,
+      onIntentInput: (e) => this.setState({ inputValue: e.target.value }),
+      onIntentKey: (e) => { if (e.key === "Enter" && S.phase === "empty") { e.preventDefault(); this.submitIntent(); } },
+      onIntentSubmit: () => { if (S.phase === "empty") this.submitIntent(); },
+      inputDisabled: S.phase !== "empty",
+      inputPlaceholder: published ? "Workflow is live — run the demo again to rebuild." : (S.phase !== "empty" ? "Atlas is building — respond on the cards above ↑" : "Describe what this workflow should do…"),
+      sendOpacity: (S.phase === "empty" && (S.inputValue || "").trim()) ? 1 : 0.35,
+
+      // right panel header
+      workflowTitle: cc === 4 ? this.getName() : "Untitled workflow",
+      titleColor: cc === 4 ? "#fff" : "rgba(255,255,255,.4)",
+      specStatusLabel: published ? "Live" : (S.phase === "empty" ? "Draft" : "Building…"),
+
+      // test environment
+      testStatusLabel: published ? "Live" : (cc !== 4 ? "Incomplete" : (TS === "running" ? "Testing…" : (TS === "passed" ? "All checks passed" : (TS === "failed" ? "Break found" : "Ready to test")))),
+      testStatusColor: (TS === "passed" || published) ? "#9fd6a8" : (TS === "failed" ? "#f0a896" : (TS === "running" ? "#f3cd86" : "rgba(255,255,255,.45)")),
+      testStatusGlow: (TS === "passed" || published) ? "rgba(127,194,138,.55)" : (TS === "failed" ? "rgba(232,116,97,.5)" : (TS === "running" ? "rgba(240,191,107,.5)" : "rgba(255,255,255,0)")),
+      testCaption: cc !== 4 ? "Confirm every step in the conversation, then test the workflow end-to-end here before it goes live."
+        : (TS === "idle" ? "Fire every step against a sample event to catch breaks before publishing."
+        : (TS === "running" ? "Firing each step in order…"
+        : (TS === "passed" ? "Every step fired cleanly — no breaks." : "One step failed — review the break below."))),
+      testSteps, slackChannel: S.channel || "#social", summaryText,
+      showVerdict: verdict.show, verdictText: verdict.text, verdictIcon: verdict.icon, verdictColor: verdict.color,
+      verdictBorder: verdict.border, verdictBg: verdict.bg, verdictIconBg: verdict.iconBg,
+
+      isPublished: published,
+
+      // footer (test-gated)
+      footLocked: cc !== 4,
+      footRunTest: cc === 4 && TS === "idle",
+      footTesting: TS === "running",
+      footProceed: TS === "passed",
+      onRunTest: () => this.runTest(),
+
+      // workspace mode
+      modeBuild: S.phase !== "draft" && S.phase !== "live" && !S.connectionsOpen,
+      modeDraft: S.phase === "draft" && !S.connectionsOpen,
+      modeLive: S.phase === "live" && !S.connectionsOpen,
+      modeConnections: S.connectionsOpen,
+      connectionsOpen: S.connectionsOpen, profileOpen: S.profileOpen,
+      connBg: S.connectionsOpen ? "rgba(127,194,138,.1)" : "rgba(255,255,255,.03)",
+      connFg: S.connectionsOpen ? "#9fd6a8" : "rgba(255,255,255,.82)",
+      connBorder: S.connectionsOpen ? "rgba(127,194,138,.3)" : "rgba(255,255,255,.1)",
+      profBg: S.profileOpen ? "rgba(255,255,255,.06)" : "none",
+      profBorder: S.profileOpen ? "rgba(255,255,255,.16)" : "transparent",
+      profShadow: S.profileOpen ? "0 1px 3px rgba(0,0,0,.3)" : "none",
+      onToggleConnections: () => this.toggleConnections(), onCloseConnections: () => this.closeConnections(),
+      onToggleProfile: () => this.toggleProfile(),
+      connectedList: this.CONNECTED,
+      availableList: this.AVAILABLE,
+      draftNodes: [0,1,2].map(i => { const v = this.variant(i); return { label: this.STEPS[i].tag, title: v.node, spec: v.spec.map(p => p[0] + ": " + p[1]).join("   ·   "), showArrow: i > 0 }; }),
+      onReviewDraft: () => this.reviewDraft(), onApprove: () => this.approveDraft(), onKeepBuilding: () => this.keepBuilding(),
+      runsLabel: String(S.liveRuns),
+      activity: S.activity.map((a, i) => ({ ch: S.channel || "#social", dur: a.dur, ago: this.LIVE_LABELS[i] || "earlier", fresh: i === 0 }))
+    };
+  }
+}
+</script>
+</body>
+</html>

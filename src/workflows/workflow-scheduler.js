@@ -126,6 +126,18 @@ export class WorkflowScheduler {
   }
 
   /**
+   * Register a per-tenant token injector. Before a flow runs, the scheduler asks
+   * this hook to return the workflow with any connector credentials its tenant
+   * owns injected into the relevant nodes — so an automatically-fired workflow
+   * acts as the OWNING tenant, never a shared/operator token. Connector-agnostic:
+   * the hook decides which nodes need which connector's token. No-op if unset.
+   * @param {(workflow: object) => object} fn
+   */
+  registerTokenInjector(fn) {
+    this._injectTokens = fn;
+  }
+
+  /**
    * Execute a single workflow (dispatch by kind).
    * @param {object} workflow
    * @param {object} [options]
@@ -195,12 +207,15 @@ export class WorkflowScheduler {
     let failed = null;
     let failedStep = null;
     try {
+      // Inject the owning tenant's connector credentials into the nodes so the
+      // automatic run acts as that tenant (never a shared/operator token).
+      const wf = this._injectTokens ? this._injectTokens(workflow) : workflow;
       // For email-triggered flows, inject the fetched email as the initial
       // lastOutput so summarize/llm nodes see it without a separate fetch step.
       const runOpts = { runId: run.id, costContext: `workflow:${workflow.slug}` };
       if (emailContext) runOpts.initialContext = emailContext;
       for await (const evt of this.flowTester.run(
-        { nodes: workflow.nodes, edges: workflow.edges },
+        { nodes: wf.nodes, edges: wf.edges },
         runOpts,
       )) {
         if (evt.type === 'step_started' || evt.type === 'step_completed' || evt.type === 'step_failed') {

@@ -87,6 +87,11 @@ export class ChannelRegistry {
         description: ch.description,
         icon: ch.icon,
         configSchema: ch.configSchema,
+        // actionOnly distinguishes mid-workflow connector ACTIONS (lookup,
+        // history, react, …) from content DELIVERY destinations — consumers
+        // (the converger's delivery vs step catalogs) need it to classify by
+        // position. Without it both menus collapse together.
+        actionOnly: ch.actionOnly ?? false,
         available,
         unavailableReason: reason,
       });

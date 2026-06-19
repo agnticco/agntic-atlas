@@ -8,8 +8,9 @@ build plan that closes those gaps for the Innovation Depot pilot.
 
 - **All UI is built fresh.** No existing frontend is reused; no re-wiring of the
   dormant in-chat builder. This is a deliberate call — see the note under Part 2.
-- **No white-labeling / per-business tenancy in pilot scope.** Parked until a
-  second customer exists.
+- **Multi-tenant from the foundation** *(added 2026-06-09, reverses the earlier
+  "no tenancy in pilot" decision).* Each onboarding client gets a `tenant_id`.
+  See CLAUDE.md and `docs/architecture/multi-tenancy.md`.
 - **No BPMN/DMN port.** The engine's existing JSON spec format is kept.
 
 ---
@@ -178,10 +179,31 @@ definition).
 **Done when:** Maggie builds the UPS workflow entirely by talking and confirming,
 and it runs.
 
-### Phase 5 — Console UI (greenfield)
+### Phase 5 — Console UI + SOP export (greenfield)
 Inventory, live run monitoring, and the step-by-step SOP view with dependencies.
-**Done when:** she sees her automations, watches a run execute step-by-step, and
-reads the logs.
+Includes SOP export: from any activated workflow's SOP view, generate a
+formatted export that documents every step, decision point, and connector in
+plain language — exported as both **PDF** (for stakeholder hand-off) and
+**Markdown** (version-controllable, paste-anywhere source). The export is derived
+directly from the live spec, so it stays in sync with the workflow as it evolves.
+**Done when:** she sees her automations, watches a run execute step-by-step,
+reads the logs, and can export the UPS workflow's SOP as a PDF and Markdown file.
+
+> **Live Dashboard design target (approved 2026-06-18; deferred here from P4).** The
+> analytical live-run dashboard is **P5**, not P4 — the current P4 live view is a minimal
+> "workflow is live" confirmation on purpose. Design reference saved at
+> [`docs/design/mockups/Atlas - Live Dashboard.dc.html`](design/mockups/) (+ drawer/output
+> screenshots). It is an ops/analytics view: status header (active/paused), a **health
+> "pulse band"** (success rate, run counts), a **filterable run ledger** (one row per
+> execution; filters: date/status/source/step/search), and a **per-run detail drawer**
+> (step-by-step timings, trigger payload, delivered output, error). **Backend it needs
+> (none built yet):** `GET /workflows/:id` (identity+DAG+health), `GET /workflows/:id/metrics`
+> (rollup), `GET /workflows/:id/runs?status=&source=&failNode=&from=&q=` (ledger), `GET
+> /workflows/:id/runs/:runId` (trace), `POST .../pause`. The `workflow_runs` table already
+> exists in `src/workflows/workflow-store.js` (started_at, steps, tokens_in/out, is_test) —
+> so storage is scaffolded; what's missing is **confirming runs are recorded for scheduled +
+> test executions**, the **query methods + endpoints**, and the UI. Do NOT populate it with
+> mock run data (the fake-data anti-pattern removed from the P4 Draft page on 2026-06-18).
 
 ### Phase 6 — Launcher + two-surface model
 Floating pill / keyboard-shortcut summon; toggle between builder and console.
@@ -191,16 +213,102 @@ Floating pill / keyboard-shortcut summon; toggle between builder and console.
 Airtable (likely the API-fallback path — budget for it), Google write plus Sheets/
 Forms, error handling (retry/notify on failure), and sub-daily scheduling.
 **Done when:** all three of Maggie's connectors are live, failures retry and
-notify, and "executes reliably" is actually true.
+notify, and sub-daily schedules fire correctly.
+
+> **PREREQUISITE — position-agnostic capability substrate (surfaced during P4, 2026-06-18).**
+> Before wiring more connector execution, do **Increment 1 (full unify)** from
+> [`docs/architecture/connector-capabilities.md`](architecture/connector-capabilities.md):
+> fold the three position-siloed registries behind ONE `CapabilityRegistry` that the
+> engine (`connector-action` step + `deliver`), the trigger system, the converger, and
+> the UI all read. Today a connector capability's reachability depends on *where* it sits:
+> `connector-action` resolves only `channelRegistry` (Slack), the email trigger lives in a
+> separate `gmail-source.js`, and Google's handlers (`src/connectors/google/index.js`) are
+> registered into none of those paths — so `gmail_search` exists but runs nowhere. A
+> capability's full ability must be the **same regardless of position** (trigger / step /
+> delivery); capabilities should declare their allowed positions (note: `capabilities.json`
+> has no `position` field yet). This also forces the deferred **execution-identity** decision
+> (per-tenant bot token vs per-user OAuth; whose account a *scheduled* run uses). This is the
+> code inflexibility that blocked building non-Slack workflows in the P4 builder — the builder
+> mechanism was verified on the runnable Slack path only.
+
+> **Slack connector reliability residuals (surfaced while verifying P4, 2026-06-18).** Found by
+> running real Slack-only workflows through the builder + a scope audit. None were UI/builder
+> defects — the builder loop (chat → propose → modify → ratify → run → per-step results)
+> worked; these are connector-layer issues to fix when P7 hardens connectors:
+> 1. **DM recipient resolution uses the known-unreliable `users.lookupByEmail`.**
+>    `resolveUser` in `src/connectors/slack/index.js` (~line 224) calls `users.lookupByEmail`,
+>    which the codebase *already* documents as flaky "even with confirmed emails + `users:read.email`"
+>    (see the `slack_lookup_user` handler ~line 461, which switched to a `users.list` scan). The
+>    DM path (`slack_dm`, `slack_dm_as_user`) was never updated — it failed live with
+>    `invalid_arguments`. Fix: resolve DM recipients via the same `users.list` scan.
+> 2. **`post_dm` capability under-declares its scopes.** `capabilities.json` lists
+>    `requiredScopes: [chat:write, im:write]` but the handler also needs `users:read.email`
+>    (for the email lookup). So the converger can mark DM "available" when the runtime can't run it.
+>    Fix: declare the full scope set per capability (and have resolution reflect runtime needs).
+> 3. **Scope-request derivation is fragile.** The OAuth flow derives the scopes it *requests* from
+>    the reference token (`SLACK_BOT_TOKEN`, floored at `chat:write`). A dead/stale reference token
+>    silently collapses every install to `chat:write` with no error — exactly what happened here
+>    (audit showed the tenant grant = `chat:write` only until a valid reference token was set + a
+>    reconnect). The explicit `SLACK_OAUTH_SCOPES` override was removed earlier; the substrate
+>    should request an explicit desired-scope set rather than infer it from a token that may be invalid.
+> 4. **Converger may emit a non-clean-email `user` for DMs** (the `invalid_arguments` vs
+>    `users_not_found` distinction suggests a malformed value, e.g. a handle). Tighten the prompt /
+>    validate the `slack_dm` `user` field once #1 lands.
+
+### Phase 8 — Web research + filesystem connectors
+A unified `web_research` connector that handles both search and content extraction
+in a single workflow node — no vendor plumbing exposed to operators. Three modes:
+`search` (Tavily — returns ranked results with URLs and snippets), `fetch`
+(Firecrawl — returns clean markdown from a given URL), and `auto` (inspects the
+node config: URL provided → fetch; query provided → search, then scrape top results
+if `content_needed=true`). The converger elicits intent in plain language ("find
+results" vs "read this page") and sets the mode in the spec. Also includes a
+tenant-scoped filesystem connector for reading local files into workflow data and
+writing outputs to disk, with paths sandboxed per tenant.
+**Done when:** a `web_research` search node returns Tavily results end-to-end; a
+`web_research` fetch node returns Firecrawl markdown end-to-end; a filesystem read
+node returns file content into `{{nodeId.output}}`; both connectors exist at
+`src/connectors/web-research.js` and `src/connectors/filesystem.js`.
+
+### Phase 9 — Value tracking (time-saved / ROI metrics)
+Closed-loop system that attaches a quantified "time saved" value to each workflow
+run so operators and buyers can measure and communicate the product's impact.
+The exact calculation method is TBD (to be designed in-phase — candidates include
+user-entered per-run time estimates during converger elicitation, step-count
+heuristics, or post-run confirmation prompts). The surface is a per-workflow and
+per-tenant aggregate: runs × estimated time saved = hours recovered, with a
+customer-facing summary suitable for internal reporting and product demos.
+**Done when:** a completed workflow run records a time-saved value; the console
+shows per-workflow and all-up time-saved totals; a shareable one-page ROI summary
+can be generated from the console.
+
+### Phase 10 — Admin observability (standalone web app)
+A separate internal-facing web dashboard — not the user-facing console — for
+monitoring per-tenant usage patterns and cost. Surfaces: run counts and frequency
+per tenant, LLM token consumption and cost per tenant, connector call volume,
+error rates, and total platform cost. Built as a standalone Atlas admin app
+(separate route/service from the user-facing product) to keep operator concerns
+out of the customer UI.
+**Done when:** the admin dashboard shows per-tenant run counts, cost breakdowns,
+and error rates in real time; data is not visible to non-admin users.
+
+### Phase 11 — E2E validation + production hardening + VPS migration
+End-to-end test suite covering the full user journey (builder → run → console →
+SOP export → value summary), cross-tenant isolation proofs, and production
+hardening (rate limits, audit logging, backup/recovery). Migration from current
+hosting to a VPS with a documented deployment runbook.
+**Done when:** the full E2E suite passes on VPS infrastructure; cross-tenant
+isolation is proven adversarially; the deployment runbook produces a clean
+environment from scratch; DNS points at the VPS and production smoke tests pass.
 
 ### Risk concentration & cut order
 Phases 3 and 4 are most of the real work and most of the unknowns; the all-fresh-UI
-decision made Phase 4 bigger. Protect those two if the calendar gets tight. The
-first thing to cut to a fast-follow after demo day is Phase 7's third connector
-(Airtable) — never the converger.
+decision made Phase 4 bigger. Protect those two if the calendar gets tight.
+Cut-order for fast-follows after the core demo: P7 Airtable connector first
+(never the converger), then P8 web + filesystem, then P9 value tracking, then
+P10 admin observability. P11 is non-negotiable before any external customer sees
+production data.
 
 ### Parked (out of pilot scope)
-- **Per-business / org tenancy.** Additive `business_id` migration across stores +
-  the agent session key. Invisible for a single-user pilot; revisit at customer #2.
 - **BPMN/DMN portability.** The engine runs its own JSON fine. Revisit when a
   customer's procurement actually requires a portable format.

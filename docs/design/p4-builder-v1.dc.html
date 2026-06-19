@@ -1,0 +1,564 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link href="https://fonts.googleapis.com/css2?family=Inter+Tight:wght@400;500;600&family=Instrument+Serif:ital@0;1&display=swap" rel="stylesheet"/>
+<style>
+  *{box-sizing:border-box}
+  body{margin:0;background:#000;color:#fff;font-family:'Inter Tight',-apple-system,BlinkMacSystemFont,'Helvetica Neue',sans-serif;-webkit-font-smoothing:antialiased;letter-spacing:-0.005em}
+  input::placeholder{color:rgba(255,255,255,.35)}
+  ::selection{background:#fff;color:#0a0a0a}
+  .ab-scroll::-webkit-scrollbar{width:8px}
+  .ab-scroll::-webkit-scrollbar-thumb{background:rgba(255,255,255,.1);border-radius:8px}
+  .ab-scroll::-webkit-scrollbar-track{background:transparent}
+  @keyframes msgIn{from{transform:translateY(9px)}to{transform:none}}
+  @keyframes slotIn{from{transform:translateY(7px) scale(.99)}to{transform:none}}
+  @keyframes thinkdot{0%,80%,100%{opacity:.25;transform:translateY(0)}40%{opacity:1;transform:translateY(-3px)}}
+  @keyframes liveGlow{0%,100%{box-shadow:0 0 0 rgba(127,194,138,0),inset 0 0 0 rgba(127,194,138,0)}50%{box-shadow:0 0 38px rgba(127,194,138,.22),inset 0 0 26px rgba(127,194,138,.05)}}
+  @keyframes ambient{0%,100%{opacity:.5}50%{opacity:.85}}
+  @media (prefers-reduced-motion:reduce){*{animation:none!important}}
+</style>
+</helmet>
+
+<div style="min-height:100vh;background:#000;display:flex;align-items:center;justify-content:center;padding:26px;position:relative;overflow:hidden">
+
+  <div aria-hidden="true" style="position:absolute;top:-10%;left:50%;width:1100px;height:700px;transform:translateX(-50%);background:radial-gradient(50% 50% at 30% 30%,rgba(127,194,138,.10),transparent 70%),radial-gradient(50% 50% at 78% 72%,rgba(240,191,107,.08),transparent 70%);filter:blur(20px);animation:ambient 11s ease-in-out infinite;pointer-events:none"></div>
+
+  <div style="position:relative;z-index:2;width:min(1360px,98vw);height:min(884px,94vh);background:#0A0A0A;border-radius:16px;border:1px solid rgba(255,255,255,.1);box-shadow:0 60px 140px rgba(0,0,0,.7),0 18px 50px rgba(0,0,0,.55),inset 0 1px 0 rgba(255,255,255,.06);display:flex;flex-direction:column;overflow:hidden">
+
+    <!-- ░ TITLE BAR ░ -->
+    <div style="flex:none;height:46px;display:flex;align-items:center;padding:0 17px;background:#0E0E10;border-bottom:1px solid rgba(255,255,255,.07)">
+      <div style="display:flex;gap:8px;align-items:center">
+        <span style="width:12px;height:12px;border-radius:50%;background:#FF5F57"></span>
+        <span style="width:12px;height:12px;border-radius:50%;background:#FEBC2E"></span>
+        <span style="width:12px;height:12px;border-radius:50%;background:#28C840"></span>
+      </div>
+      <div style="flex:1;text-align:center;font-size:12.5px;color:rgba(255,255,255,.4);letter-spacing:-0.01em">Atlas — Workflow Builder</div>
+      <div style="display:flex;align-items:center;gap:8px;font-size:11px;color:rgba(255,255,255,.45)">
+        <span style="width:7px;height:7px;border-radius:50%;background:{{ statusDotColor }};box-shadow:0 0 8px {{ statusDotGlow }}"></span>{{ statusLabel }}
+      </div>
+    </div>
+
+    <!-- ░ BODY ░ -->
+    <div style="flex:1;display:flex;min-height:0">
+
+      <!-- ░░ SIDEBAR ░░ -->
+      <aside style="flex:none;width:220px;background:#121214;border-right:1px solid rgba(255,255,255,.07);display:flex;flex-direction:column;padding:20px 16px">
+        <div style="display:flex;align-items:center;gap:9px;padding:2px 6px 0">
+          <img src="assets/atlas-globe-white.svg" alt="atlas" style="height:21px;width:21px"/>
+          <span style="font-size:16px;font-weight:500;letter-spacing:-0.03em">atlas</span>
+        </div>
+
+        <div style="font-size:11px;font-weight:500;letter-spacing:.22em;text-transform:uppercase;color:#6B6B6B;display:flex;align-items:center;gap:9px;margin:30px 6px 13px">
+          <span style="width:14px;height:1px;background:currentColor;opacity:.6"></span>Workflows
+        </div>
+        <div style="display:flex;flex-direction:column;gap:1px">
+          <div style="display:flex;align-items:center;gap:10px;padding:9px 10px;border-radius:9px;background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.06)">
+            <span style="flex:none;width:7px;height:7px;border-radius:50%;background:{{ activeDotColor }};box-shadow:0 0 8px {{ activeDotGlow }}"></span>
+            <span style="font-size:13px;color:#fff;letter-spacing:-0.01em;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ sidebarActiveName }}</span>
+          </div>
+          <div style="display:flex;align-items:center;gap:10px;padding:9px 10px;border-radius:9px">
+            <span style="flex:none;width:7px;height:7px;border-radius:50%;background:#7fc28a;box-shadow:0 0 8px rgba(127,194,138,.55)"></span>
+            <span style="font-size:13px;color:rgba(255,255,255,.6);letter-spacing:-0.01em">Invoice digest</span>
+          </div>
+          <div style="display:flex;align-items:center;gap:10px;padding:9px 10px;border-radius:9px">
+            <span style="flex:none;width:7px;height:7px;border-radius:50%;background:#7fc28a;box-shadow:0 0 8px rgba(127,194,138,.55)"></span>
+            <span style="font-size:13px;color:rgba(255,255,255,.6);letter-spacing:-0.01em">Lead router</span>
+          </div>
+          <div style="display:flex;align-items:center;gap:10px;padding:9px 10px;border-radius:9px">
+            <span style="flex:none;width:7px;height:7px;border-radius:50%;background:rgba(255,255,255,.3)"></span>
+            <span style="font-size:13px;color:rgba(255,255,255,.6);letter-spacing:-0.01em">Weekly report</span>
+          </div>
+        </div>
+
+        <div style="font-size:11px;font-weight:500;letter-spacing:.22em;text-transform:uppercase;color:#6B6B6B;display:flex;align-items:center;gap:9px;margin:28px 6px 13px">
+          <span style="width:14px;height:1px;background:currentColor;opacity:.6"></span>Connectors
+        </div>
+        <div style="display:flex;flex-direction:column;gap:8px;padding:0 4px">
+          <div style="display:flex;align-items:center;gap:10px">
+            <span style="flex:none;width:26px;height:26px;border-radius:8px;background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.1);display:flex;align-items:center;justify-content:center;font-size:13px;color:rgba(255,255,255,.7)">#</span>
+            <span style="font-size:13px;color:rgba(255,255,255,.7);flex:1">Slack</span>
+            <span style="width:6px;height:6px;border-radius:50%;background:#7fc28a;box-shadow:0 0 7px rgba(127,194,138,.55)"></span>
+          </div>
+          <div style="display:flex;align-items:center;gap:10px">
+            <span style="flex:none;width:26px;height:26px;border-radius:8px;background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.1);display:flex;align-items:center;justify-content:center;color:rgba(255,255,255,.7)">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="3" y="6" width="18" height="12" rx="2"/><path d="M4 7.5l8 5.5 8-5.5"/></svg>
+            </span>
+            <span style="font-size:13px;color:rgba(255,255,255,.7);flex:1">Gmail</span>
+            <span style="width:6px;height:6px;border-radius:50%;background:#7fc28a;box-shadow:0 0 7px rgba(127,194,138,.55)"></span>
+          </div>
+        </div>
+
+        <div style="flex:1"></div>
+        <button style="width:100%;border:none;cursor:pointer;background:#fff;color:#0a0a0a;font-family:inherit;font-weight:500;font-size:13.5px;letter-spacing:-0.01em;padding:12px;border-radius:999px">+ New workflow</button>
+      </aside>
+
+      <!-- ░░ CONVERSATION (60%) ░░ -->
+      <section style="flex:3;min-width:0;background:#0A0A0A;display:flex;flex-direction:column">
+        <div style="flex:none;display:flex;align-items:center;justify-content:space-between;padding:15px 26px;border-bottom:1px solid rgba(255,255,255,.07)">
+          <div style="display:flex;align-items:center;gap:9px;font-size:11px;font-weight:500;letter-spacing:.2em;text-transform:uppercase;color:#8A8A8A">
+            <span style="width:14px;height:1px;background:currentColor;opacity:.6"></span>Builder<span style="color:rgba(255,255,255,.35);text-transform:none;letter-spacing:-0.01em;font-size:12.5px;font-weight:400">· {{ workflowTitle }}</span>
+          </div>
+          <div style="display:flex;align-items:center;gap:16px">
+            <button onClick="{{ onRunDemo }}" style="border:1px solid rgba(255,255,255,.16);background:rgba(255,255,255,.04);color:rgba(255,255,255,.85);font-family:inherit;font-size:13px;font-weight:500;letter-spacing:-0.01em;padding:9px 18px;border-radius:999px;cursor:pointer;white-space:nowrap;opacity:{{ runOpacity }}">{{ runLabel }}</button>
+            <span onClick="{{ onReset }}" style="font-size:12.5px;color:rgba(255,255,255,.45);cursor:pointer;border-bottom:1px solid rgba(255,255,255,.22);padding-bottom:1px">Reset</span>
+          </div>
+        </div>
+
+        <div class="ab-scroll" ref="{{ scrollRef }}" style="flex:1;overflow-y:auto;padding:26px;display:flex;flex-direction:column;gap:22px">
+          <sc-for list="{{ thread }}" as="item" hint-placeholder-count="1">
+
+            <sc-if value="{{ item.isAtlas }}" hint-placeholder-val="{{ false }}">
+              <div style="display:flex;gap:12px;align-items:flex-start;animation:msgIn .4s ease both">
+                <div style="flex:none;width:30px;height:30px;border-radius:50%;background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.12);display:flex;align-items:center;justify-content:center"><img src="assets/atlas-globe-white.svg" alt="Atlas" style="width:20px;height:20px"/></div>
+                <div style="font-size:14.5px;line-height:1.55;color:rgba(255,255,255,.82);max-width:90%;padding-top:4px">{{ item.text }}</div>
+              </div>
+            </sc-if>
+
+            <sc-if value="{{ item.isOperator }}" hint-placeholder-val="{{ false }}">
+              <div style="display:flex;justify-content:flex-end;animation:msgIn .4s ease both">
+                <div style="max-width:78%;background:rgba(255,255,255,.07);border:1px solid rgba(255,255,255,.09);border-radius:16px 16px 4px 16px;padding:11px 16px;font-size:14.5px;line-height:1.5;color:rgba(255,255,255,.92)">{{ item.text }}</div>
+              </div>
+            </sc-if>
+
+            <sc-if value="{{ item.isProposal }}" hint-placeholder-val="{{ false }}">
+              <div style="display:flex;gap:12px;align-items:flex-start;animation:msgIn .4s ease both">
+                <div style="flex:none;width:30px;height:30px;border-radius:50%;background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.12);display:flex;align-items:center;justify-content:center"><img src="assets/atlas-globe-white.svg" alt="Atlas" style="width:20px;height:20px"/></div>
+                <div style="flex:1;min-width:0">
+
+                  <!-- PENDING -->
+                  <sc-if value="{{ item.isPending }}" hint-placeholder-val="{{ false }}">
+                    <div style="position:relative;overflow:hidden;border-radius:20px;padding:22px 22px 20px;background:linear-gradient(170deg,rgba(255,255,255,.16) 0%,rgba(255,255,255,.04) 40%,rgba(255,255,255,.08) 100%),rgba(18,18,20,.42);border:1px solid rgba(255,255,255,.14);backdrop-filter:blur(40px) saturate(140%);-webkit-backdrop-filter:blur(40px) saturate(140%);box-shadow:0 24px 48px rgba(0,0,0,.45),inset 0 1px 0 rgba(255,255,255,.22)">
+                      <span style="position:absolute;top:0;left:14%;right:14%;height:1px;background:linear-gradient(90deg,transparent,rgba(255,255,255,.7),transparent);pointer-events:none"></span>
+                      <div style="display:flex;align-items:center;gap:9px;margin-bottom:13px">
+                        <span style="width:18px;height:1px;background:rgba(255,255,255,.4)"></span>
+                        <span style="width:6px;height:6px;border-radius:50%;background:#f0bf6b;box-shadow:0 0 8px rgba(240,191,107,.55)"></span>
+                        <span style="font-size:11px;font-weight:500;letter-spacing:.2em;text-transform:uppercase;color:#8A8A8A">Proposal · {{ item.tag }}</span>
+                      </div>
+                      <div style="font-size:18px;font-weight:500;letter-spacing:-0.02em;color:#fff;line-height:1.25">{{ item.heading }}</div>
+                      <p style="margin:8px 0 0;font-size:14px;line-height:1.55;color:rgba(255,255,255,.6);max-width:46ch">{{ item.rationale }}</p>
+                      <div style="margin-top:16px;border-radius:11px;background:rgba(0,0,0,.30);border:1px solid rgba(255,255,255,.07);padding:12px 14px;display:flex;flex-direction:column;gap:7px">
+                        <sc-for list="{{ item.specPairs }}" as="p" hint-placeholder-count="3">
+                          <div style="display:flex;justify-content:space-between;gap:16px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11.5px">
+                            <span style="color:#6B6B6B">{{ p.k }}</span>
+                            <span style="color:rgba(255,255,255,.82);text-align:right">{{ p.v }}</span>
+                          </div>
+                        </sc-for>
+                      </div>
+
+                      <sc-if value="{{ item.actionsVisible }}" hint-placeholder-val="{{ true }}">
+                        <div style="display:flex;align-items:center;gap:12px;margin-top:18px">
+                          <button onClick="{{ item.onConfirm }}" style="border:none;cursor:pointer;background:#fff;color:#0a0a0a;font-family:inherit;font-weight:500;font-size:13.5px;letter-spacing:-0.01em;padding:10px 22px;border-radius:999px">Confirm</button>
+                          <button onClick="{{ item.onChange }}" style="border:1px solid rgba(255,255,255,.16);cursor:pointer;background:none;color:rgba(255,255,255,.8);font-family:inherit;font-weight:500;font-size:13.5px;letter-spacing:-0.01em;padding:10px 20px;border-radius:999px">Change it</button>
+                          <button onClick="{{ item.onReject }}" style="border:none;cursor:pointer;background:none;color:rgba(255,255,255,.45);font-family:inherit;font-size:13px;letter-spacing:-0.005em;padding:6px 4px">Not this</button>
+                        </div>
+                      </sc-if>
+
+                      <sc-if value="{{ item.changeOpen }}" hint-placeholder-val="{{ false }}">
+                        <div style="margin-top:18px;border-top:1px solid rgba(255,255,255,.1);padding-top:16px">
+                          <div style="font-size:11px;font-weight:500;letter-spacing:.18em;text-transform:uppercase;color:#8A8A8A;margin-bottom:11px">What would you like to change?</div>
+                          <div style="display:flex;align-items:center;gap:9px">
+                            <input value="{{ item.changeValue }}" onInput="{{ item.onChangeInput }}" onKeyDown="{{ item.onChangeKey }}" placeholder="Describe the change in plain language…" style="flex:1;background:rgba(0,0,0,.3);border:1px solid rgba(255,255,255,.14);border-radius:12px;padding:11px 14px;color:#fff;font-family:inherit;font-size:14px;outline:none"/>
+                            <button onClick="{{ item.onSubmitChange }}" style="flex:none;border:none;cursor:pointer;background:#fff;color:#0a0a0a;font-family:inherit;font-weight:500;font-size:13.5px;padding:11px 20px;border-radius:999px">Update</button>
+                          </div>
+                        </div>
+                      </sc-if>
+                    </div>
+                  </sc-if>
+
+                  <!-- CONFIRMED -->
+                  <sc-if value="{{ item.isConfirmed }}" hint-placeholder-val="{{ false }}">
+                    <div style="position:relative;overflow:hidden;border-radius:20px;padding:22px;background:linear-gradient(170deg,rgba(127,194,138,.16),rgba(127,194,138,.05) 60%),rgba(18,18,20,.42);border:1px solid rgba(127,194,138,.30);backdrop-filter:blur(40px) saturate(140%);-webkit-backdrop-filter:blur(40px) saturate(140%);box-shadow:0 18px 40px rgba(0,0,0,.4),inset 0 1px 0 rgba(255,255,255,.14)">
+                      <span style="position:absolute;top:0;left:14%;right:14%;height:1px;background:linear-gradient(90deg,transparent,rgba(127,194,138,.6),transparent);pointer-events:none"></span>
+                      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:13px">
+                        <div style="display:flex;align-items:center;gap:9px">
+                          <span style="width:18px;height:1px;background:rgba(127,194,138,.5)"></span>
+                          <span style="width:6px;height:6px;border-radius:50%;background:#7fc28a;box-shadow:0 0 8px rgba(127,194,138,.55)"></span>
+                          <span style="font-size:11px;font-weight:500;letter-spacing:.2em;text-transform:uppercase;color:rgba(127,194,138,.85)">Proposal · {{ item.tag }}</span>
+                        </div>
+                        <span style="display:inline-flex;align-items:center;gap:6px;font-size:12px;font-weight:500;color:#9fd6a8">✓ Confirmed</span>
+                      </div>
+                      <div style="font-size:18px;font-weight:500;letter-spacing:-0.02em;color:#fff;line-height:1.25">{{ item.heading }}</div>
+                      <div style="margin-top:14px;border-radius:11px;background:rgba(0,0,0,.26);border:1px solid rgba(255,255,255,.06);padding:12px 14px;display:flex;flex-direction:column;gap:7px">
+                        <sc-for list="{{ item.specPairs }}" as="p" hint-placeholder-count="3">
+                          <div style="display:flex;justify-content:space-between;gap:16px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11.5px">
+                            <span style="color:#6B6B6B">{{ p.k }}</span>
+                            <span style="color:rgba(255,255,255,.78);text-align:right">{{ p.v }}</span>
+                          </div>
+                        </sc-for>
+                      </div>
+                    </div>
+                  </sc-if>
+
+                  <!-- REVISED -->
+                  <sc-if value="{{ item.isRevised }}" hint-placeholder-val="{{ false }}">
+                    <div style="border-radius:18px;padding:15px 20px;border:1px dashed rgba(255,255,255,.14);background:rgba(255,255,255,.02);opacity:.55">
+                      <div style="display:flex;align-items:center;gap:9px;margin-bottom:7px">
+                        <span style="width:14px;height:1px;background:rgba(255,255,255,.3)"></span>
+                        <span style="font-size:11px;font-weight:500;letter-spacing:.2em;text-transform:uppercase;color:#6B6B6B">Proposal · {{ item.tag }}</span>
+                      </div>
+                      <div style="font-size:14.5px;color:rgba(255,255,255,.5);text-decoration:line-through;text-decoration-color:rgba(255,255,255,.25)">{{ item.heading }}</div>
+                      <div style="font-size:12px;color:#6B6B6B;margin-top:5px">Replaced by the version below ↓</div>
+                    </div>
+                  </sc-if>
+
+                </div>
+              </div>
+            </sc-if>
+
+          </sc-for>
+
+          <sc-if value="{{ thinking }}" hint-placeholder-val="{{ false }}">
+            <div style="display:flex;gap:12px;align-items:center;animation:msgIn .3s ease both">
+              <div style="flex:none;width:30px;height:30px;border-radius:50%;background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.12);display:flex;align-items:center;justify-content:center"><img src="assets/atlas-globe-white.svg" alt="Atlas" style="width:20px;height:20px"/></div>
+              <div style="display:flex;gap:5px;padding:11px 6px">
+                <span style="width:6px;height:6px;border-radius:50%;background:rgba(255,255,255,.6);animation:thinkdot 1.2s infinite"></span>
+                <span style="width:6px;height:6px;border-radius:50%;background:rgba(255,255,255,.6);animation:thinkdot 1.2s infinite .18s"></span>
+                <span style="width:6px;height:6px;border-radius:50%;background:rgba(255,255,255,.6);animation:thinkdot 1.2s infinite .36s"></span>
+              </div>
+            </div>
+          </sc-if>
+        </div>
+
+        <div style="flex:none;padding:16px 26px 20px;border-top:1px solid rgba(255,255,255,.07)">
+          <div style="display:flex;align-items:center;gap:10px;border-radius:16px;padding:8px 8px 8px 18px;background:linear-gradient(170deg,rgba(255,255,255,.10),rgba(255,255,255,.03));border:1px solid rgba(255,255,255,.14);box-shadow:inset 0 1px 0 rgba(255,255,255,.12)">
+            <input value="{{ inputValue }}" onInput="{{ onIntentInput }}" onKeyDown="{{ onIntentKey }}" disabled="{{ inputDisabled }}" placeholder="{{ inputPlaceholder }}" style="flex:1;background:none;border:none;outline:none;color:#fff;font-family:inherit;font-size:14.5px"/>
+            <button onClick="{{ onIntentSubmit }}" style="flex:none;width:38px;height:38px;border-radius:50%;border:none;background:#fff;color:#0a0a0a;font-size:17px;cursor:pointer;opacity:{{ sendOpacity }};display:flex;align-items:center;justify-content:center">↑</button>
+          </div>
+          <div style="font-size:11.5px;color:rgba(255,255,255,.32);margin-top:10px;padding-left:4px">Atlas proposes one step at a time. You confirm, change, or skip each.</div>
+        </div>
+      </section>
+
+      <!-- ░░ LIVE SPEC PANEL (40%) ░░ -->
+      <section style="flex:2;min-width:0;background:#0A0A0A;border-left:1px solid rgba(255,255,255,.07);padding:18px;display:flex">
+        <div style="position:relative;flex:1;min-width:0;display:flex;flex-direction:column;overflow:hidden;border-radius:20px;padding:24px;background:linear-gradient(170deg,rgba(255,255,255,.13) 0%,rgba(255,255,255,.035) 40%,rgba(255,255,255,.07) 100%),rgba(18,18,20,.5);border:1px solid rgba(255,255,255,.13);backdrop-filter:blur(40px) saturate(140%);-webkit-backdrop-filter:blur(40px) saturate(140%);box-shadow:inset 0 1px 0 rgba(255,255,255,.18)">
+          <span style="position:absolute;top:0;left:14%;right:14%;height:1px;background:linear-gradient(90deg,transparent,rgba(255,255,255,.6),transparent);pointer-events:none"></span>
+          <sc-if value="{{ isPublished }}" hint-placeholder-val="{{ false }}">
+            <div style="position:absolute;inset:0;border-radius:20px;border:1px solid rgba(127,194,138,.45);pointer-events:none;animation:liveGlow 3s ease-in-out infinite"></div>
+          </sc-if>
+
+          <div style="position:relative;display:flex;align-items:center;justify-content:space-between">
+            <div style="font-size:11px;font-weight:500;letter-spacing:.22em;text-transform:uppercase;color:#8A8A8A;display:flex;align-items:center;gap:9px">
+              <span style="width:14px;height:1px;background:currentColor;opacity:.6"></span>Live spec
+            </div>
+            <span style="display:inline-flex;align-items:center;gap:7px;font-size:12px;color:rgba(255,255,255,.7)"><span style="width:7px;height:7px;border-radius:50%;background:{{ statusDotColor }};box-shadow:0 0 8px {{ statusDotGlow }}"></span>{{ specStatusLabel }}</span>
+          </div>
+
+          <div style="position:relative;font-size:21px;font-weight:500;letter-spacing:-0.025em;color:{{ titleColor }};margin:18px 0 0;line-height:1.2">{{ workflowTitle }}</div>
+
+          <div style="position:relative;margin-top:18px">
+            <div style="font-size:12px;color:rgba(255,255,255,.6);margin-bottom:9px">{{ progressText }}</div>
+            <div style="height:6px;border-radius:999px;background:rgba(255,255,255,.08);overflow:hidden">
+              <div style="height:100%;width:{{ progressPct }}%;border-radius:999px;background:{{ progressFill }};box-shadow:0 0 10px {{ progressGlow }};transition:width .6s cubic-bezier(.2,.7,.2,1)"></div>
+            </div>
+          </div>
+
+          <div class="ab-scroll" style="position:relative;flex:1;overflow-y:auto;margin-top:20px;display:flex;flex-direction:column;gap:10px">
+            <sc-for list="{{ specSlots }}" as="slot" hint-placeholder-count="3">
+
+              <sc-if value="{{ slot.confirmed }}" hint-placeholder-val="{{ false }}">
+                <div style="display:flex;gap:13px;padding:14px 15px;border-radius:14px;background:rgba(127,194,138,.10);border:1px solid rgba(127,194,138,.28);animation:slotIn .45s cubic-bezier(.2,.7,.2,1) both">
+                  <div style="flex:none;width:24px;height:24px;border-radius:50%;background:rgba(127,194,138,.18);border:1px solid rgba(127,194,138,.5);display:flex;align-items:center;justify-content:center;color:#9fd6a8;font-size:13px;margin-top:1px">✓</div>
+                  <div style="min-width:0">
+                    <div style="font-size:10px;font-weight:500;letter-spacing:.2em;text-transform:uppercase;color:rgba(127,194,138,.85);margin-bottom:4px">0{{ slot.num }} · {{ slot.label }}</div>
+                    <div style="font-size:14px;font-weight:500;color:#fff;letter-spacing:-0.01em;line-height:1.3">{{ slot.title }}</div>
+                    <div style="font-family:ui-monospace,Menlo,monospace;font-size:10.5px;color:#6B6B6B;margin-top:5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ slot.specLine }}</div>
+                  </div>
+                </div>
+              </sc-if>
+
+              <sc-if value="{{ slot.pending }}" hint-placeholder-val="{{ false }}">
+                <div style="display:flex;gap:13px;padding:14px 15px;border-radius:14px;background:rgba(240,191,107,.08);border:1px solid rgba(240,191,107,.26);animation:slotIn .45s cubic-bezier(.2,.7,.2,1) both">
+                  <div style="flex:none;width:24px;height:24px;border-radius:50%;background:rgba(240,191,107,.12);border:1px solid rgba(240,191,107,.4);display:flex;align-items:center;justify-content:center;margin-top:1px"><span style="width:7px;height:7px;border-radius:50%;background:#f0bf6b;box-shadow:0 0 8px rgba(240,191,107,.55)"></span></div>
+                  <div style="min-width:0">
+                    <div style="font-size:10px;font-weight:500;letter-spacing:.2em;text-transform:uppercase;color:rgba(240,191,107,.85);margin-bottom:4px">0{{ slot.num }} · {{ slot.label }}</div>
+                    <div style="font-size:14px;font-weight:500;color:#fff;letter-spacing:-0.01em;line-height:1.3">{{ slot.title }}</div>
+                    <div style="font-size:11.5px;color:#f0bf6b;margin-top:5px">Waiting for confirmation</div>
+                  </div>
+                </div>
+              </sc-if>
+
+              <sc-if value="{{ slot.upcoming }}" hint-placeholder-val="{{ true }}">
+                <div style="display:flex;gap:13px;padding:14px 15px;border-radius:14px;border:1px dashed rgba(255,255,255,.13);background:transparent">
+                  <div style="flex:none;width:24px;height:24px;border-radius:50%;border:1px dashed rgba(255,255,255,.18);display:flex;align-items:center;justify-content:center;color:rgba(255,255,255,.3);font-size:11px;margin-top:1px">{{ slot.num }}</div>
+                  <div style="min-width:0">
+                    <div style="font-size:10px;font-weight:500;letter-spacing:.2em;text-transform:uppercase;color:rgba(255,255,255,.28);margin-bottom:4px">0{{ slot.num }} · {{ slot.label }}</div>
+                    <div style="font-size:14px;color:rgba(255,255,255,.3);letter-spacing:-0.01em">Upcoming</div>
+                  </div>
+                </div>
+              </sc-if>
+
+            </sc-for>
+          </div>
+
+          <div style="position:relative;margin-top:18px">
+            <sc-if value="{{ isReady }}" hint-placeholder-val="{{ false }}">
+              <button onClick="{{ onPublish }}" style="width:100%;border:none;cursor:pointer;background:#fff;color:#0a0a0a;font-family:inherit;font-weight:500;font-size:15px;letter-spacing:-0.01em;padding:14px;border-radius:999px">Publish workflow →</button>
+            </sc-if>
+            <sc-if value="{{ isPublished }}" hint-placeholder-val="{{ false }}">
+              <div style="width:100%;text-align:center;background:rgba(127,194,138,.14);border:1px solid rgba(127,194,138,.4);color:#9fd6a8;font-weight:500;font-size:15px;padding:13px;border-radius:999px">✓ Workflow is live</div>
+              <div style="text-align:center;font-size:12px;color:rgba(255,255,255,.5);margin-top:9px;display:flex;align-items:center;justify-content:center;gap:7px"><span style="width:6px;height:6px;border-radius:50%;background:#7fc28a;box-shadow:0 0 8px rgba(127,194,138,.55)"></span>Running · just now</div>
+            </sc-if>
+            <sc-if value="{{ isLocked }}" hint-placeholder-val="{{ true }}">
+              <button disabled="{{ true }}" style="width:100%;border:1px solid rgba(255,255,255,.08);background:rgba(255,255,255,.03);color:rgba(255,255,255,.3);font-family:inherit;font-weight:500;font-size:15px;padding:14px;border-radius:999px;cursor:not-allowed">Publish workflow</button>
+              <div style="text-align:center;font-size:11.5px;color:rgba(255,255,255,.32);margin-top:9px">Confirm every step to unlock</div>
+            </sc-if>
+          </div>
+        </div>
+      </section>
+
+    </div>
+
+    <sc-if value="{{ autoplaying }}" hint-placeholder-val="{{ false }}">
+      <div style="position:absolute;inset:0;z-index:20;cursor:progress"></div>
+    </sc-if>
+
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script>
+class Component extends DCLogic {
+  OPENING = "Hi — I'm Atlas. Tell me what you'd like to automate, in plain language, and I'll build it with you one piece at a time.";
+  DEMO_INTENT = "When a UPS tracking email arrives, summarize it and post it to our Slack.";
+
+  STEPS = [
+    {
+      tag: 'Trigger', slotLabel: 'Trigger',
+      intro: "Got it. First, I'll catch the email. Here's the trigger I'd set up:",
+      base: { heading: 'Watch Gmail for UPS emails', rationale: "I'll keep an eye on your inbox and start the flow the moment a UPS update lands.", spec: [['watch','Gmail inbox'],['filter','from: ups.com'],['on','new email']], slotTitle: 'Watch Gmail for UPS emails' },
+      alt: { heading: 'Watch a shared shipping inbox', rationale: "If tracking emails go to a team alias instead, I can watch that address.", spec: [['watch','shipping@acme'],['filter','subject: tracking'],['on','new email']], slotTitle: 'Watch shared shipping inbox' }
+    },
+    {
+      tag: 'Processing', slotLabel: 'Process',
+      intro: "Next — what should happen with it? I'd summarize the email:",
+      base: { heading: 'Summarize the tracking update', rationale: "I'll read each email and pull out the status, delivery date, and tracking number.", spec: [['action','summarize'],['length','short'],['keep','status · ETA · tracking #']], slotTitle: 'Summarize the tracking update' },
+      changed: { heading: 'Summarize in one tight line', rationale: "Even more concise — just the delivery status and ETA, nothing extra.", spec: [['action','summarize'],['length','one line'],['keep','status · ETA']], slotTitle: 'Summarize in one line' },
+      alt: { heading: 'Forward the full email', rationale: "Skip the summary and pass the original message straight through.", spec: [['action','forward'],['body','full email'],['keep','everything']], slotTitle: 'Forward the full email' }
+    },
+    {
+      tag: 'Delivery', slotLabel: 'Deliver',
+      intro: "Almost there. Where should the summary go? I'd post it to Slack:",
+      base: { heading: 'Post the summary to Slack', rationale: "The finished summary drops straight into your team's channel.", spec: [['app','Slack'],['channel','#social'],['as','message']], slotTitle: 'Post the summary to Slack' },
+      alt: { heading: 'Email the summary to you', rationale: "Prefer your inbox? I can send the summary there instead of Slack.", spec: [['app','Gmail'],['to','you@acme'],['as','daily digest']], slotTitle: 'Email the summary' }
+    },
+    {
+      tag: 'Finish', slotLabel: 'Finish',
+      intro: "That's the whole flow. Last thing — let's give it a name:",
+      base: { heading: 'Name it "UPS tracking email → Slack"', rationale: "A clear name so you can find it and re-run it later.", spec: [['name','UPS tracking email → Slack']] },
+      alt: { heading: 'Name it "Shipping updates → Slack"', rationale: "A slightly broader name in case you add more carriers later.", spec: [['name','Shipping updates → Slack']] }
+    }
+  ];
+
+  _id = 1;
+  _timers = [];
+  state = {
+    thread: [{ id: 0, kind: 'atlas', text: this.OPENING }],
+    started: false, thinking: false,
+    changeOpenId: null, changeText: '',
+    workflowName: '', published: false, autoplaying: false,
+    inputValue: this.DEMO_INTENT
+  };
+
+  componentWillUnmount() { this.clearTimers(); }
+  componentDidUpdate() { if (this.threadEl) this.threadEl.scrollTop = this.threadEl.scrollHeight; }
+
+  after(ms, fn) { const id = setTimeout(fn, ms); this._timers.push(id); return id; }
+  clearTimers() { this._timers.forEach(clearTimeout); this._timers = []; }
+  sleep(ms) { return new Promise(r => this.after(ms, r)); }
+
+  push(entry) { const id = this._id++; this.setState(s => ({ thread: [...s.thread, { id, ...entry }] })); }
+  setEntryStatus(id, status) { this.setState(s => ({ thread: s.thread.map(e => e.id === id ? { ...e, status } : e) })); }
+
+  variantData(e) {
+    const def = this.STEPS[e.step];
+    if (e.variant === 'changed' && def.changed) return def.changed;
+    if (e.variant === 'alt' && def.alt) return def.alt;
+    if (e.variant === 'tweak') return { ...def.base, rationale: 'Updated to match your note — ' + (e.note || '') };
+    return def.base;
+  }
+
+  latestEntry(step) { return [...this.state.thread].reverse().find(e => e.kind === 'proposal' && e.step === step && e.status !== 'revised'); }
+  confirmedCount() { return [0,1,2].filter(i => { const e = this.latestEntry(i); return e && e.status === 'confirmed'; }).length; }
+  currentPending() { return this.state.thread.find(e => e.kind === 'proposal' && e.status === 'pending'); }
+
+  thinkThen(fn) { this.setState({ thinking: true }); this.after(700, () => { this.setState({ thinking: false }); fn(); }); }
+  proposeStep(i) { this.thinkThen(() => { this.push({ kind: 'atlas', text: this.STEPS[i].intro }); this.push({ kind: 'proposal', step: i, variant: 'base', status: 'pending' }); }); }
+
+  submitIntent() {
+    if (this.state.started) return;
+    const text = (this.state.inputValue || '').trim() || this.DEMO_INTENT;
+    this.setState({ started: true, inputValue: '' });
+    this.push({ kind: 'operator', text });
+    this.after(350, () => this.proposeStep(0));
+  }
+
+  confirmById(id) { const e = this.state.thread.find(x => x.id === id); if (e && e.status === 'pending') this.confirmEntry(e); }
+  confirmEntry(entry) {
+    this.setEntryStatus(entry.id, 'confirmed');
+    if (entry.step === 3) {
+      const np = this.variantData(entry).spec.find(p => p[0] === 'name');
+      this.setState({ workflowName: np ? np[1] : 'UPS tracking email → Slack' });
+      this.after(750, () => this.thinkThen(() => this.push({ kind: 'atlas', text: "That's all four pieces confirmed. Hit publish whenever you're ready and I'll set it live." })));
+    } else {
+      this.after(750, () => this.proposeStep(entry.step + 1));
+    }
+  }
+
+  openChangeById(id) { this.setState({ changeOpenId: id, changeText: '' }); }
+  submitChangeById(id) {
+    const text = (this.state.changeText || '').trim();
+    const entry = this.state.thread.find(e => e.id === id);
+    if (!entry) return;
+    if (!text) { this.setState({ changeOpenId: null }); return; }
+    this.setEntryStatus(id, 'revised');
+    this.setState({ changeOpenId: null, changeText: '' });
+    this.push({ kind: 'operator', text });
+    const variant = entry.step === 1 ? 'changed' : 'tweak';
+    this.thinkThen(() => {
+      this.push({ kind: 'atlas', text: "Good note — here's the updated version:" });
+      this.push({ kind: 'proposal', step: entry.step, variant, note: text, status: 'pending' });
+    });
+  }
+
+  rejectById(id) {
+    const entry = this.state.thread.find(e => e.id === id);
+    if (!entry) return;
+    this.setEntryStatus(id, 'revised');
+    this.push({ kind: 'operator', text: 'Not this — show me something else.' });
+    this.thinkThen(() => {
+      this.push({ kind: 'atlas', text: "Sure — here's a different approach:" });
+      this.push({ kind: 'proposal', step: entry.step, variant: 'alt', note: '', status: 'pending' });
+    });
+  }
+
+  publish() {
+    if (this.state.published || !(this.confirmedCount() === 3 && this.state.workflowName)) return;
+    this.setState({ published: true });
+    this.push({ kind: 'atlas', text: '"' + this.state.workflowName + '" is published — it\'s live and watching for the next UPS email.' });
+  }
+
+  reset() {
+    this.clearTimers();
+    this._id = 1;
+    this.setState({
+      thread: [{ id: 0, kind: 'atlas', text: this.OPENING }],
+      started: false, thinking: false, changeOpenId: null, changeText: '',
+      workflowName: '', published: false, autoplaying: false,
+      inputValue: this.DEMO_INTENT
+    });
+  }
+
+  async waitForPending() { for (let i = 0; i < 50; i++) { if (this.currentPending()) return; await this.sleep(120); } }
+
+  async runDemo() {
+    if (this.state.autoplaying) return;
+    this.reset();
+    await this.sleep(450);
+    this.setState({ autoplaying: true });
+    await this.sleep(350);
+    this.setState({ inputValue: this.DEMO_INTENT });
+    await this.sleep(750);
+    this.submitIntent();
+    await this.waitForPending(); await this.sleep(1000);
+    { const e = this.currentPending(); if (e) this.confirmEntry(e); }            // confirm trigger
+    await this.waitForPending(); await this.sleep(1000);
+    { const e = this.currentPending(); if (e) this.setState({ changeOpenId: e.id, changeText: '' }); }  // open change on summarize
+    await this.sleep(750);
+    this.setState({ changeText: 'Make it more concise — one line is plenty.' });
+    await this.sleep(1000);
+    { const e = this.currentPending(); if (e) this.submitChangeById(e.id); }       // submit change
+    await this.waitForPending(); await this.sleep(1000);
+    { const e = this.currentPending(); if (e) this.confirmEntry(e); }              // confirm updated summarize
+    await this.waitForPending(); await this.sleep(1000);
+    { const e = this.currentPending(); if (e) this.confirmEntry(e); }              // confirm slack
+    await this.waitForPending(); await this.sleep(1000);
+    { const e = this.currentPending(); if (e) this.confirmEntry(e); }              // confirm name
+    await this.sleep(1700);
+    this.publish();
+    await this.sleep(700);
+    this.setState({ autoplaying: false });
+  }
+
+  renderVals() {
+    const s = this.state;
+    const thread = s.thread.map(e => {
+      if (e.kind === 'atlas') return { isAtlas: true, text: e.text };
+      if (e.kind === 'operator') return { isOperator: true, text: e.text };
+      const def = this.STEPS[e.step];
+      const vd = this.variantData(e);
+      const isPending = e.status === 'pending', isConfirmed = e.status === 'confirmed', isRevised = e.status === 'revised';
+      const changeOpen = s.changeOpenId === e.id;
+      return {
+        isProposal: true, tag: def.tag, heading: vd.heading, rationale: vd.rationale,
+        specPairs: vd.spec.map(p => ({ k: p[0], v: p[1] })),
+        isPending, isConfirmed, isRevised,
+        actionsVisible: isPending && !changeOpen,
+        changeOpen, changeValue: changeOpen ? s.changeText : '',
+        onConfirm: () => this.confirmById(e.id),
+        onReject: () => this.rejectById(e.id),
+        onChange: () => this.openChangeById(e.id),
+        onSubmitChange: () => this.submitChangeById(e.id),
+        onChangeInput: (ev) => this.setState({ changeText: ev.target.value }),
+        onChangeKey: (ev) => { if (ev.key === 'Enter') { ev.preventDefault(); this.submitChangeById(e.id); } }
+      };
+    });
+
+    const specSlots = [0,1,2].map(i => {
+      const e = this.latestEntry(i);
+      const lbl = this.STEPS[i].slotLabel;
+      if (!e) return { num: i+1, label: lbl, title: 'Upcoming', specLine: '', confirmed: false, pending: false, upcoming: true };
+      const vd = this.variantData(e);
+      const confirmed = e.status === 'confirmed';
+      return { num: i+1, label: lbl, title: vd.slotTitle || vd.heading, specLine: vd.spec.map(p => p[0] + ': ' + p[1]).join('   ·   '), confirmed, pending: !confirmed, upcoming: false };
+    });
+
+    const cc = this.confirmedCount();
+    const complete = cc === 3;
+    const isReady = complete && !!s.workflowName && !s.published;
+
+    return {
+      thread, thinking: s.thinking, autoplaying: s.autoplaying,
+      scrollRef: (el) => { this.threadEl = el; },
+      onRunDemo: () => this.runDemo(),
+      onReset: () => this.reset(),
+      runLabel: s.autoplaying ? 'Running demo…' : 'Run demo →',
+      runOpacity: s.autoplaying ? 0.5 : 1,
+
+      inputValue: s.inputValue,
+      onIntentInput: (ev) => this.setState({ inputValue: ev.target.value }),
+      onIntentKey: (ev) => { if (ev.key === 'Enter' && !s.started) { ev.preventDefault(); this.submitIntent(); } },
+      onIntentSubmit: () => { if (!s.started) this.submitIntent(); },
+      inputDisabled: s.started,
+      inputPlaceholder: s.published ? 'Workflow is live — run the demo again to rebuild.' : (s.started ? 'Atlas is building — respond on the cards above ↑' : 'Describe what this workflow should do…'),
+      sendOpacity: (!s.started && (s.inputValue || '').trim()) ? 1 : 0.35,
+
+      workflowTitle: s.workflowName || 'Untitled workflow',
+      titleColor: s.workflowName ? '#fff' : 'rgba(255,255,255,.4)',
+      specStatusLabel: s.published ? 'Live · running' : (s.started ? 'Building…' : 'Draft'),
+      statusLabel: s.published ? 'Live' : (s.started ? 'Building' : 'Ready'),
+      statusDotColor: s.published ? '#7fc28a' : (s.started ? '#f0bf6b' : 'rgba(255,255,255,.3)'),
+      statusDotGlow: s.published ? 'rgba(127,194,138,.55)' : (s.started ? 'rgba(240,191,107,.55)' : 'rgba(255,255,255,0)'),
+      activeDotColor: s.published ? '#7fc28a' : '#f0bf6b',
+      activeDotGlow: s.published ? 'rgba(127,194,138,.55)' : 'rgba(240,191,107,.55)',
+      sidebarActiveName: s.workflowName || 'New workflow',
+
+      progressText: cc + ' / 3 steps confirmed',
+      progressPct: Math.round(cc / 3 * 100),
+      progressFill: complete ? '#7fc28a' : '#f0bf6b',
+      progressGlow: complete ? 'rgba(127,194,138,.5)' : 'rgba(240,191,107,.45)',
+
+      specSlots,
+      isReady, isPublished: s.published, isLocked: !isReady && !s.published,
+      onPublish: () => this.publish()
+    };
+  }
+}
+</script>
+</body>
+</html>

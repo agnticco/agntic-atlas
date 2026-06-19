@@ -149,14 +149,21 @@ export class WorkflowValidator {
     }
 
     // ── 3. Trigger + deliver presence ─────────────────────────────────────
+    // A workflow's trigger may live as a `trigger` node in the DAG (the
+    // schedule-recipe path builds one) OR as an entry in the top-level
+    // `triggers[]` array (event/email/schedule specs — what the scheduler
+    // actually reads, and what the converger emits). Either satisfies the
+    // requirement; demanding a trigger *node* wrongly rejects runnable
+    // event-triggered specs whose entry step is seeded from the trigger event.
     const triggerCount = nodes.filter(n => n.type === 'trigger').length;
+    const hasTriggerDefinition = Array.isArray(def.triggers) && def.triggers.length > 0;
     const deliverCount = nodes.filter(n => n.type === 'deliver').length;
-    if (triggerCount === 0) {
+    if (triggerCount === 0 && !hasTriggerDefinition) {
       issues.push({
         severity: 'error', code: 'MISSING_TRIGGER',
-        message: 'The workflow needs a trigger step to start it.',
+        message: 'The workflow needs a trigger to start it.',
         nodeId: null, field: null,
-        hint: 'Add a "Daily at X AM" or "Manual" trigger at the beginning.',
+        hint: 'Add a trigger step (e.g. "Daily at X AM", "Manual", or an email/event trigger).',
       });
     }
     if (deliverCount === 0) {

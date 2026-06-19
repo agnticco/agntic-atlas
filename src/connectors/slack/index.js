@@ -34,6 +34,23 @@ const __dir = dirname(fileURLToPath(import.meta.url));
  */
 export const slackCapabilities = JSON.parse(readFileSync(join(__dir, 'capabilities.json'), 'utf8'));
 
+// Bridge the two id namespaces: capabilities.json action id → executable channel
+// id (what the connector-action/deliver nodes route to). Most follow `slack_<id>`;
+// a handful are irregular. Used to project the connector's scope-aware action
+// availability (resolveSlackCapabilities) onto the channel catalog so the builder
+// only ever offers actions THIS tenant's granted scopes can actually run.
+// Only the IRREGULAR pairs are listed; everything else is `slack_<capId>`.
+const CAP_TO_CHANNEL = {
+  post_message: 'slack', post_dm: 'slack_dm', reply_in_thread: 'slack_reply',
+  add_reaction: 'slack_reaction', upload_file: 'slack_file', invite_to_channel: 'slack_invite',
+  set_channel_topic: 'slack_topic', pin_message: 'slack_pin', set_reminder: 'slack_reminder',
+  search_messages: 'slack_search', get_channel_history: 'slack_history',
+  post_group_dm: 'slack_group_dm', send_dm_as_user: 'slack_dm_as_user',
+};
+export function channelIdForCapability(capId) {
+  return CAP_TO_CHANNEL[capId] ?? `slack_${capId}`;
+}
+
 /**
  * Auto-detect the scopes a bot token was actually granted. Slack returns them in
  * the `x-oauth-scopes` response header on any Web API call (we use auth.test).
@@ -93,28 +110,39 @@ export function describeSlackForPrompt(resolved) {
 }
 
 /**
- * Per-tenant capability provider. A tenant's granted scopes come from its stored
- * OAuth install grant (the source of truth once a client authorizes the app);
- * falls back to a dev env bot token's scopes (via auth.test) when no grant exists.
- * Mounted on the spine so `/capabilities` and the converger share one view.
+ * Per-tenant capability provider. A tenant's granted scopes come ONLY from its
+ * own stored OAuth install grant — the dev env bot token never leaks across
+ * tenants (hard isolation). The env token serves a context only when there is no
+ * tenant (headless tools/gates) OR for one explicitly-designated dev tenant
+ * (SLACK_DEV_TENANT). Mounted on the spine so `/capabilities` and the converger
+ * share one view.
  * @param {{ oauthTokenStore?: object, token?: string, apiBase?: string, fetchImpl?: typeof fetch }} [opts]
  */
 export function createSlackCapabilityProvider({ oauthTokenStore = null, token = undefined, apiBase = undefined, fetchImpl = undefined } = {}) {
   const cache = new Map(); // tenantId -> resolved capabilities
 
+  // The env bot token may stand in for a tenant only when no tenant is given
+  // (headless) or the tenant is the explicitly designated dev tenant. Never for
+  // an arbitrary client tenant.
+  const envTokenServes = (tenantId) => !tenantId || tenantId === process.env.SLACK_DEV_TENANT;
+
   async function scopesForTenant(tenantId) {
     if (oauthTokenStore && tenantId) {
       const grant = getSlackGrant({ oauthTokenStore, tenantId });
-      if (grant) return grant.scopes;            // installed app grant (preferred)
+      if (grant) return grant.scopes;            // the tenant's OWN install grant
     }
+    if (!envTokenServes(tenantId)) return [];    // fail-closed: no cross-tenant dev token
     const envToken = token ?? process.env.SLACK_BOT_TOKEN;
-    if (envToken) return detectGrantedScopes({ token: envToken, apiBase, fetchImpl }); // dev fallback
+    if (envToken) return detectGrantedScopes({ token: envToken, apiBase, fetchImpl });
     return [];
   }
 
   async function resolveForTenant(tenantId) {
     if (cache.has(tenantId)) return cache.get(tenantId);
-    const hasUserToken = !!(process.env.SLACK_USER_TOKEN);
+    // User-token (xoxp) actions require PER-USER OAuth, which isn't built yet. A
+    // shared env user token would run "as user" as the same person for everyone —
+    // a user-isolation leak — so it only counts for the dev tenant / headless.
+    const hasUserToken = !!(process.env.SLACK_USER_TOKEN) && envTokenServes(tenantId);
     const resolved = resolveSlackCapabilities(await scopesForTenant(tenantId), { hasUserToken });
     cache.set(tenantId, resolved);
     return resolved;
