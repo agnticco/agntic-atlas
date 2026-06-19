@@ -230,7 +230,7 @@ Update as gates close. `git log --grep "^Gate:"` is the authoritative ledger.
 - [x] **P2** — event triggers + Gmail: hand-authored UPS→Slack fires on real email *(freeze the spec here)*
 - [x] **P3** — converger reproduces the frozen spec, confirmations logged
 - [x] **P4** — builder UI: workflow built entirely by talking *(design-first: Claude generates mockups → approval → build)*
-- [ ] **P5** — console UI: inventory, live run monitoring, SOP view + SOP export (PDF + Markdown)
+- [ ] **P5** — console UI: inventory, live run monitoring, SOP view + SOP export (PDF + Markdown). **Runway:** [`docs/design/p5-readiness.md`](docs/design/p5-readiness.md) — store/ledger layer already exists (P5 ≈ read endpoints + console UI + net-new SOP export); ⚠ run-query methods (`getRuns`/`getRun`) lack `tenantId` scoping — make fail-closed before exposing.
 - [ ] **P6** — launcher + builder↔console toggle
 - [ ] **P7** — Airtable + Google write + error handling + sub-daily scheduling
 - [ ] **P8** — web + filesystem connectors: unified web research (Tavily search + Firecrawl scrape) + tenant-scoped filesystem access
