@@ -1,0 +1,481 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link href="https://fonts.googleapis.com/css2?family=Inter+Tight:wght@400;500;600&family=Instrument+Serif:ital@0;1&display=swap" rel="stylesheet"/>
+<style>
+  *{box-sizing:border-box}
+  body{margin:0;background:#000;color:#fff;font-family:'Inter Tight',-apple-system,BlinkMacSystemFont,'Helvetica Neue',sans-serif;-webkit-font-smoothing:antialiased;letter-spacing:-0.005em}
+  ::selection{background:#fff;color:#0a0a0a}
+  .ab-scroll::-webkit-scrollbar{width:9px}
+  .ab-scroll::-webkit-scrollbar-thumb{background:rgba(255,255,255,.09);border-radius:8px}
+  .ab-scroll::-webkit-scrollbar-track{background:transparent}
+  @keyframes flowPulse{0%,100%{opacity:.45}50%{opacity:1}}
+  @keyframes drawerIn{from{transform:translateX(100%)}to{transform:translateX(0)}}
+  @keyframes scrimIn{from{opacity:0}to{opacity:1}}
+  .ab-row:hover{background:rgba(255,255,255,.035)!important}
+  .ab-seg{transition:background .12s,color .12s}
+  select.ab-sel{appearance:none;-webkit-appearance:none;background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='10' height='6'><path d='M1 1l4 4 4-4' stroke='rgba(255,255,255,.45)' stroke-width='1.4' fill='none' stroke-linecap='round'/></svg>");background-repeat:no-repeat;background-position:right 12px center}
+  @media (prefers-reduced-motion:reduce){*{animation:none!important}}
+</style>
+</helmet>
+
+<div style="min-height:100vh;background:#000;display:flex;align-items:center;justify-content:center;padding:24px">
+  <div style="width:min(1500px,98vw);height:min(940px,95vh);background:#0A0A0A;border-radius:16px;border:1px solid rgba(255,255,255,.1);box-shadow:0 60px 150px rgba(0,0,0,.72),0 18px 50px rgba(0,0,0,.55),inset 0 1px 0 rgba(255,255,255,.06);display:flex;flex-direction:column;overflow:hidden">
+
+    <!-- TITLE BAR -->
+    <div style="flex:none;height:48px;display:flex;align-items:center;padding:0 18px;background:#0E0E10;border-bottom:1px solid rgba(255,255,255,.07)">
+      <div style="display:flex;gap:8px;align-items:center">
+        <span style="width:12px;height:12px;border-radius:50%;background:#FF5F57"></span>
+        <span style="width:12px;height:12px;border-radius:50%;background:#FEBC2E"></span>
+        <span style="width:12px;height:12px;border-radius:50%;background:#28C840"></span>
+      </div>
+      <div style="flex:1;display:flex;align-items:center;justify-content:center;gap:9px;font-size:12.5px;color:rgba(255,255,255,.42);letter-spacing:-0.01em">
+        <img src="assets/atlas-globe-white.svg" alt="" style="width:14px;height:14px;opacity:.7"/>atlas <span style="opacity:.4">/</span> {{ wf.slug }}
+      </div>
+      <div style="width:52px"></div>
+    </div>
+
+    <!-- LIVE PANE -->
+    <div data-screen-label="Live dashboard" style="position:relative;flex:1;min-width:0;background:#0A0A0A;display:flex;flex-direction:column;min-height:0;overflow:hidden">
+
+      <div class="ab-scroll" style="flex:1;overflow-y:auto;min-height:0">
+        <div style="max-width:1320px;margin:0 auto;padding:34px 40px 48px">
+
+          <!-- HEADER · GET /workflows/:id (name, status, kind, version, dates) · Pause → POST /pause · Modify → open Builder -->
+          <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:32px">
+            <div style="min-width:0">
+              <div style="font-size:33px;font-weight:500;letter-spacing:-0.025em;color:#fff;line-height:1.05">{{ wf.name }}</div>
+              <div style="font-size:15px;color:rgba(255,255,255,.5);margin-top:11px;max-width:60ch;line-height:1.5">Watches <span style="color:rgba(255,255,255,.78)">{{ wf.triggerLine }}</span>, processes each event, and delivers to <span style="color:rgba(255,255,255,.78)">{{ wf.channel }}</span> — automatically, <span style="font-family:'Instrument Serif',serif;font-style:italic;color:#fff;font-size:17px">now</span>.</div>
+            </div>
+            <div style="flex:none;display:flex;flex-direction:column;align-items:flex-end;gap:14px">
+              <span style="display:inline-flex;align-items:center;gap:8px;font-size:12.5px;font-weight:500;color:{{ wf.statusColor }};border:1px solid {{ wf.statusBorder }};background:{{ wf.statusBg }};padding:7px 14px;border-radius:999px">
+                <span style="width:7px;height:7px;border-radius:50%;background:{{ wf.statusDot }};box-shadow:0 0 8px {{ wf.statusGlow }};animation:flowPulse 1.9s infinite"></span>{{ wf.statusLabel }}
+              </span>
+              <div style="display:flex;align-items:center;gap:9px">
+                <button onClick="{{ onPause }}" style="border:1px solid rgba(255,255,255,.14);background:rgba(255,255,255,.04);color:rgba(255,255,255,.82);font-family:inherit;font-size:13px;font-weight:500;padding:9px 17px;border-radius:999px;cursor:pointer">❙❙ Pause</button>
+                <button onClick="{{ onEdit }}" style="border:1px solid rgba(255,255,255,.14);background:none;color:rgba(255,255,255,.7);font-family:inherit;font-size:13px;font-weight:500;padding:9px 17px;border-radius:999px;cursor:pointer">Modify</button>
+              </div>
+              <div style="font-size:12px;color:#6B6B6B;text-align:right">Created {{ wf.createdLabel }} · updated {{ wf.updatedLabel }}</div>
+            </div>
+          </div>
+
+          <!-- PULSE BAND · health rollup → GET /workflows/:id/metrics -->
+          <div style="margin-top:30px;padding:24px 26px;border-radius:18px;border:1px solid rgba(255,255,255,.09);background:linear-gradient(170deg,rgba(255,255,255,.05),rgba(255,255,255,.015));display:flex;align-items:center;justify-content:space-between;gap:36px;flex-wrap:wrap">
+            <div style="display:flex;align-items:baseline;gap:14px;min-width:0">
+              <span style="font-family:'Instrument Serif',serif;font-style:italic;font-size:30px;letter-spacing:-0.01em;color:{{ pulse.headlineColor }};line-height:1">{{ pulse.headline }}</span>
+              <span style="font-size:13.5px;color:rgba(255,255,255,.5)">last fired {{ pulse.lastFired }}</span>
+            </div>
+            <div style="display:flex;align-items:stretch;gap:0">
+              <sc-for list="{{ pulse.stats }}" as="s" hint-placeholder-count="4">
+                <div style="padding:0 26px;border-left:1px solid rgba(255,255,255,.1);display:flex;flex-direction:column;gap:5px">
+                  <span style="font-size:22px;font-weight:600;letter-spacing:-0.02em;color:{{ s.color }}">{{ s.value }}</span>
+                  <span style="font-size:10.5px;font-weight:500;letter-spacing:.16em;text-transform:uppercase;color:#7A7A7A">{{ s.label }}</span>
+                </div>
+              </sc-for>
+            </div>
+          </div>
+
+          <!-- PIPELINE (DAG) · workflow.nodes[] + edges[] -->
+          <div style="margin-top:16px;border-radius:16px;border:1px solid rgba(255,255,255,.08);background:rgba(255,255,255,.018);padding:18px 22px">
+            <div style="display:flex;align-items:center">
+              <sc-for list="{{ dag }}" as="n" hint-placeholder-count="3">
+                <div style="display:flex;align-items:center;min-width:0">
+                  <sc-if value="{{ n.showArrow }}" hint-placeholder-val="{{ false }}"><span style="padding:0 18px;color:rgba(255,255,255,.28);font-size:15px">→</span></sc-if>
+                  <div style="display:flex;align-items:center;gap:11px;min-width:0">
+                    <span style="flex:none;width:30px;height:30px;border-radius:8px;border:1px solid rgba(127,194,138,.3);background:rgba(127,194,138,.08);display:flex;align-items:center;justify-content:center;font-family:ui-monospace,Menlo,monospace;font-size:11px;color:#9fd6a8">{{ n.glyph }}</span>
+                    <div style="min-width:0">
+                      <div style="font-size:9.5px;font-weight:500;letter-spacing:.16em;text-transform:uppercase;color:#7A7A7A">{{ n.typeLabel }}</div>
+                      <div style="font-size:13.5px;font-weight:500;color:rgba(255,255,255,.9);letter-spacing:-0.01em;white-space:nowrap">{{ n.label }}</div>
+                    </div>
+                  </div>
+                </div>
+              </sc-for>
+            </div>
+          </div>
+
+          <!-- RUN LEDGER · GET /workflows/:id/runs (one row per execution) -->
+          <div style="margin-top:32px">
+            <!-- FILTER TOOLBAR · maps to /runs query params: q · from · source · failNode · status -->
+            <div style="display:flex;flex-direction:column;gap:12px;margin-bottom:14px">
+              <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+                <div style="flex:1;min-width:220px;display:flex;align-items:center;gap:9px;border:1px solid rgba(255,255,255,.12);background:rgba(255,255,255,.03);border-radius:11px;padding:0 13px;height:40px">
+                  <span style="color:rgba(255,255,255,.4);font-size:14px">⌕</span>
+                  <input value="{{ f.search }}" onInput="{{ onSearch }}" placeholder="Search run id, subject, output…" style="flex:1;min-width:0;border:none;background:none;outline:none;color:#fff;font-family:inherit;font-size:13.5px;letter-spacing:-0.005em"/>
+                </div>
+                <select class="ab-sel" value="{{ f.date }}" onChange="{{ onDate }}" style="height:40px;border:1px solid rgba(255,255,255,.12);background:rgba(255,255,255,.03);color:rgba(255,255,255,.82);font-family:inherit;font-size:13px;border-radius:11px;padding:0 34px 0 13px;cursor:pointer">
+                  <option value="all" style="background:#16161a">Any time</option>
+                  <option value="today" style="background:#16161a">Today</option>
+                  <option value="7d" style="background:#16161a">Last 7 days</option>
+                  <option value="30d" style="background:#16161a">Last 30 days</option>
+                </select>
+                <select class="ab-sel" value="{{ f.source }}" onChange="{{ onSource }}" style="height:40px;border:1px solid rgba(255,255,255,.12);background:rgba(255,255,255,.03);color:rgba(255,255,255,.82);font-family:inherit;font-size:13px;border-radius:11px;padding:0 34px 0 13px;cursor:pointer">
+                  <sc-for list="{{ sourceOptions }}" as="o" hint-placeholder-count="4"><option value="{{ o.value }}" style="background:#16161a">{{ o.label }}</option></sc-for>
+                </select>
+                <select class="ab-sel" value="{{ f.step }}" onChange="{{ onStep }}" style="height:40px;border:1px solid rgba(255,255,255,.12);background:rgba(255,255,255,.03);color:rgba(255,255,255,.82);font-family:inherit;font-size:13px;border-radius:11px;padding:0 34px 0 13px;cursor:pointer">
+                  <sc-for list="{{ stepOptions }}" as="o" hint-placeholder-count="4"><option value="{{ o.value }}" style="background:#16161a">{{ o.label }}</option></sc-for>
+                </select>
+              </div>
+              <div style="display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap">
+                <div style="display:flex;align-items:center;gap:6px;padding:4px;border-radius:11px;border:1px solid rgba(255,255,255,.1);background:rgba(255,255,255,.02)">
+                  <sc-for list="{{ statusSeg }}" as="o" hint-placeholder-count="5">
+                    <button class="ab-seg" onClick="{{ o.onPick }}" style="{{ o.style }}">{{ o.label }} <span style="opacity:.55;font-variant-numeric:tabular-nums">{{ o.count }}</span></button>
+                  </sc-for>
+                </div>
+                <div style="display:flex;align-items:center;gap:14px">
+                  <span style="font-size:12.5px;color:#6B6B6B">Showing <span style="color:rgba(255,255,255,.8);font-weight:500">{{ shownCount }}</span> of {{ totalCount }}</span>
+                  <sc-if value="{{ hasFilters }}" hint-placeholder-val="{{ false }}"><span onClick="{{ onClear }}" style="font-size:12.5px;color:rgba(255,255,255,.55);cursor:pointer;border-bottom:1px solid rgba(255,255,255,.22);padding-bottom:1px">Clear filters</span></sc-if>
+                </div>
+              </div>
+            </div>
+
+            <!-- TABLE -->
+            <div style="border:1px solid rgba(255,255,255,.1);border-radius:14px;overflow:hidden;background:rgba(255,255,255,.012)">
+              <div style="display:grid;grid-template-columns:108px 132px 1.25fr 156px 150px 84px 78px 60px 1.4fr;gap:0;padding:0 6px;background:#0E0E11;border-bottom:1px solid rgba(255,255,255,.1)">
+                <sc-for list="{{ columns }}" as="c" hint-placeholder-count="9">
+                  <div style="padding:13px 12px;font-size:10px;font-weight:600;letter-spacing:.14em;text-transform:uppercase;color:#7A7A7A">{{ c }}</div>
+                </sc-for>
+              </div>
+
+              <sc-for list="{{ rows }}" as="r" hint-placeholder-count="8">
+                <div class="ab-row" onClick="{{ r.onOpen }}" style="display:grid;grid-template-columns:108px 132px 1.25fr 156px 150px 84px 78px 60px 1.4fr;gap:0;padding:0 6px;border-bottom:1px solid rgba(255,255,255,.05);cursor:pointer;align-items:center">
+                  <div style="padding:14px 12px;font-family:ui-monospace,Menlo,monospace;font-size:12px;color:rgba(255,255,255,.55)">{{ r.id }}</div>
+                  <div style="padding:14px 12px"><span style="display:inline-flex;align-items:center;gap:7px;font-size:12.5px;font-weight:500;color:{{ r.outcomeColor }}"><span style="width:7px;height:7px;border-radius:50%;background:{{ r.outcomeDot }};box-shadow:0 0 7px {{ r.outcomeGlow }}"></span>{{ r.outcomeLabel }}</span></div>
+                  <div style="padding:14px 12px;font-size:13px;color:rgba(255,255,255,.82);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ r.triggerLabel }}</div>
+                  <div style="padding:14px 12px;font-family:ui-monospace,Menlo,monospace;font-size:11.5px;color:rgba(255,255,255,.5);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ r.source }}</div>
+                  <div style="padding:14px 12px;font-size:12.5px;color:rgba(255,255,255,.6);white-space:nowrap">{{ r.startedLabel }}</div>
+                  <div style="padding:14px 12px;font-size:12.5px;color:rgba(255,255,255,.6);font-variant-numeric:tabular-nums">{{ r.durLabel }}</div>
+                  <div style="padding:14px 12px;font-size:12.5px;font-weight:500;color:{{ r.stepsColor }};font-variant-numeric:tabular-nums">{{ r.stepsLabel }}</div>
+                  <div style="padding:14px 12px;font-family:ui-monospace,Menlo,monospace;font-size:11.5px;color:rgba(255,255,255,.45)">{{ r.versionLabel }}</div>
+                  <div style="padding:14px 12px;font-size:12.5px;color:rgba(255,255,255,.6);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ r.outputLabel }}</div>
+                </div>
+              </sc-for>
+
+              <sc-if value="{{ isEmpty }}" hint-placeholder-val="{{ false }}">
+                <div style="padding:54px 20px;text-align:center"><div style="font-size:15px;color:rgba(255,255,255,.7)">No runs match these filters.</div><div style="font-size:13px;color:#6B6B6B;margin-top:6px">Try widening the date range or clearing filters.</div></div>
+              </sc-if>
+            </div>
+          </div>
+
+        </div>
+      </div>
+
+      <!-- DETAIL DRAWER · GET /workflows/:id/runs/:runId (per-step trace, error, delivered output) -->
+      <sc-if value="{{ drawerOpen }}" hint-placeholder-val="{{ false }}">
+        <div onClick="{{ onClose }}" style="position:absolute;inset:0;z-index:30;background:rgba(0,0,0,.5);animation:scrimIn .18s ease both"></div>
+        <div class="ab-scroll" style="position:absolute;top:0;right:0;bottom:0;z-index:31;width:540px;max-width:92%;background:#0C0C0E;border-left:1px solid rgba(255,255,255,.12);box-shadow:-30px 0 80px rgba(0,0,0,.5);overflow-y:auto;animation:drawerIn .26s cubic-bezier(.22,1,.36,1) both">
+          <div style="padding:26px 28px">
+
+            <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:16px">
+              <div>
+                <div style="display:flex;align-items:center;gap:11px;font-size:11px;font-weight:500;letter-spacing:.22em;text-transform:uppercase;color:#8A8A8A"><span style="width:18px;height:1px;background:rgba(255,255,255,.5)"></span>Run trace</div>
+                <div style="font-family:ui-monospace,Menlo,monospace;font-size:18px;color:#fff;margin-top:11px">{{ drawer.id }}</div>
+              </div>
+              <button onClick="{{ onClose }}" style="flex:none;width:32px;height:32px;border-radius:8px;border:1px solid rgba(255,255,255,.14);background:rgba(255,255,255,.04);color:rgba(255,255,255,.7);font-size:15px;cursor:pointer;line-height:1">✕</button>
+            </div>
+
+            <div style="display:flex;align-items:center;gap:10px;margin-top:16px">
+              <span style="display:inline-flex;align-items:center;gap:8px;font-size:13px;font-weight:500;color:{{ drawer.outcomeColor }};border:1px solid {{ drawer.outcomeBorder }};background:{{ drawer.outcomeBg }};padding:6px 13px;border-radius:999px"><span style="width:7px;height:7px;border-radius:50%;background:{{ drawer.outcomeDot }};box-shadow:0 0 7px {{ drawer.outcomeGlow }}"></span>{{ drawer.outcomeLabel }}</span>
+              <span style="font-size:12.5px;color:#6B6B6B">{{ drawer.versionLabel }} · {{ drawer.durLabel }}</span>
+            </div>
+
+            <!-- meta grid -->
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:1px;margin-top:22px;border:1px solid rgba(255,255,255,.1);border-radius:12px;overflow:hidden;background:rgba(255,255,255,.06)">
+              <div style="background:#0C0C0E;padding:14px 15px"><div style="font-size:10px;font-weight:500;letter-spacing:.14em;text-transform:uppercase;color:#7A7A7A">Started</div><div style="font-size:13px;color:rgba(255,255,255,.85);margin-top:6px">{{ drawer.startedLabel }}</div></div>
+              <div style="background:#0C0C0E;padding:14px 15px"><div style="font-size:10px;font-weight:500;letter-spacing:.14em;text-transform:uppercase;color:#7A7A7A">Finished</div><div style="font-size:13px;color:rgba(255,255,255,.85);margin-top:6px">{{ drawer.finishedLabel }}</div></div>
+              <div style="background:#0C0C0E;padding:14px 15px"><div style="font-size:10px;font-weight:500;letter-spacing:.14em;text-transform:uppercase;color:#7A7A7A">Trigger</div><div style="font-size:13px;color:rgba(255,255,255,.85);margin-top:6px">{{ drawer.triggerType }}</div></div>
+              <div style="background:#0C0C0E;padding:14px 15px"><div style="font-size:10px;font-weight:500;letter-spacing:.14em;text-transform:uppercase;color:#7A7A7A">Source</div><div style="font-family:ui-monospace,Menlo,monospace;font-size:12px;color:rgba(255,255,255,.85);margin-top:6px">{{ drawer.source }}</div></div>
+            </div>
+
+            <!-- error note -->
+            <sc-if value="{{ drawer.hasError }}" hint-placeholder-val="{{ false }}">
+              <div style="margin-top:18px;border:1px solid rgba(232,116,97,.35);background:rgba(232,116,97,.08);border-radius:12px;padding:14px 16px">
+                <div style="font-size:10px;font-weight:600;letter-spacing:.14em;text-transform:uppercase;color:#e8a094;margin-bottom:7px">Error · {{ drawer.errorPolicy }}</div>
+                <div style="font-size:13px;color:rgba(255,255,255,.85);line-height:1.5">{{ drawer.errorMsg }}</div>
+              </div>
+            </sc-if>
+
+            <!-- step timeline -->
+            <div style="margin-top:24px">
+              <div style="font-size:11px;font-weight:500;letter-spacing:.22em;text-transform:uppercase;color:#8A8A8A;margin-bottom:16px">Step-by-step</div>
+              <div style="display:flex;flex-direction:column">
+                <sc-for list="{{ drawer.steps }}" as="s" hint-placeholder-count="3">
+                  <div style="display:flex;gap:14px">
+                    <div style="flex:none;display:flex;flex-direction:column;align-items:center">
+                      <span style="width:13px;height:13px;border-radius:50%;background:{{ s.dotColor }};box-shadow:0 0 8px {{ s.dotGlow }};border:2px solid #0C0C0E"></span>
+                      <sc-if value="{{ s.connector }}" hint-placeholder-val="{{ true }}"><span style="width:1.5px;flex:1;min-height:26px;background:rgba(255,255,255,.12)"></span></sc-if>
+                    </div>
+                    <div style="flex:1;min-width:0;padding-bottom:18px">
+                      <div style="display:flex;align-items:center;justify-content:space-between;gap:10px">
+                        <div style="font-size:9.5px;font-weight:500;letter-spacing:.16em;text-transform:uppercase;color:#7A7A7A">{{ s.typeLabel }}</div>
+                        <div style="font-size:11.5px;font-weight:500;color:{{ s.statusColor }}">{{ s.statusLabel }}<span style="color:#6B6B6B;font-weight:400"> {{ s.ms }}</span></div>
+                      </div>
+                      <div style="font-size:14px;font-weight:500;color:#fff;margin-top:3px;letter-spacing:-0.01em">{{ s.label }}</div>
+                      <sc-if value="{{ s.hasDetail }}" hint-placeholder-val="{{ false }}">
+                        <div style="margin-top:9px;border:1px solid rgba(255,255,255,.1);background:rgba(0,0,0,.3);border-radius:9px;padding:11px 13px;font-size:12.5px;color:rgba(255,255,255,.7);line-height:1.5">{{ s.detail }}</div>
+                      </sc-if>
+                    </div>
+                  </div>
+                </sc-for>
+              </div>
+            </div>
+
+            <!-- output -->
+            <sc-if value="{{ drawer.hasOutput }}" hint-placeholder-val="{{ true }}">
+              <div style="margin-top:8px">
+                <div style="font-size:11px;font-weight:500;letter-spacing:.22em;text-transform:uppercase;color:#8A8A8A;margin-bottom:13px">Delivered output</div>
+                <div style="border-radius:11px;border:1px solid rgba(127,194,138,.28);background:rgba(127,194,138,.05);padding:14px">
+                  <div style="display:flex;align-items:center;gap:7px;margin-bottom:11px;font-size:12.5px;border-bottom:1px solid rgba(255,255,255,.07);padding-bottom:10px"><span style="color:#7fc28a;font-size:14px">#</span><span style="font-weight:600;color:#fff">{{ drawer.channel }}</span></div>
+                  <div style="display:flex;gap:10px;align-items:flex-start">
+                    <div style="flex:none;width:30px;height:30px;border-radius:8px;background:#101012;border:1px solid rgba(255,255,255,.12);display:flex;align-items:center;justify-content:center"><img src="assets/atlas-globe-white.svg" alt="" style="width:18px;height:18px"/></div>
+                    <div style="min-width:0;flex:1"><div style="font-size:13px;color:#fff;font-weight:600;display:flex;align-items:center;gap:7px">Atlas <span style="font-size:9px;font-weight:500;color:rgba(255,255,255,.5);background:rgba(255,255,255,.08);padding:1px 5px;border-radius:4px">APP</span></div><div style="font-size:13px;color:rgba(255,255,255,.88);line-height:1.5;margin-top:4px">{{ drawer.message }}</div></div>
+                  </div>
+                </div>
+              </div>
+            </sc-if>
+
+          </div>
+        </div>
+      </sc-if>
+
+    </div>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;:{&quot;width&quot;:1380,&quot;height&quot;:880},&quot;workflow&quot;:{&quot;editor&quot;:null,&quot;tsType&quot;:&quot;{ id: string; slug: string; kind: 'fetch'|'flow'; status: 'active'|'paused'|'error'|'draft'; version: number; name: string; user_intent: string; channel: string; triggerLine: string; error_handling: string; created_at: string; updated_at: string; nodes: { id: string; type: string; label: string; glyph?: string }[]; edges: { from: string; to: string }[] }&quot;},&quot;onPause&quot;:{&quot;editor&quot;:null,&quot;tsType&quot;:&quot;() =&gt; void&quot;},&quot;onEdit&quot;:{&quot;editor&quot;:null,&quot;tsType&quot;:&quot;() =&gt; void&quot;}}">
+class Component extends DCLogic {
+  // ════════════════════════════════════════════════════════════════════
+  // Atlas — LIVE DASHBOARD (published "observing" screen). SKELETON.
+  // Read-only operations view of one running workflow: identity, health,
+  // its DAG, and a filterable ledger of every run with a detail drawer.
+  // All content below is NEUTRAL PLACEHOLDER data that exercises every
+  // feature/state (success · failed · running · skipped, versions, sources,
+  // failure points). It contains no real example detail — swap each block
+  // tagged INTEGRATION for the corresponding backend response.
+  //
+  // DATA MODEL (matches the backend workflow object)
+  //   workflow: { id, slug, kind('fetch'|'flow'), status('active'|'paused'|
+  //     'error'|'draft'), version, name, user_intent, triggers[], nodes[]
+  //     ({id,type,label,config}), edges[] ({from,to}), error_handling,
+  //     created_at, updated_at, last_run }
+  //   run:      { id, workflow_version, status('success'|'failed'|'running'|
+  //     'skipped'), trigger:{type,source,category}, started_at, finished_at,
+  //     duration_ms, fail_node, current_node, error, output:{channel,message} }
+  //
+  // CLAUDE CODE INTEGRATION  (full map: INTEGRATION.md at project root)
+  //   wf      ← GET /workflows/:id            (identity + DAG + health rollup)
+  //   RUNS    ← GET /workflows/:id/runs?status=&source=&failNode=&from=&q=
+  //             (server-side filtering preferred; this example filters client-side
+  //              so the toolbar is demonstrable offline — see filtered())
+  //   onPause → POST /workflows/:id/pause   ·  onEdit → open builder for :id
+  //   Live: subscribe to a run stream and prepend to RUNS (newest first).
+  // ════════════════════════════════════════════════════════════════════
+
+  NOW = new Date("2026-06-17T15:04:00");
+
+  // ── Workflow object (example). INTEGRATION: replace with API response. ──
+  WF = {
+    slug: "workflow-slug",
+    kind: "flow",            // 'fetch' (legacy polling) | 'flow' (DAG)
+    status: "active",        // 'active' | 'paused' | 'error' | 'draft'
+    version: 2,
+    name: "Workflow name",
+    user_intent: "Plain-language description of what this workflow does.",
+    channel: "a destination",
+    triggerLine: "a trigger source",
+    error_handling: "retry · then alert",
+    created_at: "2026-06-01T09:00:00",
+    updated_at: "2026-06-14T12:00:00",
+    // nodes[] + edges[] drive the DAG strip. `type` ∈ node-type registry
+    // (trigger, summarize, deliver, fetch, extract, rewrite, llm, tool, …).
+    nodes: [
+      { id: "n1", type: "trigger", label: "Trigger",   glyph: "1" },
+      { id: "n2", type: "action",  label: "Transform", glyph: "2" },
+      { id: "n3", type: "deliver", label: "Deliver",   glyph: "3" }
+    ],
+    edges: [{ from: "n1", to: "n2" }, { from: "n2", to: "n3" }]
+  };
+
+  // Trigger-event categories → example payload + delivered output.
+  // INTEGRATION: replace with real trigger payloads and rendered output.
+  CATS = {
+    a:    { tag: "Event type A", subject: "Example trigger subject", body: "Example trigger payload preview.", msg: "Example delivered output." },
+    b:    { tag: "Event type B", subject: "Example trigger subject", body: "Example trigger payload preview.", msg: "Example delivered output." },
+    c:    { tag: "Event type C", subject: "Example trigger subject", body: "Example trigger payload preview.", msg: "Example delivered output." },
+    skip: { tag: "Filtered",     subject: "Example filtered event",  body: "Did not match the trigger filter.", msg: null }
+  };
+
+  // ── Run ledger (example rows, newest first). INTEGRATION: GET …/runs. ──
+  RAW = [
+    { id:"run_0009", h:0.04, status:"running", src:"source-a", cat:"a",    ms:null, ver:2, curNode:"n2" },
+    { id:"run_0008", h:0.2,  status:"success", src:"source-b", cat:"b",    ms:800,  ver:2 },
+    { id:"run_0007", h:0.9,  status:"failed",  src:"source-c", cat:"a",    ms:null, ver:2, failNode:"n3", err:"Delivery step failed — example error message." },
+    { id:"run_0006", h:3.1,  status:"success", src:"source-a", cat:"c",    ms:760,  ver:2 },
+    { id:"run_0005", h:6.5,  status:"skipped", src:"source-b", cat:"skip", ms:90,   ver:2 },
+    { id:"run_0004", h:14.2, status:"success", src:"source-a", cat:"b",    ms:820,  ver:2 },
+    { id:"run_0003", h:28.0, status:"failed",  src:"source-c", cat:"a",    ms:null, ver:1, failNode:"n2", err:"Transform step timed out — example error message." },
+    { id:"run_0002", h:50.0, status:"success", src:"source-b", cat:"c",    ms:780,  ver:1 },
+    { id:"run_0001", h:72.0, status:"success", src:"source-a", cat:"a",    ms:740,  ver:1 }
+  ];
+
+  state = { search:"", status:"all", source:"all", step:"all", date:"all", openId:null };
+
+  // ── formatting helpers ──
+  fmtAbs(h){ const d=new Date(this.NOW.getTime()-h*3600e3); return d.toLocaleString("en-US",{month:"short",day:"numeric",hour:"numeric",minute:"2-digit"}); }
+  fmtRel(h){ if(h<1) return Math.max(1,Math.round(h*60))+"m ago"; if(h<24) return Math.round(h)+"h ago"; return Math.round(h/24)+"d ago"; }
+  dur(ms){ return ms==null?null:(ms/1000).toFixed(1)+"s"; }
+  inRange(h,mode){ if(mode==="7d") return h<=168; if(mode==="30d") return h<=720; if(mode==="today"){ const d=new Date(this.NOW.getTime()-h*3600e3); return d.toDateString()===this.NOW.toDateString(); } return true; }
+  nodeLabel(id){ const n=this.WF.nodes.find(x=>x.id===id); return n?n.label:id; }
+
+  // outcome → palette
+  palette(status){
+    switch(status){
+      case "success": return { label:"Success",  color:"#9fd6a8", dot:"#7fc28a", glow:"rgba(127,194,138,.55)", border:"rgba(127,194,138,.3)", bg:"rgba(127,194,138,.08)" };
+      case "failed":  return { label:"Failed",   color:"#e89a8d", dot:"#e87461", glow:"rgba(232,116,97,.55)",  border:"rgba(232,116,97,.32)", bg:"rgba(232,116,97,.08)" };
+      case "running": return { label:"Running",  color:"#f0bf6b", dot:"#f0bf6b", glow:"rgba(240,191,107,.55)", border:"rgba(240,191,107,.32)", bg:"rgba(240,191,107,.08)" };
+      default:        return { label:"Skipped",  color:"rgba(255,255,255,.6)", dot:"rgba(255,255,255,.35)", glow:"rgba(255,255,255,0)", border:"rgba(255,255,255,.16)", bg:"rgba(255,255,255,.04)" };
+    }
+  }
+
+  // build per-node step results for the drawer timeline
+  steps(r){
+    const order=this.WF.nodes; const out=[]; const cat=this.CATS[r.cat];
+    const okDetail={ n1:"Matched "+r.src, n2:"Produced output", n3:"Delivered to "+this.WF.channel };
+    let stopped=false;
+    order.forEach((n,i)=>{
+      let st="ok", ms=null, detail=okDetail[n.id]||"";
+      if(r.status==="skipped"){ st = n.id==="n1" ? "skipped":"notrun"; detail = n.id==="n1" ? "Trigger fired but the event did not match the filter — no action." : ""; ms = n.id==="n1" ? r.ms:null; }
+      else if(r.status==="running"){ if(n.id===r.curNode){ st="running"; detail=""; } else if(order.findIndex(x=>x.id===n.id) > order.findIndex(x=>x.id===r.curNode)){ st="notrun"; detail=""; } else { st="ok"; ms=Math.round(300+Math.random()*200); } }
+      else if(r.status==="failed"){ if(stopped){ st="notrun"; detail=""; } else if(n.id===r.failNode){ st="failed"; detail=r.err; stopped=true; } else { st="ok"; ms=Math.round(300+Math.random()*200); } }
+      else { st="ok"; ms=Math.round((r.ms||780)/order.length); }
+      const pal = st==="ok"?this.palette("success"):st==="failed"?this.palette("failed"):st==="running"?this.palette("running"):this.palette("skipped");
+      const statusLabel = {ok:"ok",failed:"failed",running:"running…",skipped:"skipped",notrun:"not run"}[st];
+      out.push({ id:n.id, label:n.label, typeLabel:n.type, dotColor:pal.dot, dotGlow:pal.glow, statusColor:pal.color, statusLabel, ms: ms!=null?(ms+"ms"):"", detail, hasDetail: !!detail, connector: i<order.length-1 });
+    });
+    return out;
+  }
+
+  okCount(r){ return this.steps(r).filter(s=>s.statusLabel==="ok").length; }
+
+  filtered(){
+    const s=this.state, q=s.search.trim().toLowerCase();
+    return this.RAW.filter(r=>{
+      if(s.status!=="all" && r.status!==s.status) return false;
+      if(s.source!=="all" && r.src!==s.source) return false;
+      if(s.step!=="all" && r.failNode!==s.step) return false;
+      if(s.date!=="all" && !this.inRange(r.h,s.date)) return false;
+      if(q){ const c=this.CATS[r.cat]; const hay=(r.id+" "+c.tag+" "+r.src+" "+c.subject+" "+(c.msg||"")).toLowerCase(); if(!hay.includes(q)) return false; }
+      return true;
+    });
+  }
+
+  setF(patch){ this.setState(patch); }
+  clear(){ this.setState({ search:"", status:"all", source:"all", step:"all", date:"all" }); }
+
+  renderVals(){
+    const p=this.props||{}, wf=p.workflow??this.WF, S=this.state;
+    const wfPal = wf.status==="active"?this.palette("success"):wf.status==="paused"?this.palette("running"):wf.status==="error"?this.palette("failed"):this.palette("skipped");
+    const statusWord = {active:"Active",paused:"Paused",error:"Needs a look",draft:"Draft"}[wf.status]||wf.status;
+
+    // health rollup (computed from runs so it stays consistent)
+    const total=this.RAW.length;
+    const succ=this.RAW.filter(r=>r.status==="success").length;
+    const fail=this.RAW.filter(r=>r.status==="failed").length;
+    const completed=succ+fail;
+    const rate= completed? Math.round((succ/completed)*100) : 100;
+    const lats=this.RAW.filter(r=>r.ms&&r.status==="success").map(r=>r.ms).sort((a,b)=>a-b);
+    const med= lats.length? lats[Math.floor(lats.length/2)] : 0;
+    const lastFired=this.fmtRel(this.RAW[0].h);
+
+    const fr=this.filtered();
+    const rows=fr.map(r=>{
+      const pal=this.palette(r.status), c=this.CATS[r.cat];
+      const ok=this.okCount(r), tot=wf.nodes.length;
+      let stepsLabel, durLabel=this.dur(r.ms)||"—", outputLabel;
+      if(r.status==="success"){ stepsLabel=tot+" / "+tot; outputLabel=c.msg; }
+      else if(r.status==="running"){ stepsLabel=ok+" / "+tot; durLabel="running…"; outputLabel="—"; }
+      else if(r.status==="failed"){ stepsLabel=ok+" / "+tot; outputLabel="Failed at "+this.nodeLabel(r.failNode); }
+      else { stepsLabel="—"; outputLabel="Filtered — no action"; }
+      return {
+        id:r.id, outcomeLabel:pal.label, outcomeColor:pal.color, outcomeDot:pal.dot, outcomeGlow:pal.glow,
+        triggerLabel:c.tag+" · "+c.subject, source:r.src, startedLabel:this.fmtAbs(r.h),
+        durLabel, stepsLabel, stepsColor:pal.color, versionLabel:"v"+r.ver, outputLabel,
+        onOpen:()=>this.setState({ openId:r.id })
+      };
+    });
+
+    // drawer
+    let drawer=null; const raw=this.RAW.find(r=>r.id===S.openId);
+    if(raw){
+      const pal=this.palette(raw.status), c=this.CATS[raw.cat];
+      const finished = raw.status==="running"?"—":(raw.status==="skipped"?this.fmtAbs(raw.h):this.fmtAbs(Math.max(0,raw.h-(raw.ms||0)/3600e3)));
+      drawer={
+        id:raw.id, versionLabel:"v"+raw.ver, durLabel:this.dur(raw.ms)||"—",
+        outcomeLabel:pal.label, outcomeColor:pal.color, outcomeDot:pal.dot, outcomeGlow:pal.glow, outcomeBorder:pal.border, outcomeBg:pal.bg,
+        startedLabel:this.fmtAbs(raw.h), finishedLabel:finished, triggerType:(wf.nodes&&wf.nodes[0]?wf.nodes[0].type:"trigger"), source:raw.src,
+        hasError: raw.status==="failed", errorMsg:raw.err||"", errorPolicy:wf.error_handling||this.WF.error_handling,
+        steps:this.steps(raw),
+        hasOutput: raw.status==="success", channel:wf.channel||this.WF.channel, message:c.msg
+      };
+    }
+
+    // filter option lists
+    const srcs=[...new Set(this.RAW.map(r=>r.src))];
+    const statusCounts={ all:total, success:succ, failed:fail, running:this.RAW.filter(r=>r.status==="running").length, skipped:this.RAW.filter(r=>r.status==="skipped").length };
+    const segDef=[["all","All"],["success","Success"],["failed","Failed"],["running","Running"],["skipped","Skipped"]];
+    const segBase="border:none;font-family:inherit;font-size:12.5px;font-weight:500;padding:7px 13px;border-radius:8px;cursor:pointer;letter-spacing:-0.005em;";
+    const statusSeg=segDef.map(([k,l])=>({
+      label:l, count:statusCounts[k],
+      style: segBase + (S.status===k ? "background:rgba(255,255,255,.1);color:#fff;" : "background:transparent;color:rgba(255,255,255,.5);"),
+      onPick:()=>this.setF({status:k})
+    }));
+
+    return {
+      wf:{
+        slug:wf.slug, name:wf.name, kindLabel:(wf.kind||"flow").toUpperCase(), versionLabel:"v"+wf.version,
+        triggerLine:wf.triggerLine||this.WF.triggerLine, channel:wf.channel||this.WF.channel,
+        statusLabel:statusWord, statusColor:wfPal.color, statusDot:wfPal.dot, statusGlow:wfPal.glow, statusBorder:wfPal.border, statusBg:wfPal.bg,
+        createdLabel:new Date(wf.created_at).toLocaleDateString("en-US",{month:"short",day:"numeric"}),
+        updatedLabel:new Date(wf.updated_at).toLocaleDateString("en-US",{month:"short",day:"numeric"})
+      },
+      pulse:{
+        headline: wf.status==="active"?"Running smoothly.":wf.status==="paused"?"Paused.":"Needs a look.",
+        headlineColor: wf.status==="error"?"#e89a8d":"#fff",
+        lastFired,
+        stats:[
+          { value:String(total), label:"Runs · 3d", color:"#fff" },
+          { value:rate+"%", label:"Delivered", color:"#9fd6a8" },
+          { value:(med/1000).toFixed(1)+"s", label:"Median", color:"#fff" },
+          { value:String(fail), label:"Failures", color: fail?"#e89a8d":"#fff" }
+        ]
+      },
+      dag: wf.nodes.map((n,i)=>({ ...n, typeLabel:n.type, glyph:n.glyph||"•", showArrow:i>0 })),
+      columns:["Run","Outcome","Trigger","Source","Started","Dur","Steps","Ver","Output"],
+      rows, isEmpty: rows.length===0,
+      f:{ search:S.search, status:S.status, source:S.source, step:S.step, date:S.date },
+      sourceOptions:[{value:"all",label:"Any source"},...srcs.map(s=>({value:s,label:s}))],
+      stepOptions:[{value:"all",label:"Any step"},...wf.nodes.map(n=>({value:n.id,label:"Failed at "+n.label}))],
+      statusSeg,
+      shownCount:rows.length, totalCount:total,
+      hasFilters: S.search!=="" || S.status!=="all" || S.source!=="all" || S.step!=="all" || S.date!=="all",
+      drawer, drawerOpen: !!drawer,
+      onSearch:(e)=>this.setF({search:e.target.value}),
+      onSource:(e)=>this.setF({source:e.target.value}),
+      onStep:(e)=>this.setF({step:e.target.value}),
+      onDate:(e)=>this.setF({date:e.target.value}),
+      onClear:()=>this.clear(),
+      onClose:()=>this.setState({openId:null}),
+      onPause: p.onPause ?? (()=>console.log("[Atlas] pause workflow")),
+      onEdit: p.onEdit ?? (()=>console.log("[Atlas] edit workflow"))
+    };
+  }
+}
+</script>
+</body>
+</html>

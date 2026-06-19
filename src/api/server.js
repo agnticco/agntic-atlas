@@ -18,6 +18,7 @@
 
 import { existsSync, mkdirSync } from 'node:fs';
 import { dirname, resolve, join } from 'node:path';
+import { createHmac, timingSafeEqual } from 'node:crypto';
 
 import express from 'express';
 import cors from 'cors';
@@ -51,6 +52,8 @@ import {
 } from '../connectors/google/index.js';
 import { pollGmail, formatEmailContext } from '../connectors/google/gmail-source.js';
 import { InteractionStore } from '../converger/interaction-store.js';
+import { mountBuilderRoutes } from './builder.js';
+import { logEvent, errFields } from '../utils/event-log.js';
 
 const PORT = Number(process.env.PORT ?? 3000);
 const WORKFLOWS_DB = process.env.WORKFLOWS_DB ?? './memory/workflows/workflows.sqlite';
@@ -75,6 +78,118 @@ const ensureDir = (file) => { try { mkdirSync(dirname(file), { recursive: true }
 
 /** Public-safe user shape for API responses (never leaks password_hash). */
 const pubUser = (u) => ({ id: u.id, email: u.email, role: u.role, tenant_id: u.tenant_id, display_name: u.display_name });
+
+// Set the session JWT as an HttpOnly cookie (in addition to the JSON body the
+// SPA stores). The cookie lets top-level browser navigations — notably the
+// OAuth connect/callback redirects — carry the session, which a Bearer header
+// cannot. `requireAuth` reads this `session` cookie first (see auth/middleware).
+function setSessionCookie(res, token) {
+  res.cookie('session', token, {
+    httpOnly: true,
+    sameSite: 'lax',
+    path: '/',
+    secure: process.env.NODE_ENV === 'production',
+    maxAge: 30 * 24 * 60 * 60 * 1000, // 30d, matches the bearer-session TTL
+  });
+}
+
+// Verify a Slack request signature (Events API). Signs `v0:{ts}:{rawBody}` with
+// the app's signing secret; rejects on mismatch or a >5min-old timestamp (replay).
+function verifySlackSignature(req, signingSecret) {
+  const ts  = req.headers['x-slack-request-timestamp'];
+  const sig = req.headers['x-slack-signature'];
+  if (!ts || !sig) return false;
+  if (Math.abs(Date.now() / 1000 - Number(ts)) > 300) return false;
+  const base = `v0:${ts}:${req.rawBody?.toString('utf8') ?? ''}`;
+  const mine = 'v0=' + createHmac('sha256', signingSecret).update(base).digest('hex');
+  try { return mine.length === sig.length && timingSafeEqual(Buffer.from(mine), Buffer.from(sig)); }
+  catch { return false; }
+}
+
+// A node that posts to / calls Slack (so it needs the tenant's Slack token).
+const isSlackNode = (n) =>
+  (n?.type === 'deliver' && String(n?.config?.channel ?? '').startsWith('slack')) ||
+  (n?.type === 'connector-action' && String(n?.config?.action ?? '').startsWith('slack'));
+
+// ── Connector credential registry ────────────────────────────────────────────
+// Per-tenant credential handling for EVERY connector, in one place. Each entry
+// declares: which workflow nodes it owns, the human name, how to resolve THIS
+// tenant's token, which config field to inject it into, and an optional dev
+// escape hatch (for connectors with an operator env token). Adding a connector —
+// now or in future — is ONE entry here; no run-path changes, nothing per-workflow.
+//
+// Google's actions are REST-only today (no workflow nodes), so it has no entry
+// yet; add one when google delivery/action nodes exist. Its scope-aware catalog
+// is already resolved per tenant+user via createGoogleCapabilityProvider.
+const CONNECTOR_INJECTORS = [
+  {
+    id: 'slack',
+    name: 'Slack',
+    ownsNode: isSlackNode,
+    resolveToken: (tenantId, { oauthTokenStore, cipher }) =>
+      getSlackToken({ oauthTokenStore, cipher, tenantId })?.botToken ?? null,
+    field: 'token',
+    devEscape: (tenantId) => !!process.env.SLACK_DEV_TENANT && tenantId === process.env.SLACK_DEV_TENANT,
+  },
+];
+
+// Inject the owning tenant's credentials into every connector node of a workflow/
+// spec, so the run acts as that tenant — never a shared/operator token. Used by
+// EVERY run path (run-test, event dispatch, scheduler). Connector-agnostic.
+function injectTenantTokens(obj, tenantId, deps) {
+  if (!tenantId || !(obj?.nodes?.length)) return obj;
+  let nodes = obj.nodes;
+  let changed = false;
+  for (const c of CONNECTOR_INJECTORS) {
+    if (!nodes.some(c.ownsNode)) continue;
+    const tok = c.resolveToken(tenantId, deps);
+    if (!tok) continue;
+    nodes = nodes.map((n) => (c.ownsNode(n) && n?.config?.[c.field] == null) ? { ...n, config: { ...n.config, [c.field]: tok } } : n);
+    changed = true;
+  }
+  return changed ? { ...obj, nodes } : obj;
+}
+
+// A connector this tenant must connect before the spec can run (owns a node but
+// has no resolvable token and no dev escape). Returns its name, or null. Generic.
+function unconnectedConnector(spec, tenantId, deps) {
+  for (const c of CONNECTOR_INJECTORS) {
+    if ((spec?.nodes ?? []).some(c.ownsNode) && !c.resolveToken(tenantId, deps) && !c.devEscape?.(tenantId)) return c.name;
+  }
+  return null;
+}
+
+// Route a verified Slack event to the owning tenant's matching workflows. Tenant
+// isolation is hard: the event's team_id must resolve to exactly one tenant's
+// stored Slack install, and only THAT tenant's active flows are considered — and
+// each runs with that tenant's OWN Slack token.
+async function dispatchSlackEvent(spine, body) {
+  const teamId = body?.team_id;
+  const ev = body?.event ?? {};
+  // Only real user messages — skip bot echoes, edits, joins, etc.
+  if (!teamId || ev.type !== 'message' || ev.bot_id || ev.subtype) return;
+
+  const tenantId = spine.auth.oauthTokenStore.findTenantByAccount?.({ connectorId: 'slack', account: teamId });
+  if (!tenantId) { logEvent('slack.event.no_tenant', { teamId }); return; }
+
+  const channelMatches = (t) => {
+    const want = t.filter?.channel;
+    if (!want) return true;                       // no channel filter → any channel
+    return want === ev.channel || String(want).replace(/^#/, '') === ev.channel; // id match (names need resolution — see doc)
+  };
+  const flows = spine.engine.workflowStore.list({ tenantId, kind: 'flow', status: 'active' })
+    .filter((w) => (w.triggers ?? []).some((t) => t.type === 'event' && t.connector === 'slack' && t.event === 'message' && channelMatches(t)));
+
+  if (!flows.length) return;
+  const deps = { oauthTokenStore: spine.auth.oauthTokenStore, cipher: spine.auth.tokenCipher };
+  const context = `New Slack message in <#${ev.channel}> from <@${ev.user}>:\n\n${ev.text ?? ''}`;
+  for (const wf of flows) {
+    logEvent('slack.event.dispatch', { tenant: tenantId, workflow: wf.slug, channel: ev.channel });
+    const tenantWf = injectTenantTokens(wf, tenantId, deps);
+    try { await spine.engine.workflowScheduler._executeFlow(tenantWf, { trigger: 'event', emailContext: context }); }
+    catch (err) { logEvent('slack.event.error', { tenant: tenantId, workflow: wf.slug, ...errFields(err) }); }
+  }
+}
 
 /**
  * Build the LLM pool. Priority: Anthropic (cloud) → OpenAI (cloud) → local weights.
@@ -226,6 +341,14 @@ export async function bootSpine() {
     return emails.map(formatEmailContext); // strings — injected as initialContext
   });
 
+  // Scheduled + email-triggered runs act as the OWNING tenant: inject that
+  // tenant's connector tokens before each automatic run (connector-agnostic).
+  engine.workflowScheduler.registerTokenInjector((workflow) => {
+    return injectTenantTokens(workflow, workflow.tenant_id ?? 'default', {
+      oauthTokenStore: auth.oauthTokenStore, cipher: auth.tokenCipher,
+    });
+  });
+
   const slack = createSlackCapabilityProvider({ oauthTokenStore: auth.oauthTokenStore, apiBase: process.env.SLACK_API_URL });
   const slackOAuth = createSlackOAuthFlow();
   const google = createGoogleCapabilityProvider({ oauthTokenStore: auth.oauthTokenStore });
@@ -266,7 +389,28 @@ export function createApp(spine) {
   const app = express();
   app.use(cors());
   app.use(cookieParser());
-  app.use(express.json({ limit: '4mb' }));
+  // Capture the raw body so connector webhooks (e.g. Slack Events) can verify
+  // request signatures over the exact bytes Slack signed.
+  app.use(express.json({ limit: '4mb', verify: (req, _res, buf) => { req.rawBody = buf; } }));
+
+  // Request log: one JSON line per request (method, path, status, ms, tenant).
+  // Lets us see — from the log file alone — whether a request even reached the
+  // server (e.g. distinguishing a real app error from a proxy/tunnel 502 that
+  // never arrived). req.tenant/req.user are populated by per-route auth before
+  // 'finish' fires. Static asset noise is skipped.
+  app.use((req, res, next) => {
+    const t0 = Date.now();
+    res.on('finish', () => {
+      if (req.path.startsWith('/assets/') || req.path === '/favicon.ico') return;
+      logEvent('http', {
+        method: req.method, path: req.path, status: res.statusCode, ms: Date.now() - t0,
+        tenant: req.tenant?.id ?? null, user: req.user?.id ?? null,
+      });
+    });
+    next();
+  });
+
+  app.use(express.static(join(process.cwd(), 'public')));
 
   const optionalAuth = spine.auth?.middleware?.optionalAuth ?? ((_req, _res, next) => next());
   // RAG holds company context → no anonymous access. requireAuth resolves req.tenant,
@@ -305,6 +449,7 @@ export function createApp(spine) {
       const { token, email, password, display_name } = req.body ?? {};
       const user = await spine.auth.completeBootstrap({ token, email, password, display_name });
       const { token: jwt } = spine.auth.issueSession({ user });
+      setSessionCookie(res, jwt);
       res.json({ ok: true, token: jwt, user: pubUser(user) });
     } catch (err) { res.status(400).json({ error: err.message ?? String(err) }); }
   });
@@ -316,11 +461,13 @@ export function createApp(spine) {
       if (!user) return res.status(401).json({ error: 'Invalid credentials' });
       if (!spine.auth.tenantStore.isActive(user.tenant_id)) return res.status(403).json({ error: 'tenant suspended' });
       const { token } = spine.auth.issueSession({ user });
+      setSessionCookie(res, token);
       res.json({ ok: true, token, user: pubUser(user) });
     } catch (err) { res.status(400).json({ error: err.message ?? String(err) }); }
   });
   app.post('/auth/logout', requireAuth, (req, res) => {
     try { spine.auth.sessionStore.revoke(req.session.id); } catch { /* ignore */ }
+    res.clearCookie('session', { path: '/' });
     res.json({ ok: true });
   });
 
@@ -412,10 +559,10 @@ export function createApp(spine) {
 
   // ── Slack connector OAuth (client authorizes the Atlas app; per-tenant token) ──
   // Start the install — returns the "Add to Slack" authorize URL (UI/redirect later).
-  app.get('/connectors/slack/authorize', requireActiveTenant, (req, res) => {
+  app.get('/connectors/slack/authorize', requireActiveTenant, async (req, res) => {
     try {
       if (!isOAuthConfigured()) return res.status(501).json({ error: 'Slack OAuth is not configured on this deployment' });
-      const { authorizeUrl } = spine.slackOAuth.start({ tenantId: req.tenant.id, userId: req.user.id });
+      const { authorizeUrl } = await spine.slackOAuth.start({ tenantId: req.tenant.id, userId: req.user.id });
       res.json({ authorizeUrl });
     } catch (err) { res.status(400).json({ error: err.message ?? String(err) }); }
   });
@@ -427,12 +574,33 @@ export function createApp(spine) {
       const grant = await spine.slackOAuth.complete({ state: req.query?.state, code: req.query?.code });
       storeSlackToken({
         oauthTokenStore: spine.auth.oauthTokenStore, cipher: spine.auth.tokenCipher,
-        tenantId: grant.tenantId, botToken: grant.botToken, scopes: grant.scopes, account: grant.account,
+        // Store the team_id as `account` so inbound Slack events (which carry
+        // team_id) route to this exact tenant. Falls back to the team name.
+        tenantId: grant.tenantId, botToken: grant.botToken, scopes: grant.scopes,
+        account: grant.team?.id ?? grant.account,
       });
       spine.slack.refresh(grant.tenantId);
-      res.json({ ok: true, connected: true, team: grant.account, scopes: grant.scopes });
-    } catch (err) { res.status(400).json({ error: err.message ?? String(err) }); }
+      // The browser is mid-navigation from Slack — send it back to the app.
+      res.redirect('/?connected=slack');
+    } catch (err) { res.redirect('/?connect_error=slack&reason=' + encodeURIComponent(err.message ?? String(err))); }
   });
+
+  // Slack Events API receiver. NOT auth-gated — Slack POSTs here; the request
+  // SIGNATURE (over the raw body, with the app signing secret) is the trust
+  // anchor. Requires SLACK_SIGNING_SECRET + the app's Event Subscriptions
+  // configured with this URL. Acks within 3s, then dispatches asynchronously.
+  app.post('/connectors/slack/events', (req, res) => {
+    const body = req.body ?? {};
+    if (body.type === 'url_verification') return res.json({ challenge: body.challenge });
+    const secret = process.env.SLACK_SIGNING_SECRET;
+    if (!secret) return res.status(501).json({ error: 'Slack events not configured (set SLACK_SIGNING_SECRET)' });
+    if (!verifySlackSignature(req, secret)) return res.status(401).json({ error: 'bad signature' });
+    res.status(200).end(); // ack immediately
+    if (body.type === 'event_callback') {
+      dispatchSlackEvent(spine, body).catch((err) => logEvent('slack.event.error', errFields(err)));
+    }
+  });
+
   // Is Slack connected for this tenant?
   app.get('/connectors/slack/status', requireActiveTenant, (req, res) => {
     const grant = getSlackGrant({ oauthTokenStore: spine.auth.oauthTokenStore, tenantId: req.tenant.id });
@@ -461,11 +629,11 @@ export function createApp(spine) {
       // the callback can complete without an active session cookie.
       const pending = spine.auth.oauth._pending?.get(req.query?.state);
       const sessionUser = pending ? { id: pending.userId } : null;
-      if (!sessionUser) return res.status(400).json({ error: 'Google callback: unknown or expired state — restart the connection' });
+      if (!sessionUser) return res.redirect('/?connect_error=google&reason=' + encodeURIComponent('unknown or expired state — restart the connection'));
       const result = await spine.auth.oauth.handleCallback({ query: req.query, sessionUser });
       spine.google.refresh(pending.tenantId, pending.userId);
-      res.json({ ok: true, connected: true, connector: 'google', account: result?.account });
-    } catch (err) { res.status(400).json({ error: err.message }); }
+      res.redirect('/?connected=google');
+    } catch (err) { res.redirect('/?connect_error=google&reason=' + encodeURIComponent(err.message ?? String(err))); }
   });
   app.get('/connectors/google/status', requireActiveTenant, (req, res) => {
     const row = spine.auth.oauthTokenStore.get({ tenantId: req.tenant.id, userId: req.user.id, connectorId: GOOGLE_CONNECTOR_ID });
@@ -548,27 +716,46 @@ export function createApp(spine) {
     if (!spec || !Array.isArray(spec.nodes)) {
       return res.status(400).json({ error: 'body.spec with a nodes[] array is required' });
     }
-    // If authenticated, run in the caller's tenant: inject that tenant's stored
-    // Slack OAuth token into slack deliver nodes (so the workflow posts as the
-    // tenant's connected workspace, not a shared env token). Unauthenticated runs
-    // fall back to the dev env token in the channel handler.
-    if (req.tenant) {
-      const tok = getSlackToken({ oauthTokenStore: spine.auth.oauthTokenStore, cipher: spine.auth.tokenCipher, tenantId: req.tenant.id });
-      if (tok) {
-        spec = { ...spec, nodes: spec.nodes.map((n) =>
-          (n?.type === 'deliver' && String(n?.config?.channel ?? '').startsWith('slack') && !n?.config?.token)
-            ? { ...n, config: { ...n.config, token: tok.botToken } } : n) };
-      }
-    }
+    // A test run has no real inbound event, so the entry node (e.g. summarize)
+    // would have no upstream content. Let callers seed a representative sample
+    // event as `initialContext` — the same mechanism the P3 runnability check
+    // uses — so the builder's "Run test" fires every step against a sample.
+    const initialContext = req.body?.initialContext;
+    const t0 = Date.now();
+    const tenantId = req.tenant?.id ?? null;
+    logEvent('run.start', { tenant: tenantId, user: req.user?.id ?? null, nodes: (spec.nodes ?? []).map(n => n.type), seeded: initialContext != null });
     try {
+      // If authenticated, run in the caller's tenant: inject THAT tenant's stored
+      // Slack token into every slack node (deliver + connector-action). A tenant
+      // that hasn't connected Slack must NOT borrow the operator's dev env token —
+      // fail closed instead (hard isolation). The env token only stands in with no
+      // tenant (headless) or for the designated dev tenant. Inside the try so a
+      // token decrypt error returns JSON, never an HTML 500 the UI can't parse.
+      if (req.tenant) {
+        const deps = { oauthTokenStore: spine.auth.oauthTokenStore, cipher: spine.auth.tokenCipher };
+        const missing = unconnectedConnector(spec, req.tenant.id, deps);
+        if (missing) {
+          logEvent('run.connector_not_connected', { tenant: tenantId, connector: missing });
+          return res.json({ runId: null, completed: false, error: `${missing} isn't connected for this workspace — connect it first, then run the test.`, steps: [] });
+        }
+        spec = injectTenantTokens(spec, req.tenant.id, deps);
+      }
       let runId = null, completed = false, output = null;
       const steps = [];
-      for await (const ev of spine.engine.flowTester.run(spec, {})) {
+      for await (const ev of spine.engine.flowTester.run(spec, initialContext != null ? { initialContext } : {})) {
         if (ev.type === 'run_started') runId = ev.runId;
-        else if (ev.type === 'step_completed') steps.push({ nodeId: ev.nodeId, output: ev.output });
+        else if (ev.type === 'step_completed') { steps.push({ nodeId: ev.nodeId, output: ev.output }); logEvent('run.step', { tenant: tenantId, runId, nodeId: ev.nodeId }); }
         else if (ev.type === 'run_completed') { completed = true; output = ev.output; }
-        else if (ev.type === 'run_failed') return res.status(502).json({ runId, error: ev.error, steps });
+        else if (ev.type === 'run_failed') {
+          logEvent('run.failed', { tenant: tenantId, runId, failedStep: steps.length, error: typeof ev.error === 'string' ? ev.error : (ev.error?.message ?? JSON.stringify(ev.error)), ms: Date.now() - t0 });
+          // A failed STEP is an expected test outcome, not a gateway error. Return
+          // 200 with completed:false so the real error reaches the UI — a 5xx here
+          // gets swallowed and replaced by Cloudflare's own error page through the
+          // tunnel, hiding the actual cause.
+          return res.json({ runId, completed: false, error: ev.error, steps });
+        }
       }
+      logEvent('run.ok', { tenant: tenantId, runId, steps: steps.length, ms: Date.now() - t0 });
       // step_completed outputs are shrunk to strings by the executor; coerce back
       // to objects so delivery results (e.g. the Slack { delivered, ts }) surface.
       const coerce = (o) => {
@@ -579,9 +766,12 @@ export function createApp(spine) {
       const deliveries = steps.map((s) => coerce(s.output)).filter((o) => o && o.delivered);
       res.json({ runId, completed, output, deliveries, steps });
     } catch (err) {
+      logEvent('run.error', { tenant: tenantId, ms: Date.now() - t0, ...errFields(err) });
       res.status(500).json({ error: `run failed: ${err.message ?? String(err)}` });
     }
   });
+
+  mountBuilderRoutes(app, { spine, requireActiveTenant, requireAuth });
 
   return app;
 }

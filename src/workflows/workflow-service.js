@@ -254,13 +254,17 @@ export class WorkflowService {
   _assembleDefinition(input) {
     const isRecipe = input.schedule !== undefined || input.steps !== undefined || input.delivery !== undefined;
     if (!isRecipe) {
-      // Treat as already-built definition
+      // Treat as already-built definition (converger / tool output). Pre-built
+      // specs may omit required node config that has a sensible schema default
+      // (e.g. summarize length/style) — fill those so the stored spec is
+      // self-describing and validation passes, exactly matching what the
+      // executor applies at runtime.
       return {
         def: {
           name:          String(input.name ?? '').trim(),
           description:   String(input.description ?? '').trim(),
           triggers:      input.triggers ?? [],
-          nodes:         input.nodes ?? [],
+          nodes:         this._applyConfigDefaults(input.nodes ?? []),
           edges:         input.edges ?? [],
           errorHandling: input.errorHandling ?? {},
         },
@@ -321,6 +325,32 @@ export class WorkflowService {
       },
       status,
     };
+  }
+
+  /**
+   * Fill missing required node config from each node-type's schema `default`.
+   * Pre-built specs (converger output, the frozen canonical spec, tool calls)
+   * may omit fields like summarize's length/style. Those have explicit defaults
+   * the executor already applies at runtime, so persisting them keeps the spec
+   * self-describing and lets validation pass. Returns new node objects — the
+   * caller's input is not mutated.
+   */
+  _applyConfigDefaults(nodes) {
+    return (Array.isArray(nodes) ? nodes : []).map((node) => {
+      const schema = this.nodeTypeRegistry?.get?.(node?.type)?.configSchema;
+      if (!Array.isArray(schema) || !node) return node;
+      const cfg = { ...(node.config ?? {}) };
+      let changed = false;
+      for (const field of schema) {
+        if (field.optional || field.default === undefined) continue;
+        const v = cfg[field.key];
+        if (v == null || (typeof v === 'string' && !v.trim())) {
+          cfg[field.key] = field.default;
+          changed = true;
+        }
+      }
+      return changed ? { ...node, config: cfg } : node;
+    });
   }
 
   /**

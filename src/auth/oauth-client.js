@@ -28,6 +28,7 @@
 
 import { randomBytes, createHash } from 'node:crypto';
 import { log } from '../utils/logger.js';
+import { oauthRedirectBase } from '../connectors/oauth-redirect.js';
 
 const PENDING_TTL_MS   = 10 * 60 * 1000; // an in-flight consent must complete within 10 min
 const REFRESH_SKEW_MS  = 60 * 1000;      // refresh this long before actual expiry
@@ -52,7 +53,7 @@ function decodeJwtPayload(jwtStr) {
 export function googleProviderConfig() {
   const clientId     = process.env.GOOGLE_OAUTH_CLIENT_ID?.trim();
   const clientSecret = process.env.GOOGLE_OAUTH_CLIENT_SECRET?.trim();
-  const redirectBase = (process.env.OAUTH_REDIRECT_BASE?.trim() || 'http://localhost:3000').replace(/\/+$/, '');
+  const redirectBase = oauthRedirectBase();
   return {
     name: 'google',
     configured: !!(clientId && clientSecret),

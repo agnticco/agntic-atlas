@@ -18,6 +18,67 @@ function capabilitySummary(capabilities) {
   }).join('\n');
 }
 
+// The live, scope-aware catalog of delivery destinations the deliver node can
+// target. Built from the channel registry passed in `capabilities.channels`
+// (id/name/description/configSchema/available/actionOnly). Only content-delivery
+// channels that are currently available are offered; `actionOnly` channels are
+// mid-workflow connector actions that require the tool path (not runnable yet).
+// Falls back to the core set when channel info wasn't provided (e.g. headless).
+function deliverySummary(capabilities) {
+  const all = capabilities?.channels;
+  const usable = Array.isArray(all) ? all.filter(c => c && !c.actionOnly && c.available !== false) : null;
+  if (!usable || !usable.length) {
+    return `    • channel "slack": post to a Slack channel. config: { channel:"slack", target:"#channel-name" }
+    • channel "slack_dm": direct-message one person. config: { channel:"slack_dm", user:"<email or @handle>" }
+    • channel "in_app": the in-app inbox. config: { channel:"in_app" }
+    • channel "webhook": POST to a URL. config: { channel:"webhook", url:"https://…" }`;
+  }
+  return usable.map(c => {
+    const fields = (c.configSchema ?? [])
+      .filter(f => f.key !== 'body') // body = previous step's output, not set by you
+      .map(f => `${f.key}${f.optional ? '?' : ''}`).join(', ');
+    return `    • channel "${c.id}": ${c.description}${fields ? `  config: { channel:"${c.id}", ${fields} }` : ''}`;
+  }).join('\n');
+}
+
+// The live, scope-aware catalog of connector capabilities usable as MID-workflow
+// steps — the `actionOnly` channels (lookup, history, search, create, react, …).
+// Empty (e.g. headless P3 run with no channel info) ⇒ the converger is told there
+// are none, so it won't add a connector-action step.
+function stepSummary(capabilities) {
+  const all = capabilities?.channels;
+  const actions = Array.isArray(all) ? all.filter(c => c && c.actionOnly && c.available !== false) : null;
+  if (!actions || !actions.length) return '    (none available — do not use the connector-action node)';
+  return actions.map(c => {
+    const fields = (c.configSchema ?? [])
+      .filter(f => f.key !== 'body')
+      .map(f => `${f.key}${f.optional ? '?' : ''}`).join(', ');
+    return `    • action "${c.id}": ${c.description}${fields ? `  config: { action:"${c.id}", ${fields} }` : ''}`;
+  }).join('\n');
+}
+
+// Trigger-position capabilities contributed by connected connectors. Today: a
+// Slack message event. Listed only when the connector is connected; the event
+// actually fires once the workspace's Slack Event Subscriptions are configured.
+function connectorTriggerSummary(capabilities) {
+  const c = capabilities?.connectors ?? {};
+  const lines = [];
+  if (c.slack) {
+    lines.push('- Slack message event — fires when a message is posted to a channel you name. Spec: {"type":"event","connector":"slack","event":"message","filter":{"channel":"#channel-name"}}. Use this for "when someone posts in #X" / "when a Slack message arrives" intents.');
+  }
+  return lines.length ? `CONNECTOR EVENT TRIGGERS (available because the connector is connected):\n${lines.join('\n')}` : '';
+}
+
+function operatorSummary(capabilities) {
+  const op = capabilities?.operator;
+  if (!op?.email) return '';
+  const who = op.name ? `${op.name} <${op.email}>` : op.email;
+  return `
+THE OPERATOR (the person you are building this for): ${who}.
+When they say "me", "myself", "DM me", or "send it to me", deliver via a Slack direct message: { channel:"slack_dm", user:"${op.email}" }.
+`;
+}
+
 function triggerSummary(capabilities) {
   const triggers = capabilities?.triggers ?? {};
   const defaults = {
@@ -38,12 +99,13 @@ function triggerSummary(capabilities) {
 
 export function buildSystemPrompt(capabilities) {
   return `You are a workflow architect. Your job is to turn a user's intent into a structured automation spec, one component at a time.
-
+${operatorSummary(capabilities)}
 AVAILABLE CONNECTOR ACTIONS:
 ${capabilitySummary(capabilities)}
 
 AVAILABLE TRIGGER TYPES:
 ${triggerSummary(capabilities)}
+${connectorTriggerSummary(capabilities)}
 
 TRIGGER INFERENCE RULES:
 - Intent mentions "every morning/daily/weekly/hourly/on a schedule/recurring" → schedule trigger
@@ -55,17 +117,45 @@ TRIGGER INFERENCE RULES:
 - If ambiguous between one_time and manual, ask: "Should this run once immediately, or each time you trigger it manually?"
 - If trigger type genuinely unclear, ask: "What should start this workflow?"
 
-AVAILABLE NODE TYPES:
+AVAILABLE NODE TYPES (only these — every one is runnable by the engine today):
 - summarize: Summarize text with AI (config: instructions, format)
 - llm: Run a custom AI prompt (config: prompt, model)
 - extract: Extract structured fields from text (config: fields[])
 - rewrite: Rewrite/transform text (config: instructions, tone)
-- deliver: Send the final result to a destination (config: channel ["slack","in_app","webhook"], target, title). Use this for the LAST step that delivers output to the user.
-- fetch: Fetch a URL (config: url, method)
-- tool: Call a specific connector action mid-workflow (config: connector, action, params). Use this for processing steps, NOT for final delivery to Slack — use deliver for that.
+- connector-action: Call a connector capability MID-workflow to GET or DO something, then pass the result to the next step (config: { action:"<id>", ...params }). Use this ONLY when the workflow genuinely needs to reach into a connector mid-flow — e.g. pull a Slack channel's history, look up a user, create/invite to a channel. Do NOT use it to "fetch" the data a trigger already delivers, and never for the final delivery (use deliver). If no connector action is needed, skip it entirely. Available actions:
+${stepSummary(capabilities)}
+- deliver: Send the final result to a destination. ALWAYS the LAST step. Choose config.channel from the destinations below and set ONLY its routing fields — the message body is filled automatically from the previous step's output, so never put the content in config.
+  AVAILABLE DELIVERY DESTINATIONS (these are the only ones connected/runnable right now — never invent one):
+${deliverySummary(capabilities)}
+  Guidance: a "#channel" goes to channel "slack" with target. A DM / "send it to me" / "message <person>" goes to channel "slack_dm" with user = their email or @handle. If the user wants a Slack channel but hasn't named one, ask which channel.
+
+HOW INPUT ENTERS THE WORKFLOW:
+- Workflows are event-driven. The TRIGGER provides the input — e.g. an email trigger
+  delivers the matching email's content into the first step. Do NOT add a step to
+  "fetch" or "pull" data mid-workflow; choose the right trigger instead (an email
+  trigger to react to new mail, a schedule trigger to run periodically, etc.).
+- An EVENT trigger (email, connector event) hands its payload to the first step as the
+  input — don't add a step to re-"fetch" what the trigger already delivers.
+- A CONTENTLESS trigger (schedule, manual, one_time, webhook) provides NO data. If the
+  workflow then operates on connector data — e.g. "summarize the #general channel", "digest
+  my unread emails", "report on yesterday's messages" — the FIRST step MUST be a
+  connector-action that fetches that data, because the transform steps
+  (summarize/extract/rewrite) have nothing to work on otherwise. Use ONLY an action listed in
+  "Available actions" above — those are the actions THIS workspace's scopes actually allow. If
+  no listed action can fetch the needed data, tell the user that capability isn't enabled
+  (e.g. a missing Slack scope) instead of inventing one. Never use a "tool" or "fetch" node.
+- Use connector-action for side-effects too (post then pin, look up a user, create a channel).
 
 RULES:
-- NEVER propose an action or connector that is not listed under AVAILABLE CONNECTOR ACTIONS
+- NEVER propose an action, connector, trigger, or delivery destination that is not listed in
+  the AVAILABLE sections above. Those lists already reflect THIS workspace's granted scopes.
+- DECLINE GRACEFULLY: if fulfilling the intent REQUIRES a capability that is not in the
+  available lists (because the scope isn't granted), do NOT silently omit it, substitute an
+  unrelated action, or build a workflow that can't work. Instead return a clarification that
+  plainly states the capability isn't enabled and exactly what would enable it — e.g.
+  {"type":"clarification","question":"Reading channel history needs the \"channels:history\"
+  Slack scope, which isn't granted yet. Reconnect Slack with that scope and I'll build it — or
+  want me to do something else with what's available?"} — and stop until they respond.
 - If a user requests an unavailable service, announce it and propose the closest available alternative
 - Propose exactly ONE component per response
 - Return ONLY valid JSON — no prose, no markdown fences, no explanation outside the JSON

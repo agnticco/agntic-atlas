@@ -11,6 +11,7 @@ import { toolNodeType }         from './tool.js';
 import { mcpToolNodeType }      from './mcp-tool.js';
 import { llmNodeType }          from './llm.js';
 import { deliverNodeType }      from './deliver.js';
+import { connectorActionNodeType } from './connector-action.js';
 
 import { searchWebNodeType }    from './search-web.js';
 import { summarizeNodeType }    from './summarize.js';
@@ -29,6 +30,7 @@ export function registerBuiltInNodeTypes(registry) {
   registry.register(rewriteNodeType);
   registry.register(extractNodeType);
   registry.register(dailyDigestNodeType);
+  registry.register(connectorActionNodeType);
 
   // Low-level escape hatches (hidden from palette unless needed)
   registry.register(fetchNodeType);
@@ -41,7 +43,7 @@ export function registerBuiltInNodeTypes(registry) {
 
 export {
   triggerNodeType, fetchNodeType, toolNodeType, mcpToolNodeType,
-  llmNodeType, deliverNodeType,
+  llmNodeType, deliverNodeType, connectorActionNodeType,
   searchWebNodeType,
   summarizeNodeType, rewriteNodeType, extractNodeType, dailyDigestNodeType,
 };
