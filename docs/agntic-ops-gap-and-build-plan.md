@@ -180,6 +180,22 @@ definition).
 and it runs.
 
 ### Phase 5 — Console UI + SOP export (greenfield)
+
+> **Runway / readiness (grounded 2026-06-18, after P4 merge):**
+> [`docs/design/p5-readiness.md`](design/p5-readiness.md). Key facts the deferral
+> notes understated: the **store/ledger layer already exists** — `workflow_runs` is
+> populated by the scheduler (`startRun`/`completeRun`), and `workflow-store.js`
+> already has `list()` (inventory), `getRuns()` (ledger), `getRun()` (drawer),
+> `getRecentRuns`, `getCostByWorkflow`, `getVersions`. So **P5 ≈ mount read endpoints
+> over existing methods + build the console UI + net-new SOP export** (no SOP/PDF/MD
+> scaffolding exists). ⚠ **Tenancy flag:** the run-query methods are **not
+> tenant-scoped** (`getRuns`/`getRun` take only `userId`, no `tenantId`; `list()`
+> returns unscoped when no tenant passed) — every new read endpoint must pass
+> `req.tenant.id` and the query methods need a `tenantId` param, proven by an
+> adversarial cross-tenant test. Builder "Run test" (`/workflows/run`) does **not**
+> record runs (only the scheduler does). Live Dashboard design target:
+> [`docs/design/mockups/`](design/mockups/). No mock data (P4 Draft-page lesson).
+
 Inventory, live run monitoring, and the step-by-step SOP view with dependencies.
 Includes SOP export: from any activated workflow's SOP view, generate a
 formatted export that documents every step, decision point, and connector in
