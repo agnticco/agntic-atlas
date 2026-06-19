@@ -14,6 +14,7 @@
  */
 
 import { randomBytes } from 'node:crypto';
+import { connectorRedirectUri } from '../oauth-redirect.js';
 
 const DEFAULT_API_BASE = 'https://slack.com/api';
 const AUTHORIZE_URL = 'https://slack.com/oauth/v2/authorize';
@@ -30,8 +31,9 @@ export function slackOAuthConfig() {
   return {
     clientId: process.env.SLACK_CLIENT_ID ?? null,
     clientSecret: process.env.SLACK_CLIENT_SECRET ?? null,
-    redirectUri: process.env.SLACK_REDIRECT_URI ?? null,
-    scopes: (process.env.SLACK_OAUTH_SCOPES ?? 'chat:write').split(/[,\s]+/).filter(Boolean),
+    // Derive from the shared OAUTH_REDIRECT_BASE so one env var drives every
+    // connector; SLACK_REDIRECT_URI still overrides when explicitly set.
+    redirectUri: process.env.SLACK_REDIRECT_URI ?? connectorRedirectUri(SLACK_CONNECTOR_ID),
   };
 }
 
@@ -39,6 +41,32 @@ export function slackOAuthConfig() {
 export function isOAuthConfigured() {
   const c = slackOAuthConfig();
   return !!(c.clientId && c.clientSecret && c.redirectUri);
+}
+
+// Read the scopes a token was actually granted (Slack returns them in the
+// `x-oauth-scopes` header on any Web API call). Used to derive what NEW client
+// installs should request — no hardcoded scope list to keep in sync.
+async function detectScopesFromToken(token, apiBase, fetchImpl) {
+  if (!token) return [];
+  try {
+    const res = await fetchImpl(`${apiBase}/auth.test`, { method: 'POST', headers: { authorization: `Bearer ${token}` } });
+    return (res.headers?.get?.('x-oauth-scopes') ?? '').split(/[,\s]+/).filter(Boolean);
+  } catch { return []; }
+}
+
+// Scopes to REQUEST at OAuth (vs. what a tenant has granted). Derived from the
+// reference bot/user tokens so the request always matches what this app's tokens
+// actually carry — no scope list to maintain. Cached per process.
+let _requestScopeCache = null;
+export function resetRequestScopeCache() { _requestScopeCache = null; }
+async function resolveRequestScopes(fetchImpl) {
+  if (_requestScopeCache) return _requestScopeCache;
+  const apiBase = process.env.SLACK_API_URL ?? DEFAULT_API_BASE;
+  const bot  = await detectScopesFromToken(process.env.SLACK_BOT_TOKEN, apiBase, fetchImpl);
+  const user = await detectScopesFromToken(process.env.SLACK_USER_TOKEN, apiBase, fetchImpl);
+  if (!bot.length) bot.push('chat:write'); // floor: the app must stay installable
+  _requestScopeCache = { bot, user };
+  return _requestScopeCache;
 }
 
 /**
@@ -50,16 +78,20 @@ export function createSlackOAuthFlow({ fetchImpl = fetch } = {}) {
   const pending = new Map(); // state -> { tenantId, userId, expiresAt }
   const sweep = () => { const now = Date.now(); for (const [k, v] of pending) if (v.expiresAt <= now) pending.delete(k); };
 
-  function start({ tenantId, userId }) {
+  async function start({ tenantId, userId }) {
     if (!tenantId) throw new Error('slack oauth start requires a tenant');
     const cfg = slackOAuthConfig();
     if (!cfg.clientId || !cfg.redirectUri) throw new Error('Slack OAuth not configured (set SLACK_CLIENT_ID, SLACK_CLIENT_SECRET, SLACK_REDIRECT_URI)');
     sweep();
     const state = randomBytes(24).toString('hex');
     pending.set(state, { tenantId, userId: userId ?? null, expiresAt: Date.now() + STATE_TTL_MS });
+    // Request whatever this app's reference token(s) actually carry (or the
+    // explicit env overrides), so new client installs grant the full set.
+    const { bot, user } = await resolveRequestScopes(fetchImpl);
     const url = new URL(AUTHORIZE_URL);
     url.searchParams.set('client_id', cfg.clientId);
-    url.searchParams.set('scope', cfg.scopes.join(',')); // Slack bot scopes are comma-separated
+    url.searchParams.set('scope', bot.join(',')); // Slack bot scopes are comma-separated
+    if (user.length) url.searchParams.set('user_scope', user.join(','));
     url.searchParams.set('redirect_uri', cfg.redirectUri);
     url.searchParams.set('state', state);
     return { authorizeUrl: url.toString(), state };

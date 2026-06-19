@@ -18,6 +18,23 @@ executes. The hard, unbuilt IP is that **converger**.
 ## Closed decisions (do not re-litigate)
 
 - **Keep the proprietary JSON spec format.** No BPMN/DMN port.
+- **The codebase is workflow-agnostic** *(2026-06-18)*. It is a general engine for building
+  and running ANY workflow — it is NOT built around the canonical UPS→Slack example. That
+  spec (`docs/specs/canonical-ups-slack.json`) is a **test fixture** for the P2/P3 gates,
+  nothing more. Mechanisms must be generic: token injection (`injectTenantTokens`), the
+  capability catalog, execution, and the converger all work for arbitrary node/connector/
+  trigger combinations. Never special-case logic to one workflow shape; add a generic branch
+  (e.g. per-connector) instead.
+- **Connectors are a unified, real-time, position-agnostic capability catalog**
+  *(direction approved 2026-06-18)*. Each connector exposes ONE catalog; each capability
+  declares which positions it can occupy (**trigger / step / delivery**), its required
+  scopes, and **real-time availability** from the tenant's *granted* scopes. The converger,
+  engine, and UI all read the same catalog, so any connected connector can be used anywhere
+  in a workflow. This replaces today's fragmentation (channelRegistry = delivery only;
+  no ToolRegistry so steps are dead; only email/schedule triggers). It is the substrate for
+  P7/P8 — design-first, built in increments (unify catalog → enable connector *steps* via
+  existing handlers → converger consumes positioned catalog → connector-event triggers).
+  Design: [`docs/architecture/connector-capabilities.md`](docs/architecture/connector-capabilities.md).
 - **Multi-tenant from the foundation** *(reverses the earlier "no tenancy in
   pilot" decision, 2026-06-09).* Each onboarding client gets a `tenant_id`; users
   and every resource live underneath it. Data isolation is **hard and fail-closed**
@@ -73,6 +90,35 @@ refactor them without an explicit decision recorded here:
   when `ANTHROPIC_API_KEY` is set, falls back to OpenAI, then local weights. `ChatModel`
   import added. Startup log now reflects actual provider. No logic changes to engine or
   salvage LLM modules.
+- **Converger spec → persistence bridge (2026-06-17, P4)** — persisting a converger
+  (or the frozen canonical) spec via `workflowService.create` failed validation; **the
+  frozen canonical spec itself failed identically**, so this was a pre-existing
+  validator/persistence defect surfaced by P4 (the first path to persist a converger spec).
+  Two engine-layer fixes (Option Z, decided with the user):
+  1. `src/workflows/workflow-validator.js` — `MISSING_TRIGGER` now accepts a trigger in
+     the top-level `triggers[]` array (what the scheduler reads, and what the converger /
+     canonical spec emit), not only a `type:'trigger'` **node**. Demanding a trigger node
+     wrongly rejected runnable event/email specs. *Verified*: synthesizing a trigger node
+     instead is wrong — its `{trigger:true}` sentinel clobbers the entry node's seeded
+     input, making summarize summarize the sentinel (the entry step is seeded from the
+     trigger event via `initialContext`, with no trigger node).
+  2. `src/workflows/workflow-service.js` — `create()`'s pre-built branch now fills missing
+     **required** node config from each node-type's schema `default` (`_applyConfigDefaults`),
+     e.g. summarize `length:'medium'` / `style:'neutral'` — the same values the executor
+     already applies at runtime. Non-mutating.
+  Also `src/api/server.js` `POST /workflows/run` accepts an optional `initialContext`
+  (sample event) so the builder's "Run test" can fire trigger-based flows end-to-end. P2/P3
+  gates still pass.
+- **OAuth redirect base centralized (2026-06-18, P4)** — `OAUTH_REDIRECT_BASE` is now the
+  single lever for where every connector's OAuth redirects back. New helper
+  `src/connectors/oauth-redirect.js` (`oauthRedirectBase()` / `connectorRedirectUri()`,
+  PORT-aware localhost default). `src/connectors/slack/oauth.js` previously read only
+  `SLACK_REDIRECT_URI` and ignored the base — now derives `<base>/connectors/slack/callback`
+  (explicit var still overrides). `src/auth/oauth-client.js` (Google) routes its existing
+  base derivation through the shared helper. `.env` per-connector `*_REDIRECT_URI` overrides
+  commented out so the base drives both. Whatever base is chosen must be registered as an
+  allowed redirect URL in the provider consoles. (Surfaced by a Cloudflare Tunnel 1033 on the
+  hosted base while testing locally; prod hosting is P11.)
 
 ## The frozen canonical spec
 
@@ -97,6 +143,30 @@ This is a stronger check than byte-for-byte comparison because it proves the
 spec is actually executable, not just structurally similar to the frozen file.
 
 ## Known gotchas
+
+- **`tool` / `mcp-tool` / `fetch` node types are NOT runnable in this build.** There is
+  no `ToolRegistry` (no `src/tools/`, never instantiated), and `FlowTester` is built
+  without `tools`, so a `tool`/`mcp-tool` node throws `Tool registry unavailable`; `fetch`
+  needs a registered `source`, not a URL. The converger prompt
+  (`src/converger/prompts.js`) is therefore restricted to the runnable set
+  (summarize/llm/extract/rewrite/deliver + triggers) and told to model incoming data as a
+  TRIGGER, never a mid-workflow fetch/tool step. Re-add these to the prompt when a later
+  phase wires connector actions as tools. (2026-06-18)
+- **`/workflows/run` returns 200 with `{completed:false, error}` for a failed step**, not a
+  5xx — Cloudflare replaces origin 502/504 with its own HTML error page, which hid the real
+  run error behind a "tunnel/proxy" message. Application-level run failures must stay 2xx so
+  the UI can read them. (2026-06-18)
+- **Dev event log:** `src/utils/event-log.js` appends JSON-lines to
+  `./memory/logs/atlas-events.log` (gitignored) — one line per HTTP request plus
+  run/chat/session/persist lifecycle events. Tail/grep it to see exactly where a
+  conversation or run broke. The pretty console `logger.js` is separate (terminal only).
+- **`.env` is not auto-loaded.** `src/api/server.js` has no dotenv; `npm start` runs
+  `node --env-file-if-exists=.env src/api/server.js` (fixed 2026-06-17). Running the
+  server with a bare `node src/api/server.js` leaves `ANTHROPIC_API_KEY` unset, so
+  `buildLLM()` silently falls back to the **local llama model** — the symptom is "inference
+  is using local even though Anthropic is in the codebase." Always launch via `npm start`
+  (or pass `--env-file`).
+
 
 - **`server.js` encoding.** In `agntic-prod`, `src/api/server.js` reads as
   `data` to `file` and plain `grep` returns zero matches — it once convinced an
@@ -159,7 +229,11 @@ Update as gates close. `git log --grep "^Gate:"` is the authoritative ledger.
 - [x] **P1** — Slack connector: clicking "run" posts to Slack
 - [x] **P2** — event triggers + Gmail: hand-authored UPS→Slack fires on real email *(freeze the spec here)*
 - [x] **P3** — converger reproduces the frozen spec, confirmations logged
-- [ ] **P4** — builder UI: workflow built entirely by talking
-- [ ] **P5** — console UI: inventory, live run monitoring, SOP view
+- [ ] **P4** — builder UI: workflow built entirely by talking *(design-first: Claude generates mockups → approval → build)*
+- [ ] **P5** — console UI: inventory, live run monitoring, SOP view + SOP export (PDF + Markdown)
 - [ ] **P6** — launcher + builder↔console toggle
 - [ ] **P7** — Airtable + Google write + error handling + sub-daily scheduling
+- [ ] **P8** — web + filesystem connectors: unified web research (Tavily search + Firecrawl scrape) + tenant-scoped filesystem access
+- [ ] **P9** — value tracking: time-saved metrics per run, all-up ROI summary, customer-facing report
+- [ ] **P10** — admin observability: standalone admin app, per-tenant usage + cost monitoring
+- [ ] **P11** — E2E validation + production hardening + VPS migration

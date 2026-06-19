@@ -131,6 +131,21 @@ export class OAuthTokenStore {
     return !!this.get({ tenantId, userId, connectorId });
   }
 
+  /**
+   * Resolve the tenant that owns a connector install by its `account` value
+   * (e.g. a Slack team_id). Used to route inbound connector webhooks/events to
+   * the correct tenant — the trust boundary for event dispatch. Returns the
+   * tenant_id or null. (If two tenants somehow share an account, returns the
+   * first; account should be globally unique per connector install.)
+   */
+  findTenantByAccount({ connectorId, account }) {
+    if (!connectorId || !account) return null;
+    const row = this.db
+      .prepare('SELECT tenant_id FROM oauth_tokens WHERE connector_id = ? AND account = ? LIMIT 1')
+      .get(connectorId, account);
+    return row?.tenant_id ?? null;
+  }
+
   /** Delete the row. Returns true if a row was removed. Tenant-scoped. */
   delete({ tenantId, userId, connectorId }) {
     requireTenant(tenantId, 'OAuthTokenStore.delete');
