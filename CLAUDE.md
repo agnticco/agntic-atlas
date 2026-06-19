@@ -229,7 +229,7 @@ Update as gates close. `git log --grep "^Gate:"` is the authoritative ledger.
 - [x] **P1** — Slack connector: clicking "run" posts to Slack
 - [x] **P2** — event triggers + Gmail: hand-authored UPS→Slack fires on real email *(freeze the spec here)*
 - [x] **P3** — converger reproduces the frozen spec, confirmations logged
-- [ ] **P4** — builder UI: workflow built entirely by talking *(design-first: Claude generates mockups → approval → build)*
+- [x] **P4** — builder UI: workflow built entirely by talking *(design-first: Claude generates mockups → approval → build)*
 - [ ] **P5** — console UI: inventory, live run monitoring, SOP view + SOP export (PDF + Markdown)
 - [ ] **P6** — launcher + builder↔console toggle
 - [ ] **P7** — Airtable + Google write + error handling + sub-daily scheduling
