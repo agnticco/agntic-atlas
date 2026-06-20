@@ -84,6 +84,7 @@ const ADDITIVE_COLUMNS = [
   { col: 'version',        type: 'INTEGER NOT NULL DEFAULT 1' },
   { col: 'user_id',        type: 'TEXT' },
   { col: 'tenant_id',      type: "TEXT NOT NULL DEFAULT 'default'" },
+  { col: 'deleted_at',     type: 'TEXT' },
 ];
 
 export class WorkflowStore {
@@ -421,13 +422,13 @@ export class WorkflowStore {
    * pass `undefined`) ONLY for internal callers like the scheduler.
    */
   list({ status = null, kind = null, userId = undefined, tenantId = undefined } = {}) {
-    const where = [];
+    const where = ['deleted_at IS NULL'];
     const args = [];
     if (status) { where.push('status = ?'); args.push(status); }
     if (kind)   { where.push('kind = ?');   args.push(kind); }
     if (userId !== undefined)   { where.push('user_id IS ?');   args.push(userId); }
     if (tenantId !== undefined) { where.push('tenant_id IS ?'); args.push(tenantId); }
-    const sql = `SELECT * FROM workflows ${where.length ? 'WHERE ' + where.join(' AND ') : ''} ORDER BY created_at DESC`;
+    const sql = `SELECT * FROM workflows WHERE ${where.join(' AND ')} ORDER BY created_at DESC`;
     return this.db.prepare(sql).all(...args).map(r => this._parse(r));
   }
 
@@ -495,6 +496,41 @@ export class WorkflowStore {
       : this.db.prepare('DELETE FROM workflows WHERE id = ?');
     const info = userId !== undefined ? stmt.run(id, userId) : stmt.run(id);
     return info.changes > 0;
+  }
+
+  softDelete(id, { userId = undefined, tenantId = undefined } = {}) {
+    const where = ['id = ?', 'deleted_at IS NULL'];
+    const args = [id];
+    if (userId !== undefined) { where.push('user_id IS ?'); args.push(userId); }
+    if (tenantId !== undefined) { where.push('tenant_id IS ?'); args.push(tenantId); }
+    const info = this.db.prepare(`UPDATE workflows SET deleted_at = ? WHERE ${where.join(' AND ')}`)
+      .run(new Date().toISOString(), ...args);
+    return info.changes > 0;
+  }
+
+  restore(id, { userId = undefined, tenantId = undefined } = {}) {
+    const where = ['id = ?', 'deleted_at IS NOT NULL'];
+    const args = [id];
+    if (userId !== undefined) { where.push('user_id IS ?'); args.push(userId); }
+    if (tenantId !== undefined) { where.push('tenant_id IS ?'); args.push(tenantId); }
+    const info = this.db.prepare(`UPDATE workflows SET deleted_at = NULL WHERE ${where.join(' AND ')}`)
+      .run(...args);
+    return info.changes > 0;
+  }
+
+  listDeleted({ userId = undefined, tenantId = undefined } = {}) {
+    const where = ['deleted_at IS NOT NULL'];
+    const args = [];
+    if (userId !== undefined) { where.push('user_id IS ?'); args.push(userId); }
+    if (tenantId !== undefined) { where.push('tenant_id IS ?'); args.push(tenantId); }
+    return this.db.prepare(`SELECT * FROM workflows WHERE ${where.join(' AND ')} ORDER BY deleted_at DESC`)
+      .all(...args).map(r => this._parse(r));
+  }
+
+  purgeExpiredDeleted(daysOld = 30) {
+    const cutoff = new Date(Date.now() - daysOld * 24 * 60 * 60 * 1000).toISOString();
+    const info = this.db.prepare('DELETE FROM workflows WHERE deleted_at IS NOT NULL AND deleted_at < ?').run(cutoff);
+    return info.changes;
   }
 
   /**
@@ -615,16 +651,16 @@ export class WorkflowStore {
     `).all(...args);
   }
 
-  /** Get runs for a workflow, most recent first. Scoped by userId. */
-  getRuns(workflowId, limit = 20, { userId = undefined } = {}) {
-    if (userId === undefined) {
-      return this.db.prepare(
-        'SELECT * FROM workflow_runs WHERE workflow_id = ? ORDER BY started_at DESC LIMIT ?'
-      ).all(workflowId, limit).map(r => this._parseRun(r));
-    }
+  /** Get runs for a workflow, most recent first. Scoped by userId and/or tenantId. */
+  getRuns(workflowId, limit = 20, { userId = undefined, tenantId = undefined } = {}) {
+    const where = ['workflow_id = ?'];
+    const args = [workflowId];
+    if (userId !== undefined)   { where.push('user_id IS ?');   args.push(userId); }
+    if (tenantId !== undefined) { where.push('tenant_id IS ?'); args.push(tenantId); }
+    args.push(limit);
     return this.db.prepare(
-      'SELECT * FROM workflow_runs WHERE workflow_id = ? AND user_id IS ? ORDER BY started_at DESC LIMIT ?'
-    ).all(workflowId, userId, limit).map(r => this._parseRun(r));
+      `SELECT * FROM workflow_runs WHERE ${where.join(' AND ')} ORDER BY started_at DESC LIMIT ?`
+    ).all(...args).map(r => this._parseRun(r));
   }
 
   /** Get the most recent run for a workflow (excluding test runs). Scoped by userId. */
@@ -638,14 +674,13 @@ export class WorkflowStore {
     return row ? this._parseRun(row) : null;
   }
 
-  /** Get a single run by id. Scoped by userId — returns null if owner mismatch. */
-  getRun(runId, { userId = undefined } = {}) {
-    const sql = userId === undefined
-      ? 'SELECT * FROM workflow_runs WHERE id = ?'
-      : 'SELECT * FROM workflow_runs WHERE id = ? AND user_id IS ?';
-    const row = userId === undefined
-      ? this.db.prepare(sql).get(runId)
-      : this.db.prepare(sql).get(runId, userId);
+  /** Get a single run by id. Scoped by userId and/or tenantId — returns null on mismatch. */
+  getRun(runId, { userId = undefined, tenantId = undefined } = {}) {
+    const where = ['id = ?'];
+    const args = [runId];
+    if (userId !== undefined)   { where.push('user_id IS ?');   args.push(userId); }
+    if (tenantId !== undefined) { where.push('tenant_id IS ?'); args.push(tenantId); }
+    const row = this.db.prepare(`SELECT * FROM workflow_runs WHERE ${where.join(' AND ')}`).get(...args);
     return row ? this._parseRun(row) : null;
   }
 

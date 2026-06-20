@@ -80,7 +80,7 @@ export class WorkflowService {
    *   { name, description?, triggers: [...], nodes: [...], edges: [...],
    *     errorHandling?: {...}, status? }
    */
-  async create(input, { userId, events = null } = {}) {
+  async create(input, { userId, tenantId = null, events = null } = {}) {
     if (!userId) return _err('Missing authenticated userId on service call.');
 
     const built = this._assembleDefinition(input);
@@ -101,6 +101,7 @@ export class WorkflowService {
     const workflow = this.workflowStore.create({
       slug,
       userId,
+      tenantId,
       sessionId:    input.sessionId,
       kind:         'flow',
       name:         def.name,

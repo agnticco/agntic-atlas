@@ -21,6 +21,7 @@
     "fflate": "^0.8.2",
     "jsonwebtoken": "^9.0.3",
     "node-llama-cpp": "^3.14.0",
-    "openai": "^6.7.0"
+    "openai": "^6.7.0",
+    "pdfkit": "^0.19.1"
   }
 }

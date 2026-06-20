@@ -109,6 +109,22 @@ refactor them without an explicit decision recorded here:
   Also `src/api/server.js` `POST /workflows/run` accepts an optional `initialContext`
   (sample event) so the builder's "Run test" can fire trigger-based flows end-to-end. P2/P3
   gates still pass.
+- **Console run-query tenantId scoping (2026-06-18, P5)** — `getRuns(workflowId, limit, opts)` and
+  `getRun(runId, opts)` in `src/workflows/workflow-store.js` previously only accepted `userId` in
+  the opts object; `tenantId` was absent, making cross-tenant isolation impossible for run reads.
+  Both methods now accept `tenantId` and include it in the WHERE clause when provided. Every P5
+  console endpoint passes `req.tenant.id` + `req.user.id` to enforce both dimensions. The fix
+  uses the same WHERE-builder pattern already used by `list()`. Non-breaking for existing callers
+  that pass only `userId` or neither.
+- **Builder tenantId + status on publish (2026-06-19)** — `POST /api/builder/workflows` called
+  `workflowService.create()` with only `{ userId }`, no `tenantId`. The store's `create()` falls
+  back to `tenant_id: 'default'` when no tenantId is given, so all published workflows were
+  invisible to the console (which queries by the real tenant id). Additionally the non-recipe
+  (`_assembleDefinition`) path defaulted to `status: 'draft'`, so scheduled workflows were never
+  picked up by the scheduler. Fixes: `workflow-service.js` `create()` now accepts `tenantId` in
+  its opts and passes it to the store; `builder.js` passes `tenantId: req.tenant.id` and adds
+  `status: 'active'` to the spec before calling create. Existing `tenant_id='default'` rows were
+  migrated to the real tenant id in a one-time SQL update.
 - **OAuth redirect base centralized (2026-06-18, P4)** — `OAUTH_REDIRECT_BASE` is now the
   single lever for where every connector's OAuth redirects back. New helper
   `src/connectors/oauth-redirect.js` (`oauthRedirectBase()` / `connectorRedirectUri()`,
@@ -230,7 +246,7 @@ Update as gates close. `git log --grep "^Gate:"` is the authoritative ledger.
 - [x] **P2** — event triggers + Gmail: hand-authored UPS→Slack fires on real email *(freeze the spec here)*
 - [x] **P3** — converger reproduces the frozen spec, confirmations logged
 - [x] **P4** — builder UI: workflow built entirely by talking *(design-first: Claude generates mockups → approval → build)*
-- [ ] **P5** — console UI: inventory, live run monitoring, SOP view + SOP export (PDF + Markdown). **Runway:** [`docs/design/p5-readiness.md`](docs/design/p5-readiness.md) — store/ledger layer already exists (P5 ≈ read endpoints + console UI + net-new SOP export); ⚠ run-query methods (`getRuns`/`getRun`) lack `tenantId` scoping — make fail-closed before exposing.
+- [x] **P5** — console UI: inventory, live run monitoring, SOP view + SOP export (PDF + Markdown).
 - [ ] **P6** — launcher + builder↔console toggle
 - [ ] **P7** — Airtable + Google write + error handling + sub-daily scheduling
 - [ ] **P8** — web + filesystem connectors: unified web research (Tavily search + Firecrawl scrape) + tenant-scoped filesystem access
