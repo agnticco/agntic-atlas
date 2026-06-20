@@ -39,6 +39,9 @@ CREATE INDEX IF NOT EXISTS idx_users_email  ON users(email);
 /** Reserved tenant whose admins are platform operators (can manage tenants). */
 export const PLATFORM_TENANT_ID = 'platform';
 
+/** Default homepage modules shown when a user has no saved preference. */
+export const DEFAULT_HOMEPAGE_MODULES = ['ai_greeting'];
+
 /** Fail-closed guard: a tenant-scoped op must never run without a tenant. */
 function requireTenant(tenantId, where) {
   if (typeof tenantId !== 'string' || !tenantId.trim()) {
@@ -79,6 +82,7 @@ export class UserStore {
     }
     this.db.exec(SCHEMA);
     this._migrateTenantId();
+    this._migratePreferences();
   }
 
   /** Additive migration: add tenant_id to a legacy users table, backfilling 'default'. */
@@ -89,6 +93,22 @@ export class UserStore {
     }
     // Create the index AFTER the column exists (fresh or migrated). Idempotent.
     this.db.exec(`CREATE INDEX IF NOT EXISTS idx_users_tenant ON users(tenant_id)`);
+  }
+
+  /** Additive migration: add preferences JSON column for user settings. */
+  _migratePreferences() {
+    const cols = this.db.prepare(`PRAGMA table_info(users)`).all().map((c) => c.name);
+    if (!cols.includes('preferences')) {
+      this.db.exec(`ALTER TABLE users ADD COLUMN preferences TEXT`);
+    }
+  }
+
+  /** Return parsed user preferences, falling back to defaults when unset or corrupt. */
+  getPreferences(userId, tenantId) {
+    requireTenant(tenantId, 'UserStore.getPreferences');
+    const row = this.db.prepare('SELECT preferences FROM users WHERE id = ? AND tenant_id = ?').get(userId, tenantId);
+    if (!row?.preferences) return { homepageModules: DEFAULT_HOMEPAGE_MODULES };
+    try { return JSON.parse(row.preferences); } catch { return { homepageModules: DEFAULT_HOMEPAGE_MODULES }; }
   }
 
   close() {
@@ -228,6 +248,10 @@ export class UserStore {
     if (patch.role != null) {
       if (!['admin', 'user'].includes(patch.role)) throw new Error('role must be admin or user');
       updates.role = patch.role;
+    }
+    if (patch.preferences != null) {
+      try { updates.preferences = JSON.stringify(patch.preferences); }
+      catch { throw new Error('preferences must be JSON-serializable'); }
     }
 
     const keys = Object.keys(updates);

@@ -53,6 +53,7 @@ import {
 import { pollGmail, formatEmailContext } from '../connectors/google/gmail-source.js';
 import { InteractionStore } from '../converger/interaction-store.js';
 import { mountBuilderRoutes } from './builder.js';
+import { mountConsoleRoutes } from './console.js';
 import { logEvent, errFields } from '../utils/event-log.js';
 
 const PORT = Number(process.env.PORT ?? 3000);
@@ -462,7 +463,9 @@ export function createApp(spine) {
       if (!spine.auth.tenantStore.isActive(user.tenant_id)) return res.status(403).json({ error: 'tenant suspended' });
       const { token } = spine.auth.issueSession({ user });
       setSessionCookie(res, token);
-      res.json({ ok: true, token, user: pubUser(user) });
+      const tenantRow = spine.auth.tenantStore.get(user.tenant_id);
+      const tenant = tenantRow ? { id: tenantRow.id, name: tenantRow.name } : null;
+      res.json({ ok: true, token, user: pubUser(user), tenant });
     } catch (err) { res.status(400).json({ error: err.message ?? String(err) }); }
   });
   app.post('/auth/logout', requireAuth, (req, res) => {
@@ -506,6 +509,23 @@ export function createApp(spine) {
   app.get('/users', requireActiveTenant, (req, res) => {
     if (req.user.role !== 'admin') return res.status(403).json({ error: 'Forbidden' });
     res.json({ users: spine.auth.userStore.list(req.tenant.id) });
+  });
+
+  // ── User preferences ──────────────────────────────────────────────────────
+  const VALID_HOMEPAGE_MODULES = ['ai_greeting','workflow_health','recent_activity','success_rate','top_workflows','quick_run','next_scheduled','failure_alerts','time_saved','ai_tip','workflows_list'];
+
+  app.get('/api/user/preferences', requireActiveTenant, (req, res) => {
+    const prefs = spine.auth.userStore.getPreferences(req.user.id, req.tenant.id);
+    res.json({ ok: true, ...prefs });
+  });
+
+  app.put('/api/user/preferences', requireActiveTenant, (req, res) => {
+    const { homepageModules } = req.body ?? {};
+    if (!Array.isArray(homepageModules) || homepageModules.some(m => !VALID_HOMEPAGE_MODULES.includes(m))) {
+      return res.status(400).json({ error: 'invalid homepageModules' });
+    }
+    spine.auth.userStore.update(req.user.id, { preferences: { homepageModules } }, req.tenant.id);
+    res.json({ ok: true, homepageModules });
   });
 
   // Ingest company context (this tenant only). Body: { text, metadata? } or { documents: [{text, metadata?}] }.
@@ -772,6 +792,7 @@ export function createApp(spine) {
   });
 
   mountBuilderRoutes(app, { spine, requireActiveTenant, requireAuth });
+  mountConsoleRoutes(app, { spine, requireActiveTenant });
 
   return app;
 }
