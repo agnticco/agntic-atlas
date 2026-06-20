@@ -109,6 +109,22 @@ refactor them without an explicit decision recorded here:
   Also `src/api/server.js` `POST /workflows/run` accepts an optional `initialContext`
   (sample event) so the builder's "Run test" can fire trigger-based flows end-to-end. P2/P3
   gates still pass.
+- **Console run-query tenantId scoping (2026-06-18, P5)** — `getRuns(workflowId, limit, opts)` and
+  `getRun(runId, opts)` in `src/workflows/workflow-store.js` previously only accepted `userId` in
+  the opts object; `tenantId` was absent, making cross-tenant isolation impossible for run reads.
+  Both methods now accept `tenantId` and include it in the WHERE clause when provided. Every P5
+  console endpoint passes `req.tenant.id` + `req.user.id` to enforce both dimensions. The fix
+  uses the same WHERE-builder pattern already used by `list()`. Non-breaking for existing callers
+  that pass only `userId` or neither.
+- **Builder tenantId + status on publish (2026-06-19)** — `POST /api/builder/workflows` called
+  `workflowService.create()` with only `{ userId }`, no `tenantId`. The store's `create()` falls
+  back to `tenant_id: 'default'` when no tenantId is given, so all published workflows were
+  invisible to the console (which queries by the real tenant id). Additionally the non-recipe
+  (`_assembleDefinition`) path defaulted to `status: 'draft'`, so scheduled workflows were never
+  picked up by the scheduler. Fixes: `workflow-service.js` `create()` now accepts `tenantId` in
+  its opts and passes it to the store; `builder.js` passes `tenantId: req.tenant.id` and adds
+  `status: 'active'` to the spec before calling create. Existing `tenant_id='default'` rows were
+  migrated to the real tenant id in a one-time SQL update.
 - **OAuth redirect base centralized (2026-06-18, P4)** — `OAUTH_REDIRECT_BASE` is now the
   single lever for where every connector's OAuth redirects back. New helper
   `src/connectors/oauth-redirect.js` (`oauthRedirectBase()` / `connectorRedirectUri()`,
