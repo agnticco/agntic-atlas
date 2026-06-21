@@ -143,7 +143,11 @@ export function createSlackCapabilityProvider({ oauthTokenStore = null, token = 
     // shared env user token would run "as user" as the same person for everyone —
     // a user-isolation leak — so it only counts for the dev tenant / headless.
     const hasUserToken = !!(process.env.SLACK_USER_TOKEN) && envTokenServes(tenantId);
-    const resolved = resolveSlackCapabilities(await scopesForTenant(tenantId), { hasUserToken });
+    const connected = !!(
+      (oauthTokenStore && tenantId && getSlackGrant({ oauthTokenStore, tenantId })) ||
+      (envTokenServes(tenantId) && (token ?? process.env.SLACK_BOT_TOKEN))
+    );
+    const resolved = { connected, ...resolveSlackCapabilities(await scopesForTenant(tenantId), { hasUserToken }) };
     cache.set(tenantId, resolved);
     return resolved;
   }
