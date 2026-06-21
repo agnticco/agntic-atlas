@@ -69,6 +69,7 @@ import {
 import { InteractionStore } from '../converger/interaction-store.js';
 import { InboxStore } from '../inbox/inbox-store.js';
 import { registerInboxCapability } from '../inbox/index.js';
+import { registerFilesystemCapabilities, FILESYSTEM_CAPABILITY_IDS } from '../connectors/filesystem.js';
 import { mountBuilderRoutes } from './builder.js';
 import { mountConsoleRoutes } from './console.js';
 import { logEvent, errFields } from '../utils/event-log.js';
@@ -78,6 +79,17 @@ const WORKFLOWS_DB = process.env.WORKFLOWS_DB ?? './memory/workflows/workflows.s
 const SOURCES_DB   = process.env.SOURCES_DB   ?? './memory/workflows/sources.sqlite';
 // Base directory for per-tenant RAG stores: VECTOR_DIR/<tenantId>/company.sqlite.
 const VECTOR_DIR   = process.env.VECTOR_DIR   ?? './memory/vectors';
+
+// Per-tenant sources.json helpers — module-level so both bootSpine (filesystem
+// connector registration) and createApp (RAG knowledge routes) can call them.
+function sourcesPath(tenantId) {
+  const safe = String(tenantId).replace(/[^a-z0-9_-]/gi, '');
+  return join(VECTOR_DIR, safe, 'sources.json');
+}
+function readSources(tenantId) {
+  const p = sourcesPath(tenantId);
+  try { return JSON.parse(readFileSync(p, 'utf8')); } catch { return []; }
+}
 const LOCAL_MODEL_PATH = process.env.LOCAL_MODEL_PATH
   ?? resolve('models/qwen2.5-0.5b-instruct-q4_k_m.gguf');
 const EMBEDDING_PROVIDER   = process.env.EMBEDDING_PROVIDER ?? 'local';
@@ -218,6 +230,18 @@ function injectInboxContext(spec, tenantId, userId, extras = {}) {
   return { ...spec, nodes };
 }
 
+// Inject tenant identity into filesystem_read / filesystem_list nodes so the
+// handler can validate the path against the tenant's approved folders.
+function injectFilesystemContext(spec, tenantId) {
+  if (!tenantId || !(spec?.nodes?.length)) return spec;
+  const isFs = (n) => n?.type === 'connector-action' && FILESYSTEM_CAPABILITY_IDS.has(n?.config?.action);
+  if (!spec.nodes.some(isFs)) return spec;
+  const nodes = spec.nodes.map((n) => isFs(n)
+    ? { ...n, config: { ...n.config, _tenantId: tenantId } }
+    : n);
+  return { ...spec, nodes };
+}
+
 // A connector this tenant must connect before the spec can run (owns a node but
 // has no resolvable token and no dev escape). Returns its name, or null. Generic.
 function unconnectedConnector(spec, tenantId, deps) {
@@ -253,7 +277,8 @@ async function dispatchSlackEvent(spine, body) {
   const context = `New Slack message in <#${ev.channel}> from <@${ev.user}>:\n\n${ev.text ?? ''}`;
   for (const wf of flows) {
     logEvent('slack.event.dispatch', { tenant: tenantId, workflow: wf.slug, channel: ev.channel });
-    const tenantWf = injectTenantTokens(wf, tenantId, deps);
+    let tenantWf = injectTenantTokens(wf, tenantId, deps);
+    tenantWf = injectFilesystemContext(tenantWf, tenantId);
     try { await spine.engine.workflowScheduler._executeFlow(tenantWf, { trigger: 'event', emailContext: context }); }
     catch (err) { logEvent('slack.event.error', { tenant: tenantId, workflow: wf.slug, ...errFields(err) }); }
   }
@@ -294,7 +319,8 @@ async function dispatchAirtableEvent(spine, body) {
   const context = `Airtable record changed in base ${baseId}.\n\nChanges:\n${JSON.stringify(payloads.slice(0, 3), null, 2)}`;
   for (const wf of flows) {
     logEvent('airtable.event.dispatch', { tenant: tenantId, workflow: wf.slug });
-    const tenantWf = injectTenantTokens(wf, tenantId, deps);
+    let tenantWf = injectTenantTokens(wf, tenantId, deps);
+    tenantWf = injectFilesystemContext(tenantWf, tenantId);
     try { await spine.engine.workflowScheduler._executeFlow(tenantWf, { trigger: 'event', emailContext: context }); }
     catch (err) { logEvent('airtable.event.error', { tenant: tenantId, workflow: wf.slug, ...errFields(err) }); }
   }
@@ -462,6 +488,7 @@ export async function bootSpine() {
       oauthTokenStore: auth.oauthTokenStore, cipher: auth.tokenCipher,
     });
     w = injectInboxContext(w, w.tenant_id ?? 'default', w.user_id ?? '');
+    w = injectFilesystemContext(w, w.tenant_id ?? 'default');
     return w;
   });
 
@@ -496,6 +523,12 @@ export async function bootSpine() {
   registerInboxCapability(engine.capabilityRegistry, {
     inboxStore,
     getRag: rag.forTenant.bind(rag),
+  });
+
+  // Filesystem connector — tenant-scoped read + list for workflows.
+  // Sandboxed to folders the tenant has connected via the Filesystem page.
+  registerFilesystemCapabilities(engine.capabilityRegistry, {
+    getApprovedFolders: (tenantId) => readSources(tenantId),
   });
 
   const slack = createSlackCapabilityProvider({ oauthTokenStore: auth.oauthTokenStore, apiBase: process.env.SLACK_API_URL });
@@ -699,19 +732,8 @@ export function createApp(spine) {
   });
 
   // ── Knowledge base: folder indexing ──────────────────────────────────────────
-  // Sources list persisted per-tenant at VECTOR_DIR/<tenantId>/sources.json
-  // (same directory as the vector sqlite). Adding a path re-indexes all matching
-  // text files into the tenant's vector store so the chat agent can retrieve them.
-
-  function sourcesPath(tenantId) {
-    const safe = String(tenantId).replace(/[^a-z0-9_-]/gi, '');
-    return join(VECTOR_DIR, safe, 'sources.json');
-  }
-
-  function readSources(tenantId) {
-    const p = sourcesPath(tenantId);
-    try { return JSON.parse(readFileSync(p, 'utf8')); } catch { return []; }
-  }
+  // Sources list helpers are defined at module scope (below) so both bootSpine
+  // (filesystem connector registration) and createApp (RAG routes) can use them.
 
   function writeSources(tenantId, sources) {
     const p = sourcesPath(tenantId);
@@ -1063,6 +1085,7 @@ export function createApp(spine) {
         }
         spec = injectTenantTokens(spec, req.tenant.id, deps);
         spec = injectInboxContext(spec, req.tenant.id, req.user.id);
+        spec = injectFilesystemContext(spec, req.tenant.id);
       }
       let runId = null, completed = false, output = null;
       const steps = [];
