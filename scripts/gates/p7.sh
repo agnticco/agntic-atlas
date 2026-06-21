@@ -117,6 +117,13 @@ check "sheets_append registered" \
 check "registerGoogleChannels called in server.js" \
   grep -q 'registerGoogleChannels' src/api/server.js
 
+# Parse check — grep passes even on non-parsing source; verify the modules load
+check "workflow-store.js parses (node import)" \
+  node --input-type=module --eval "import('./src/workflows/workflow-store.js').then(()=>process.exit(0)).catch(()=>process.exit(1))"
+
+check "server.js loads cleanly (node import)" \
+  node --input-type=module --eval "import('./src/api/server.js').then(()=>process.exit(0)).catch(()=>process.exit(1))"
+
 # Summary
 echo ""
 echo "p7: $PASS passed, $FAIL failed"
