@@ -844,15 +844,49 @@ export class WorkflowStore {
    *   { config: { cron: "M H * * <DOW>" } }      — weekly cron (DOW = 0–6,
    *                                                 comma list, or range a-b;
    *                                                 7 also treated as Sunday)
+   *   { config: { cron: "*/N * * * *" } }        — every N minutes (sub-daily)
+   *   { config: { cron: "0 */N * * *" } }        — every N hours (sub-daily)
    */
   _isFlowDue(workflow) {
     const triggers = workflow.triggers ?? [];
     for (const t of triggers) {
       if (t?.type !== 'schedule') continue;
+      const cron = t.config?.cron;
+      const time = t.config?.time;
+
+      // ── Sub-daily: interval-based patterns ──────────────────────────────────
+      // These use elapsed time since last_run rather than "once per calendar day."
+      if (typeof cron === 'string') {
+        const parts = cron.trim().split(/\s+/);
+        if (parts.length >= 5 && parts[2] === '*' && parts[3] === '*') {
+          const [mField, hField] = parts;
+
+          // */N * * * *  — every N minutes
+          const everyMinMatch = mField.match(/^\*\/(\d+)$/);
+          if (everyMinMatch && hField === '*') {
+            const intervalMs = parseInt(everyMinMatch[1], 10) * 60_000;
+            if (!isNaN(intervalMs) && intervalMs > 0) {
+              if (!workflow.last_run) return true;
+              return (Date.now() - new Date(workflow.last_run).getTime()) >= intervalMs;
+            }
+          }
+
+          // 0 */N * * *  — every N hours (fires on the hour, every N hours)
+          const everyHrMatch = hField.match(/^\*\/(\d+)$/);
+          if (everyHrMatch && mField === '0') {
+            const intervalMs = parseInt(everyHrMatch[1], 10) * 3_600_000;
+            if (!isNaN(intervalMs) && intervalMs > 0) {
+              if (!workflow.last_run) return true;
+              return (Date.now() - new Date(workflow.last_run).getTime()) >= intervalMs;
+            }
+          }
+        }
+      }
+
+      // ── Daily / weekly: fire once per calendar day at a specific time ───────
       let hh = null, mm = null;
       let allowedDows = null;  // null = any day; otherwise Set<0..6>
-      const time = t.config?.time;
-      const cron = t.config?.cron;
+
       if (typeof time === 'string' && /^\d{1,2}:\d{2}$/.test(time)) {
         [hh, mm] = time.split(':').map(n => parseInt(n, 10));
       } else if (typeof cron === 'string') {

@@ -135,6 +135,39 @@ refactor them without an explicit decision recorded here:
   commented out so the base drives both. Whatever base is chosen must be registered as an
   allowed redirect URL in the provider consoles. (Surfaced by a Cloudflare Tunnel 1033 on the
   hosted base while testing locally; prod hosting is P11.)
+- **CapabilityRegistry + unified catalog (2026-06-20, P7)** — new
+  `src/connectors/capability-registry.js` replaces the fragmented ChannelRegistry / per-connector
+  silos with a single position-agnostic catalog. Each capability declares `positions: ['trigger'
+  | 'step' | 'delivery']`, `isReady()`, and a `handle` (none for triggers). `ChannelRegistry`
+  now wraps `CapabilityRegistry` (adapter pattern): `getAll()` returns step+delivery only
+  (no triggers). `buildEngine()` in server.js instantiates `CapabilityRegistry` first, passes it
+  to `ChannelRegistry`, then calls `registerSlackTriggers`, `registerGoogleChannels`,
+  `registerAirtableChannels`. The `/capabilities` endpoint + builder session creation narrow
+  trigger `available` flags per-tenant based on actual connector connection status.
+- **Airtable connector (2026-06-20, P7)** — `src/connectors/airtable/index.js`. PAT auth stored
+  at workspace level (`wsinstall:<tenantId>` synthetic userId, mirrors Slack bot token pattern).
+  7 capabilities: list/get/search/create/update/delete records + `airtable_record_changed` trigger.
+  Real webhook subscriptions via Airtable Webhooks API; HMAC-verified (`X-Airtable-Content-MAC`).
+  Webhook routing table persisted to `./memory/airtable-webhooks.json` (Map rebuilt on start).
+  `isAirtableConnected` check used to narrow trigger `available` flag at `/capabilities`.
+  REST routes in server.js: POST/GET/DELETE `/connectors/airtable/*` + webhook event dispatch.
+- **Google write-back capabilities (2026-06-20, P7)** — `registerGoogleChannels` in
+  `src/connectors/google/index.js` adds 13 capabilities to the catalog (8 step-only reads,
+  5 step+delivery writes, 1 gmail trigger). `makeGoogleApiFromToken(token)` added for credential
+  injection via `CONNECTOR_INJECTORS`. All handles use `config.googleToken` injected at run time.
+- **Sub-daily scheduling (2026-06-20, P7)** — `_isFlowDue` in `src/workflows/workflow-store.js`
+  now supports `*/N * * * *` (every N minutes) and `0 */N * * *` (every N hours) cron patterns.
+  Sub-daily patterns use elapsed-time deduplication (`Date.now() - last_run >= intervalMs`) instead
+  of the per-calendar-day check used by daily/weekly patterns. Scheduler tick is 60s — sufficient
+  for minute-level granularity.
+- **Error handling with retry + notify (2026-06-20, P7)** — `WorkflowScheduler._executeFlow` in
+  `src/workflows/workflow-scheduler.js` is now a retry wrapper: reads
+  `workflow.error_handling.retry.attempts` (extra attempts) and `retry.delay_seconds` (wait between
+  attempts), then delegates to `_runFlowOnce` (the extracted single-attempt executor). After all
+  attempts fail, calls `this._errorNotifier(workflow, error)` if registered.
+  `registerErrorNotifier(fn)` added. In server.js, a Slack-based notifier is wired: reads
+  `workflow.error_handling.notify.{type:'slack', channel}`, resolves the tenant's bot token from
+  the grant store (falls back to `SLACK_BOT_TOKEN`), and posts to the specified channel.
 
 ## The frozen canonical spec
 
@@ -248,7 +281,7 @@ Update as gates close. `git log --grep "^Gate:"` is the authoritative ledger.
 - [x] **P4** — builder UI: workflow built entirely by talking *(design-first: Claude generates mockups → approval → build)*
 - [x] **P5** — console UI: inventory, live run monitoring, SOP view + SOP export (PDF + Markdown).
 - [~] **P6** — *(scrapped 2026-06-20)* current sidebar + surface switching is sufficient; floating pill / launcher layer dropped from scope.
-- [ ] **P7** — Airtable + Google write + error handling + sub-daily scheduling
+- [~] **P7** — Airtable + Google write + error handling + sub-daily scheduling *(built; awaiting gate)*
 - [ ] **P8** — web + filesystem connectors: unified web research (Tavily search + Firecrawl scrape) + tenant-scoped filesystem access
 - [ ] **P9** — value tracking: time-saved metrics per run, all-up ROI summary, customer-facing report
 - [ ] **P10** — admin observability: standalone admin app, per-tenant usage + cost monitoring
