@@ -148,7 +148,7 @@ export function webConnectionStatus() {
     connected: anthropic,
     anthropic,
     detail: anthropic
-      ? 'Web search (Anthropic) + web fetch (Readability) enabled'
-      : 'Set ANTHROPIC_API_KEY to enable web search',
+      ? 'Gives workflows live access to the web — search for current information or fetch and read content from any URL.'
+      : 'Set ANTHROPIC_API_KEY to enable web search.',
   };
 }
