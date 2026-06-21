@@ -84,8 +84,9 @@ export function createGoogleCapabilityProvider({ oauthTokenStore }) {
     async resolveForTenant(tenantId, userId) {
       const key = `${tenantId}:${userId}`;
       if (cache.has(key)) return cache.get(key);
+      const connected = oauthTokenStore.has({ tenantId, userId, connectorId: GOOGLE_CONNECTOR_ID });
       const scopes = getGrantedScopes(oauthTokenStore, tenantId, userId);
-      const resolved = resolveGoogleCapabilities(scopes);
+      const resolved = { connected, ...resolveGoogleCapabilities(scopes) };
       cache.set(key, resolved);
       return resolved;
     },
