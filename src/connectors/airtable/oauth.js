@@ -248,3 +248,63 @@ export function getAirtableGrant({ oauthTokenStore, tenantId }) {
 export function disconnectAirtable({ oauthTokenStore, tenantId }) {
   return oauthTokenStore.delete({ tenantId, userId: _owner(tenantId), connectorId: AIRTABLE_CONNECTOR_ID });
 }
+
+// ── Scope-aware capability resolution ────────────────────────────────────────
+
+const CAPABILITY_SCOPES = {
+  airtable_list_records:   ['data.records:read'],
+  airtable_get_record:     ['data.records:read'],
+  airtable_search_records: ['data.records:read'],
+  airtable_create_record:  ['data.records:write'],
+  airtable_update_record:  ['data.records:write'],
+  airtable_delete_record:  ['data.records:write'],
+  airtable_record_changed: ['webhook:manage'],
+};
+
+/**
+ * Annotate Airtable capabilities with availability based on granted OAuth scopes.
+ * Returns the same shape as resolveGoogleCapabilities / resolveSlackCapabilities
+ * so the /capabilities endpoint and converger treat all connectors uniformly.
+ */
+export function resolveAirtableCapabilities(grantedScopes = []) {
+  const granted = new Set(grantedScopes);
+  const actions = Object.entries(CAPABILITY_SCOPES).map(([id, required]) => {
+    const missing = required.filter(s => !granted.has(s));
+    const available = missing.length === 0;
+    return {
+      id,
+      available,
+      unavailableReason: available ? null : `missing scope(s): ${missing.join(', ')}`,
+    };
+  });
+  return { connector: 'airtable', grantedScopes: [...granted], actions };
+}
+
+/**
+ * Per-tenant Airtable capability provider — mirrors createSlackCapabilityProvider
+ * and createGoogleCapabilityProvider. Mount on the spine; call resolveForTenant()
+ * in /capabilities and the converger.
+ */
+export function createAirtableCapabilityProvider({ oauthTokenStore }) {
+  const cache = new Map(); // tenantId → resolved
+
+  return {
+    resolveForTenant(tenantId) {
+      if (!tenantId) return { connector: 'airtable', connected: false, grantedScopes: [], actions: [] };
+      if (cache.has(tenantId)) return cache.get(tenantId);
+      const grant = getAirtableGrant({ oauthTokenStore, tenantId });
+      if (!grant) {
+        const r = { connector: 'airtable', connected: false, grantedScopes: [], actions: [] };
+        cache.set(tenantId, r);
+        return r;
+      }
+      const scopes = grant.scope ? grant.scope.split(/\s+/).filter(Boolean) : [];
+      const resolved = { connected: true, ...resolveAirtableCapabilities(scopes) };
+      cache.set(tenantId, resolved);
+      return resolved;
+    },
+    refresh(tenantId) {
+      if (tenantId) cache.delete(tenantId); else cache.clear();
+    },
+  };
+}
