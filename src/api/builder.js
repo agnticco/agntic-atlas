@@ -118,9 +118,7 @@ How to behave:
 - If they seem close but have not confirmed, you may gently offer ("Want me to set this up?") but keep ready_to_build=false until they say yes.${connectorBlock}
 
 Return ONLY JSON, no markdown fences, no text outside it:
-{"reply":"<your natural message to the user>","ready_to_build":<true|false>,"build_intent":<string or null>}
-
-CRITICAL: In the "reply" field write plain prose only — absolutely no markdown (no **bold**, no _italic_, no - bullet lists, no # headers). Use natural sentences.`;
+{"reply":"<your natural message to the user>","ready_to_build":<true|false>,"build_intent":<string or null>}`;
 }
 
 // Tolerant JSON extraction: strip code fences, else grab the first {...} block.
