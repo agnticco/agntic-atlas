@@ -21,7 +21,6 @@ import { GraphInterrupt }  from '../graph/index.js';
 import { SystemMessage, HumanMessage } from '../core/message.js';
 import { logEvent, errFields } from '../utils/event-log.js';
 import { channelIdForCapability } from '../connectors/slack/index.js';
-import { isAirtableConnected } from '../connectors/airtable/oauth.js';
 import { webConnectionStatus } from '../connectors/web/index.js';
 
 // Retry an LLM call up to maxRetries times on transient provider errors (500/529/503).
@@ -78,6 +77,15 @@ function annotateChannelCatalog(channels, resolvedByConnector = {}) {
     }
   }
 
+  // Airtable: same pattern as Google — actionId matches capability id.
+  const airtable = resolvedByConnector?.airtable;
+  const airtableAvail = {};
+  if ((airtable?.grantedScopes ?? []).length > 0) {
+    for (const a of airtable?.actions ?? []) {
+      airtableAvail[a.id] = { available: a.available, reason: a.unavailableReason };
+    }
+  }
+
   return (channels ?? []).map(c => {
     const positions = c.positions ?? (c.actionOnly ? ['step'] : ['step', 'delivery']);
     if (c.connector === 'slack') {
@@ -89,6 +97,11 @@ function annotateChannelCatalog(channels, resolvedByConnector = {}) {
       const ga = googleAvail[c.id];
       if (!ga) return { ...c, positions };
       return { ...c, positions, available: c.available && ga.available, unavailableReason: ga.reason ?? c.unavailableReason };
+    }
+    if (c.connector === 'airtable') {
+      const aa = airtableAvail[c.id];
+      if (!aa) return { ...c, positions };
+      return { ...c, positions, available: c.available && aa.available, unavailableReason: aa.reason ?? c.unavailableReason };
     }
     return { ...c, positions };
   });
@@ -420,11 +433,46 @@ Rules:
     try {
       const slack    = await spine.slack.resolveForTenant(req.tenant.id);
       const google   = await spine.google.resolveForTenant(req.tenant.id, req.user.id);
-      const airtable = { connected: isAirtableConnected({ oauthTokenStore: spine.auth.oauthTokenStore, tenantId: req.tenant.id }) };
+      const airtable = spine.airtable.resolveForTenant(req.tenant.id);
       const web      = webConnectionStatus();
       capabilities.connectors = { slack, google, airtable, web: { connected: web.connected } };
+
+      // Fetch Airtable base + table schema so the converger can propose real
+      // baseId / tableId values instead of placeholder strings.
+      if (airtable.connected) {
+        try {
+          const { getAirtableAccessToken } = await import('../connectors/airtable/oauth.js');
+          const pat = await getAirtableAccessToken({
+            oauthTokenStore: spine.auth.oauthTokenStore,
+            cipher: spine.auth.tokenCipher,
+            tenantId: req.tenant.id,
+          });
+          if (pat) {
+            const headers = { authorization: `Bearer ${pat}` };
+            const basesRes = await fetch('https://api.airtable.com/v0/meta/bases', { headers });
+            if (basesRes.ok) {
+              const { bases = [] } = await basesRes.json();
+              const schema = await Promise.all(bases.map(async (b) => {
+                try {
+                  const tRes = await fetch(`https://api.airtable.com/v0/meta/bases/${b.id}/tables`, { headers });
+                  if (!tRes.ok) return { id: b.id, name: b.name, tables: [] };
+                  const { tables = [] } = await tRes.json();
+                  return {
+                    id: b.id, name: b.name,
+                    tables: tables.map(t => ({
+                      id: t.id, name: t.name,
+                      fields: (t.fields ?? []).map(f => ({ name: f.name, type: f.type })),
+                    })),
+                  };
+                } catch { return { id: b.id, name: b.name, tables: [] }; }
+              }));
+              capabilities.airtableSchema = schema;
+            }
+          }
+        } catch { /* non-fatal */ }
+      }
       // Scope-aware, position-tagged catalog: only what this tenant can actually run.
-      capabilities.channels   = annotateChannelCatalog(spine.engine.channelRegistry.getAll(), { slack, google });
+      capabilities.channels   = annotateChannelCatalog(spine.engine.channelRegistry.getAll(), { slack, google, airtable });
       // Narrow triggers to connected connectors only.
       const connectedIds = new Set(['slack', 'google'].filter(id => id === 'slack' ? slack : google));
       if (airtable.connected) connectedIds.add('airtable');
