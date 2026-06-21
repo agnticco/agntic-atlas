@@ -1,0 +1,91 @@
+/**
+ * Filesystem connector — tenant-scoped read + list capabilities.
+ *
+ * Security model: every operation is sandboxed to the tenant's approved folders,
+ * which are stored in sources.json (managed via the Filesystem / Knowledge page).
+ * Only entries with absolute paths (added server-side via /rag/index-folder) are
+ * eligible for workflow file access. Browser-upload entries (source:'upload')
+ * have no stable server path and are RAG-only.
+ *
+ * _tenantId is stamped into node config by injectFilesystemContext() in server.js
+ * before each run, mirroring the injectInboxContext() / injectTenantTokens() pattern.
+ */
+
+import { readFileSync, readdirSync, statSync, existsSync } from 'node:fs';
+import { join, resolve }                                   from 'node:path';
+
+function findApprovedRoot(approvedFolders, filePath) {
+  const abs = resolve(filePath);
+  for (const entry of approvedFolders) {
+    if (!entry.path || !entry.path.startsWith('/')) continue; // upload-only entries have no absolute path
+    const root = resolve(entry.path);
+    if (abs === root || abs.startsWith(root + '/')) return root;
+  }
+  return null;
+}
+
+export function registerFilesystemCapabilities(registry, { getApprovedFolders }) {
+  function guard(tenantId, filePath) {
+    if (!tenantId) throw new Error('filesystem: _tenantId not injected — is injectFilesystemContext() called before this run?');
+    if (!filePath)  throw new Error('filesystem: `path` is required in node config');
+    const folders = getApprovedFolders(tenantId);
+    const root    = findApprovedRoot(folders, filePath);
+    if (!root) {
+      throw new Error(
+        `filesystem: "${filePath}" is not within any approved folder for this tenant. ` +
+        `Connect the folder first via the Filesystem page.`,
+      );
+    }
+  }
+
+  registry.register({
+    id:          'filesystem_read',
+    connector:   'atlas',
+    name:        'Read file',
+    description: 'Read a file from a tenant-approved folder and pass its content to the next step.',
+    positions:   ['step'],
+    configSchema: [
+      { key: 'path', label: 'File path', type: 'text',
+        hint: 'Absolute path to a file inside a connected folder.' },
+    ],
+    isReady: () => true,
+    handle: async ({ config }) => {
+      const filePath = config.path;
+      guard(config._tenantId, filePath);
+      if (!existsSync(filePath)) throw new Error(`filesystem_read: file not found: ${filePath}`);
+      const st = statSync(filePath);
+      if (st.isDirectory()) throw new Error(`filesystem_read: path is a directory: ${filePath}`);
+      const content = readFileSync(filePath, 'utf8');
+      return { path: filePath, content, bytes: content.length };
+    },
+  });
+
+  registry.register({
+    id:          'filesystem_list',
+    connector:   'atlas',
+    name:        'List folder',
+    description: 'List files and subdirectories in a tenant-approved folder.',
+    positions:   ['step'],
+    configSchema: [
+      { key: 'path', label: 'Folder path', type: 'text',
+        hint: 'Absolute path to a connected folder or subfolder within it.' },
+    ],
+    isReady: () => true,
+    handle: async ({ config }) => {
+      const folderPath = config.path;
+      guard(config._tenantId, folderPath);
+      if (!existsSync(folderPath)) throw new Error(`filesystem_list: folder not found: ${folderPath}`);
+      const st = statSync(folderPath);
+      if (!st.isDirectory()) throw new Error(`filesystem_list: path is a file, not a folder: ${folderPath}`);
+      const entries = readdirSync(folderPath, { withFileTypes: true }).map(e => ({
+        name: e.name,
+        type: e.isDirectory() ? 'directory' : 'file',
+        path: join(folderPath, e.name),
+      }));
+      return { path: folderPath, count: entries.length, entries };
+    },
+  });
+}
+
+// Identifies filesystem capability node types for context injection.
+export const FILESYSTEM_CAPABILITY_IDS = new Set(['filesystem_read', 'filesystem_list']);

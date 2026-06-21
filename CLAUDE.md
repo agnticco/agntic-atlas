@@ -173,6 +173,19 @@ refactor them without an explicit decision recorded here:
   `registerErrorNotifier(fn)` added. In server.js, a Slack-based notifier is wired: reads
   `workflow.error_handling.notify.{type:'slack', channel}`, resolves the tenant's bot token from
   the grant store (falls back to `SLACK_BOT_TOKEN`), and posts to the specified channel.
+- **Filesystem connector (2026-06-21, P8)** — `src/connectors/filesystem.js` registers
+  `filesystem_read` and `filesystem_list` capabilities (step position) in the CapabilityRegistry.
+  Both are sandboxed to the tenant's approved folders (entries with absolute paths in
+  `sources.json` — browser-upload entries are RAG-only). `injectFilesystemContext()` in
+  `server.js` stamps `_tenantId` into connector-action node configs before each run, mirroring
+  the `injectInboxContext` pattern. Called in all four run paths: REST `/workflows/run`,
+  scheduler token injector, Slack event dispatch, Airtable event dispatch. Only absolute-path
+  entries (added server-side via `/rag/index-folder`) are eligible for workflow file access;
+  browser-upload entries (`source:'upload'`) have no stable server path and cannot be used.
+- **search_web in converger prompt (2026-06-21, P8)** — `src/converger/prompts.js` now lists
+  `search_web` as an available node type (Anthropic native web_search_20260209, no Tavily/
+  Firecrawl). Filesystem capabilities surface automatically via CapabilityRegistry → ChannelRegistry
+  → `stepSummary()` with `actionOnly:true`, so no additional prompt wiring was needed.
 
 ## The frozen canonical spec
 
@@ -203,9 +216,10 @@ spec is actually executable, not just structurally similar to the frozen file.
   without `tools`, so a `tool`/`mcp-tool` node throws `Tool registry unavailable`; `fetch`
   needs a registered `source`, not a URL. The converger prompt
   (`src/converger/prompts.js`) is therefore restricted to the runnable set
-  (summarize/llm/extract/rewrite/deliver + triggers) and told to model incoming data as a
-  TRIGGER, never a mid-workflow fetch/tool step. Re-add these to the prompt when a later
-  phase wires connector actions as tools. (2026-06-18)
+  (summarize/llm/extract/rewrite/search_web/deliver + connector-action for registered
+  capabilities + triggers). `search_web` was added in P8 (2026-06-21). Filesystem
+  capabilities (`filesystem_read`, `filesystem_list`) surface automatically in
+  connector-action options via CapabilityRegistry/ChannelRegistry. (2026-06-18, updated 2026-06-21)
 - **`/workflows/run` returns 200 with `{completed:false, error}` for a failed step**, not a
   5xx — Cloudflare replaces origin 502/504 with its own HTML error page, which hid the real
   run error behind a "tunnel/proxy" message. Application-level run failures must stay 2xx so
@@ -287,7 +301,7 @@ Update as gates close. `git log --grep "^Gate:"` is the authoritative ledger.
 - [x] **P5** — console UI: inventory, live run monitoring, SOP view + SOP export (PDF + Markdown).
 - [~] **P6** — *(scrapped 2026-06-20)* current sidebar + surface switching is sufficient; floating pill / launcher layer dropped from scope.
 - [x] **P7** — Airtable + Google write + error handling + sub-daily scheduling
-- [ ] **P8** — web + filesystem connectors: unified web research (Tavily search + Firecrawl scrape) + tenant-scoped filesystem access
+- [ ] **P8** — web research (`search_web` native Anthropic tool, already built) + filesystem connector (`filesystem_read`/`filesystem_list`, tenant-sandboxed to Knowledge-page approved folders)
 - [ ] **P9** — value tracking: time-saved metrics per run, all-up ROI summary, customer-facing report
 - [ ] **P10** — admin observability: standalone admin app, per-tenant usage + cost monitoring
 - [ ] **P11** — E2E validation + production hardening + VPS migration

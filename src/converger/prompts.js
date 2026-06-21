@@ -126,6 +126,7 @@ AVAILABLE NODE TYPES (only these — every one is runnable by the engine today):
 - llm: Run a custom AI prompt (config: prompt, model)
 - extract: Extract structured fields from text (config: fields[])
 - rewrite: Rewrite/transform text (config: instructions, tone)
+- search_web: Search the web and return article summaries (config: topic, count 1-10, depth "snippets"|"standard"|"deep"). Use for schedule-triggered workflows that need current information. Result includes results[].{title,url,snippet} and a written body — pass it to summarize/extract/rewrite for further processing. Requires an Anthropic-backed LLM tier.
 - connector-action: Call a connector capability MID-workflow to GET or DO something, then pass the result to the next step (config: { action:"<id>", ...params }). Use this ONLY when the workflow genuinely needs to reach into a connector mid-flow — e.g. pull a Slack channel's history, look up a user, create/invite to a channel. Do NOT use it to "fetch" the data a trigger already delivers, and never for the final delivery (use deliver). If no connector action is needed, skip it entirely. Available actions:
 ${stepSummary(capabilities)}
 - deliver: Send the final result to a destination. ALWAYS the LAST step. Choose config.channel from the destinations below and set ONLY its routing fields — the message body is filled automatically from the previous step's output, so never put the content in config.
