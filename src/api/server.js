@@ -54,12 +54,17 @@ import {
 } from '../connectors/google/index.js';
 import { pollGmail, formatEmailContext } from '../connectors/google/gmail-source.js';
 import {
-  AIRTABLE_CONNECTOR_ID, makeAirtableApi,
-  storeAirtableToken, getAirtableToken, disconnectAirtable, isAirtableConnected,
+  makeAirtableApi,
   registerAirtableChannels, registerWebhookRoute, unregisterWebhookRoute,
   lookupWebhook, allWebhooks as _airtableWebhooks, initWebhookStore, verifyAirtableSignature,
   createAirtableWebhook, deleteAirtableWebhook, fetchWebhookPayloads,
 } from '../connectors/airtable/index.js';
+import {
+  AIRTABLE_CONNECTOR_ID,
+  airtableOAuthConfig, isAirtableOAuthConfigured, createAirtableOAuthFlow,
+  storeAirtableToken, getAirtableToken, getAirtableAccessToken,
+  isAirtableConnected, getAirtableGrant, disconnectAirtable,
+} from '../connectors/airtable/oauth.js';
 import { InteractionStore } from '../converger/interaction-store.js';
 import { mountBuilderRoutes } from './builder.js';
 import { mountConsoleRoutes } from './console.js';
@@ -249,7 +254,7 @@ async function dispatchAirtableEvent(spine, body) {
 
   const { tenantId } = route;
   const deps = { oauthTokenStore: spine.auth.oauthTokenStore, cipher: spine.auth.tokenCipher };
-  const pat  = getAirtableToken({ oauthTokenStore: spine.auth.oauthTokenStore, cipher: spine.auth.tokenCipher, tenantId });
+  const pat  = await getAirtableAccessToken({ oauthTokenStore: spine.auth.oauthTokenStore, cipher: spine.auth.tokenCipher, tenantId });
   if (!pat) { logEvent('airtable.event.no_token', { tenantId }); return; }
 
   const api = makeAirtableApi(pat);
@@ -919,30 +924,56 @@ export function createApp(spine) {
   });
 
   // ── Airtable connector ─────────────────────────────────────────────────────
-  // PAT-based auth (no OAuth). User generates a PAT at airtable.com/create/tokens
-  // with scopes: data.records:read  data.records:write  webhook:manage
+  // OAuth 2.0 + PKCE. Requires AIRTABLE_CLIENT_ID + AIRTABLE_CLIENT_SECRET.
+  // Workspace-level install: one token per tenant; first admin to connect installs for all.
+  const airtableFlow = createAirtableOAuthFlow();
 
-  // Store a PAT for this tenant.
-  app.post('/connectors/airtable/connect', requireActiveTenant, (req, res) => {
-    const pat = String(req.body?.pat ?? '').trim();
-    if (!pat) return res.status(400).json({ error: 'pat is required' });
-    storeAirtableToken({ oauthTokenStore: spine.auth.oauthTokenStore, cipher: spine.auth.tokenCipher, tenantId: req.tenant.id, pat });
-    res.json({ ok: true, connected: true });
+  // Start OAuth flow — redirect the browser to Airtable's consent screen.
+  app.get('/connectors/airtable/oauth/start', requireActiveTenant, (req, res) => {
+    if (!isAirtableOAuthConfigured()) {
+      return res.status(501).json({ error: 'Airtable OAuth not configured (set AIRTABLE_CLIENT_ID and AIRTABLE_CLIENT_SECRET)' });
+    }
+    try {
+      const { authorizeUrl } = airtableFlow.start({ tenantId: req.tenant.id, userId: req.user.id });
+      res.redirect(authorizeUrl);
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // OAuth callback — Airtable redirects here after the user consents.
+  app.get('/connectors/airtable/callback', requireActiveTenant, async (req, res) => {
+    if (req.query.error) return res.status(400).json({ error: req.query.error });
+    try {
+      const result = await airtableFlow.complete({ state: req.query.state, code: req.query.code, sessionUserId: req.user.id });
+      storeAirtableToken({
+        oauthTokenStore: spine.auth.oauthTokenStore,
+        cipher: spine.auth.tokenCipher,
+        tenantId: result.tenantId,
+        accessToken:  result.accessToken,
+        refreshToken: result.refreshToken,
+        expiresIn:    result.expiresIn,
+        scope:        result.scope,
+      });
+      // Redirect back to the settings/connectors page.
+      res.redirect('/?connected=airtable');
+    } catch (err) {
+      res.status(400).json({ error: err.message });
+    }
   });
 
   // Connection status.
   app.get('/connectors/airtable/status', requireActiveTenant, (req, res) => {
-    const connected = isAirtableConnected({ oauthTokenStore: spine.auth.oauthTokenStore, tenantId: req.tenant.id });
-    res.json({ connected });
+    const grant = getAirtableGrant({ oauthTokenStore: spine.auth.oauthTokenStore, tenantId: req.tenant.id });
+    res.json(grant ?? { connected: false });
   });
 
-  // Disconnect and best-effort delete all registered webhooks for this tenant.
+  // Disconnect — best-effort delete all registered webhooks, then remove the token.
   app.delete('/connectors/airtable', requireActiveTenant, async (req, res) => {
     const tenantId = req.tenant.id;
-    const pat = getAirtableToken({ oauthTokenStore: spine.auth.oauthTokenStore, cipher: spine.auth.tokenCipher, tenantId });
-    if (pat) {
-      const api = makeAirtableApi(pat);
-      // lookupWebhook returns one entry; scan the full map via the exported iterable.
+    const token = await getAirtableAccessToken({ oauthTokenStore: spine.auth.oauthTokenStore, cipher: spine.auth.tokenCipher, tenantId });
+    if (token) {
+      const api = makeAirtableApi(token);
       for (const [webhookId, entry] of _airtableWebhooks()) {
         if (entry?.tenantId !== tenantId) continue;
         try { await deleteAirtableWebhook(api, { baseId: entry.baseId, webhookId }); } catch { /* best-effort */ }
@@ -953,15 +984,15 @@ export function createApp(spine) {
     res.json({ ok: true, removed });
   });
 
-  // Register a webhook for an Airtable base (called after publishing a workflow with an airtable trigger).
+  // Register a webhook for an Airtable base (called after publishing a workflow with an airtable_record_changed trigger).
   app.post('/connectors/airtable/webhooks', requireActiveTenant, async (req, res) => {
     const { baseId, tableId } = req.body ?? {};
     if (!baseId) return res.status(400).json({ error: 'baseId is required' });
     const tenantId = req.tenant.id;
-    const pat = getAirtableToken({ oauthTokenStore: spine.auth.oauthTokenStore, cipher: spine.auth.tokenCipher, tenantId });
-    if (!pat) return res.status(403).json({ error: 'Airtable not connected for this tenant' });
+    const token = await getAirtableAccessToken({ oauthTokenStore: spine.auth.oauthTokenStore, cipher: spine.auth.tokenCipher, tenantId });
+    if (!token) return res.status(403).json({ error: 'Airtable not connected for this tenant' });
     try {
-      const api = makeAirtableApi(pat);
+      const api = makeAirtableApi(token);
       const notificationUrl = `${process.env.OAUTH_REDIRECT_BASE ?? `http://localhost:${PORT}`}/connectors/airtable/events`;
       const { webhookId, macSecretBase64 } = await createAirtableWebhook(api, { baseId, tableId, notificationUrl });
       registerWebhookRoute({ webhookId, tenantId, baseId, macSecretBase64 });

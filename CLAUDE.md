@@ -144,13 +144,18 @@ refactor them without an explicit decision recorded here:
   to `ChannelRegistry`, then calls `registerSlackTriggers`, `registerGoogleChannels`,
   `registerAirtableChannels`. The `/capabilities` endpoint + builder session creation narrow
   trigger `available` flags per-tenant based on actual connector connection status.
-- **Airtable connector (2026-06-20, P7)** — `src/connectors/airtable/index.js`. PAT auth stored
-  at workspace level (`wsinstall:<tenantId>` synthetic userId, mirrors Slack bot token pattern).
+- **Airtable connector (2026-06-20, P7)** — `src/connectors/airtable/index.js` (CRUD + webhooks)
+  + `src/connectors/airtable/oauth.js` (OAuth 2.0 + PKCE auth). OAuth install is workspace-level:
+  `wsinstall:<tenantId>` synthetic userId, mirrors Slack bot token pattern. Access tokens expire
+  in 3600s; refresh tokens are rotated on each refresh (`_doRefresh` persists new refresh token
+  immediately). `getAirtableAccessToken` (async, auto-refresh) used in all async server paths;
+  `getAirtableToken` (sync, no refresh) used by `injectTenantTokens`. OAuth routes:
+  `GET /connectors/airtable/oauth/start` → Airtable consent screen;
+  `GET /connectors/airtable/callback` → exchange code, store tokens, redirect to `/?connected=airtable`.
   7 capabilities: list/get/search/create/update/delete records + `airtable_record_changed` trigger.
   Real webhook subscriptions via Airtable Webhooks API; HMAC-verified (`X-Airtable-Content-MAC`).
   Webhook routing table persisted to `./memory/airtable-webhooks.json` (Map rebuilt on start).
-  `isAirtableConnected` check used to narrow trigger `available` flag at `/capabilities`.
-  REST routes in server.js: POST/GET/DELETE `/connectors/airtable/*` + webhook event dispatch.
+  Required env: `AIRTABLE_CLIENT_ID`, `AIRTABLE_CLIENT_SECRET` (from airtable.com/create/oauth).
 - **Google write-back capabilities (2026-06-20, P7)** — `registerGoogleChannels` in
   `src/connectors/google/index.js` adds 13 capabilities to the catalog (8 step-only reads,
   5 step+delivery writes, 1 gmail trigger). `makeGoogleApiFromToken(token)` added for credential

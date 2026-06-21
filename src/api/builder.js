@@ -21,7 +21,7 @@ import { GraphInterrupt }  from '../graph/index.js';
 import { SystemMessage, HumanMessage } from '../core/message.js';
 import { logEvent, errFields } from '../utils/event-log.js';
 import { channelIdForCapability } from '../connectors/slack/index.js';
-import { isAirtableConnected } from '../connectors/airtable/index.js';
+import { isAirtableConnected } from '../connectors/airtable/oauth.js';
 
 // Retry an LLM call up to maxRetries times on transient provider errors (500/529/503).
 async function withLLMRetry(fn, maxRetries = 2) {
