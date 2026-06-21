@@ -101,20 +101,27 @@ function pubUser(u) {
   return { id: u.id, email: u.email, display_name: u.display_name ?? u.email, role: u.role };
 }
 
-// The conversational agent's system prompt. It must feel like a colleague, not a
-// form — and it must NOT push the user toward building until they're ready.
-const CHAT_SYSTEM = `You are Atlas, a warm, down-to-earth assistant for non-technical business operators. You help people automate repetitive work — but you are also happy to just talk, answer questions, or think an idea through with them.
+// Build the conversational system prompt with live connector context injected.
+// connectorLines: string[] of "- ConnectorName: what it can do" per connected connector.
+function buildChatSystem(connectorLines = []) {
+  const connectorBlock = connectorLines.length
+    ? `\n\nConnectors this workspace has connected — answer questions about available connectors ONLY based on this list, never invent others:\n${connectorLines.join('\n')}`
+    : `\n\nNo connectors are connected yet. If asked what connectors are available, say none are set up yet and suggest visiting Connections in the sidebar to add them.`;
+
+  return `You are Atlas, a warm, down-to-earth assistant for non-technical business operators. You help people automate repetitive work — but you are also happy to just talk, answer questions, or think an idea through with them.
 
 How to behave:
 - Talk like a helpful colleague: natural, concise, and friendly. Match the user's tone. Small talk and general questions are welcome — answer them normally.
 - NEVER pressure the user to build a workflow. If they greet you or ask something, just respond. The user may only want to chat.
 - When they describe something they want to automate, help them think it through in conversation — gently explore the trigger (what starts it), the steps, and where the result should go, ONE easy question at a time. Don't dump a form or a list of fields on them.
-- Atlas can automate things like: watching email/Gmail, running on a schedule, summarizing or rewriting text with AI, extracting information, and delivering results to Slack or email. If asked for something out of scope, say so kindly and suggest the closest thing.
 - Only when the user has described an automation AND clearly signals they are ready to build it (e.g. "let's build it", "set that up", "yes, make it", "go ahead") do you set ready_to_build=true and write build_intent: a single clear paragraph capturing the trigger, the processing steps, and the destination, in plain language, folding in everything discussed so far.
-- If they seem close but have not confirmed, you may gently offer ("Want me to set this up?") but keep ready_to_build=false until they say yes.
+- If they seem close but have not confirmed, you may gently offer ("Want me to set this up?") but keep ready_to_build=false until they say yes.${connectorBlock}
 
 Return ONLY JSON, no markdown fences, no text outside it:
-{"reply":"<your natural message to the user>","ready_to_build":<true|false>,"build_intent":<string or null>}`;
+{"reply":"<your natural message to the user>","ready_to_build":<true|false>,"build_intent":<string or null>}
+
+CRITICAL: In the "reply" field write plain prose only — absolutely no markdown (no **bold**, no _italic_, no - bullet lists, no # headers). Use natural sentences.`;
+}
 
 // Tolerant JSON extraction: strip code fences, else grab the first {...} block.
 function extractJsonLoose(text) {
@@ -219,7 +226,18 @@ Rules:
         .filter(m => m && (m.role === 'user' || m.role === 'assistant') && typeof m.content === 'string')
         .map(m => ({ role: m.role, content: m.content }));
 
-      const raw = await withLLMRetry(() => t.invoke([{ role: 'system', content: CHAT_SYSTEM }, ...history]));
+      // Resolve live connector grants so the prompt reflects what's actually connected.
+      const connectorLines = [];
+      try {
+        const sl = await spine.slack.resolveForTenant(req.tenant.id);
+        const go = await spine.google.resolveForTenant(req.tenant.id, req.user.id);
+        const at = spine.airtable.resolveForTenant(req.tenant.id);
+        if (sl.connected) connectorLines.push('- Slack: post messages, DMs, reactions, reminders');
+        if (go.connected) connectorLines.push('- Google Workspace: send/read Gmail, create calendar events, read/write Sheets, create Docs, manage Tasks');
+        if (at.connected) connectorLines.push('- Airtable: read, create, update, delete records in any base');
+      } catch { /* non-fatal */ }
+
+      const raw = await withLLMRetry(() => t.invoke([{ role: 'system', content: buildChatSystem(connectorLines) }, ...history]));
       const text = (typeof raw === 'string' ? raw : raw?.content ?? '').trim();
 
       let parsed = null;

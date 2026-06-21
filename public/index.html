@@ -186,7 +186,7 @@
               <sc-if value="{{ item.isGreeting }}" hint-placeholder-val="{{ false }}">
                 <div style="animation:msgIn .45s ease both">
                   <div style="padding-left:12px;border-left:2px solid rgba(120,180,255,.35)">
-                    <div style="font-size:16.5px;line-height:1.5;color:rgba(255,255,255,.88);max-width:52ch"><sc-for list="{{ item.parts }}" as="p"><sc-if value="{{ p.isMention }}" hint-placeholder-val="{{ false }}"><span style="background:{{ p.gradient }};-webkit-background-clip:text;background-clip:text;color:transparent;font-weight:600;letter-spacing:-0.005em;filter:{{ p.glow }}">{{ p.val }}</span></sc-if><sc-if value="{{ p.isText }}" hint-placeholder-val="{{ false }}">{{ p.val }}</sc-if></sc-for></div>
+                    <div style="font-size:16.5px;line-height:1.5;color:rgba(255,255,255,.88);max-width:52ch;white-space:pre-line"><sc-for list="{{ item.parts }}" as="p"><sc-if value="{{ p.isMention }}" hint-placeholder-val="{{ false }}"><span style="background:{{ p.gradient }};-webkit-background-clip:text;background-clip:text;color:transparent;font-weight:600;letter-spacing:-0.005em;filter:{{ p.glow }}">{{ p.val }}</span></sc-if><sc-if value="{{ p.isText }}" hint-placeholder-val="{{ false }}">{{ p.val }}</sc-if></sc-for></div>
                   </div>
                 </div>
               </sc-if>
@@ -200,7 +200,7 @@
               <sc-if value="{{ item.isAtlas }}" hint-placeholder-val="{{ false }}">
                 <div style="animation:msgIn .45s ease both">
                   <div style="padding-left:12px;border-left:2px solid rgba(120,180,255,.35)">
-                    <div style="font-size:15px;line-height:1.5;color:rgba(255,255,255,.76)"><sc-for list="{{ item.parts }}" as="p"><sc-if value="{{ p.isMention }}" hint-placeholder-val="{{ false }}"><span style="background:{{ p.gradient }};-webkit-background-clip:text;background-clip:text;color:transparent;font-weight:600;letter-spacing:-0.005em;filter:{{ p.glow }}">{{ p.val }}</span></sc-if><sc-if value="{{ p.isText }}" hint-placeholder-val="{{ false }}">{{ p.val }}</sc-if></sc-for></div>
+                    <div style="font-size:15px;line-height:1.5;color:rgba(255,255,255,.76);white-space:pre-line"><sc-for list="{{ item.parts }}" as="p"><sc-if value="{{ p.isMention }}" hint-placeholder-val="{{ false }}"><span style="background:{{ p.gradient }};-webkit-background-clip:text;background-clip:text;color:transparent;font-weight:600;letter-spacing:-0.005em;filter:{{ p.glow }}">{{ p.val }}</span></sc-if><sc-if value="{{ p.isText }}" hint-placeholder-val="{{ false }}">{{ p.val }}</sc-if></sc-for></div>
                     <sc-if value="{{ item.hasReason }}" hint-placeholder-val="{{ false }}">
                       <div style="display:flex;gap:8px;align-items:flex-start;margin-top:8px;color:rgba(255,255,255,.45)">
                         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" style="flex:none;margin-top:2px"><path d="M9 18h6M10 21h4M12 3a6 6 0 0 0-4 10.5c.6.6 1 1.3 1 2.5h6c0-1.2.4-1.9 1-2.5A6 6 0 0 0 12 3Z"/></svg>
@@ -1446,6 +1446,12 @@ class Component extends DCLogic {
 
   _parseMentions(text) {
     if (!text) return [{ isText: true, val: '' }];
+    // Degrade markdown gracefully: strip markers so **bold** renders as bold, etc.
+    text = text
+      .replace(/\*\*([^*]+)\*\*/g, '$1')
+      .replace(/\*([^*]+)\*/g, '$1')
+      .replace(/^#{1,3}\s+/gm, '')
+      .replace(/^[-*]\s+/gm, '• ');
     const parts = [];
     const re = /@([\w-]+)/g;
     let last = 0, m;
