@@ -44,7 +44,7 @@ export function airtableOAuthConfig() {
     redirectUri: process.env.AIRTABLE_REDIRECT_URI ?? connectorRedirectUri('airtable'),
     // Request the full capability set; user can narrow on Airtable's consent screen.
     scopes: (process.env.AIRTABLE_OAUTH_SCOPES ??
-      'data.records:read data.records:write schema.bases:read webhook:manage'
+      'data.records:read data.records:write schema.bases:read schema.bases:write webhook:manage'
     ).split(/\s+/).filter(Boolean),
   };
 }

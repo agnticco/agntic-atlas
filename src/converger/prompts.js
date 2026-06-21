@@ -99,6 +99,23 @@ function triggerSummary(capabilities) {
   ).join('\n');
 }
 
+// Render the tenant's actual Airtable bases + tables so the converger can
+// propose real baseId / tableId values rather than placeholder strings.
+function airtableSchemaSummary(capabilities) {
+  const schema = capabilities?.airtableSchema;
+  if (!schema?.length) return '';
+  const lines = ['AIRTABLE SCHEMA (your connected workspace — use these exact IDs in connector-action configs):'];
+  for (const base of schema) {
+    lines.push(`  Base: "${base.name}"  baseId: "${base.id}"`);
+    for (const table of (base.tables ?? [])) {
+      const fieldList = (table.fields ?? []).slice(0, 8).map(f => `${f.name} (${f.type})`).join(', ');
+      lines.push(`    Table: "${table.name}"  tableId: "${table.id}"${fieldList ? `  fields: ${fieldList}` : ''}`);
+    }
+  }
+  lines.push('  When proposing an airtable_create_record or airtable_list_records node, set baseId and tableId from this schema — never use placeholder strings like {{YOUR_BASE_ID}}.');
+  return '\n' + lines.join('\n');
+}
+
 // ── System prompt (shared across all converger LLM calls) ────────────────────
 
 export function buildSystemPrompt(capabilities) {
@@ -106,6 +123,7 @@ export function buildSystemPrompt(capabilities) {
 ${operatorSummary(capabilities)}
 AVAILABLE CONNECTOR ACTIONS:
 ${capabilitySummary(capabilities)}
+${airtableSchemaSummary(capabilities)}
 
 AVAILABLE TRIGGER TYPES:
 ${triggerSummary(capabilities)}
