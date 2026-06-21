@@ -235,7 +235,25 @@ Rules:
         if (at.connected) connectorLines.push('- Airtable: read, create, update, delete records in any base');
       } catch { /* non-fatal */ }
 
-      const raw = await withLLMRetry(() => t.invoke([{ role: 'system', content: buildChatSystem(connectorLines) }, ...history]));
+      // Retrieve relevant knowledge base + inbox context via RAG.
+      let ragBlock = '';
+      try {
+        const lastUserMsg = [...history].reverse().find(m => m.role === 'user')?.content ?? '';
+        if (lastUserMsg) {
+          const rag  = await spine.rag.forTenant(req.tenant.id);
+          const hits = await rag.query(lastUserMsg, 6);
+          const useful = (hits ?? []).filter(h => (h.score ?? 0) > 0.25).slice(0, 4);
+          if (useful.length) {
+            const ctx = useful.map(h => {
+              const label = h.metadata?.subject || h.metadata?.source_path || h.metadata?.source || 'source';
+              return `[${label}]\n${h.pageContent ?? h.content ?? ''}`;
+            }).join('\n\n---\n\n');
+            ragBlock = `\n\nRelevant content retrieved from the knowledge base and inbox:\n${ctx}`;
+          }
+        }
+      } catch { /* non-fatal */ }
+
+      const raw = await withLLMRetry(() => t.invoke([{ role: 'system', content: buildChatSystem(connectorLines) + ragBlock }, ...history]));
       const text = (typeof raw === 'string' ? raw : raw?.content ?? '').trim();
 
       let parsed = null;

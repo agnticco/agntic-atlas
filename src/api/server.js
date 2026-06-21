@@ -16,7 +16,7 @@
  * in the phases that need them — grow as needed, do not bulk-port the salvage server.
  */
 
-import { existsSync, mkdirSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, resolve, join } from 'node:path';
 import { createHmac, timingSafeEqual } from 'node:crypto';
 
@@ -39,7 +39,7 @@ import {
 } from '../workflows/index.js';
 import { CapabilityRegistry } from '../connectors/capability-registry.js';
 import { LlamaCppLLM, ModelPool, ChatModel } from '../llm/index.js';
-import { EmbeddingModel, TextSplitter, VectorStore } from '../rag/index.js';
+import { EmbeddingModel, TextSplitter, VectorStore, DocumentLoader } from '../rag/index.js';
 import { registerSlackChannel, registerSlackTriggers, createSlackCapabilityProvider } from '../connectors/slack/index.js';
 import {
   createSlackOAuthFlow, storeSlackToken, getSlackToken, getSlackGrant, disconnectSlack, isOAuthConfigured,
@@ -67,6 +67,8 @@ import {
   createAirtableCapabilityProvider,
 } from '../connectors/airtable/oauth.js';
 import { InteractionStore } from '../converger/interaction-store.js';
+import { InboxStore } from '../inbox/inbox-store.js';
+import { registerInboxCapability } from '../inbox/index.js';
 import { mountBuilderRoutes } from './builder.js';
 import { mountConsoleRoutes } from './console.js';
 import { logEvent, errFields } from '../utils/event-log.js';
@@ -86,6 +88,7 @@ const EMBEDDING_MODEL_PATH = process.env.EMBEDDING_MODEL_PATH
 // auth subsystem's own defaults.
 const INTERACTIONS_DB       = process.env.INTERACTIONS_DB       ?? './memory/interactions.sqlite';
 const AIRTABLE_WEBHOOKS_FILE = process.env.AIRTABLE_WEBHOOKS_FILE ?? './memory/airtable-webhooks.json';
+const INBOX_DB               = process.env.INBOX_DB               ?? './memory/inbox.sqlite';
 const AUTH_DB     = process.env.AUTH_DB     ?? './memory/auth.sqlite';
 const AUTH_SECRET = process.env.AUTH_SECRET ?? './memory/.jwt-secret';
 const OAUTH_DB    = process.env.OAUTH_DB    ?? './memory/oauth.sqlite';
@@ -200,6 +203,19 @@ function injectTenantTokens(obj, tenantId, deps) {
     changed = true;
   }
   return changed ? { ...obj, nodes } : obj;
+}
+
+// Inject tenant + user identity into inbox_deliver nodes so the handler knows
+// which user's inbox to write to. Called alongside injectTenantTokens before
+// every run path (REST, scheduler, event dispatch).
+function injectInboxContext(spec, tenantId, userId, extras = {}) {
+  if (!tenantId || !userId || !(spec?.nodes?.length)) return spec;
+  const isInbox = (n) => n?.type === 'deliver' && n?.config?.channel === 'inbox_deliver';
+  if (!spec.nodes.some(isInbox)) return spec;
+  const nodes = spec.nodes.map((n) => isInbox(n)
+    ? { ...n, config: { ...n.config, _tenantId: tenantId, _userId: userId, ...extras } }
+    : n);
+  return { ...spec, nodes };
 }
 
 // A connector this tenant must connect before the spec can run (owns a node but
@@ -442,9 +458,11 @@ export async function bootSpine() {
   // Scheduled + email-triggered runs act as the OWNING tenant: inject that
   // tenant's connector tokens before each automatic run (connector-agnostic).
   engine.workflowScheduler.registerTokenInjector((workflow) => {
-    return injectTenantTokens(workflow, workflow.tenant_id ?? 'default', {
+    let w = injectTenantTokens(workflow, workflow.tenant_id ?? 'default', {
       oauthTokenStore: auth.oauthTokenStore, cipher: auth.tokenCipher,
     });
+    w = injectInboxContext(w, w.tenant_id ?? 'default', w.user_id ?? '');
+    return w;
   });
 
   // Send a Slack alert when a workflow exhausts all retry attempts.
@@ -472,6 +490,14 @@ export async function bootSpine() {
     });
   });
 
+  // Per-user inbox — delivery destination + RAG-indexed content store.
+  ensureDir(INBOX_DB);
+  const inboxStore = new InboxStore({ dbPath: INBOX_DB });
+  registerInboxCapability(engine.capabilityRegistry, {
+    inboxStore,
+    getRag: rag.forTenant.bind(rag),
+  });
+
   const slack = createSlackCapabilityProvider({ oauthTokenStore: auth.oauthTokenStore, apiBase: process.env.SLACK_API_URL });
   const slackOAuth = createSlackOAuthFlow();
   const google = createGoogleCapabilityProvider({ oauthTokenStore: auth.oauthTokenStore });
@@ -484,6 +510,7 @@ export async function bootSpine() {
     auth,
     engine,
     rag,
+    inboxStore,
     slack,
     slackOAuth,
     google,
@@ -501,6 +528,7 @@ export async function bootSpine() {
       try { engine.workflowScheduler.stop?.(); } catch { /* ignore */ }
       try { workflowStore.close?.(); } catch { /* ignore */ }
       try { rag.close?.(); } catch { /* ignore */ }
+      try { inboxStore.close?.(); } catch { /* ignore */ }
       try { auth.close?.(); } catch { /* ignore */ }
     },
   };
@@ -668,6 +696,144 @@ export function createApp(spine) {
     } catch (err) {
       res.status(500).json({ error: `ingest failed: ${err.message ?? String(err)}` });
     }
+  });
+
+  // ── Knowledge base: folder indexing ──────────────────────────────────────────
+  // Sources list persisted per-tenant at VECTOR_DIR/<tenantId>/sources.json
+  // (same directory as the vector sqlite). Adding a path re-indexes all matching
+  // text files into the tenant's vector store so the chat agent can retrieve them.
+
+  function sourcesPath(tenantId) {
+    const safe = String(tenantId).replace(/[^a-z0-9_-]/gi, '');
+    return join(VECTOR_DIR, safe, 'sources.json');
+  }
+
+  function readSources(tenantId) {
+    const p = sourcesPath(tenantId);
+    try { return JSON.parse(readFileSync(p, 'utf8')); } catch { return []; }
+  }
+
+  function writeSources(tenantId, sources) {
+    const p = sourcesPath(tenantId);
+    ensureDir(p);
+    writeFileSync(p, JSON.stringify(sources, null, 2));
+  }
+
+  app.get('/rag/sources', requireActiveTenant, (req, res) => {
+    res.json({ sources: readSources(req.tenant.id) });
+  });
+
+  app.post('/rag/index-folder', requireActiveTenant, async (req, res) => {
+    const folderPath = req.body?.path;
+    if (typeof folderPath !== 'string' || !folderPath.trim()) {
+      return res.status(400).json({ error: '`path` is required' });
+    }
+    const absPath = resolve(folderPath.trim());
+    if (!existsSync(absPath)) {
+      return res.status(400).json({ error: `Path not found: ${absPath}` });
+    }
+    try {
+      const loader = new DocumentLoader();
+      const docs   = await loader._call(absPath);
+      const rag    = await spine.rag.forTenant(req.tenant.id);
+      let chunks   = 0;
+      for (const doc of docs) {
+        chunks += await rag.ingest(doc.pageContent, {
+          source:      'folder',
+          source_path: doc.metadata?.source ?? absPath,
+          folder_root: absPath,
+          tenant_id:   req.tenant.id,
+        });
+      }
+      // Upsert into sources list
+      const sources = readSources(req.tenant.id);
+      if (!sources.find(s => s.path === absPath)) {
+        sources.push({ path: absPath, addedAt: Date.now(), files: docs.length, chunks });
+        writeSources(req.tenant.id, sources);
+      } else {
+        const idx = sources.findIndex(s => s.path === absPath);
+        sources[idx] = { ...sources[idx], files: docs.length, chunks, reindexedAt: Date.now() };
+        writeSources(req.tenant.id, sources);
+      }
+      res.json({ ok: true, path: absPath, files: docs.length, chunks });
+    } catch (err) {
+      res.status(500).json({ error: `index-folder failed: ${err.message ?? String(err)}` });
+    }
+  });
+
+  app.delete('/rag/sources', requireActiveTenant, (req, res) => {
+    const pathStr = (req.body?.path ?? '').trim();
+    if (!pathStr) return res.status(400).json({ error: '`path` is required' });
+    // Match by exact stored value first; also try resolved absolute path for legacy path-based sources
+    const maybeAbs = (pathStr.startsWith('/') || pathStr.startsWith('~')) ? resolve(pathStr) : null;
+    const sources = readSources(req.tenant.id)
+      .filter(s => s.path !== pathStr && (maybeAbs === null || s.path !== maybeAbs));
+    writeSources(req.tenant.id, sources);
+    res.json({ ok: true, removed: pathStr });
+  });
+
+  // Accept file contents uploaded from the browser (folder picker flow).
+  // Ingests each file into the tenant's RAG store and records the folder in sources.json.
+  app.post('/rag/ingest-files', requireActiveTenant, async (req, res) => {
+    const { folderName, files } = req.body ?? {};
+    if (!folderName || !Array.isArray(files) || !files.length) {
+      return res.status(400).json({ error: '`folderName` and non-empty `files` array required' });
+    }
+    const MAX_FILES = 300;
+    const MAX_BYTES = 200_000;
+    try {
+      const rag = await spine.rag.forTenant(req.tenant.id);
+      let chunks = 0;
+      let ingested = 0;
+      for (const { path: filePath, content } of files.slice(0, MAX_FILES)) {
+        if (typeof content !== 'string' || !content.trim()) continue;
+        const trimmed = content.slice(0, MAX_BYTES);
+        chunks += await rag.ingest(trimmed, {
+          source:      'upload',
+          source_path: filePath,
+          folder_root: folderName,
+          tenant_id:   req.tenant.id,
+        });
+        ingested++;
+      }
+      const sources = readSources(req.tenant.id);
+      const entry   = { path: folderName, addedAt: Date.now(), files: ingested, chunks, source: 'upload' };
+      const idx     = sources.findIndex(s => s.path === folderName);
+      if (idx >= 0) sources[idx] = { ...sources[idx], ...entry, reindexedAt: Date.now() };
+      else sources.push(entry);
+      writeSources(req.tenant.id, sources);
+      res.json({ ok: true, folderName, files: ingested, chunks });
+    } catch (err) {
+      res.status(500).json({ error: `ingest-files failed: ${err.message ?? String(err)}` });
+    }
+  });
+
+  // ── Inbox ─────────────────────────────────────────────────────────────────────
+
+  app.get('/inbox', requireActiveTenant, (req, res) => {
+    const { limit = 50, offset = 0 } = req.query;
+    const messages = spine.inboxStore.list(req.tenant.id, req.user.id, {
+      limit: Number(limit), offset: Number(offset),
+    });
+    const unread = spine.inboxStore.unreadCount(req.tenant.id, req.user.id);
+    res.json({ messages, unread });
+  });
+
+  app.get('/inbox/:id', requireActiveTenant, (req, res) => {
+    const msg = spine.inboxStore.get(req.tenant.id, req.user.id, req.params.id);
+    if (!msg) return res.status(404).json({ error: 'not found' });
+    res.json(msg);
+  });
+
+  app.patch('/inbox/:id/read', requireActiveTenant, (req, res) => {
+    const msg = spine.inboxStore.markRead(req.tenant.id, req.user.id, req.params.id);
+    if (!msg) return res.status(404).json({ error: 'not found' });
+    res.json(msg);
+  });
+
+  app.delete('/inbox/:id', requireActiveTenant, (req, res) => {
+    const result = spine.inboxStore.delete(req.tenant.id, req.user.id, req.params.id);
+    res.json(result);
   });
 
   // Query company context (this tenant only). Body: { query, k? }.
@@ -896,6 +1062,7 @@ export function createApp(spine) {
           return res.json({ runId: null, completed: false, error: `${missing} isn't connected for this workspace — connect it first, then run the test.`, steps: [] });
         }
         spec = injectTenantTokens(spec, req.tenant.id, deps);
+        spec = injectInboxContext(spec, req.tenant.id, req.user.id);
       }
       let runId = null, completed = false, output = null;
       const steps = [];

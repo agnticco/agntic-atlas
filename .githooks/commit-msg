@@ -47,14 +47,14 @@ esac
 type="${header%%[(:]*}"
 
 has_phase=no
-if printf '%s\n' "$cleaned" | grep -qE '^Phase:[[:space:]]*[0-7][[:space:]]*$'; then
+if printf '%s\n' "$cleaned" | grep -qE '^Phase:[[:space:]]*[0-9]+[[:space:]]*$'; then
   has_phase=yes
 fi
 
 # 5) feat/fix/refactor/test must carry a valid Phase trailer.
 case "$type" in
   feat|fix|refactor|test)
-    [ "$has_phase" = yes ] || fail "$type commits require a 'Phase: <0-7>' trailer" ;;
+    [ "$has_phase" = yes ] || fail "$type commits require a 'Phase: <N>' trailer" ;;
 esac
 
 # 6) A Gate: trailer must be non-empty and accompanied by a Phase: trailer.
