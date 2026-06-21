@@ -441,6 +441,31 @@ export async function bootSpine() {
     });
   });
 
+  // Send a Slack alert when a workflow exhausts all retry attempts.
+  // The workflow's error_handling.notify field controls the target:
+  //   { type: 'slack', channel: '#ops-alerts' }
+  engine.workflowScheduler.registerErrorNotifier(async (workflow, error) => {
+    const notify = workflow.error_handling?.notify;
+    if (!notify) return;
+    if (notify.type !== 'slack') return;
+    const channel = notify.channel ?? notify.target;
+    if (!channel) return;
+    const tenantId = workflow.tenant_id ?? 'default';
+    let token;
+    try {
+      const grant = getSlackGrant({ oauthTokenStore: auth.oauthTokenStore, tenantId });
+      token = grant?.botToken;
+    } catch { /* no grant */ }
+    token ??= process.env.SLACK_BOT_TOKEN;
+    if (!token) return;
+    const text = `⚠️ Workflow *${workflow.name ?? workflow.slug}* failed after all retry attempts.\n\`${error?.message ?? String(error)}\``;
+    await fetch(`https://slack.com/api/chat.postMessage`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ channel, text }),
+    });
+  });
+
   const slack = createSlackCapabilityProvider({ oauthTokenStore: auth.oauthTokenStore, apiBase: process.env.SLACK_API_URL });
   const slackOAuth = createSlackOAuthFlow();
   const google = createGoogleCapabilityProvider({ oauthTokenStore: auth.oauthTokenStore });

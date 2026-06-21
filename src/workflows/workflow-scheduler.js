@@ -138,6 +138,17 @@ export class WorkflowScheduler {
   }
 
   /**
+   * Register the error notifier. Called after every terminal failure (all
+   * retry attempts exhausted). Receives (workflow, error) and is responsible
+   * for sending the notification described in `workflow.error_handling.notify`.
+   * No-op if unset.
+   * @param {(workflow: object, error: Error) => Promise<void>} fn
+   */
+  registerErrorNotifier(fn) {
+    this._errorNotifier = fn;
+  }
+
+  /**
    * Execute a single workflow (dispatch by kind).
    * @param {object} workflow
    * @param {object} [options]
@@ -186,17 +197,52 @@ export class WorkflowScheduler {
     }
   }
 
-  /** Execute a flow-kind workflow via the FlowTester DAG executor.
+  /**
+   * Execute a flow-kind workflow with retry and error notification.
+   * Reads `workflow.error_handling` for:
+   *   retry.attempts      — how many extra attempts (0 = no retry, default)
+   *   retry.delay_seconds — seconds to wait between attempts (default 0)
+   *   notify.type         — 'slack' | 'email' (routed via _errorNotifier hook)
+   *   notify.channel      — target for the notification
+   */
+  async _executeFlow(workflow, opts = {}) {
+    const eh = workflow.error_handling ?? {};
+    const maxAttempts = Math.max(1, 1 + (parseInt(eh.retry?.attempts, 10) || 0));
+    const retryDelayMs = Math.max(0, (parseInt(eh.retry?.delay_seconds, 10) || 0)) * 1_000;
+
+    let lastError = null;
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      lastError = await this._runFlowOnce(workflow, opts);
+      if (!lastError) return;
+      if (attempt < maxAttempts) {
+        log.warn(`[workflow-scheduler] flow "${workflow.slug}" failed (attempt ${attempt}/${maxAttempts}) — retrying in ${retryDelayMs / 1_000}s`);
+        if (retryDelayMs > 0) await new Promise(r => setTimeout(r, retryDelayMs));
+      }
+    }
+
+    if (this._errorNotifier) {
+      try {
+        await this._errorNotifier(workflow, lastError);
+      } catch (e) {
+        log.warn(`[workflow-scheduler] error notifier failed: ${e.message}`);
+      }
+    }
+  }
+
+  /**
+   * Single execution attempt for a flow-kind workflow.
+   * Returns `null` on success, or the error on failure (engine error or uncaught throw).
    * @param {object} workflow
    * @param {object} [opts]
    * @param {string} [opts.trigger]
    * @param {string|null} [opts.sessionId]
-   * @param {object|null} [opts.emailContext] — pre-fetched email to inject as initial context
+   * @param {object|null} [opts.emailContext]
+   * @returns {Promise<null|Error>}
    */
-  async _executeFlow(workflow, { trigger = 'scheduled', sessionId = null, emailContext = null } = {}) {
+  async _runFlowOnce(workflow, { trigger = 'scheduled', sessionId = null, emailContext = null } = {}) {
     if (!this.flowTester) {
       log.error(`[workflow-scheduler] flow-kind workflow "${workflow.slug}" is due but no flowTester is configured`);
-      return;
+      return new Error('flowTester not configured');
     }
     const startedAt = Date.now();
     const run = this.workflowStore.startRun(workflow.id);
@@ -235,6 +281,7 @@ export class WorkflowScheduler {
           error: failed, errorClass: this._classifyError(failed),
         });
         log.error(`[workflow-scheduler] flow "${workflow.slug}" failed: ${explanation.title}`);
+        return failed;
       } else {
         const finalRun = this.workflowStore.getRun(run.id);
         const probeRun = { ...finalRun, output: typeof lastOutput === 'string' ? lastOutput : JSON.stringify(lastOutput), steps: finalRun?.steps ?? [] };
@@ -246,6 +293,7 @@ export class WorkflowScheduler {
         });
         const warnNote = warnings.length ? ` · ${warnings.length} warning${warnings.length === 1 ? '' : 's'}` : '';
         log.info(`[workflow-scheduler] flow "${workflow.slug}" completed · $${(runCost?.costUsd ?? 0).toFixed(4)} (${runCost?.calls ?? 0} llm calls)${warnNote}`);
+        return null;
       }
     } catch (err) {
       this.workflowStore.failRun(run.id, err);
@@ -255,6 +303,7 @@ export class WorkflowScheduler {
         error: err, errorClass: this._classifyError(err),
       });
       log.error(`[workflow-scheduler] flow "${workflow.slug}" crashed: ${err.message}`);
+      return err;
     }
   }
 
