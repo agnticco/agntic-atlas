@@ -946,4 +946,41 @@ export function registerSlackChannel(registry, { fetchImpl = fetch } = {}) {
   return registry;
 }
 
+/**
+ * Register Slack inbound-event triggers on a CapabilityRegistry.
+ * Fires a workflow when a Slack event arrives via POST /connectors/slack/events.
+ *
+ * @param {import('../capability-registry.js').CapabilityRegistry} capabilityRegistry
+ */
+export function registerSlackTriggers(capabilityRegistry) {
+  const ready = () => isOAuthConfigured() || !!process.env.SLACK_BOT_TOKEN;
+
+  capabilityRegistry.register({
+    id: 'slack_message',
+    connector: 'slack',
+    positions: ['trigger'],
+    name: 'Slack Message',
+    description: 'Fires when a message is posted to a Slack channel.',
+    icon: 'slack',
+    configSchema: [
+      { key: 'channel', label: 'Channel (optional)', type: 'string', optional: true, hint: 'Slack channel ID or #name; leave blank to trigger on any channel' },
+      { key: 'keywords', label: 'Keywords (optional)', type: 'string', optional: true, hint: 'Comma-separated; trigger only when message contains one of these words' },
+    ],
+    requiredScopes: ['channels:history', 'channels:read'],
+    isReady: ready,
+  });
+
+  capabilityRegistry.register({
+    id: 'slack_mention',
+    connector: 'slack',
+    positions: ['trigger'],
+    name: 'Slack App Mention',
+    description: 'Fires when someone @-mentions the Atlas app in Slack.',
+    icon: 'slack',
+    configSchema: [],
+    requiredScopes: ['app_mentions:read'],
+    isReady: ready,
+  });
+}
+
 export default registerSlackChannel;

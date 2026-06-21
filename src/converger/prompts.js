@@ -57,16 +57,20 @@ function stepSummary(capabilities) {
   }).join('\n');
 }
 
-// Trigger-position capabilities contributed by connected connectors. Today: a
-// Slack message event. Listed only when the connector is connected; the event
-// actually fires once the workspace's Slack Event Subscriptions are configured.
+// Trigger-position capabilities from the CapabilityRegistry. Each trigger declares
+// which connector it belongs to; only available triggers are listed.
 function connectorTriggerSummary(capabilities) {
-  const c = capabilities?.connectors ?? {};
-  const lines = [];
-  if (c.slack) {
-    lines.push('- Slack message event — fires when a message is posted to a channel you name. Spec: {"type":"event","connector":"slack","event":"message","filter":{"channel":"#channel-name"}}. Use this for "when someone posts in #X" / "when a Slack message arrives" intents.');
-  }
-  return lines.length ? `CONNECTOR EVENT TRIGGERS (available because the connector is connected):\n${lines.join('\n')}` : '';
+  const triggers = (capabilities?.triggers ?? []).filter(t => t.available !== false);
+  if (!triggers.length) return '';
+  const lines = triggers.map(t => {
+    let spec;
+    if (t.id === 'slack_message')    spec = '{"type":"event","connector":"slack","event":"message","filter":{"channel":"#channel-name"}}';
+    else if (t.id === 'slack_mention') spec = '{"type":"event","connector":"slack","event":"app_mention"}';
+    else if (t.id === 'gmail_new_message') spec = '{"type":"email","filter":"from:example.com is:unread"}';
+    else spec = `{"type":"event","connector":"${t.connector}","event":"${t.id}"}`;
+    return `- ${t.name} — ${t.description} Spec: ${spec}`;
+  });
+  return `CONNECTOR EVENT TRIGGERS (available because the connector is connected):\n${lines.join('\n')}`;
 }
 
 function operatorSummary(capabilities) {

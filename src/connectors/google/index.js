@@ -130,6 +130,37 @@ export function makeGoogleApi({ oauthTokenStore, cipher, tenantId, userId }) {
   };
 }
 
+/**
+ * Build an authenticated Google API caller from a pre-decrypted access token.
+ * Used by CONNECTOR_INJECTORS in server.js after vault lookup + decrypt.
+ * Mirrors makeGoogleApi but skips the vault lookup.
+ */
+export function makeGoogleApiFromToken(token) {
+  if (!token) throw new Error('google: no access token provided');
+  return async function gapi(method, path, { body, params } = {}) {
+    let url = googleApiUrl(path);
+    if (params) {
+      const qs = new URLSearchParams(
+        Object.fromEntries(Object.entries(params).filter(([, v]) => v !== undefined && v !== null))
+      ).toString();
+      if (qs) url += `?${qs}`;
+    }
+    const res = await fetch(url, {
+      method,
+      headers: {
+        authorization: `Bearer ${token}`,
+        ...(body ? { 'content-type': 'application/json' } : {}),
+      },
+      body: body ? JSON.stringify(body) : undefined,
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(`google API ${path} failed: ${err?.error?.message ?? `HTTP ${res.status}`}`);
+    }
+    return res.status === 204 ? {} : res.json();
+  };
+}
+
 // ── Gmail helpers ────────────────────────────────────────────────────────────
 
 /** Decode a base64url-encoded Gmail message part. */
@@ -305,6 +336,210 @@ export async function tasksCreate(gapi, { title, notes, due, tasklistId = '@defa
   if (due)   task.due = due;
   const created = await gapi('POST', `/tasks/v1/lists/${tasklistId}/tasks`, { body: task });
   return { taskId: created.id };
+}
+
+/**
+ * Register all implemented Google actions on a CapabilityRegistry.
+ * Handles receive config.googleToken (injected by CONNECTOR_INJECTORS in server.js).
+ *
+ * @param {import('../capability-registry.js').CapabilityRegistry} capabilityRegistry
+ */
+export function registerGoogleChannels(capabilityRegistry) {
+  const ready = () => !!(process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET);
+
+  function makeHandle(fn) {
+    return async ({ config, body }) => {
+      if (!config.googleToken) throw new Error('google: no access token — connect Google via /connectors/google/authorize');
+      const gapi = makeGoogleApiFromToken(config.googleToken);
+      return fn(gapi, config, body);
+    };
+  }
+
+  capabilityRegistry.register({
+    id: 'gmail_search', connector: 'google', positions: ['step'],
+    name: 'Search Gmail', icon: 'mail',
+    description: 'Search inbox messages with a Gmail query (e.g. from:ups.com is:unread).',
+    configSchema: [
+      { key: 'query',      label: 'Search query', type: 'string', optional: false, hint: 'Gmail search query, e.g. from:ups.com is:unread' },
+      { key: 'maxResults', label: 'Max results',  type: 'number', optional: true,  hint: 'Default 10' },
+    ],
+    requiredScopes: ['https://www.googleapis.com/auth/gmail.readonly'],
+    isReady: ready,
+    handle: makeHandle((gapi, config) => gmailSearch(gapi, { query: config.query, maxResults: config.maxResults })),
+  });
+
+  capabilityRegistry.register({
+    id: 'gmail_get_message', connector: 'google', positions: ['step'],
+    name: 'Get Gmail Message', icon: 'mail',
+    description: 'Fetch the full content of a specific Gmail message by ID.',
+    configSchema: [
+      { key: 'messageId', label: 'Message ID', type: 'string', optional: false, hint: 'Gmail message ID' },
+    ],
+    requiredScopes: ['https://www.googleapis.com/auth/gmail.readonly'],
+    isReady: ready,
+    handle: makeHandle((gapi, config) => gmailGetMessage(gapi, { messageId: config.messageId })),
+  });
+
+  capabilityRegistry.register({
+    id: 'gmail_send', connector: 'google', positions: ['step', 'delivery'],
+    name: 'Send Email (Gmail)', icon: 'mail',
+    description: 'Send an email from the connected Gmail account.',
+    configSchema: [
+      { key: 'to',      label: 'To',      type: 'string',   optional: false },
+      { key: 'subject', label: 'Subject', type: 'string',   optional: false },
+      { key: 'body',    label: 'Body',    type: 'textarea', optional: true, hint: 'Email body; omit to use prior step output' },
+    ],
+    requiredScopes: ['https://www.googleapis.com/auth/gmail.send'],
+    isReady: ready,
+    handle: makeHandle((gapi, config, body) => gmailSend(gapi, { to: config.to, subject: config.subject, body: config.body ?? body })),
+  });
+
+  capabilityRegistry.register({
+    id: 'gmail_mark_read', connector: 'google', positions: ['step'],
+    name: 'Mark Gmail Read', icon: 'mail',
+    description: 'Remove the UNREAD label from a message.',
+    configSchema: [
+      { key: 'messageId', label: 'Message ID', type: 'string', optional: false },
+    ],
+    requiredScopes: ['https://www.googleapis.com/auth/gmail.modify'],
+    isReady: ready,
+    handle: makeHandle((gapi, config) => gmailMarkRead(gapi, { messageId: config.messageId })),
+  });
+
+  capabilityRegistry.register({
+    id: 'calendar_list_events', connector: 'google', positions: ['step'],
+    name: 'List Calendar Events', icon: 'calendar',
+    description: 'Fetch upcoming events from the connected Google Calendar.',
+    configSchema: [
+      { key: 'maxResults', label: 'Max results',         type: 'number', optional: true, hint: 'Default 10' },
+      { key: 'timeMin',    label: 'After (ISO datetime)', type: 'string', optional: true, hint: 'Defaults to now' },
+      { key: 'calendarId', label: 'Calendar ID',          type: 'string', optional: true, hint: 'Defaults to primary' },
+    ],
+    requiredScopes: ['https://www.googleapis.com/auth/calendar'],
+    isReady: ready,
+    handle: makeHandle((gapi, config) => calendarListEvents(gapi, { maxResults: config.maxResults, timeMin: config.timeMin, calendarId: config.calendarId })),
+  });
+
+  capabilityRegistry.register({
+    id: 'calendar_create_event', connector: 'google', positions: ['step', 'delivery'],
+    name: 'Create Calendar Event', icon: 'calendar',
+    description: 'Add an event to the connected Google Calendar.',
+    configSchema: [
+      { key: 'title',       label: 'Title',                            type: 'string', optional: false },
+      { key: 'start',       label: 'Start (ISO datetime)',              type: 'string', optional: false },
+      { key: 'end',         label: 'End (ISO datetime)',                type: 'string', optional: false },
+      { key: 'description', label: 'Description',                       type: 'string', optional: true  },
+      { key: 'attendees',   label: 'Attendees (comma-separated emails)', type: 'string', optional: true  },
+    ],
+    requiredScopes: ['https://www.googleapis.com/auth/calendar'],
+    isReady: ready,
+    handle: makeHandle((gapi, config) => calendarCreateEvent(gapi, { title: config.title, start: config.start, end: config.end, description: config.description, attendees: config.attendees })),
+  });
+
+  capabilityRegistry.register({
+    id: 'drive_list_files', connector: 'google', positions: ['step'],
+    name: 'List Drive Files', icon: 'folder',
+    description: 'List files in Google Drive, optionally filtered by name or type.',
+    configSchema: [
+      { key: 'query',      label: 'Drive query', type: 'string', optional: true, hint: "e.g. name contains 'report'" },
+      { key: 'maxResults', label: 'Max results', type: 'number', optional: true  },
+    ],
+    requiredScopes: ['https://www.googleapis.com/auth/drive'],
+    isReady: ready,
+    handle: makeHandle((gapi, config) => driveListFiles(gapi, { query: config.query, maxResults: config.maxResults })),
+  });
+
+  capabilityRegistry.register({
+    id: 'sheets_read', connector: 'google', positions: ['step'],
+    name: 'Read Google Sheet', icon: 'table',
+    description: 'Read data from a spreadsheet range.',
+    configSchema: [
+      { key: 'spreadsheetId', label: 'Spreadsheet ID', type: 'string', optional: false },
+      { key: 'range',         label: 'Range',           type: 'string', optional: true,  hint: 'e.g. Sheet1!A1:D10; defaults to first sheet' },
+    ],
+    requiredScopes: ['https://www.googleapis.com/auth/spreadsheets'],
+    isReady: ready,
+    handle: makeHandle((gapi, config) => sheetsRead(gapi, { spreadsheetId: config.spreadsheetId, range: config.range })),
+  });
+
+  capabilityRegistry.register({
+    id: 'sheets_append', connector: 'google', positions: ['step', 'delivery'],
+    name: 'Append to Google Sheet', icon: 'table',
+    description: 'Add rows of data to a spreadsheet.',
+    configSchema: [
+      { key: 'spreadsheetId', label: 'Spreadsheet ID',    type: 'string', optional: false },
+      { key: 'range',         label: 'Range / Sheet',      type: 'string', optional: true,  hint: 'Sheet name or range; defaults to first sheet' },
+      { key: 'values',        label: 'Values (JSON array)', type: 'string', optional: false, hint: '[["a","b"],["c","d"]]' },
+    ],
+    requiredScopes: ['https://www.googleapis.com/auth/spreadsheets'],
+    isReady: ready,
+    handle: makeHandle((gapi, config) => sheetsAppend(gapi, { spreadsheetId: config.spreadsheetId, range: config.range, values: config.values })),
+  });
+
+  capabilityRegistry.register({
+    id: 'docs_read', connector: 'google', positions: ['step'],
+    name: 'Read Google Doc', icon: 'file-text',
+    description: 'Read the text content of a Google Doc.',
+    configSchema: [
+      { key: 'documentId', label: 'Document ID', type: 'string', optional: false },
+    ],
+    requiredScopes: ['https://www.googleapis.com/auth/documents'],
+    isReady: ready,
+    handle: makeHandle((gapi, config) => docsRead(gapi, { documentId: config.documentId })),
+  });
+
+  capabilityRegistry.register({
+    id: 'docs_create', connector: 'google', positions: ['step', 'delivery'],
+    name: 'Create Google Doc', icon: 'file-text',
+    description: 'Create a new Google Doc with optional initial content.',
+    configSchema: [
+      { key: 'title',   label: 'Title',   type: 'string',   optional: false },
+      { key: 'content', label: 'Content', type: 'textarea', optional: true, hint: 'Initial content; omit to use prior step output' },
+    ],
+    requiredScopes: ['https://www.googleapis.com/auth/documents'],
+    isReady: ready,
+    handle: makeHandle((gapi, config, body) => docsCreate(gapi, { title: config.title, content: config.content ?? body })),
+  });
+
+  capabilityRegistry.register({
+    id: 'tasks_list', connector: 'google', positions: ['step'],
+    name: 'List Tasks', icon: 'check-square',
+    description: 'List tasks from a Google Tasks list.',
+    configSchema: [
+      { key: 'tasklistId',    label: 'Task list ID',   type: 'string',  optional: true, hint: 'Defaults to the default task list' },
+      { key: 'showCompleted', label: 'Show completed', type: 'boolean', optional: true  },
+    ],
+    requiredScopes: ['https://www.googleapis.com/auth/tasks'],
+    isReady: ready,
+    handle: makeHandle((gapi, config) => tasksList(gapi, { tasklistId: config.tasklistId, showCompleted: config.showCompleted })),
+  });
+
+  capabilityRegistry.register({
+    id: 'tasks_create', connector: 'google', positions: ['step', 'delivery'],
+    name: 'Create Task', icon: 'check-square',
+    description: 'Add a task to a Google Tasks list.',
+    configSchema: [
+      { key: 'title',      label: 'Title',       type: 'string', optional: false },
+      { key: 'notes',      label: 'Notes',       type: 'string', optional: true  },
+      { key: 'due',        label: 'Due (ISO)',   type: 'string', optional: true  },
+      { key: 'tasklistId', label: 'Task list ID', type: 'string', optional: true  },
+    ],
+    requiredScopes: ['https://www.googleapis.com/auth/tasks'],
+    isReady: ready,
+    handle: makeHandle((gapi, config) => tasksCreate(gapi, { title: config.title, notes: config.notes, due: config.due, tasklistId: config.tasklistId })),
+  });
+
+  // Gmail trigger — polling stub; real Pub/Sub push upgradeable later
+  capabilityRegistry.register({
+    id: 'gmail_new_message', connector: 'google', positions: ['trigger'],
+    name: 'New Gmail Message', icon: 'mail',
+    description: 'Fires when a new Gmail message arrives matching a query (polling; upgradeable to Pub/Sub push).',
+    configSchema: [
+      { key: 'query', label: 'Gmail query', type: 'string', optional: true, hint: 'e.g. from:ups.com is:unread; blank = all new messages' },
+    ],
+    requiredScopes: ['https://www.googleapis.com/auth/gmail.readonly'],
+    isReady: ready,
+  });
 }
 
 export default { googleCapabilities, resolveGoogleCapabilities, makeGoogleApi };
