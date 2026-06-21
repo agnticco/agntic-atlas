@@ -25,7 +25,7 @@ wired connectors can't do.
 | **P7** | Airtable connector + Google write-back + error handling with retry/notify + sub-daily scheduling | ✅ merged |
 | **P8** | Web research (`web_search` / `web_fetch` connector) + filesystem connector (tenant-sandboxed read/list) | ✅ merged |
 | — | **Web connector** — `web_search` (Anthropic native tool) + `web_fetch` (Readability); no API key beyond `ANTHROPIC_API_KEY` | ✅ shipped post-P8 |
-| — | **Airtable E2E verification** — create dummy base, test record creation end-to-end via workflow | ✅ verified |
+| — | **Autonomous execution** — scheduler tick loop started; Gmail polling with OAuth auto-refresh; Airtable token auto-refresh on every run. First autonomous run: email → summarize → Airtable → Slack (2026-06-21). | ✅ verified |
 | **P9** | **Workflow profile page** — baseline screen recording + duration captured at build time; per-run execution time tracked and compared to baseline; profile displays baseline, execution time, total time saved YTD, trend line, example outputs, and the baseline recording. Enables the trust-building narrative for ops directors: *"same workflow, automated."* | planned |
 | **P10** | Admin console — per-tenant usage monitoring + **cost tracking**: LLM spend segmented by call type (converger, execution, UI), lifetime cost per tenant, estimated monthly burn. Feeds unit economics modeling. | planned |
 | **P11** | E2E validation + production hardening + VPS migration | planned |
@@ -201,10 +201,13 @@ with expand/collapse. Users can connect folders two ways:
 
 ### Scheduler (`src/workflows/workflow-scheduler.js`)
 
-Supports full cron patterns (`0 9 * * 1-5`) plus sub-daily shortcuts
-(`*/N * * * *` every N minutes, `0 */N * * *` every N hours). Tick is 60 s.
-After all retry attempts fail, calls a registered `errorNotifier` — wired in
-`server.js` to post to the Slack channel named in `error_handling.notify`.
+Runs autonomously: starts on boot, ticks every 60 s.
+
+- **Scheduled workflows** — full cron patterns (`0 9 * * 1-5`) plus sub-daily shortcuts (`*/N * * * *` every N minutes, `0 */N * * *` every N hours)
+- **Email-trigger workflows** — polls Gmail every tick for each active workflow with a `type:"email"` trigger; advances a per-workflow watermark so emails fire exactly once
+- **OAuth token auto-refresh** — both Google (Gmail polling) and Airtable (connector-action nodes) use the stored refresh token to get a fresh access token on every run; expired 1-hour tokens are transparent to workflows
+- **Error handling** — configurable retry (`error_handling.retry.attempts` / `delay_seconds`); after all attempts fail calls the registered `errorNotifier`, wired to post to the Slack channel named in `error_handling.notify`
+- **Observability** — each Gmail poll tick writes a `gmail.poll.ok` or `gmail.poll.error` entry to the event log (`memory/logs/atlas-events.log`)
 
 ## Running it
 
