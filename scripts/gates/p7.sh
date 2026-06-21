@@ -46,8 +46,8 @@ check "airtable/index.js exists" \
 check "makeAirtableApi exported" \
   grep -q 'export function makeAirtableApi' src/connectors/airtable/index.js
 
-check "storeAirtableToken exported" \
-  grep -q 'export function storeAirtableToken' src/connectors/airtable/index.js
+check "storeAirtableToken exported from oauth.js" \
+  grep -q 'export function storeAirtableToken' src/connectors/airtable/oauth.js
 
 check "initWebhookStore exported" \
   grep -q 'export function initWebhookStore' src/connectors/airtable/index.js
@@ -116,6 +116,17 @@ check "sheets_append registered" \
 
 check "registerGoogleChannels called in server.js" \
   grep -q 'registerGoogleChannels' src/api/server.js
+
+# Testability env var overrides
+check "AIRTABLE_OAUTH_URL override in oauth.js (stub-testable)" \
+  grep -q 'AIRTABLE_OAUTH_URL' src/connectors/airtable/oauth.js
+
+check "AIRTABLE_API_URL override in index.js (stub-testable)" \
+  grep -q 'AIRTABLE_API_URL' src/connectors/airtable/index.js
+
+# Airtable OAuth E2E (stubbed Airtable, real spine, two tenants, isolation, run, disconnect)
+check "airtable OAuth E2E passes" \
+  node scripts/checks/airtable-oauth.mjs
 
 # Parse check — grep passes even on non-parsing source; verify the modules load
 check "workflow-store.js parses (node import)" \
