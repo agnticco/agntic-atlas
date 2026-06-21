@@ -53,6 +53,13 @@ import {
   tasksList, tasksCreate, GOOGLE_CONNECTOR_ID,
 } from '../connectors/google/index.js';
 import { pollGmail, formatEmailContext } from '../connectors/google/gmail-source.js';
+import {
+  AIRTABLE_CONNECTOR_ID, makeAirtableApi,
+  storeAirtableToken, getAirtableToken, disconnectAirtable, isAirtableConnected,
+  registerAirtableChannels, registerWebhookRoute, unregisterWebhookRoute,
+  lookupWebhook, allWebhooks as _airtableWebhooks, initWebhookStore, verifyAirtableSignature,
+  createAirtableWebhook, deleteAirtableWebhook, fetchWebhookPayloads,
+} from '../connectors/airtable/index.js';
 import { InteractionStore } from '../converger/interaction-store.js';
 import { mountBuilderRoutes } from './builder.js';
 import { mountConsoleRoutes } from './console.js';
@@ -71,7 +78,8 @@ const EMBEDDING_MODEL_PATH = process.env.EMBEDDING_MODEL_PATH
 // Auth store/key locations — env-overridable so checks can run hermetically
 // against a temp dir instead of writing to ./memory. Defaults match the
 // auth subsystem's own defaults.
-const INTERACTIONS_DB = process.env.INTERACTIONS_DB ?? './memory/interactions.sqlite';
+const INTERACTIONS_DB       = process.env.INTERACTIONS_DB       ?? './memory/interactions.sqlite';
+const AIRTABLE_WEBHOOKS_FILE = process.env.AIRTABLE_WEBHOOKS_FILE ?? './memory/airtable-webhooks.json';
 const AUTH_DB     = process.env.AUTH_DB     ?? './memory/auth.sqlite';
 const AUTH_SECRET = process.env.AUTH_SECRET ?? './memory/.jwt-secret';
 const OAUTH_DB    = process.env.OAUTH_DB    ?? './memory/oauth.sqlite';
@@ -114,6 +122,14 @@ const isSlackNode = (n) =>
   (n?.type === 'deliver' && String(n?.config?.channel ?? '').startsWith('slack')) ||
   (n?.type === 'connector-action' && String(n?.config?.action ?? '').startsWith('slack'));
 
+const AIRTABLE_ACTION_IDS = new Set([
+  'airtable_list_records', 'airtable_get_record', 'airtable_search_records',
+  'airtable_create_record', 'airtable_update_record', 'airtable_delete_record',
+]);
+const isAirtableNode = (n) =>
+  (n?.type === 'deliver' && AIRTABLE_ACTION_IDS.has(n?.config?.channel)) ||
+  (n?.type === 'connector-action' && AIRTABLE_ACTION_IDS.has(n?.config?.action));
+
 const GOOGLE_ACTION_IDS = new Set([
   'gmail_search', 'gmail_get_message', 'gmail_send', 'gmail_mark_read',
   'calendar_list_events', 'calendar_create_event',
@@ -150,6 +166,15 @@ const CONNECTOR_INJECTORS = [
       try { return cipher.decrypt(row.access_token_enc); } catch { return null; }
     },
     field: 'googleToken',
+    devEscape: () => false,
+  },
+  {
+    id: 'airtable',
+    name: 'Airtable',
+    ownsNode: isAirtableNode,
+    resolveToken: (tenantId, { oauthTokenStore, cipher }) =>
+      getAirtableToken({ oauthTokenStore, cipher, tenantId }),
+    field: 'airtableToken',
     devEscape: () => false,
   },
 ];
@@ -212,6 +237,47 @@ async function dispatchSlackEvent(spine, body) {
   }
 }
 
+// Route an Airtable webhook notification to matching workflows.
+// Airtable only sends a ping (base + webhook id); payloads are fetched separately.
+async function dispatchAirtableEvent(spine, body) {
+  const baseId    = body?.base?.id;
+  const webhookId = body?.webhook?.id;
+  if (!baseId || !webhookId) return;
+
+  const route = lookupWebhook(webhookId);
+  if (!route) { logEvent('airtable.event.no_route', { baseId, webhookId }); return; }
+
+  const { tenantId } = route;
+  const deps = { oauthTokenStore: spine.auth.oauthTokenStore, cipher: spine.auth.tokenCipher };
+  const pat  = getAirtableToken({ oauthTokenStore: spine.auth.oauthTokenStore, cipher: spine.auth.tokenCipher, tenantId });
+  if (!pat) { logEvent('airtable.event.no_token', { tenantId }); return; }
+
+  const api = makeAirtableApi(pat);
+  let payloads;
+  try {
+    const result = await fetchWebhookPayloads(api, { baseId, webhookId });
+    payloads = result.payloads;
+  } catch (err) {
+    logEvent('airtable.event.payload_error', { tenantId, webhookId, ...errFields(err) });
+    return;
+  }
+  if (!payloads.length) return;
+
+  const flows = spine.engine.workflowStore.list({ tenantId, kind: 'flow', status: 'active' })
+    .filter((w) => (w.triggers ?? []).some((t) =>
+      t.type === 'event' && t.connector === 'airtable' && t.event === 'record_changed' &&
+      (!t.filter?.baseId || t.filter.baseId === baseId)));
+
+  if (!flows.length) return;
+  const context = `Airtable record changed in base ${baseId}.\n\nChanges:\n${JSON.stringify(payloads.slice(0, 3), null, 2)}`;
+  for (const wf of flows) {
+    logEvent('airtable.event.dispatch', { tenant: tenantId, workflow: wf.slug });
+    const tenantWf = injectTenantTokens(wf, tenantId, deps);
+    try { await spine.engine.workflowScheduler._executeFlow(tenantWf, { trigger: 'event', emailContext: context }); }
+    catch (err) { logEvent('airtable.event.error', { tenant: tenantId, workflow: wf.slug, ...errFields(err) }); }
+  }
+}
+
 /**
  * Build the LLM pool. Priority: Anthropic (cloud) → OpenAI (cloud) → local weights.
  * Returns null only when nothing is configured — engine still boots but llm nodes
@@ -253,6 +319,7 @@ async function buildEngine(workflowStore, llm) {
   registerSlackChannel(channelRegistry);                  // Slack step/delivery channels (ChannelRegistry adapter)
   registerSlackTriggers(capabilityRegistry);              // Slack trigger capabilities
   registerGoogleChannels(capabilityRegistry);             // All Google step/delivery/trigger capabilities
+  registerAirtableChannels(capabilityRegistry);           // Airtable CRUD + record-changed trigger
 
   const nodeTypeRegistry = new NodeTypeRegistry();
   registerBuiltInNodeTypes(nodeTypeRegistry);
@@ -593,12 +660,19 @@ export function createApp(spine) {
   // "Connector/action NOT available is not usable — don't propose it."
   app.get('/capabilities', requireActiveTenant, async (req, res) => {
     try {
-      const slack  = await spine.slack.resolveForTenant(req.tenant.id);
-      const google = await spine.google.resolveForTenant(req.tenant.id, req.user.id);
+      const slack     = await spine.slack.resolveForTenant(req.tenant.id);
+      const google    = await spine.google.resolveForTenant(req.tenant.id, req.user.id);
+      const airtable  = { connected: isAirtableConnected({ oauthTokenStore: spine.auth.oauthTokenStore, tenantId: req.tenant.id }) };
+      // Narrow triggers to those whose connector is actually connected for this tenant.
+      const connected = new Set(['slack', 'google'].filter(id => id === 'slack' ? slack : google));
+      if (airtable.connected) connected.add('airtable');
+      const triggers = spine.engine.capabilityRegistry
+        .list({ position: 'trigger' })
+        .map(t => ({ ...t, available: t.available && (!t.connector || connected.has(t.connector)) }));
       res.json({
         channels: spine.engine.channelRegistry.getAll(),
-        triggers: spine.engine.capabilityRegistry.list({ position: 'trigger' }),
-        connectors: { slack, google },
+        triggers,
+        connectors: { slack, google, airtable },
       });
     } catch (err) {
       res.status(500).json({ error: `capabilities failed: ${err.message ?? String(err)}` });
@@ -819,6 +893,71 @@ export function createApp(spine) {
     }
   });
 
+  // ── Airtable connector ─────────────────────────────────────────────────────
+  // PAT-based auth (no OAuth). User generates a PAT at airtable.com/create/tokens
+  // with scopes: data.records:read  data.records:write  webhook:manage
+
+  // Store a PAT for this tenant.
+  app.post('/connectors/airtable/connect', requireActiveTenant, (req, res) => {
+    const pat = String(req.body?.pat ?? '').trim();
+    if (!pat) return res.status(400).json({ error: 'pat is required' });
+    storeAirtableToken({ oauthTokenStore: spine.auth.oauthTokenStore, cipher: spine.auth.tokenCipher, tenantId: req.tenant.id, pat });
+    res.json({ ok: true, connected: true });
+  });
+
+  // Connection status.
+  app.get('/connectors/airtable/status', requireActiveTenant, (req, res) => {
+    const connected = isAirtableConnected({ oauthTokenStore: spine.auth.oauthTokenStore, tenantId: req.tenant.id });
+    res.json({ connected });
+  });
+
+  // Disconnect and best-effort delete all registered webhooks for this tenant.
+  app.delete('/connectors/airtable', requireActiveTenant, async (req, res) => {
+    const tenantId = req.tenant.id;
+    const pat = getAirtableToken({ oauthTokenStore: spine.auth.oauthTokenStore, cipher: spine.auth.tokenCipher, tenantId });
+    if (pat) {
+      const api = makeAirtableApi(pat);
+      // lookupWebhook returns one entry; scan the full map via the exported iterable.
+      for (const [webhookId, entry] of _airtableWebhooks()) {
+        if (entry?.tenantId !== tenantId) continue;
+        try { await deleteAirtableWebhook(api, { baseId: entry.baseId, webhookId }); } catch { /* best-effort */ }
+        unregisterWebhookRoute(webhookId);
+      }
+    }
+    const removed = disconnectAirtable({ oauthTokenStore: spine.auth.oauthTokenStore, tenantId });
+    res.json({ ok: true, removed });
+  });
+
+  // Register a webhook for an Airtable base (called after publishing a workflow with an airtable trigger).
+  app.post('/connectors/airtable/webhooks', requireActiveTenant, async (req, res) => {
+    const { baseId, tableId } = req.body ?? {};
+    if (!baseId) return res.status(400).json({ error: 'baseId is required' });
+    const tenantId = req.tenant.id;
+    const pat = getAirtableToken({ oauthTokenStore: spine.auth.oauthTokenStore, cipher: spine.auth.tokenCipher, tenantId });
+    if (!pat) return res.status(403).json({ error: 'Airtable not connected for this tenant' });
+    try {
+      const api = makeAirtableApi(pat);
+      const notificationUrl = `${process.env.OAUTH_REDIRECT_BASE ?? `http://localhost:${PORT}`}/connectors/airtable/events`;
+      const { webhookId, macSecretBase64 } = await createAirtableWebhook(api, { baseId, tableId, notificationUrl });
+      registerWebhookRoute({ webhookId, tenantId, baseId, macSecretBase64 });
+      res.json({ ok: true, webhookId });
+    } catch (err) { res.status(500).json({ error: err.message ?? String(err) }); }
+  });
+
+  // Airtable webhook event receiver. NOT auth-gated — Airtable POSTs here.
+  // Only sends a ping (base + webhook id); actual payloads fetched in dispatchAirtableEvent.
+  app.post('/connectors/airtable/events', (req, res) => {
+    const body      = req.body ?? {};
+    const webhookId = body?.webhook?.id;
+    const route     = webhookId ? lookupWebhook(webhookId) : null;
+    // Verify HMAC if we have a secret for this webhook.
+    if (route?.macSecretBase64 && !verifyAirtableSignature(req, route.macSecretBase64)) {
+      return res.status(401).json({ error: 'bad signature' });
+    }
+    res.status(200).end(); // ack immediately — Airtable requires <30s response
+    dispatchAirtableEvent(spine, body).catch((err) => logEvent('airtable.event.error', errFields(err)));
+  });
+
   mountBuilderRoutes(app, { spine, requireActiveTenant, requireAuth });
   mountConsoleRoutes(app, { spine, requireActiveTenant });
 
@@ -826,6 +965,7 @@ export function createApp(spine) {
 }
 
 export async function start() {
+  initWebhookStore(AIRTABLE_WEBHOOKS_FILE);
   const spine = await bootSpine();
   const app = createApp(spine);
 
