@@ -29,7 +29,7 @@ while read -r local_ref local_sha remote_ref remote_sha; do
     # Only gate-closing commits carry a non-empty Gate: trailer.
     printf '%s\n' "$msg" | grep -qE '^Gate:[[:space:]]*[^[:space:]]' || continue
 
-    phase="$(printf '%s\n' "$msg" | sed -n -E 's/^Phase:[[:space:]]*([0-7]).*$/\1/p' | head -n1)"
+    phase="$(printf '%s\n' "$msg" | sed -n -E 's/^Phase:[[:space:]]*([0-9]+).*$/\1/p' | head -n1)"
     if [ -z "$phase" ]; then
       echo "x pre-push: commit $(short "$sha") closes a gate but has no Phase: trailer" >&2
       rc=1; continue
