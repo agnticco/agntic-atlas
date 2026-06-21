@@ -1298,7 +1298,7 @@
               <div style="font-size:10.5px;font-weight:600;letter-spacing:.16em;text-transform:uppercase;color:rgba(255,255,255,.28);margin-bottom:8px">{{ connectorModal.detailLabel }}</div>
               <div style="font-size:13.5px;color:rgba(255,255,255,.7);line-height:1.55">{{ connectorModal.detail }}</div>
             </div>
-            <sc-if value="{{ connectorModal.connected }}" hint-placeholder-val="{{ false }}">
+            <sc-if value="{{ connectorModal.connected && !connectorModal.isApiKey }}" hint-placeholder-val="{{ false }}">
               <button onClick="{{ connectorModal.onDisconnect }}" style="width:100%;border:1px solid rgba(232,116,97,.35);background:rgba(232,116,97,.07);color:#f0a896;font-family:inherit;font-size:14px;font-weight:500;padding:12px;border-radius:12px;cursor:pointer" style-hover="background:rgba(232,116,97,.14);border-color:rgba(232,116,97,.55)">Disconnect</button>
             </sc-if>
             <sc-if value="{{ !connectorModal.connected }}" hint-placeholder-val="{{ false }}">
@@ -3269,7 +3269,7 @@ class Component extends DCLogic {
           statusDot:   m.connected ? "#7fc28a" : "rgba(255,255,255,.18)",
           statusGlow:  m.connected ? "rgba(127,194,138,.6)" : "none",
           detail: m.meta || "",
-          detailLabel: m.connected ? "Account" : "About",
+          detailLabel: m.connected && !m.isApiKey ? "Account" : "About",
           isComingSoon,
           isApiKey,
           onConnect:    () => { closeAnim(); setTimeout(() => this.connectProvider(m.provider), 290); },
