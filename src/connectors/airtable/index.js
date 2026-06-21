@@ -18,7 +18,7 @@ import { createHmac, timingSafeEqual } from 'node:crypto';
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 
-export const AIRTABLE_CONNECTOR_ID = 'airtable';
+export { AIRTABLE_CONNECTOR_ID } from './oauth.js';
 const API_BASE = 'https://api.airtable.com/v0';
 
 // ── API helper ────────────────────────────────────────────────────────────────
@@ -47,39 +47,6 @@ export function makeAirtableApi(pat, { fetchImpl = fetch } = {}) {
     }
     return res.status === 204 ? {} : res.json();
   };
-}
-
-// ── Credential storage ────────────────────────────────────────────────────────
-// PAT is workspace-level (one per tenant, not per user). Uses a synthetic
-// userId so the store's (userId, connectorId) PK constraint is satisfied
-// without tying the token to a specific user — matches the Slack bot-token pattern.
-
-const _owner = (tenantId) => `wsinstall:${tenantId}`;
-
-export function storeAirtableToken({ oauthTokenStore, cipher, tenantId, pat }) {
-  oauthTokenStore.upsert({
-    tenantId,
-    userId: _owner(tenantId),
-    connectorId: AIRTABLE_CONNECTOR_ID,
-    accessTokenEnc: cipher.encrypt(pat),
-    scope: 'data.records:read data.records:write webhook:manage',
-    expiry: 0,
-    account: tenantId,
-  });
-}
-
-export function getAirtableToken({ oauthTokenStore, cipher, tenantId }) {
-  const row = oauthTokenStore.get({ tenantId, userId: _owner(tenantId), connectorId: AIRTABLE_CONNECTOR_ID });
-  if (!row) return null;
-  try { return cipher.decrypt(row.access_token_enc); } catch { return null; }
-}
-
-export function disconnectAirtable({ oauthTokenStore, tenantId }) {
-  return oauthTokenStore.delete({ tenantId, userId: _owner(tenantId), connectorId: AIRTABLE_CONNECTOR_ID });
-}
-
-export function isAirtableConnected({ oauthTokenStore, tenantId }) {
-  return oauthTokenStore.has({ tenantId, userId: _owner(tenantId), connectorId: AIRTABLE_CONNECTOR_ID });
 }
 
 // ── Webhook routing table ─────────────────────────────────────────────────────
