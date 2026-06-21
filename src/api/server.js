@@ -70,6 +70,7 @@ import { InteractionStore } from '../converger/interaction-store.js';
 import { InboxStore } from '../inbox/inbox-store.js';
 import { registerInboxCapability } from '../inbox/index.js';
 import { registerFilesystemCapabilities, FILESYSTEM_CAPABILITY_IDS } from '../connectors/filesystem.js';
+import { registerWebCapabilities, webConnectionStatus, WEB_CAPABILITY_IDS } from '../connectors/web/index.js';
 import { mountBuilderRoutes } from './builder.js';
 import { mountConsoleRoutes } from './console.js';
 import { logEvent, errFields } from '../utils/event-log.js';
@@ -530,6 +531,8 @@ export async function bootSpine() {
   registerFilesystemCapabilities(engine.capabilityRegistry, {
     getApprovedFolders: (tenantId) => readSources(tenantId),
   });
+
+  registerWebCapabilities(engine.capabilityRegistry, { llm: engine.llm });
 
   const slack = createSlackCapabilityProvider({ oauthTokenStore: auth.oauthTokenStore, apiBase: process.env.SLACK_API_URL });
   const slackOAuth = createSlackOAuthFlow();
@@ -1178,6 +1181,10 @@ export function createApp(spine) {
     res.json(grant ?? { connected: false });
   });
 
+  app.get('/connectors/web/status', requireActiveTenant, (_req, res) => {
+    res.json(webConnectionStatus());
+  });
+
   // Disconnect — best-effort delete all registered webhooks, then remove the token.
   app.delete('/connectors/airtable', requireActiveTenant, async (req, res) => {
     const tenantId = req.tenant.id;
@@ -1224,7 +1231,7 @@ export function createApp(spine) {
     dispatchAirtableEvent(spine, body).catch((err) => logEvent('airtable.event.error', errFields(err)));
   });
 
-  mountBuilderRoutes(app, { spine, requireActiveTenant, requireAuth });
+  mountBuilderRoutes(app, { spine, requireActiveTenant, requireAuth, readSources });
   mountConsoleRoutes(app, { spine, requireActiveTenant });
 
   return app;

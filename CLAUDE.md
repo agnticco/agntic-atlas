@@ -182,10 +182,23 @@ refactor them without an explicit decision recorded here:
   scheduler token injector, Slack event dispatch, Airtable event dispatch. Only absolute-path
   entries (added server-side via `/rag/index-folder`) are eligible for workflow file access;
   browser-upload entries (`source:'upload'`) have no stable server path and cannot be used.
-- **search_web in converger prompt (2026-06-21, P8)** — `src/converger/prompts.js` now lists
-  `search_web` as an available node type (Anthropic native web_search_20260209, no Tavily/
-  Firecrawl). Filesystem capabilities surface automatically via CapabilityRegistry → ChannelRegistry
-  → `stepSummary()` with `actionOnly:true`, so no additional prompt wiring was needed.
+- **search_web in converger prompt (2026-06-21, P8)** — `src/converger/prompts.js` listed
+  `search_web` as an available node type (Anthropic native web_search_20260209). Later superseded
+  by the Web connector (see below); entry removed from prompts.js.
+- **Web connector (2026-06-21, post-P8)** — `src/connectors/web/index.js` registers
+  `web_search` and `web_fetch` capabilities (positions: `['step']`) in the CapabilityRegistry.
+  No Tavily or Firecrawl — fully self-owned:
+  - `web_search`: Anthropic native `web_search_20260209` via the LLM service (same model tier
+    already in use). `isReady()` = `ANTHROPIC_API_KEY` is set. Connected = Anthropic key present.
+  - `web_fetch`: Mozilla Readability + jsdom (deps added). Fetches a URL and extracts readable
+    article content (Firefox Reader Mode algorithm). `isReady()` = always true (no API key).
+  `registerWebCapabilities(registry, { llm })` takes the LLM service so `web_search` can call
+  through `llm.invoke()`. Registered in `bootSpine` after filesystem capabilities.
+  `webConnectionStatus()` returns `{ connected: !!ANTHROPIC_API_KEY, anthropic, detail }`.
+  UI: Connections flyout fetches `/connectors/web/status`; shows Web as connected when
+  ANTHROPIC_API_KEY is set. Chat context (`builder.js`) surfaces web capability when connected.
+  The old `search_web` built-in node type remains but is no longer promoted to the converger;
+  `web_search` connector-action is the primary path.
 
 ## The frozen canonical spec
 
