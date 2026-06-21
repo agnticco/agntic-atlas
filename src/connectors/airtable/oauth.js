@@ -24,7 +24,8 @@ import { connectorRedirectUri } from '../oauth-redirect.js';
 export const AIRTABLE_CONNECTOR_ID = 'airtable';
 
 const AUTHORIZE_URL = 'https://airtable.com/oauth2/v1/authorize';
-const TOKEN_URL     = 'https://airtable.com/oauth2/v1/token';
+// Allow tests to override so the token endpoint can be stubbed locally.
+const TOKEN_URL     = process.env.AIRTABLE_OAUTH_URL ?? 'https://airtable.com/oauth2/v1/token';
 const STATE_TTL_MS  = 10 * 60 * 1000;
 const REFRESH_SKEW_MS = 60 * 1000; // refresh 60s before actual expiry
 

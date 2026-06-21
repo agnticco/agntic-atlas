@@ -20,7 +20,8 @@ import { dirname } from 'node:path';
 
 export { AIRTABLE_CONNECTOR_ID } from './oauth.js';
 import { isAirtableOAuthConfigured } from './oauth.js';
-const API_BASE = 'https://api.airtable.com/v0';
+// Allow tests to override so API calls can be intercepted by a stub server.
+const API_BASE = process.env.AIRTABLE_API_URL ?? 'https://api.airtable.com/v0';
 
 // ── API helper ────────────────────────────────────────────────────────────────
 
