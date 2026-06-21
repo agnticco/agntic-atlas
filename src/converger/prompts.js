@@ -112,7 +112,8 @@ function airtableSchemaSummary(capabilities) {
       lines.push(`    Table: "${table.name}"  tableId: "${table.id}"${fieldList ? `  fields: ${fieldList}` : ''}`);
     }
   }
-  lines.push('  When proposing an airtable_create_record or airtable_list_records node, set baseId and tableId from this schema — never use placeholder strings like {{YOUR_BASE_ID}}.');
+  lines.push('  CRITICAL: use ONLY the baseId and tableId values listed above. NEVER invent placeholder strings like {{YOUR_BASE_ID}}, {{WAITLIST_TABLE_ID}}, or any {{...}} form.');
+  lines.push('  If the user\'s intent requires a table that does NOT appear in this schema, do NOT invent an ID — instead return a clarification: e.g. {"type":"clarification","question":"I don\'t see a [table name] table in your Airtable. You have: [list]. Should I use one of these, or do you need a new table created first?"}');
   return '\n' + lines.join('\n');
 }
 

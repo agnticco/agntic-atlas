@@ -255,7 +255,7 @@ export class WorkflowScheduler {
     try {
       // Inject the owning tenant's connector credentials into the nodes so the
       // automatic run acts as that tenant (never a shared/operator token).
-      const wf = this._injectTokens ? this._injectTokens(workflow) : workflow;
+      const wf = this._injectTokens ? await this._injectTokens(workflow) : workflow;
       // For email-triggered flows, inject the fetched email as the initial
       // lastOutput so summarize/llm nodes see it without a separate fetch step.
       const runOpts = { runId: run.id, costContext: `workflow:${workflow.slug}` };
