@@ -1084,15 +1084,6 @@
               </div>
             </div>
           </sc-for>
-          <div style="display:flex;align-items:center;gap:10px;padding:9px 16px;opacity:.3;cursor:default">
-            <span style="flex:none;width:32px;height:32px;border-radius:9px;background:#fff;display:flex;align-items:center;justify-content:center;filter:saturate(0)">
-              <img src="/assets/connectors/airtable.svg" alt="Airtable" style="width:18px;height:18px;object-fit:contain"/>
-            </span>
-            <div style="flex:1;min-width:0">
-              <div style="font-size:13px;font-weight:500;color:rgba(255,255,255,.5)">Airtable</div>
-              <div style="font-size:11px;color:rgba(255,255,255,.3);margin-top:1px">Coming soon</div>
-            </div>
-          </div>
           <div style="height:6px"></div>
         </div>
       </div>
@@ -1755,8 +1746,8 @@ class Component extends DCLogic {
       if (ok || err) {
         this.setState({
           connectionsOpen: true,
-          connectFlash: ok ? { ok: true, text: (ok === "slack" ? "Slack" : "Google") + " connected." }
-                           : { ok: false, text: "Couldn't connect " + (err === "slack" ? "Slack" : "Google") + (q.get("reason") ? " — " + q.get("reason") : ".") }
+          connectFlash: ok ? { ok: true, text: (ok === "slack" ? "Slack" : ok === "airtable" ? "Airtable" : "Google") + " connected." }
+                           : { ok: false, text: "Couldn't connect " + (err === "slack" ? "Slack" : err === "airtable" ? "Airtable" : "Google") + (q.get("reason") ? " — " + q.get("reason") : ".") }
         });
         history.replaceState({}, "", location.pathname);
         setTimeout(() => this.setState({ connectFlash: null }), 4500);
@@ -1843,14 +1834,14 @@ class Component extends DCLogic {
   _loadConnections() {
     const self = this, H = { "Authorization": "Bearer " + this.state.authToken };
     const get = (u) => fetch(u, { headers: H }).then(r => r.ok ? r.json() : null).catch(() => null);
-    Promise.all([get("/connectors/slack/status"), get("/connectors/google/status")]).then(([s, g]) => {
+    Promise.all([get("/connectors/slack/status"), get("/connectors/google/status"), get("/connectors/airtable/status")]).then(([s, g, a]) => {
       const isC = (d) => !!(d && (d.connected || d.authorized || d.ok || d.team || d.email || d.workspace || d.account));
       const connected = [], available = [];
       (isC(s) ? connected : available).push({ name: "Slack", logo: "/assets/connectors/slack.svg", provider: "slack", meta: isC(s) ? (((s && (s.team || s.workspace || s.account)) || "Workspace connected")) : "Post messages to channels" });
       // ONE Google Workspace connector — the OAuth grant spans Gmail, Calendar,
       // Drive, Sheets, Docs & Tasks, not just email.
       (isC(g) ? connected : available).push({ name: "Google Workspace", logo: "/assets/connectors/google.svg", provider: "google", meta: isC(g) ? (((g && (g.email || g.account)) || "Workspace connected")) : "Gmail, Calendar, Drive, Sheets, Docs & more" });
-;
+      (isC(a) ? connected : available).push({ name: "Airtable", logo: "/assets/connectors/airtable.svg", provider: "airtable", meta: isC(a) ? "Workspace connected" : "Automate records, tables & views" });
       self.setState({ connected, available });
     });
   }
@@ -2037,8 +2028,8 @@ class Component extends DCLogic {
   // Kick off an OAuth connect: fetch the provider authorize URL (Bearer), then
   // navigate the browser to it. The callback redirects back to /?connected=…
   connectProvider(provider) {
-    if (provider !== "slack" && provider !== "google") return;
-    const url = provider === "slack" ? "/connectors/slack/authorize" : "/connectors/google/authorize";
+    if (provider !== "slack" && provider !== "google" && provider !== "airtable") return;
+    const url = provider === "slack" ? "/connectors/slack/authorize" : provider === "airtable" ? "/connectors/airtable/authorize" : "/connectors/google/authorize";
     fetch(url, { headers: { "Authorization": "Bearer " + this.state.authToken } })
       .then(r => this._readJson(r))
       .then(r => {
@@ -2051,7 +2042,7 @@ class Component extends DCLogic {
   // Disconnect a connector (deletes the tenant's grant) so it can be reconnected
   // — e.g. to re-authorize with new scopes. DELETE /connectors/<provider>.
   disconnectProvider(provider, name) {
-    if (provider !== "slack" && provider !== "google") return;
+    if (provider !== "slack" && provider !== "google" && provider !== "airtable") return;
     const self = this;
     fetch("/connectors/" + provider, { method: "DELETE", headers: { "Authorization": "Bearer " + this.state.authToken } })
       .then(r => this._readJson(r))
