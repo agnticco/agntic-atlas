@@ -844,8 +844,8 @@ export class WorkflowStore {
    *   { config: { cron: "M H * * <DOW>" } }      — weekly cron (DOW = 0–6,
    *                                                 comma list, or range a-b;
    *                                                 7 also treated as Sunday)
-   *   { config: { cron: "*/N * * * *" } }        — every N minutes (sub-daily)
-   *   { config: { cron: "0 */N * * *" } }        — every N hours (sub-daily)
+   *   cron field "* /N * * *" (step syntax)       — every N minutes (sub-daily)
+   *   cron field "0 * /N * * *" (step syntax)     — every N hours (sub-daily)
    */
   _isFlowDue(workflow) {
     const triggers = workflow.triggers ?? [];
