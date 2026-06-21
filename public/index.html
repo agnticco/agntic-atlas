@@ -1298,7 +1298,7 @@
               <div style="font-size:10.5px;font-weight:600;letter-spacing:.16em;text-transform:uppercase;color:rgba(255,255,255,.28);margin-bottom:8px">{{ connectorModal.detailLabel }}</div>
               <div style="font-size:13.5px;color:rgba(255,255,255,.7);line-height:1.55">{{ connectorModal.detail }}</div>
             </div>
-            <sc-if value="{{ connectorModal.connected && !connectorModal.isApiKey }}" hint-placeholder-val="{{ false }}">
+            <sc-if value="{{ connectorModal.connected }}" hint-placeholder-val="{{ false }}">
               <button onClick="{{ connectorModal.onDisconnect }}" style="width:100%;border:1px solid rgba(232,116,97,.35);background:rgba(232,116,97,.07);color:#f0a896;font-family:inherit;font-size:14px;font-weight:500;padding:12px;border-radius:12px;cursor:pointer" style-hover="background:rgba(232,116,97,.14);border-color:rgba(232,116,97,.55)">Disconnect</button>
             </sc-if>
             <sc-if value="{{ !connectorModal.connected }}" hint-placeholder-val="{{ false }}">
@@ -2171,8 +2171,10 @@ class Component extends DCLogic {
       (isC(g) ? connected : available).push({ name: "Google Workspace", logo: "/assets/connectors/google.svg", provider: "google", meta: isC(g) ? (((g && (g.email || g.account)) || "Workspace connected")) : "Gmail, Calendar, Drive, Sheets, Docs & more" });
       (isC(a) ? connected : available).push({ name: "Airtable", logo: "/assets/connectors/airtable.svg", provider: "airtable", meta: isC(a) ? "Workspace connected" : "Automate records, tables & views" });
       const webC = !!(w && w.connected);
-      const webDetail = webC ? (w.detail || "Web search & fetch enabled") : "Add TAVILY_API_KEY and/or FIRECRAWL_API_KEY to .env";
-      (webC ? connected : available).push({ name: "Web", logo: "/assets/connectors/web.svg", provider: "web", meta: webDetail, isApiKey: true });
+      const webApiKey = !!(w && w.anthropic);
+      const _webSvg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 214.628 198.142"><path fill="#5CB0FF" d="M171.748 142.319c0-15.438-12.563-28-28-28s-28 12.563-28 28 12.563 28 28 28 28-12.563 28-28z"/><path fill="#1C71DA" d="M95.748 166.319v-76h42.989c.015.788.07 1.558.07 2.352 0 2.211 1.789 4 4 4s4-1.789 4-4c0-.794-.06-1.563-.075-2.352h25.016 5.648 2.352c0-46.316-37.684-84-84-84h-8v.405C40.173 10.81 6.748 46.744 6.748 90.319c0 46.316 37.684 84 84 84 2.211 0 4-1.789 4-4s-1.789-4-4-4zm-8 0c-19.929-6.438-35.059-36.395-35.059-72.324 0-.794.055-1.564.07-2.352h34.989v74.676zm-34.582-83.999C55.75 51.114 69.773 26.157 87.748 20.351v61.969H53.166zM95.748 82.319V19.026c21.683 0 39.625 27.581 42.583 63.293H95.748zm75.57 0h-24.969c-2.388-29.981-14.96-54.891-31.999-65.601C144.768 24.415 167.964 50.417 171.318 82.319zM77.146 16.718C60.106 27.428 47.535 52.338 45.147 82.319H20.178C23.532 50.417 46.728 24.415 77.146 16.718zM19.748 90.319h25.016c-.014.788-.075 1.558-.075 2.352 0 28.533 9.217 53.657 23.123 68.26C39.703 149.769 19.748 122.357 19.748 90.319z"/><path fill="#1C71DA" d="M191.514 184.429l-19.665-19.665c4.931-6.161 7.899-13.957 7.899-22.444 0-19.852-16.148-36-36-36s-36 16.148-36 36 16.148 36 36 36c8.487 0 16.283-2.969 22.444-7.899l19.665 19.665 5.657-5.657zM115.748 142.319c0-15.438 12.563-28 28-28s28 12.563 28 28-12.563 28-28 28-28-12.563-28-28z"/><path fill="#FF5D5D" d="M4 22.142c-1.023 0-2.048-.391-2.828-1.172-1.563-1.562-1.563-4.095 0-5.656L15.314 1.172c1.563-1.563 4.096-1.563 5.656 0 1.563 1.562 1.563 4.095 0 5.656L6.828 20.97C6.047 21.751 5.023 22.142 4 22.142z"/><path fill="#FF5D5D" d="M18.143 22.142c-1.023 0-2.047-.391-2.828-1.172L1.172 6.828c-1.563-1.562-1.563-4.095 0-5.656 1.561-1.563 4.094-1.563 5.656 0l14.143 14.142c1.563 1.562 1.563 4.095 0 5.656C20.19 21.751 19.166 22.142 18.143 22.142z"/><path fill="#00D40B" d="M14 198.142c-7.72 0-14-6.28-14-14s6.28-14 14-14 14 6.28 14 14-6.28 14-14 14zm0-20c-3.309 0-6 2.691-6 6s2.691 6 6 6 6-2.691 6-6-2.691-6-6-6z"/><path fill="#FFC504" d="M199.314 56.77c-1.061 0-2.078-.422-2.828-1.172l-11.314-11.314a4 4 0 0 1 0-5.656l11.314-11.314c1.563-1.563 4.094-1.563 5.656 0l11.314 11.314c1.563 1.562 1.563 4.095 0 5.656l-11.314 11.314c-.75.75-1.767 1.172-2.828 1.172zm-5.657-12.314l5.657 5.657 5.657-5.657-5.657-5.657-5.657 5.657z"/></svg>';
+      const webLogo = 'data:image/svg+xml,' + encodeURIComponent(_webSvg);
+      (webC ? connected : available).push({ name: "Web", logo: webLogo, provider: "web", meta: webC ? "Search & fetch" : "Web access", isApiKey: !webApiKey });
       self.setState({ connected, available });
     });
   }
@@ -2359,6 +2361,16 @@ class Component extends DCLogic {
   // Kick off an OAuth connect: fetch the provider authorize URL (Bearer), then
   // navigate the browser to it. The callback redirects back to /?connected=…
   connectProvider(provider) {
+    if (provider === "web") {
+      fetch("/connectors/web/enable", { method: "POST", headers: { "Authorization": "Bearer " + this.state.authToken } })
+        .then(r => this._readJson(r))
+        .then(r => {
+          if (r.ok) { this.setState({ connectFlash: { ok: true, text: "Web connector enabled." } }); this._loadConnections(); }
+          else { this.setState({ connectFlash: { ok: false, text: (r.data && r.data.error) || "Couldn't enable Web connector." } }); }
+        })
+        .catch(e => this.setState({ connectFlash: { ok: false, text: String(e) } }));
+      return;
+    }
     if (provider !== "slack" && provider !== "google" && provider !== "airtable") return;
     const url = provider === "slack" ? "/connectors/slack/authorize" : provider === "airtable" ? "/connectors/airtable/authorize" : "/connectors/google/authorize";
     fetch(url, { headers: { "Authorization": "Bearer " + this.state.authToken } })
@@ -2373,7 +2385,7 @@ class Component extends DCLogic {
   // Disconnect a connector (deletes the tenant's grant) so it can be reconnected
   // — e.g. to re-authorize with new scopes. DELETE /connectors/<provider>.
   disconnectProvider(provider, name) {
-    if (provider !== "slack" && provider !== "google" && provider !== "airtable") return;
+    if (provider !== "slack" && provider !== "google" && provider !== "airtable" && provider !== "web") return;
     const self = this;
     fetch("/connectors/" + provider, { method: "DELETE", headers: { "Authorization": "Bearer " + this.state.authToken } })
       .then(r => this._readJson(r))
@@ -3269,7 +3281,7 @@ class Component extends DCLogic {
           statusDot:   m.connected ? "#7fc28a" : "rgba(255,255,255,.18)",
           statusGlow:  m.connected ? "rgba(127,194,138,.6)" : "none",
           detail: m.meta || "",
-          detailLabel: m.connected && !m.isApiKey ? "Account" : "About",
+          detailLabel: m.connected && !m.isApiKey && m.provider !== "web" ? "Account" : "About",
           isComingSoon,
           isApiKey,
           onConnect:    () => { closeAnim(); setTimeout(() => this.connectProvider(m.provider), 290); },

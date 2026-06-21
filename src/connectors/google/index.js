@@ -346,7 +346,10 @@ export async function tasksCreate(gapi, { title, notes, due, tasklistId = '@defa
  * @param {import('../capability-registry.js').CapabilityRegistry} capabilityRegistry
  */
 export function registerGoogleChannels(capabilityRegistry) {
-  const ready = () => !!(process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET);
+  const ready = () => !!(
+    (process.env.GOOGLE_CLIENT_ID || process.env.GOOGLE_OAUTH_CLIENT_ID) &&
+    (process.env.GOOGLE_CLIENT_SECRET || process.env.GOOGLE_OAUTH_CLIENT_SECRET)
+  );
 
   function makeHandle(fn) {
     return async ({ config, body }) => {

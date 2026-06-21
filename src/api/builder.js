@@ -94,6 +94,76 @@ function annotateChannelCatalog(channels, resolvedByConnector = {}) {
   });
 }
 
+// Build connector context lines from the live CapabilityRegistry.
+// Returns one line per connected connector — "- DisplayName: cap1, cap2, ..."
+// connectedSet: Set of connector ids that are actually connected for this tenant.
+// Used for both the chat system prompt and the edit-change prompt.
+const CONNECTOR_DISPLAY = {
+  slack:      'Slack',
+  google:     'Google Workspace',
+  airtable:   'Airtable',
+  web:        'Web',
+  filesystem: 'Filesystem',
+};
+
+function connectorLinesFromRegistry(capabilityRegistry, connectedSet) {
+  const byConnector = new Map();
+  for (const cap of (capabilityRegistry?.list() ?? [])) {
+    if (!cap.connector) continue;            // built-ins (in_app, webhook) — no connector field
+    if (!connectedSet.has(cap.connector)) continue;
+    if (!cap.available) continue;
+    if (!byConnector.has(cap.connector)) byConnector.set(cap.connector, []);
+    byConnector.get(cap.connector).push(cap.name);
+  }
+  return [...byConnector.entries()].map(([id, names]) => {
+    const display = CONNECTOR_DISPLAY[id] ?? id;
+    return `- ${display}: ${[...new Set(names)].join(', ')}`;
+  });
+}
+
+// Build the full capability context block for the edit-change prompt.
+// Includes delivery channels, step actions, and a connector summary — all live from the registry.
+// connectedSet: Set of connector ids the TENANT has actually OAuth-connected. When provided,
+// capabilities from unconnected connectors are moved to the unavailable list even if isReady().
+function editChangeCapabilityContext(channelRegistry, capabilityRegistry, connectedSet) {
+  const all = channelRegistry?.getAll() ?? [];
+
+  const isConnected = (c) => !c.connector || !connectedSet || connectedSet.has(c.connector);
+
+  const deliveryAll  = all.filter(c => !c.actionOnly);
+  const availDel     = deliveryAll.filter(c => c.available && isConnected(c));
+  const unavailDel   = deliveryAll.filter(c => !c.available || !isConnected(c));
+  const channelList  = availDel.map(c => `  - "${c.id}" — ${c.name}`).join('\n') || '  (none connected)';
+  const unavailNote  = unavailDel.length
+    ? `\nUNAVAILABLE delivery channels (do NOT use — connector not connected):\n${unavailDel.map(c => `  - "${c.id}" — ${c.name}`).join('\n')}`
+    : '';
+
+  const stepAll      = all.filter(c => c.actionOnly && c.available && isConnected(c));
+  const stepList     = stepAll.length
+    ? stepAll.map(c => {
+        const fields = (c.configSchema ?? []).filter(f => f.key !== 'body').map(f => f.key + (f.optional ? '?' : '')).join(', ');
+        return `  - "${c.id}" — ${c.name}${fields ? ` (config fields: ${fields})` : ''}`;
+      }).join('\n')
+    : '  (none connected)';
+
+  return `AVAILABLE DELIVERY CHANNEL IDs (the ONLY valid values for config.channel on a deliver node):
+${channelList}${unavailNote}
+
+AVAILABLE STEP ACTIONS (valid values for config.action on a connector-action node):
+${stepList}
+
+Channel name aliases — map user requests to the correct channel id:
+- "email", "gmail", "send email", "email me"           → "gmail_send"
+- "slack channel", "post to slack", "#channel"          → "slack"
+- "dm", "direct message", "slack dm", "message me"      → "slack_dm"
+- "sheets", "google sheets", "spreadsheet", "append"    → "sheets_append"
+- "doc", "google doc", "document"                       → "docs_create"
+- "calendar", "calendar event", "schedule meeting"       → "calendar_create_event"
+- "tasks", "google tasks", "to-do"                      → "tasks_create"
+- "search web", "web search", "look up online"          → connector-action with action "web_search"
+- "fetch url", "read page", "scrape url"                → connector-action with action "web_fetch"`;
+}
+
 // In-process session map: threadId → converger instance.
 // Sessions are short-lived (one building conversation), so in-memory is correct.
 const sessions = new Map();
@@ -225,21 +295,28 @@ Rules:
         .filter(m => m && (m.role === 'user' || m.role === 'assistant') && typeof m.content === 'string')
         .map(m => ({ role: m.role, content: m.content }));
 
-      // Resolve live connector grants so the prompt reflects what's actually connected.
+      // Resolve live connector grants and build connector lines from the registry.
+      // Any connector registered in the CapabilityRegistry appears automatically.
       const connectorLines = [];
       try {
-        const sl = await spine.slack.resolveForTenant(req.tenant.id);
-        const go = await spine.google.resolveForTenant(req.tenant.id, req.user.id);
-        const at = spine.airtable.resolveForTenant(req.tenant.id);
-        if (sl.connected) connectorLines.push('- Slack: post messages, DMs, reactions, reminders');
-        if (go.connected) connectorLines.push('- Google Workspace: send/read Gmail, create calendar events, read/write Sheets, create Docs, manage Tasks');
-        if (at.connected) connectorLines.push('- Airtable: read, create, update, delete records in any base');
+        const sl  = await spine.slack.resolveForTenant(req.tenant.id);
+        const go  = await spine.google.resolveForTenant(req.tenant.id, req.user.id);
+        const at  = spine.airtable.resolveForTenant(req.tenant.id);
         const web = webConnectionStatus();
-        if (web.connected) connectorLines.push('- Web: search the web for current news or information (Anthropic native search), and fetch + extract readable content from any URL (Mozilla Readability)');
+
+        const connectedSet = new Set();
+        if (sl.connected)  connectedSet.add('slack');
+        if (go.connected)  connectedSet.add('google');
+        if (at.connected)  connectedSet.add('airtable');
+        if (web.connected) connectedSet.add('web');
+
+        connectorLines.push(...connectorLinesFromRegistry(spine.engine.capabilityRegistry, connectedSet));
+
+        // Filesystem: not in the CapabilityRegistry (sandboxed by tenant folder list), add manually.
         const fsSources = (readSources?.(req.tenant.id) ?? []).filter(s => s.path?.startsWith('/'));
         if (fsSources.length) {
           const names = fsSources.map(s => s.path.split('/').pop()).join(', ');
-          connectorLines.push(`- Filesystem (built-in): read files from connected folders (${names})`);
+          connectorLines.push(`- Filesystem: read files from approved folders (${names})`);
         }
       } catch { /* non-fatal */ }
 
@@ -603,9 +680,27 @@ Rules:
       if (!t?.invoke) return res.status(503).json({ error: 'LLM unavailable' });
 
       const specSummary = JSON.stringify(spec, null, 2);
+
+      // Resolve per-tenant OAuth connection status so the model only sees
+      // channels the tenant has actually connected (not just isReady() env vars).
+      let editConnectedSet = null;
+      try {
+        const sl  = await spine.slack.resolveForTenant(req.tenant.id);
+        const go  = await spine.google.resolveForTenant(req.tenant.id, req.user.id);
+        const at  = spine.airtable.resolveForTenant(req.tenant.id);
+        const web = webConnectionStatus();
+        editConnectedSet = new Set();
+        if (sl.connected)  editConnectedSet.add('slack');
+        if (go.connected)  editConnectedSet.add('google');
+        if (at.connected)  editConnectedSet.add('airtable');
+        if (web.connected) editConnectedSet.add('web');
+      } catch { /* non-fatal — fall back to isReady()-only filtering */ }
+
+      const capCtx = editChangeCapabilityContext(spine.engine?.channelRegistry, spine.engine?.capabilityRegistry, editConnectedSet);
+
       const raw = await t.invoke([
         new SystemMessage(
-          `You are Atlas, a workflow automation assistant. You receive a workflow spec (JSON) and a user's change request and return an updated spec.\n\nWorkflow spec format:\n- triggers[]: array of trigger objects (type, config, label)\n- nodes[]: array of step objects (id, type, label, config). Types: summarize, llm, extract, rewrite, deliver\n- edges[]: array of {from, to} connections\n\nRules:\n- Apply ONLY what the user asked for. Don't restructure unrelated parts.\n- Preserve all existing node ids, edge connections, and config fields not mentioned in the change.\n- For schedule triggers, config.cron is a cron expression (e.g. "0 6 * * *" = 6am daily), config.timezone is a tz name (e.g. "America/Chicago"), config.label is a human label.\n- For llm/summarize nodes, config.instructions is the prompt.\n- For deliver nodes, config.channel is the destination id (e.g. "slack"), config.target is the channel name.\n- Return ONLY valid JSON with exactly this shape: {"explanation":"<one sentence describing what you changed>","spec":{...updated spec...}}\n- No markdown fences, no extra text.`
+          `You are Atlas, a workflow automation assistant. You receive a workflow spec (JSON) and a user's change request and return an updated spec.\n\nWorkflow spec format:\n- triggers[]: array of trigger objects (type, config, label)\n- nodes[]: array of step objects (id, type, label, config). Types: summarize, llm, extract, rewrite, connector-action, deliver\n- edges[]: array of {from, to} connections\n\n${capCtx}\n\nRules:\n- Apply ONLY what the user asked for. Don't restructure unrelated parts.\n- Preserve all existing node ids, edge connections, and config fields not mentioned in the change.\n- For schedule triggers, config.cron is a cron expression (e.g. "0 6 * * *" = 6am daily), config.timezone is a tz name (e.g. "America/Chicago"), config.label is a human label.\n- For llm/summarize nodes, config.instructions is the prompt.\n- For deliver nodes, config.channel MUST be one of the AVAILABLE DELIVERY CHANNEL IDs — use the alias table to map plain-English requests to the right id. NEVER invent a channel id.\n- For connector-action nodes, config.action MUST be one of the AVAILABLE STEP ACTIONS.\n- If the user requests a delivery method or step action that is UNAVAILABLE or not listed, keep the relevant node UNCHANGED and explain specifically what connector or scope is needed to enable it.\n- Return ONLY valid JSON with exactly this shape: {"explanation":"<one sentence describing what you changed>","spec":{...updated spec...}}\n- No markdown fences, no extra text.`
         ),
         new HumanMessage(
           `Current spec:\n${specSummary}\n\nChange request: "${change}"\n\nReturn the updated spec as JSON.`

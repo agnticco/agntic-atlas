@@ -225,12 +225,18 @@ export function registerSlackChannel(registry, { fetchImpl = fetch } = {}) {
   }
 
   // Resolve a user arg (Slack ID or email) to a Slack user ID.
+  // Uses users.list scan — users.lookupByEmail is unreliable (invalid_arguments even
+  // with valid emails and users:read.email scope).
   async function resolveUser(api, user) {
     if (!user) throw new Error('slack: user (ID or email) is required');
     if (!user.includes('@')) return user;
-    const r = await api('users.lookupByEmail', { email: user });
-    if (!r.user?.id) throw new Error(`slack: could not resolve email "${user}" to a Slack user ID`);
-    return r.user.id;
+    const target = user.toLowerCase().trim();
+    const d = await api.get('users.list', { limit: 200 });
+    const match = (d.members ?? []).find((u) =>
+      !u.deleted && (u.profile?.email?.toLowerCase() === target || u.name?.toLowerCase() === target)
+    );
+    if (!match) throw new Error(`slack: no user found with email "${user}"`);
+    return match.id;
   }
 
   // ── post_message ───────────────────────────────────────────────────────────
