@@ -195,8 +195,8 @@ const CONNECTOR_INJECTORS = [
     id: 'airtable',
     name: 'Airtable',
     ownsNode: isAirtableNode,
-    resolveToken: (tenantId, { oauthTokenStore, cipher }) =>
-      getAirtableToken({ oauthTokenStore, cipher, tenantId }),
+    resolveToken: async (tenantId, { oauthTokenStore, cipher }) =>
+      getAirtableAccessToken({ oauthTokenStore, cipher, tenantId }),
     field: 'airtableToken',
     devEscape: () => false,
   },
@@ -205,13 +205,13 @@ const CONNECTOR_INJECTORS = [
 // Inject the owning tenant's credentials into every connector node of a workflow/
 // spec, so the run acts as that tenant — never a shared/operator token. Used by
 // EVERY run path (run-test, event dispatch, scheduler). Connector-agnostic.
-function injectTenantTokens(obj, tenantId, deps) {
+async function injectTenantTokens(obj, tenantId, deps) {
   if (!tenantId || !(obj?.nodes?.length)) return obj;
   let nodes = obj.nodes;
   let changed = false;
   for (const c of CONNECTOR_INJECTORS) {
     if (!nodes.some(c.ownsNode)) continue;
-    const tok = c.resolveToken(tenantId, deps);
+    const tok = await c.resolveToken(tenantId, deps);
     if (!tok) continue;
     nodes = nodes.map((n) => (c.ownsNode(n) && n?.config?.[c.field] == null) ? { ...n, config: { ...n.config, [c.field]: tok } } : n);
     changed = true;
@@ -279,7 +279,7 @@ async function dispatchSlackEvent(spine, body) {
   const context = `New Slack message in <#${ev.channel}> from <@${ev.user}>:\n\n${ev.text ?? ''}`;
   for (const wf of flows) {
     logEvent('slack.event.dispatch', { tenant: tenantId, workflow: wf.slug, channel: ev.channel });
-    let tenantWf = injectTenantTokens(wf, tenantId, { ...slackDeps, userId: wf.user_id });
+    let tenantWf = await injectTenantTokens(wf, tenantId, { ...slackDeps, userId: wf.user_id });
     tenantWf = injectFilesystemContext(tenantWf, tenantId);
     try { await spine.engine.workflowScheduler._executeFlow(tenantWf, { trigger: 'event', emailContext: context }); }
     catch (err) { logEvent('slack.event.error', { tenant: tenantId, workflow: wf.slug, ...errFields(err) }); }
@@ -321,7 +321,7 @@ async function dispatchAirtableEvent(spine, body) {
   const context = `Airtable record changed in base ${baseId}.\n\nChanges:\n${JSON.stringify(payloads.slice(0, 3), null, 2)}`;
   for (const wf of flows) {
     logEvent('airtable.event.dispatch', { tenant: tenantId, workflow: wf.slug });
-    let tenantWf = injectTenantTokens(wf, tenantId, { ...airtableDeps, userId: wf.user_id });
+    let tenantWf = await injectTenantTokens(wf, tenantId, { ...airtableDeps, userId: wf.user_id });
     tenantWf = injectFilesystemContext(tenantWf, tenantId);
     try { await spine.engine.workflowScheduler._executeFlow(tenantWf, { trigger: 'event', emailContext: context }); }
     catch (err) { logEvent('airtable.event.error', { tenant: tenantId, workflow: wf.slug, ...errFields(err) }); }
@@ -479,14 +479,21 @@ export async function bootSpine() {
     const userId = trigger?.userId ?? workflow.user_id;
     const tenantId = workflow.tenant_id ?? 'default';
     if (!userId) return [];
-    const emails = await pollGmail({ workflow, tenantId, userId, oauthTokenStore: auth.oauthTokenStore, cipher: auth.tokenCipher });
+    let emails;
+    try {
+      emails = await pollGmail({ workflow, tenantId, userId, oauthTokenStore: auth.oauthTokenStore, cipher: auth.tokenCipher, oauthClient: auth.oauth });
+    } catch (err) {
+      logEvent({ kind: 'gmail.poll.error', tenant: tenantId, workflowId: workflow.id, error: err.message });
+      return [];
+    }
+    logEvent({ kind: 'gmail.poll.ok', tenant: tenantId, workflowId: workflow.id, found: emails.length, filter: trigger?.filter });
     return emails.map(formatEmailContext); // strings — injected as initialContext
   });
 
   // Scheduled + email-triggered runs act as the OWNING tenant: inject that
   // tenant's connector tokens before each automatic run (connector-agnostic).
-  engine.workflowScheduler.registerTokenInjector((workflow) => {
-    let w = injectTenantTokens(workflow, workflow.tenant_id ?? 'default', {
+  engine.workflowScheduler.registerTokenInjector(async (workflow) => {
+    let w = await injectTenantTokens(workflow, workflow.tenant_id ?? 'default', {
       oauthTokenStore: auth.oauthTokenStore, cipher: auth.tokenCipher, userId: workflow.user_id,
     });
     w = injectInboxContext(w, w.tenant_id ?? 'default', w.user_id ?? '');
@@ -518,6 +525,9 @@ export async function bootSpine() {
       body: JSON.stringify({ channel, text }),
     });
   });
+
+  // Start the background tick loop (email polling + scheduled workflow execution).
+  engine.workflowScheduler.start();
 
   // Per-user inbox — delivery destination + RAG-indexed content store.
   ensureDir(INBOX_DB);
@@ -1087,7 +1097,7 @@ export function createApp(spine) {
           logEvent('run.connector_not_connected', { tenant: tenantId, connector: missing });
           return res.json({ runId: null, completed: false, error: `${missing} isn't connected for this workspace — connect it first, then run the test.`, steps: [] });
         }
-        spec = injectTenantTokens(spec, req.tenant.id, deps);
+        spec = await injectTenantTokens(spec, req.tenant.id, deps);
         spec = injectInboxContext(spec, req.tenant.id, req.user.id);
         spec = injectFilesystemContext(spec, req.tenant.id);
       }

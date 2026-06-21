@@ -14,7 +14,7 @@
 
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
-import { makeGoogleApi, gmailSearch, GOOGLE_CONNECTOR_ID } from './index.js';
+import { makeGoogleApi, makeGoogleApiFromToken, gmailSearch, GOOGLE_CONNECTOR_ID } from './index.js';
 
 const WATERMARK_DIR = process.env.GMAIL_WATERMARK_DIR ?? './memory/gmail';
 
@@ -49,15 +49,25 @@ function saveWatermark(tenantId, workflowId, data) {
  * @param {object} opts.cipher
  * @returns {Promise<object[]>} — array of new message objects (empty = nothing new)
  */
-export async function pollGmail({ workflow, tenantId, userId, oauthTokenStore, cipher }) {
+export async function pollGmail({ workflow, tenantId, userId, oauthTokenStore, cipher, oauthClient }) {
   const trigger = (workflow.triggers ?? []).find((t) => t.type === 'email');
   if (!trigger) return [];
 
-  // Get the connected Google token for this user.
-  const row = oauthTokenStore.get({ tenantId, userId, connectorId: GOOGLE_CONNECTOR_ID });
-  if (!row) return []; // not connected — skip silently
-
-  const gapi = makeGoogleApi({ oauthTokenStore, cipher, tenantId, userId });
+  // Prefer auto-refreshing via OAuthClient; fall back to sync vault read.
+  let gapi;
+  if (oauthClient) {
+    let token;
+    try {
+      token = await oauthClient.getAccessToken({ userId, tenantId, connectorId: GOOGLE_CONNECTOR_ID });
+    } catch {
+      return []; // not connected or refresh failed — skip silently
+    }
+    gapi = makeGoogleApiFromToken(token);
+  } else {
+    const row = oauthTokenStore.get({ tenantId, userId, connectorId: GOOGLE_CONNECTOR_ID });
+    if (!row) return [];
+    gapi = makeGoogleApi({ oauthTokenStore, cipher, tenantId, userId });
+  }
   const filter = trigger.filter ?? '';
   const wm = loadWatermark(tenantId, workflow.id);
 
