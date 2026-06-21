@@ -21,6 +21,7 @@ import { GraphInterrupt }  from '../graph/index.js';
 import { SystemMessage, HumanMessage } from '../core/message.js';
 import { logEvent, errFields } from '../utils/event-log.js';
 import { channelIdForCapability } from '../connectors/slack/index.js';
+import { isAirtableConnected } from '../connectors/airtable/index.js';
 
 // Retry an LLM call up to maxRetries times on transient provider errors (500/529/503).
 async function withLLMRetry(fn, maxRetries = 2) {
@@ -298,12 +299,18 @@ Rules:
     // Operator identity lets the converger resolve "me"/"DM me" to a real target.
     let capabilities = { operator: { name: req.user?.display_name ?? null, email: req.user?.email ?? null } };
     try {
-      const slack  = await spine.slack.resolveForTenant(req.tenant.id);
-      const google = await spine.google.resolveForTenant(req.tenant.id, req.user.id);
-      capabilities.connectors = { slack, google };
+      const slack    = await spine.slack.resolveForTenant(req.tenant.id);
+      const google   = await spine.google.resolveForTenant(req.tenant.id, req.user.id);
+      const airtable = { connected: isAirtableConnected({ oauthTokenStore: spine.auth.oauthTokenStore, tenantId: req.tenant.id }) };
+      capabilities.connectors = { slack, google, airtable };
       // Scope-aware, position-tagged catalog: only what this tenant can actually run.
       capabilities.channels   = annotateChannelCatalog(spine.engine.channelRegistry.getAll(), { slack, google });
-      capabilities.triggers   = spine.engine.capabilityRegistry.list({ position: 'trigger' });
+      // Narrow triggers to connected connectors only.
+      const connectedIds = new Set(['slack', 'google'].filter(id => id === 'slack' ? slack : google));
+      if (airtable.connected) connectedIds.add('airtable');
+      capabilities.triggers = spine.engine.capabilityRegistry
+        .list({ position: 'trigger' })
+        .map(t => ({ ...t, available: t.available && (!t.connector || connectedIds.has(t.connector)) }));
     } catch { /* non-fatal — converger still works with empty capabilities */ }
 
     const threadId  = `build-${req.tenant.id}-${Date.now()}`;
