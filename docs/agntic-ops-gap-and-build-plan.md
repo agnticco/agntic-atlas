@@ -272,41 +272,74 @@ notify, and sub-daily schedules fire correctly.
 >    validate the `slack_dm` `user` field once #1 lands.
 
 ### Phase 8 — Web research + filesystem connectors
-A unified `web_research` connector that handles both search and content extraction
-in a single workflow node — no vendor plumbing exposed to operators. Three modes:
-`search` (Tavily — returns ranked results with URLs and snippets), `fetch`
-(Firecrawl — returns clean markdown from a given URL), and `auto` (inspects the
-node config: URL provided → fetch; query provided → search, then scrape top results
-if `content_needed=true`). The converger elicits intent in plain language ("find
-results" vs "read this page") and sets the mode in the spec. Also includes a
-tenant-scoped filesystem connector for reading local files into workflow data and
-writing outputs to disk, with paths sandboxed per tenant.
-**Done when:** a `web_research` search node returns Tavily results end-to-end; a
-`web_research` fetch node returns Firecrawl markdown end-to-end; a filesystem read
-node returns file content into `{{nodeId.output}}`; both connectors exist at
-`src/connectors/web-research.js` and `src/connectors/filesystem.js`.
+*(Scope re-decided: no Tavily/Firecrawl. Fully self-owned.)*
 
-### Phase 9 — Value tracking (time-saved / ROI metrics)
-Closed-loop system that attaches a quantified "time saved" value to each workflow
-run so operators and buyers can measure and communicate the product's impact.
-The exact calculation method is TBD (to be designed in-phase — candidates include
-user-entered per-run time estimates during converger elicitation, step-count
-heuristics, or post-run confirmation prompts). The surface is a per-workflow and
-per-tenant aggregate: runs × estimated time saved = hours recovered, with a
-customer-facing summary suitable for internal reporting and product demos.
-**Done when:** a completed workflow run records a time-saved value; the console
-shows per-workflow and all-up time-saved totals; a shareable one-page ROI summary
-can be generated from the console.
+**Web connector** (`src/connectors/web/`) — two capabilities (step position):
+- `web_search`: Anthropic native `web_search_20260209` tool via the existing LLM
+  service. `isReady()` = `ANTHROPIC_API_KEY` is set. Converger surfaces it
+  automatically from the CapabilityRegistry when the connector is available.
+- `web_fetch`: fetches a URL and extracts readable article content using Mozilla
+  Readability + jsdom (Firefox Reader Mode). Always ready; no API key required.
 
-### Phase 10 — Admin observability (standalone web app)
+**Filesystem connector** (`src/connectors/filesystem.js`) — two capabilities
+(step position): `filesystem_read` and `filesystem_list`. Every call is sandboxed
+to the tenant's approved folders (absolute-path entries in `sources.json` added
+via `/rag/index-folder`). Browser-upload entries are RAG-only and ineligible.
+`injectFilesystemContext()` stamps `_tenantId` into filesystem nodes before every
+run path (REST, scheduler, Slack event dispatch, Airtable event dispatch).
+
+**Done when:** gate `scripts/gates/p8.sh` — 20 checks covering both connectors,
+sandbox guard, and filesystem read end-to-end. Gate closed 2026-06-21.
+Airtable E2E verification (create record via workflow, confirm it lands) tracked
+separately (`scripts/checks/p8-airtable-e2e.mjs`).
+
+### Phase 9 — Workflow profile page (value + trust narrative)
+A per-workflow profile that makes the automation's value tangible to an ops
+director or buyer. Core concept: capture the manual version of the task as a
+baseline at build time, then show every automated run measured against it.
+
+**Baseline capture (build time):** the operator records a screen capture of doing
+the task manually and enters how long it takes. Both are stored with the workflow.
+This is the proof of equivalence — "same workflow, automated."
+
+**Per-run tracking:** execution time is recorded for every run and compared to
+the baseline duration. Running total of time saved (runs × (baseline − execution
+time)) accumulates as YTD savings.
+
+**Profile surface:** a dedicated page per workflow showing: baseline duration,
+last-run execution time, total time saved YTD, a trend line over recent runs,
+example outputs from past runs, and a link to the baseline screen recording.
+
+**Why this matters:** ops directors need a trust-building narrative, not just a
+toggle. The profile gives them a one-screen answer to "is this doing what the
+manual process did, and how much time is it saving?"
+
+*(Cost tracking moved to P10.)*
+
+**Done when:** a workflow run records execution time; the profile page renders
+baseline, execution time, time-saved YTD, trend, example outputs, and baseline
+recording; the page is accessible from the console workflow detail view.
+
+### Phase 10 — Admin observability + cost tracking
 A separate internal-facing web dashboard — not the user-facing console — for
-monitoring per-tenant usage patterns and cost. Surfaces: run counts and frequency
-per tenant, LLM token consumption and cost per tenant, connector call volume,
-error rates, and total platform cost. Built as a standalone Atlas admin app
-(separate route/service from the user-facing product) to keep operator concerns
-out of the customer UI.
-**Done when:** the admin dashboard shows per-tenant run counts, cost breakdowns,
-and error rates in real time; data is not visible to non-admin users.
+monitoring per-tenant usage and economics.
+
+**Usage observability:** run counts and frequency per tenant, connector call
+volume, error rates, workflow health at a glance.
+
+**Cost tracking (feeds unit economics):** every LLM call is tagged by type
+(converger turn, workflow execution node, UI/chat interaction). Per-tenant cost
+is segmented by call type so variable costs are visible at the account level.
+Lifetime and estimated monthly cost per tenant are surfaced in the dashboard.
+This data feeds the unit economics model — variable cost per workflow run, per
+tenant, per month — which anchors pricing decisions for paid pilots.
+
+Built as a standalone Atlas admin app (separate route/service from the
+user-facing product) to keep operator concerns out of the customer UI.
+
+**Done when:** the admin dashboard shows per-tenant run counts, LLM cost broken
+down by call type, estimated monthly burn per tenant, and error rates in real
+time; data is not visible to non-admin users.
 
 ### Phase 11 — E2E validation + production hardening + VPS migration
 End-to-end test suite covering the full user journey (builder → run → console →

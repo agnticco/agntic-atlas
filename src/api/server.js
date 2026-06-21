@@ -182,8 +182,9 @@ const CONNECTOR_INJECTORS = [
     id: 'google',
     name: 'Google',
     ownsNode: isGoogleNode,
-    resolveToken: (tenantId, { oauthTokenStore, cipher }) => {
-      const row = oauthTokenStore.get({ tenantId, connectorId: GOOGLE_CONNECTOR_ID });
+    resolveToken: (tenantId, { oauthTokenStore, cipher, userId }) => {
+      if (!userId) return null;
+      const row = oauthTokenStore.get({ tenantId, userId, connectorId: GOOGLE_CONNECTOR_ID });
       if (!row) return null;
       try { return cipher.decrypt(row.access_token_enc); } catch { return null; }
     },
@@ -274,11 +275,11 @@ async function dispatchSlackEvent(spine, body) {
     .filter((w) => (w.triggers ?? []).some((t) => t.type === 'event' && t.connector === 'slack' && t.event === 'message' && channelMatches(t)));
 
   if (!flows.length) return;
-  const deps = { oauthTokenStore: spine.auth.oauthTokenStore, cipher: spine.auth.tokenCipher };
+  const slackDeps = { oauthTokenStore: spine.auth.oauthTokenStore, cipher: spine.auth.tokenCipher };
   const context = `New Slack message in <#${ev.channel}> from <@${ev.user}>:\n\n${ev.text ?? ''}`;
   for (const wf of flows) {
     logEvent('slack.event.dispatch', { tenant: tenantId, workflow: wf.slug, channel: ev.channel });
-    let tenantWf = injectTenantTokens(wf, tenantId, deps);
+    let tenantWf = injectTenantTokens(wf, tenantId, { ...slackDeps, userId: wf.user_id });
     tenantWf = injectFilesystemContext(tenantWf, tenantId);
     try { await spine.engine.workflowScheduler._executeFlow(tenantWf, { trigger: 'event', emailContext: context }); }
     catch (err) { logEvent('slack.event.error', { tenant: tenantId, workflow: wf.slug, ...errFields(err) }); }
@@ -296,7 +297,7 @@ async function dispatchAirtableEvent(spine, body) {
   if (!route) { logEvent('airtable.event.no_route', { baseId, webhookId }); return; }
 
   const { tenantId } = route;
-  const deps = { oauthTokenStore: spine.auth.oauthTokenStore, cipher: spine.auth.tokenCipher };
+  const airtableDeps = { oauthTokenStore: spine.auth.oauthTokenStore, cipher: spine.auth.tokenCipher };
   const pat  = await getAirtableAccessToken({ oauthTokenStore: spine.auth.oauthTokenStore, cipher: spine.auth.tokenCipher, tenantId });
   if (!pat) { logEvent('airtable.event.no_token', { tenantId }); return; }
 
@@ -320,7 +321,7 @@ async function dispatchAirtableEvent(spine, body) {
   const context = `Airtable record changed in base ${baseId}.\n\nChanges:\n${JSON.stringify(payloads.slice(0, 3), null, 2)}`;
   for (const wf of flows) {
     logEvent('airtable.event.dispatch', { tenant: tenantId, workflow: wf.slug });
-    let tenantWf = injectTenantTokens(wf, tenantId, deps);
+    let tenantWf = injectTenantTokens(wf, tenantId, { ...airtableDeps, userId: wf.user_id });
     tenantWf = injectFilesystemContext(tenantWf, tenantId);
     try { await spine.engine.workflowScheduler._executeFlow(tenantWf, { trigger: 'event', emailContext: context }); }
     catch (err) { logEvent('airtable.event.error', { tenant: tenantId, workflow: wf.slug, ...errFields(err) }); }
@@ -486,7 +487,7 @@ export async function bootSpine() {
   // tenant's connector tokens before each automatic run (connector-agnostic).
   engine.workflowScheduler.registerTokenInjector((workflow) => {
     let w = injectTenantTokens(workflow, workflow.tenant_id ?? 'default', {
-      oauthTokenStore: auth.oauthTokenStore, cipher: auth.tokenCipher,
+      oauthTokenStore: auth.oauthTokenStore, cipher: auth.tokenCipher, userId: workflow.user_id,
     });
     w = injectInboxContext(w, w.tenant_id ?? 'default', w.user_id ?? '');
     w = injectFilesystemContext(w, w.tenant_id ?? 'default');
@@ -1080,7 +1081,7 @@ export function createApp(spine) {
       // tenant (headless) or for the designated dev tenant. Inside the try so a
       // token decrypt error returns JSON, never an HTML 500 the UI can't parse.
       if (req.tenant) {
-        const deps = { oauthTokenStore: spine.auth.oauthTokenStore, cipher: spine.auth.tokenCipher };
+        const deps = { oauthTokenStore: spine.auth.oauthTokenStore, cipher: spine.auth.tokenCipher, userId: req.user?.id };
         const missing = unconnectedConnector(spec, req.tenant.id, deps);
         if (missing) {
           logEvent('run.connector_not_connected', { tenant: tenantId, connector: missing });
@@ -1181,8 +1182,33 @@ export function createApp(spine) {
     res.json(grant ?? { connected: false });
   });
 
-  app.get('/connectors/web/status', requireActiveTenant, (_req, res) => {
-    res.json(webConnectionStatus());
+  const WEB_DISABLED_FILE = process.env.WEB_DISABLED_FILE ?? './memory/web-disabled.json';
+  function readWebDisabled() {
+    try { return new Set(JSON.parse(readFileSync(WEB_DISABLED_FILE, 'utf8'))); } catch { return new Set(); }
+  }
+  function writeWebDisabled(set) {
+    ensureDir(WEB_DISABLED_FILE);
+    writeFileSync(WEB_DISABLED_FILE, JSON.stringify([...set]));
+  }
+
+  app.get('/connectors/web/status', requireActiveTenant, (req, res) => {
+    const base = webConnectionStatus();
+    const disabled = readWebDisabled().has(req.tenant.id);
+    res.json({ ...base, connected: base.connected && !disabled, disabled });
+  });
+
+  app.post('/connectors/web/enable', requireActiveTenant, (req, res) => {
+    const set = readWebDisabled();
+    set.delete(req.tenant.id);
+    writeWebDisabled(set);
+    res.json({ ok: true });
+  });
+
+  app.delete('/connectors/web', requireActiveTenant, (req, res) => {
+    const set = readWebDisabled();
+    set.add(req.tenant.id);
+    writeWebDisabled(set);
+    res.json({ ok: true });
   });
 
   // Disconnect — best-effort delete all registered webhooks, then remove the token.

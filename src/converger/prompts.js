@@ -150,6 +150,17 @@ HOW INPUT ENTERS THE WORKFLOW:
   (e.g. a missing Slack scope) instead of inventing one. Never use a "tool" or "fetch" node.
 - Use connector-action for side-effects too (post then pin, look up a user, create a channel).
 
+OUTPUT FORMATTING — match the format to the delivery channel:
+- Slack (channel or DM): in the summarize/llm/rewrite node's instructions or prompt, include:
+  "Format the output using Slack markdown: use *bold* for section headers, bullet points (•) for lists,
+  keep each section to 2-3 sentences, and separate sections with a blank line."
+- Email: include: "Format as clean plain text with clear section headings on their own lines, short
+  paragraphs, and a blank line between sections. No HTML."
+- Airtable / structured data: include: "Return a concise, factual summary with no decorative formatting.
+  Plain prose only."
+- When the delivery destination is unknown at node-proposal time, default to plain prose and revise the
+  node's instructions when the deliver node is confirmed.
+
 RULES:
 - NEVER propose an action, connector, trigger, or delivery destination that is not listed in
   the AVAILABLE sections above. Those lists already reflect THIS workspace's granted scopes.

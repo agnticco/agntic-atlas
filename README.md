@@ -23,13 +23,27 @@ wired connectors can't do.
 | **P5** | Console UI — inventory, live run monitoring, SOP view + PDF/MD export | ✅ merged |
 | **P6** | *(scrapped 2026-06-20)* — current sidebar + surface switching is sufficient; floating pill / launcher layer dropped | — |
 | **P7** | Airtable connector + Google write-back + error handling with retry/notify + sub-daily scheduling | ✅ merged |
-| **P8** | `search_web` node type (Anthropic native) + filesystem connector (tenant-sandboxed read/list) | ✅ gate passed |
-| **P9** | Value tracking — time-saved metrics per run, all-up ROI summary, customer-facing report | planned |
-| **P10** | Admin observability — standalone admin app, per-tenant usage + cost monitoring | planned |
+| **P8** | Web research (`web_search` / `web_fetch` connector) + filesystem connector (tenant-sandboxed read/list) | ✅ merged |
+| — | **Web connector** — `web_search` (Anthropic native tool) + `web_fetch` (Readability); no API key beyond `ANTHROPIC_API_KEY` | ✅ shipped post-P8 |
+| — | **Airtable E2E verification** — create dummy base, test record creation end-to-end via workflow | ✅ verified |
+| **P9** | **Workflow profile page** — baseline screen recording + duration captured at build time; per-run execution time tracked and compared to baseline; profile displays baseline, execution time, total time saved YTD, trend line, example outputs, and the baseline recording. Enables the trust-building narrative for ops directors: *"same workflow, automated."* | planned |
+| **P10** | Admin console — per-tenant usage monitoring + **cost tracking**: LLM spend segmented by call type (converger, execution, UI), lifetime cost per tenant, estimated monthly burn. Feeds unit economics modeling. | planned |
 | **P11** | E2E validation + production hardening + VPS migration | planned |
 
 Each ✅ was closed by an independent **Verifier** against a fail-closed gate;
 the evidence lives in [`docs/gates/`](docs/gates/) and `git log --grep "^Gate:"`.
+
+## Parallel work (next 2–3 weeks)
+
+Work that runs alongside the phase sequence:
+
+- **Anthropic invoice** — get actual spend data this week; baseline for unit economics
+- **Cost instrumentation** — tag every LLM call by type (converger turn, workflow execution, UI/chat) so spend is segmentable per tenant
+- **Unit economics spreadsheet** — variable costs, fixed costs, target price per workflow or per tenant
+- **Anchor pricing** — derive a paid-pilot price from real cost data before the first commercial conversation
+- **Converger iteration** — ongoing prompt + elicitation quality improvements as pilot workflows surface edge cases
+- **HubSpot build** — first real-customer workflow built in parallel with converger iteration
+- **Load test** — after pilot workflows are stable; gate for P11
 
 ## What's built
 
@@ -47,7 +61,7 @@ or local GGUF) is injected as the engine's LLM. Durable cost-tracked run logs.
 | `llm` | Run a custom AI prompt |
 | `extract` | Extract structured fields from text |
 | `rewrite` | Rewrite / transform text |
-| `search_web` | Web search via Anthropic's native `web_search_20260209` tool |
+| `search_web` | Web search via Anthropic's native `web_search_20260209` tool (built-in; superseded by the Web connector-action — use `connector-action` with `action:"web_search"` instead) |
 | `connector-action` | Call a connector capability mid-workflow (fetch, create, update) |
 | `deliver` | Send the final result to a destination (Slack, email, in-app inbox, webhook) |
 | `trigger` | Entry node (created from the trigger spec; not proposed by the converger) |
@@ -114,6 +128,15 @@ Security model: every call is sandboxed to the tenant's approved folders
 are eligible — browser-upload entries (RAG-only) are skipped. The guard throws
 on any path outside an approved root.
 
+#### Web (`src/connectors/web/`)
+
+Two capabilities (step position only):
+
+- **`web_search`** — web search via Anthropic's native `web_search_20260209` tool. Ready when `ANTHROPIC_API_KEY` is set. Invoked through `llm.invoke()` using the same model tier already in use.
+- **`web_fetch`** — fetches a URL and extracts readable article content using Mozilla Readability + jsdom (Firefox Reader Mode algorithm). Always ready; no API key required.
+
+Shown as "connected" in the Connections flyout whenever `ANTHROPIC_API_KEY` is set. The converger surfaces both capabilities automatically from the CapabilityRegistry when the connector is available.
+
 ### Local models + RAG (`src/llm/`, `src/rag/`)
 
 Open-source models locally via `node-llama-cpp`; cloud optional. Company-context
@@ -130,7 +153,7 @@ See [`docs/capabilities/local-models-rag.md`](docs/capabilities/local-models-rag
 
 `buildLLM()` prefers Anthropic (haiku fast / sonnet balanced+powerful) when
 `ANTHROPIC_API_KEY` is set, falls back to OpenAI, then local GGUF weights.
-`search_web` requires an Anthropic-backed tier (uses the native tool).
+`web_search` (via the Web connector) requires an Anthropic-backed tier (uses the native `web_search_20260209` tool).
 
 ### Converger (`src/converger/`, `src/graph/`)
 
@@ -229,6 +252,9 @@ engine silently falls back to the local GGUF tier.
 - `GET /connectors/google/authorize`, `/callback`, `/status`, `DELETE /connectors/google`
 - `GET /connectors/google/capabilities`
 
+**Web connector**
+- `GET /connectors/web/status` — reports connected when `ANTHROPIC_API_KEY` is set
+
 **Connector OAuth — Airtable**
 - `GET /connectors/airtable/oauth/start`, `/callback`, `/status`, `DELETE /connectors/airtable`
 - `POST /connectors/airtable/webhooks` — Airtable webhook registration
@@ -262,6 +288,10 @@ engine silently falls back to the local GGUF tier.
 - `GET /api/builder/workflows/deleted` — recently deleted
 - `GET /api/builder/greeting` — AI home greeting
 - `GET /api/builder/connections` — connector status
+- `POST /api/builder/edit-intro` — AI opener for the edit flow (describes current workflow, invites changes)
+- `POST /api/builder/edit-change` — apply a natural-language change request to an existing spec
+- `GET /api/builder/home` — AI home greeting + recent workflow summary
+- `GET /api/builder/mentions` — @-mention suggestions
 
 **Console** (auth required)
 - `GET /api/console/workflows` — tenant-scoped inventory
@@ -285,7 +315,7 @@ write the code) passes the check and records `docs/gates/<gate>.md`. A
 `pre-push` hook blocks publishing a `Gate:`-trailer commit unless its check passes.
 
 ```bash
-bash scripts/gate.sh 8                       # P8: search_web + filesystem (20 checks)
+bash scripts/gate.sh 8                       # P8: web connector + filesystem (20 checks)
 bash scripts/gates/cap-multitenancy.sh       # cross-tenant isolation
 bash scripts/gates/cap-slack-oauth.sh        # per-tenant Slack OAuth
 ```
@@ -299,7 +329,7 @@ src/
   auth/         users · sessions · tenants · JWT · AES-256-GCM OAuth vault
   llm/          local (node-llama-cpp) + cloud models · ModelPool · cost tracker
   rag/          embeddings · per-tenant vector store · retrievers · ingestion
-  connectors/   CapabilityRegistry · Slack · Google/G-Suite · Airtable · Filesystem · Inbox
+  connectors/   CapabilityRegistry · Slack · Google/G-Suite · Airtable · Filesystem · Web · Inbox
   converger/    elicitation engine · prompts · interaction store
   graph/        custom StateGraph · HITL interrupt/resume
   core/ utils/  shared primitives
@@ -327,11 +357,11 @@ git config commit.template .gitmessage
 
 | Var | Purpose |
 |---|---|
-| `ANTHROPIC_API_KEY` | Cloud inference + `search_web` (required for web search) |
+| `ANTHROPIC_API_KEY` | Cloud inference + `web_search` connector (required for web search) |
 | `OPENAI_API_KEY` | Fallback cloud inference |
 | `AIRTABLE_CLIENT_ID` / `AIRTABLE_CLIENT_SECRET` | Airtable OAuth |
 | `SLACK_CLIENT_ID` / `SLACK_CLIENT_SECRET` | Slack OAuth |
-| `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` | Google OAuth |
+| `GOOGLE_OAUTH_CLIENT_ID` / `GOOGLE_OAUTH_CLIENT_SECRET` | Google OAuth |
 | `OAUTH_REDIRECT_BASE` | Base URL for all OAuth callbacks (default: `http://localhost:3000`) |
 | `AUTH_SECRET` | JWT signing secret |
 | `OAUTH_KEY` | AES-256-GCM key for OAuth token encryption |
