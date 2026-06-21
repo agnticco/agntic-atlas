@@ -37,14 +37,16 @@ import {
   FlowTester,
   WorkflowService,
 } from '../workflows/index.js';
+import { CapabilityRegistry } from '../connectors/capability-registry.js';
 import { LlamaCppLLM, ModelPool, ChatModel } from '../llm/index.js';
 import { EmbeddingModel, TextSplitter, VectorStore } from '../rag/index.js';
-import { registerSlackChannel, createSlackCapabilityProvider } from '../connectors/slack/index.js';
+import { registerSlackChannel, registerSlackTriggers, createSlackCapabilityProvider } from '../connectors/slack/index.js';
 import {
   createSlackOAuthFlow, storeSlackToken, getSlackToken, getSlackGrant, disconnectSlack, isOAuthConfigured,
 } from '../connectors/slack/oauth.js';
 import {
-  googleCapabilities, resolveGoogleCapabilities, makeGoogleApi, createGoogleCapabilityProvider,
+  googleCapabilities, resolveGoogleCapabilities, makeGoogleApi, makeGoogleApiFromToken,
+  createGoogleCapabilityProvider, registerGoogleChannels,
   gmailSearch, gmailGetMessage, gmailSend, gmailMarkRead,
   calendarListEvents, calendarCreateEvent,
   driveListFiles, sheetsRead, sheetsAppend, docsRead, docsCreate,
@@ -112,16 +114,22 @@ const isSlackNode = (n) =>
   (n?.type === 'deliver' && String(n?.config?.channel ?? '').startsWith('slack')) ||
   (n?.type === 'connector-action' && String(n?.config?.action ?? '').startsWith('slack'));
 
+const GOOGLE_ACTION_IDS = new Set([
+  'gmail_search', 'gmail_get_message', 'gmail_send', 'gmail_mark_read',
+  'calendar_list_events', 'calendar_create_event',
+  'drive_list_files', 'sheets_read', 'sheets_append',
+  'docs_read', 'docs_create', 'tasks_list', 'tasks_create',
+]);
+const isGoogleNode = (n) =>
+  (n?.type === 'deliver' && GOOGLE_ACTION_IDS.has(n?.config?.channel)) ||
+  (n?.type === 'connector-action' && GOOGLE_ACTION_IDS.has(n?.config?.action));
+
 // ── Connector credential registry ────────────────────────────────────────────
 // Per-tenant credential handling for EVERY connector, in one place. Each entry
 // declares: which workflow nodes it owns, the human name, how to resolve THIS
 // tenant's token, which config field to inject it into, and an optional dev
 // escape hatch (for connectors with an operator env token). Adding a connector —
 // now or in future — is ONE entry here; no run-path changes, nothing per-workflow.
-//
-// Google's actions are REST-only today (no workflow nodes), so it has no entry
-// yet; add one when google delivery/action nodes exist. Its scope-aware catalog
-// is already resolved per tenant+user via createGoogleCapabilityProvider.
 const CONNECTOR_INJECTORS = [
   {
     id: 'slack',
@@ -131,6 +139,18 @@ const CONNECTOR_INJECTORS = [
       getSlackToken({ oauthTokenStore, cipher, tenantId })?.botToken ?? null,
     field: 'token',
     devEscape: (tenantId) => !!process.env.SLACK_DEV_TENANT && tenantId === process.env.SLACK_DEV_TENANT,
+  },
+  {
+    id: 'google',
+    name: 'Google',
+    ownsNode: isGoogleNode,
+    resolveToken: (tenantId, { oauthTokenStore, cipher }) => {
+      const row = oauthTokenStore.get({ tenantId, connectorId: GOOGLE_CONNECTOR_ID });
+      if (!row) return null;
+      try { return cipher.decrypt(row.access_token_enc); } catch { return null; }
+    },
+    field: 'googleToken',
+    devEscape: () => false,
   },
 ];
 
@@ -226,9 +246,13 @@ async function buildEngine(workflowStore, llm) {
   const sourceRegistry = new SourceRegistry({ dbPath: SOURCES_DB });
   await sourceRegistry.init();
 
-  const channelRegistry = new ChannelRegistry();
+  const capabilityRegistry = new CapabilityRegistry();
+
+  const channelRegistry = new ChannelRegistry(capabilityRegistry);
   registerBuiltInChannels(channelRegistry, {});           // in-app + webhook; mcp channel is opt-in
-  registerSlackChannel(channelRegistry);                  // P1: Slack post-to-channel (chat.postMessage)
+  registerSlackChannel(channelRegistry);                  // Slack step/delivery channels (ChannelRegistry adapter)
+  registerSlackTriggers(capabilityRegistry);              // Slack trigger capabilities
+  registerGoogleChannels(capabilityRegistry);             // All Google step/delivery/trigger capabilities
 
   const nodeTypeRegistry = new NodeTypeRegistry();
   registerBuiltInNodeTypes(nodeTypeRegistry);
@@ -251,7 +275,7 @@ async function buildEngine(workflowStore, llm) {
     workflowStore, nodeTypeRegistry, channelRegistry, sourceRegistry, workflowValidator, workflowScheduler,
   });
 
-  return { workflowStore, sourceRegistry, channelRegistry, nodeTypeRegistry, workflowValidator, workflowScheduler, flowTester, workflowService, llm };
+  return { workflowStore, sourceRegistry, capabilityRegistry, channelRegistry, nodeTypeRegistry, workflowValidator, workflowScheduler, flowTester, workflowService, llm };
 }
 
 /**
@@ -571,7 +595,11 @@ export function createApp(spine) {
     try {
       const slack  = await spine.slack.resolveForTenant(req.tenant.id);
       const google = await spine.google.resolveForTenant(req.tenant.id, req.user.id);
-      res.json({ channels: spine.engine.channelRegistry.getAll(), connectors: { slack, google } });
+      res.json({
+        channels: spine.engine.channelRegistry.getAll(),
+        triggers: spine.engine.capabilityRegistry.list({ position: 'trigger' }),
+        connectors: { slack, google },
+      });
     } catch (err) {
       res.status(500).json({ error: `capabilities failed: ${err.message ?? String(err)}` });
     }

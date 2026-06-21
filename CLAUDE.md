@@ -247,7 +247,7 @@ Update as gates close. `git log --grep "^Gate:"` is the authoritative ledger.
 - [x] **P3** — converger reproduces the frozen spec, confirmations logged
 - [x] **P4** — builder UI: workflow built entirely by talking *(design-first: Claude generates mockups → approval → build)*
 - [x] **P5** — console UI: inventory, live run monitoring, SOP view + SOP export (PDF + Markdown).
-- [ ] **P6** — launcher + builder↔console toggle
+- [~] **P6** — *(scrapped 2026-06-20)* current sidebar + surface switching is sufficient; floating pill / launcher layer dropped from scope.
 - [ ] **P7** — Airtable + Google write + error handling + sub-daily scheduling
 - [ ] **P8** — web + filesystem connectors: unified web research (Tavily search + Firecrawl scrape) + tenant-scoped filesystem access
 - [ ] **P9** — value tracking: time-saved metrics per run, all-up ROI summary, customer-facing report

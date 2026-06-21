@@ -52,25 +52,43 @@ function cleanLLMError(err) {
   return err?.message ?? raw;
 }
 
-// Project a connector's scope-aware action availability onto the channel catalog
-// and tag each channel with the workflow positions it can occupy, so the converger
-// only ever offers capabilities THIS tenant's granted scopes can actually run.
-function annotateChannelCatalog(channels, slackResolved) {
-  // Only narrow availability when we actually KNOW the tenant's granted scopes.
-  // If scope detection returned nothing (no token / probe failed), fail OPEN —
-  // keep the channel's global availability rather than blocking all building.
-  const haveScopeInfo = (slackResolved?.grantedScopes ?? []).length > 0;
+// Project connector scope-aware availability onto the channel catalog, so the
+// converger only ever offers capabilities THIS tenant's granted scopes can run.
+// resolvedByConnector: { slack: resolvedSlack, google: resolvedGoogle, ... }
+function annotateChannelCatalog(channels, resolvedByConnector = {}) {
+  // Support legacy single-arg call (resolvedByConnector is the slack object directly).
+  const slack  = resolvedByConnector?.connector === 'slack' ? resolvedByConnector : resolvedByConnector.slack;
+  const google = resolvedByConnector?.connector === 'google' ? resolvedByConnector : resolvedByConnector.google;
+
+  // Slack: map channelId → {available, reason} using the connector's capability→channel mapping.
   const slackAvail = {};
-  if (haveScopeInfo) {
-    for (const a of slackResolved?.actions ?? []) {
+  if ((slack?.grantedScopes ?? []).length > 0) {
+    for (const a of slack?.actions ?? []) {
       slackAvail[channelIdForCapability(a.id)] = { available: a.available, reason: a.unavailableReason };
     }
   }
+
+  // Google: actionId matches channel id directly (registration uses the same IDs).
+  const googleAvail = {};
+  if ((google?.grantedScopes ?? []).length > 0) {
+    for (const a of google?.actions ?? []) {
+      googleAvail[a.id] = { available: a.available, reason: a.unavailableReason };
+    }
+  }
+
   return (channels ?? []).map(c => {
-    const positions = c.actionOnly ? ['step'] : ['step', 'delivery'];
-    const sa = slackAvail[c.id];
-    if (!sa) return { ...c, positions };
-    return { ...c, positions, available: c.available && sa.available, unavailableReason: sa.reason ?? c.unavailableReason };
+    const positions = c.positions ?? (c.actionOnly ? ['step'] : ['step', 'delivery']);
+    if (c.connector === 'slack') {
+      const sa = slackAvail[c.id];
+      if (!sa) return { ...c, positions };
+      return { ...c, positions, available: c.available && sa.available, unavailableReason: sa.reason ?? c.unavailableReason };
+    }
+    if (c.connector === 'google') {
+      const ga = googleAvail[c.id];
+      if (!ga) return { ...c, positions };
+      return { ...c, positions, available: c.available && ga.available, unavailableReason: ga.reason ?? c.unavailableReason };
+    }
+    return { ...c, positions };
   });
 }
 
@@ -284,7 +302,8 @@ Rules:
       const google = await spine.google.resolveForTenant(req.tenant.id, req.user.id);
       capabilities.connectors = { slack, google };
       // Scope-aware, position-tagged catalog: only what this tenant can actually run.
-      capabilities.channels   = annotateChannelCatalog(spine.engine.channelRegistry.getAll(), slack);
+      capabilities.channels   = annotateChannelCatalog(spine.engine.channelRegistry.getAll(), { slack, google });
+      capabilities.triggers   = spine.engine.capabilityRegistry.list({ position: 'trigger' });
     } catch { /* non-fatal — converger still works with empty capabilities */ }
 
     const threadId  = `build-${req.tenant.id}-${Date.now()}`;
