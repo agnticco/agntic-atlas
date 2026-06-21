@@ -933,6 +933,20 @@ export function createApp(spine) {
   // Workspace-level install: one token per tenant; first admin to connect installs for all.
   const airtableFlow = createAirtableOAuthFlow();
 
+  // JSON authorize endpoint — same as oauth/start but returns { authorizeUrl } for
+  // fetch-based clients that need to handle the redirect themselves (UI connect flow).
+  app.get('/connectors/airtable/authorize', requireActiveTenant, (req, res) => {
+    if (!isAirtableOAuthConfigured()) {
+      return res.status(501).json({ error: 'Airtable OAuth not configured (set AIRTABLE_CLIENT_ID and AIRTABLE_CLIENT_SECRET)' });
+    }
+    try {
+      const { authorizeUrl } = airtableFlow.start({ tenantId: req.tenant.id, userId: req.user.id });
+      res.json({ authorizeUrl });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
   // Start OAuth flow — redirect the browser to Airtable's consent screen.
   app.get('/connectors/airtable/oauth/start', requireActiveTenant, (req, res) => {
     if (!isAirtableOAuthConfigured()) {
