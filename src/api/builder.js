@@ -22,6 +22,7 @@ import { SystemMessage, HumanMessage } from '../core/message.js';
 import { logEvent, errFields } from '../utils/event-log.js';
 import { channelIdForCapability } from '../connectors/slack/index.js';
 import { isAirtableConnected } from '../connectors/airtable/oauth.js';
+import { webConnectionStatus } from '../connectors/web/index.js';
 
 // Retry an LLM call up to maxRetries times on transient provider errors (500/529/503).
 async function withLLMRetry(fn, maxRetries = 2) {
@@ -155,7 +156,7 @@ async function introMessage(spine, intent) {
   } catch { return null; }
 }
 
-export function mountBuilderRoutes(app, { spine, requireActiveTenant, requireAuth }) {
+export function mountBuilderRoutes(app, { spine, requireActiveTenant, requireAuth, readSources }) {
 
   // ── GET /api/builder/me ──────────────────────────────────────────────────────
   app.get('/api/builder/me', requireAuth, (req, res) => {
@@ -233,6 +234,13 @@ Rules:
         if (sl.connected) connectorLines.push('- Slack: post messages, DMs, reactions, reminders');
         if (go.connected) connectorLines.push('- Google Workspace: send/read Gmail, create calendar events, read/write Sheets, create Docs, manage Tasks');
         if (at.connected) connectorLines.push('- Airtable: read, create, update, delete records in any base');
+        const web = webConnectionStatus();
+        if (web.connected) connectorLines.push('- Web: search the web for current news or information (Anthropic native search), and fetch + extract readable content from any URL (Mozilla Readability)');
+        const fsSources = (readSources?.(req.tenant.id) ?? []).filter(s => s.path?.startsWith('/'));
+        if (fsSources.length) {
+          const names = fsSources.map(s => s.path.split('/').pop()).join(', ');
+          connectorLines.push(`- Filesystem (built-in): read files from connected folders (${names})`);
+        }
       } catch { /* non-fatal */ }
 
       // Retrieve relevant knowledge base + inbox context via RAG.
@@ -336,12 +344,14 @@ Rules:
       const slack    = await spine.slack.resolveForTenant(req.tenant.id);
       const google   = await spine.google.resolveForTenant(req.tenant.id, req.user.id);
       const airtable = { connected: isAirtableConnected({ oauthTokenStore: spine.auth.oauthTokenStore, tenantId: req.tenant.id }) };
-      capabilities.connectors = { slack, google, airtable };
+      const web      = webConnectionStatus();
+      capabilities.connectors = { slack, google, airtable, web: { connected: web.connected } };
       // Scope-aware, position-tagged catalog: only what this tenant can actually run.
       capabilities.channels   = annotateChannelCatalog(spine.engine.channelRegistry.getAll(), { slack, google });
       // Narrow triggers to connected connectors only.
       const connectedIds = new Set(['slack', 'google'].filter(id => id === 'slack' ? slack : google));
       if (airtable.connected) connectedIds.add('airtable');
+      if (web.connected)      connectedIds.add('web');
       capabilities.triggers = spine.engine.capabilityRegistry
         .list({ position: 'trigger' })
         .map(t => ({ ...t, available: t.available && (!t.connector || connectedIds.has(t.connector)) }));
