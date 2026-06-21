@@ -64,6 +64,7 @@ import {
   airtableOAuthConfig, isAirtableOAuthConfigured, createAirtableOAuthFlow,
   storeAirtableToken, getAirtableToken, getAirtableAccessToken,
   isAirtableConnected, getAirtableGrant, disconnectAirtable,
+  createAirtableCapabilityProvider,
 } from '../connectors/airtable/oauth.js';
 import { InteractionStore } from '../converger/interaction-store.js';
 import { mountBuilderRoutes } from './builder.js';
@@ -474,6 +475,7 @@ export async function bootSpine() {
   const slack = createSlackCapabilityProvider({ oauthTokenStore: auth.oauthTokenStore, apiBase: process.env.SLACK_API_URL });
   const slackOAuth = createSlackOAuthFlow();
   const google = createGoogleCapabilityProvider({ oauthTokenStore: auth.oauthTokenStore });
+  const airtableProvider = createAirtableCapabilityProvider({ oauthTokenStore: auth.oauthTokenStore });
 
   const interactionStore = new InteractionStore({ dbPath: INTERACTIONS_DB });
   interactionStore.init();
@@ -485,6 +487,7 @@ export async function bootSpine() {
     slack,
     slackOAuth,
     google,
+    airtable: airtableProvider,
     interactionStore,
     get llm() { return engine.llm; },
     // Dispose Metal contexts/models before exit — freeing an embedding context
@@ -692,9 +695,11 @@ export function createApp(spine) {
     try {
       const slack     = await spine.slack.resolveForTenant(req.tenant.id);
       const google    = await spine.google.resolveForTenant(req.tenant.id, req.user.id);
-      const airtable  = { connected: isAirtableConnected({ oauthTokenStore: spine.auth.oauthTokenStore, tenantId: req.tenant.id }) };
+      const airtable  = spine.airtable.resolveForTenant(req.tenant.id);
       // Narrow triggers to those whose connector is actually connected for this tenant.
-      const connected = new Set(['slack', 'google'].filter(id => id === 'slack' ? slack : google));
+      const connected = new Set();
+      if (slack?.actions?.some(a => a.available)) connected.add('slack');
+      if (google?.actions?.some(a => a.available)) connected.add('google');
       if (airtable.connected) connected.add('airtable');
       const triggers = spine.engine.capabilityRegistry
         .list({ position: 'trigger' })
@@ -955,6 +960,7 @@ export function createApp(spine) {
         expiresIn:    result.expiresIn,
         scope:        result.scope,
       });
+      spine.airtable.refresh(result.tenantId);
       // Redirect back to the settings/connectors page.
       res.redirect('/?connected=airtable');
     } catch (err) {

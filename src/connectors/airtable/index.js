@@ -19,6 +19,7 @@ import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 
 export { AIRTABLE_CONNECTOR_ID } from './oauth.js';
+import { isAirtableOAuthConfigured } from './oauth.js';
 const API_BASE = 'https://api.airtable.com/v0';
 
 // ── API helper ────────────────────────────────────────────────────────────────
@@ -176,12 +177,11 @@ export async function fetchWebhookPayloads(api, { baseId, webhookId, cursor } = 
 // ── CapabilityRegistry registration ──────────────────────────────────────────
 
 export function registerAirtableChannels(capabilityRegistry) {
-  // PAT is per-user — can't probe at registration time. Handle throws clearly if absent.
-  const ready = () => true;
+  const ready = () => isAirtableOAuthConfigured();
 
   function makeHandle(fn) {
     return async ({ config }) => {
-      if (!config.airtableToken) throw new Error('airtable: not connected — save a Personal Access Token via /connectors/airtable/connect');
+      if (!config.airtableToken) throw new Error('airtable: not connected — authorize via /connectors/airtable/oauth/start');
       const api = makeAirtableApi(config.airtableToken);
       return fn(api, config);
     };
@@ -191,6 +191,7 @@ export function registerAirtableChannels(capabilityRegistry) {
     id: 'airtable_list_records', connector: 'airtable', positions: ['step'],
     name: 'List Airtable Records', icon: 'table',
     description: 'Fetch records from an Airtable table, optionally filtered by a formula.',
+    requiredScopes: ['data.records:read'],
     configSchema: [
       { key: 'baseId',          label: 'Base ID',          type: 'string', optional: false, hint: 'appXXXXXXXXXXXXXX' },
       { key: 'tableId',         label: 'Table name or ID', type: 'string', optional: false },
@@ -206,6 +207,7 @@ export function registerAirtableChannels(capabilityRegistry) {
     id: 'airtable_get_record', connector: 'airtable', positions: ['step'],
     name: 'Get Airtable Record', icon: 'table',
     description: 'Fetch a single Airtable record by ID.',
+    requiredScopes: ['data.records:read'],
     configSchema: [
       { key: 'baseId',   label: 'Base ID',          type: 'string', optional: false },
       { key: 'tableId',  label: 'Table name or ID', type: 'string', optional: false },
@@ -219,6 +221,7 @@ export function registerAirtableChannels(capabilityRegistry) {
     id: 'airtable_search_records', connector: 'airtable', positions: ['step'],
     name: 'Search Airtable Records', icon: 'table',
     description: 'Search records in an Airtable table using a formula filter.',
+    requiredScopes: ['data.records:read'],
     configSchema: [
       { key: 'baseId',          label: 'Base ID',          type: 'string', optional: false },
       { key: 'tableId',         label: 'Table name or ID', type: 'string', optional: false },
@@ -233,6 +236,7 @@ export function registerAirtableChannels(capabilityRegistry) {
     id: 'airtable_create_record', connector: 'airtable', positions: ['step', 'delivery'],
     name: 'Create Airtable Record', icon: 'table',
     description: 'Create a new record in an Airtable table.',
+    requiredScopes: ['data.records:write'],
     configSchema: [
       { key: 'baseId',  label: 'Base ID',          type: 'string',   optional: false },
       { key: 'tableId', label: 'Table name or ID', type: 'string',   optional: false },
@@ -246,6 +250,7 @@ export function registerAirtableChannels(capabilityRegistry) {
     id: 'airtable_update_record', connector: 'airtable', positions: ['step', 'delivery'],
     name: 'Update Airtable Record', icon: 'table',
     description: 'Update fields on an existing Airtable record.',
+    requiredScopes: ['data.records:write'],
     configSchema: [
       { key: 'baseId',   label: 'Base ID',          type: 'string',   optional: false },
       { key: 'tableId',  label: 'Table name or ID', type: 'string',   optional: false },
@@ -260,6 +265,7 @@ export function registerAirtableChannels(capabilityRegistry) {
     id: 'airtable_delete_record', connector: 'airtable', positions: ['step'],
     name: 'Delete Airtable Record', icon: 'table',
     description: 'Delete a record from an Airtable table.',
+    requiredScopes: ['data.records:write'],
     configSchema: [
       { key: 'baseId',   label: 'Base ID',          type: 'string', optional: false },
       { key: 'tableId',  label: 'Table name or ID', type: 'string', optional: false },
@@ -273,6 +279,7 @@ export function registerAirtableChannels(capabilityRegistry) {
     id: 'airtable_record_changed', connector: 'airtable', positions: ['trigger'],
     name: 'Airtable Record Changed', icon: 'table',
     description: 'Fires when a record is created or updated in an Airtable table.',
+    requiredScopes: ['webhook:manage'],
     configSchema: [
       { key: 'baseId',  label: 'Base ID',            type: 'string', optional: false, hint: 'appXXXXXXXXXXXXXX' },
       { key: 'tableId', label: 'Table ID (optional)', type: 'string', optional: true,  hint: 'tblXXXXXXXXXXXXXX — blank = all tables in base' },
