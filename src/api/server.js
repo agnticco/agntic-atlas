@@ -50,7 +50,7 @@ import {
   gmailSearch, gmailGetMessage, gmailSend, gmailMarkRead,
   calendarListEvents, calendarCreateEvent,
   driveListFiles, sheetsRead, sheetsAppend, docsRead, docsCreate,
-  tasksList, tasksCreate, GOOGLE_CONNECTOR_ID,
+  tasksList, tasksCreate, GOOGLE_CONNECTOR_ID, getGoogleAccessToken,
 } from '../connectors/google/index.js';
 import { pollGmail, formatEmailContext } from '../connectors/google/gmail-source.js';
 import {
@@ -182,12 +182,8 @@ const CONNECTOR_INJECTORS = [
     id: 'google',
     name: 'Google',
     ownsNode: isGoogleNode,
-    resolveToken: (tenantId, { oauthTokenStore, cipher, userId }) => {
-      if (!userId) return null;
-      const row = oauthTokenStore.get({ tenantId, userId, connectorId: GOOGLE_CONNECTOR_ID });
-      if (!row) return null;
-      try { return cipher.decrypt(row.access_token_enc); } catch { return null; }
-    },
+    resolveToken: async (tenantId, { oauthTokenStore, cipher, userId }) =>
+      getGoogleAccessToken({ oauthTokenStore, cipher, tenantId, userId }),
     field: 'googleToken',
     devEscape: () => false,
   },
@@ -257,9 +253,12 @@ function injectFilesystemContext(spec, tenantId) {
 
 // A connector this tenant must connect before the spec can run (owns a node but
 // has no resolvable token and no dev escape). Returns its name, or null. Generic.
-function unconnectedConnector(spec, tenantId, deps) {
+async function unconnectedConnector(spec, tenantId, deps) {
   for (const c of CONNECTOR_INJECTORS) {
-    if ((spec?.nodes ?? []).some(c.ownsNode) && !c.resolveToken(tenantId, deps) && !c.devEscape?.(tenantId)) return c.name;
+    if (!(spec?.nodes ?? []).some(c.ownsNode)) continue;
+    if (c.devEscape?.(tenantId)) continue;
+    const tok = await c.resolveToken(tenantId, deps);
+    if (!tok) return c.name;
   }
   return null;
 }
@@ -1173,7 +1172,7 @@ export function createApp(spine) {
       // token decrypt error returns JSON, never an HTML 500 the UI can't parse.
       if (req.tenant) {
         const deps = { oauthTokenStore: spine.auth.oauthTokenStore, cipher: spine.auth.tokenCipher, userId: req.user?.id };
-        const missing = unconnectedConnector(spec, req.tenant.id, deps);
+        const missing = await unconnectedConnector(spec, req.tenant.id, deps);
         if (missing) {
           logEvent('run.connector_not_connected', { tenant: tenantId, connector: missing });
           return res.json({ runId: null, completed: false, error: `${missing} isn't connected for this workspace — connect it first, then run the test.`, steps: [] });
