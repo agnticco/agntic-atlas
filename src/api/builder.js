@@ -342,11 +342,17 @@ Rules:
 
         connectorLines.push(...connectorLinesFromRegistry(spine.engine.capabilityRegistry, connectedSet));
 
-        // Filesystem: not in the CapabilityRegistry (sandboxed by tenant folder list), add manually.
-        const fsSources = (readSources?.(req.tenant.id) ?? []).filter(s => s.path?.startsWith('/'));
+        // Filesystem + Knowledge: not in the CapabilityRegistry, add manually.
+        const allKnSources = readSources?.(req.tenant.id) ?? [];
+        const fsSources    = allKnSources.filter(s => s.path?.startsWith('/'));
+        const upSources    = allKnSources.filter(s => !s.path?.startsWith('/'));
         if (fsSources.length) {
           const names = fsSources.map(s => s.path.split('/').pop()).join(', ');
-          connectorLines.push(`- Filesystem: read files from approved folders (${names})`);
+          connectorLines.push(`- Filesystem: read files from connected folders (${names}) via filesystem_read`);
+        }
+        if (upSources.length) {
+          const names = upSources.map(s => s.path).join(', ');
+          connectorLines.push(`- Knowledge uploads (RAG-indexed, searchable in context): ${names}`);
         }
       } catch { /* non-fatal */ }
 
@@ -498,11 +504,31 @@ Rules:
         .list({ position: 'trigger' })
         .map(t => ({ ...t, available: t.available && (!t.connector || connectedIds.has(t.connector)) }));
 
-      // Filesystem: pass connected folder names so the converger can reference
-      // them by name and knows whether to ask for a clarification.
-      const fsSources = (readSources?.(req.tenant.id) ?? []).filter(s => s.path?.startsWith('/'));
-      capabilities.filesystem = fsSources.map(s => s.path.split('/').pop());
+      // Filesystem: two distinct source types — absolute-path sources are accessible
+      // via filesystem_read in workflows; browser-upload sources are in RAG (Knowledge)
+      // but not accessible via filesystem_read (no stable server path).
+      const allSources = readSources?.(req.tenant.id) ?? [];
+      const fsSources    = allSources.filter(s => s.path?.startsWith('/'));
+      const uploadSources = allSources.filter(s => !s.path?.startsWith('/'));
+      capabilities.filesystem      = fsSources.map(s => s.path.split('/').pop());
+      capabilities.knowledgeUploads = uploadSources.map(s => s.path);
     } catch { /* non-fatal — converger still works with empty capabilities */ }
+
+    // Query RAG for knowledge relevant to this intent so the converger's LLM
+    // calls can see what's actually in the knowledge base (not just folder names).
+    if (intent) {
+      try {
+        const rag  = await spine.rag.forTenant(req.tenant.id);
+        const hits = await rag.query(intent, 6);
+        const useful = (hits ?? []).filter(h => (h.score ?? 0) > 0.2).slice(0, 4);
+        if (useful.length) {
+          capabilities.knowledgeContext = useful.map(h => {
+            const label = h.metadata?.subject || h.metadata?.source_path || h.metadata?.source || 'knowledge';
+            return { label, content: (h.pageContent ?? h.content ?? '').slice(0, 600) };
+          });
+        }
+      } catch { /* non-fatal */ }
+    }
 
     const threadId  = `build-${req.tenant.id}-${Date.now()}`;
     const converger = createConverger({
