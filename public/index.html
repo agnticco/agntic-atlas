@@ -187,7 +187,7 @@
           </div>
         </sc-if>
       </aside>
-      <div onMousedown="{{ onLeftResizeStart }}" style="flex:none;width:4px;cursor:col-resize;background:rgba(255,255,255,.07);transition:background .15s" style-hover="background:rgba(255,255,255,.22)"></div>
+      <div onmousedown="{{ onLeftResizeStart }}" style="flex:none;width:4px;cursor:col-resize;background:rgba(255,255,255,.07);transition:background .15s;user-select:none" style-hover="background:rgba(255,255,255,.22)"></div>
 
       <!-- ░ MODE: BUILD (conversation + live pipeline) ░ -->
       <sc-if value="{{ modeBuild }}" hint-placeholder-val="{{ true }}">
