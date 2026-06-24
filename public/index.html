@@ -1228,7 +1228,7 @@
                       </button>
                       <button onClick="{{ onToggleAddFolder }}" style="border:1px solid rgba(255,255,255,.1);background:none;cursor:pointer;color:rgba(255,255,255,.35);font-family:inherit;font-size:13px;padding:9px 14px;border-radius:9px;flex:none;white-space:nowrap" style-hover="border-color:rgba(255,255,255,.22);color:rgba(255,255,255,.65)">Cancel</button>
                     </div>
-                    <div style="margin-top:10px;font-size:12px;color:rgba(255,255,255,.28);line-height:1.5">Indexes <code style="background:rgba(255,255,255,.07);padding:1px 5px;border-radius:4px;font-size:11px">.md</code>, <code style="background:rgba(255,255,255,.07);padding:1px 5px;border-radius:4px;font-size:11px">.txt</code>, and <code style="background:rgba(255,255,255,.07);padding:1px 5px;border-radius:4px;font-size:11px">.csv</code> files for search. Direct workflow file access coming in a future update.</div>
+                    <div style="margin-top:10px;font-size:12px;color:rgba(255,255,255,.28);line-height:1.5">Indexes <code style="background:rgba(255,255,255,.07);padding:1px 5px;border-radius:4px;font-size:11px">.md</code> <code style="background:rgba(255,255,255,.07);padding:1px 5px;border-radius:4px;font-size:11px">.txt</code> <code style="background:rgba(255,255,255,.07);padding:1px 5px;border-radius:4px;font-size:11px">.csv</code> <code style="background:rgba(255,255,255,.07);padding:1px 5px;border-radius:4px;font-size:11px">.html</code> <code style="background:rgba(255,255,255,.07);padding:1px 5px;border-radius:4px;font-size:11px">.png</code> <code style="background:rgba(255,255,255,.07);padding:1px 5px;border-radius:4px;font-size:11px">.jpg</code> — images are described by AI for search.</div>
                   </div>
                 </sc-if>
               </div>
@@ -2139,18 +2139,30 @@ class Component extends DCLogic {
     input.onchange = (e) => self._handleFolderPickerFiles(e.target.files);
     input.click();
   }
+  // Read a file for upload: images as base64 data URLs, everything else as text.
+  _readFileForUpload(f) {
+    if (/\.(png|jpe?g|gif|webp)$/i.test(f.name)) {
+      return new Promise(function(resolve, reject) {
+        var reader = new FileReader();
+        reader.onload = function(e) { resolve({ path: f.webkitRelativePath || f.name, content: e.target.result }); };
+        reader.onerror = reject;
+        reader.readAsDataURL(f);
+      });
+    }
+    return f.text().then(function(content) { return { path: f.webkitRelativePath || f.name, content: content }; });
+  }
   _handleFolderPickerFiles(fileList) {
     const all = Array.from(fileList || []);
     if (!all.length) return;
     const folderName = (all[0].webkitRelativePath || '').split('/')[0] || 'uploaded-folder';
-    const textFiles  = all.filter(f => /\.(md|txt|csv)$/i.test(f.name)).slice(0, 300);
-    if (!textFiles.length) {
-      alert('No .md, .txt, or .csv files found in that folder.');
+    const supported  = all.filter(f => /\.(md|txt|csv|html?|png|jpe?g|gif|webp)$/i.test(f.name)).slice(0, 300);
+    if (!supported.length) {
+      alert('No supported files found (.md, .txt, .csv, .html, .png, .jpg, .jpeg).');
       return;
     }
     const self = this;
     this.setState({ knowledgeIndexing: true, knowledgeFolderInput: folderName, knowledgeAddingFolder: true });
-    Promise.all(textFiles.map(f => f.text().then(content => ({ path: f.webkitRelativePath, content }))))
+    Promise.all(supported.map(f => self._readFileForUpload(f)))
       .then(files => fetch('/rag/ingest-files', {
         method: 'POST', headers: self._H(),
         body: JSON.stringify({ folderName, files }),
@@ -2173,14 +2185,14 @@ class Component extends DCLogic {
     const all = Array.from(fileList || []);
     if (!all.length) return;
     const folderName = (all[0].webkitRelativePath || '').split('/')[0] || 'uploaded-folder';
-    const textFiles  = all.filter(f => /\.(md|txt|csv)$/i.test(f.name)).slice(0, 300);
-    if (!textFiles.length) {
-      alert('No .md, .txt, or .csv files found in that folder.');
+    const supported  = all.filter(f => /\.(md|txt|csv|html?|png|jpe?g|gif|webp)$/i.test(f.name)).slice(0, 300);
+    if (!supported.length) {
+      alert('No supported files found (.md, .txt, .csv, .html, .png, .jpg, .jpeg).');
       return;
     }
     const self = this;
     this.setState({ chatFolderIndexing: true });
-    Promise.all(textFiles.map(f => f.text().then(content => ({ path: f.webkitRelativePath, content }))))
+    Promise.all(supported.map(f => self._readFileForUpload(f)))
       .then(files => fetch('/rag/ingest-files', {
         method: 'POST', headers: self._H(),
         body: JSON.stringify({ folderName, files }),

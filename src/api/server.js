@@ -821,6 +821,56 @@ export function createApp(spine) {
     res.json({ sources: readSources(req.tenant.id) });
   });
 
+  // Build a vision function for DocumentLoader: reads the file, calls Anthropic
+  // vision to get a text description, returns it. Returns null when no API key.
+  function buildVisionFn() {
+    if (!process.env.ANTHROPIC_API_KEY) return null;
+    return async function visionFn(filePath) {
+      const { readFileSync } = await import('fs');
+      const ext  = filePath.split('.').pop().toLowerCase();
+      const mime = ext === 'png' ? 'image/png' : ext === 'gif' ? 'image/gif' : ext === 'webp' ? 'image/webp' : 'image/jpeg';
+      const data = readFileSync(filePath).toString('base64');
+      const Anthropic = (await import('@anthropic-ai/sdk')).default;
+      const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+      const resp = await client.messages.create({
+        model: 'claude-haiku-4-5-20251001', max_tokens: 1024,
+        messages: [{ role: 'user', content: [
+          { type: 'image', source: { type: 'base64', media_type: mime, data } },
+          { type: 'text', text: `Describe this image in detail for document search indexing. Extract any visible text verbatim. Note key objects, people, charts, or data visible. File: ${filePath.split('/').pop()}` },
+        ]}],
+      });
+      return resp.content?.[0]?.text ?? null;
+    };
+  }
+
+  // Strip HTML tags to plain text using jsdom.
+  async function stripHtmlToText(html) {
+    const { JSDOM } = await import('jsdom');
+    const dom = new JSDOM(html);
+    const doc = dom.window.document;
+    for (const el of doc.querySelectorAll('script, style, noscript')) el.remove();
+    return (doc.body?.textContent ?? doc.documentElement?.textContent ?? '')
+      .replace(/\s+/g, ' ').trim();
+  }
+
+  // Describe a base64-encoded image (data URL) via Anthropic vision. Returns text.
+  async function describeImageDataUrl(dataUrl, fileName) {
+    if (!process.env.ANTHROPIC_API_KEY) return null;
+    const [header, b64] = dataUrl.split(',');
+    const mimeMatch = header?.match(/data:([^;]+);/);
+    const mime = (mimeMatch?.[1] ?? 'image/jpeg');
+    const Anthropic = (await import('@anthropic-ai/sdk')).default;
+    const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+    const resp = await client.messages.create({
+      model: 'claude-haiku-4-5-20251001', max_tokens: 1024,
+      messages: [{ role: 'user', content: [
+        { type: 'image', source: { type: 'base64', media_type: mime, data: b64 } },
+        { type: 'text', text: `Describe this image in detail for document search indexing. Extract any visible text verbatim. Note key objects, people, charts, or data visible. File: ${fileName}` },
+      ]}],
+    });
+    return resp.content?.[0]?.text ?? null;
+  }
+
   app.post('/rag/index-folder', requireActiveTenant, async (req, res) => {
     const folderPath = req.body?.path;
     if (typeof folderPath !== 'string' || !folderPath.trim()) {
@@ -831,7 +881,7 @@ export function createApp(spine) {
       return res.status(400).json({ error: `Path not found: ${absPath}` });
     }
     try {
-      const loader = new DocumentLoader();
+      const loader = new DocumentLoader({ visionFn: buildVisionFn() });
       const docs   = await loader._call(absPath);
       const rag    = await spine.rag.forTenant(req.tenant.id);
       let chunks   = 0;
@@ -885,8 +935,24 @@ export function createApp(spine) {
       let ingested = 0;
       for (const { path: filePath, content } of files.slice(0, MAX_FILES)) {
         if (typeof content !== 'string' || !content.trim()) continue;
-        const trimmed = content.slice(0, MAX_BYTES);
-        chunks += await rag.ingest(trimmed, {
+        const ext = (filePath.split('.').pop() ?? '').toLowerCase();
+
+        let text;
+        if (content.startsWith('data:image/')) {
+          // Image sent as base64 data URL — describe via vision
+          const fileName = filePath.split('/').pop() ?? filePath;
+          text = await describeImageDataUrl(content, fileName).catch(() => null);
+          if (!text) continue;
+        } else if (ext === 'html' || ext === 'htm') {
+          // HTML — strip tags to plain text
+          text = await stripHtmlToText(content).catch(() => null);
+          if (!text) continue;
+        } else {
+          text = content.slice(0, MAX_BYTES);
+        }
+
+        if (!text.trim()) continue;
+        chunks += await rag.ingest(text.slice(0, MAX_BYTES), {
           source:      'upload',
           source_path: filePath,
           folder_root: folderName,
