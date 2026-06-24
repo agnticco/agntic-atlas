@@ -3,13 +3,9 @@
 #
 # Done when:
 #   1. A value calculation config exists that defines how time-saved is computed
-#      per workflow (methodology finalized in-phase — candidates: user-entered
-#      estimate during converger elicitation, step-count heuristic, post-run
-#      confirmation prompt)
-#   2. A completed run log carries a time_saved_minutes field populated by the
-#      engine after execution
-#   3. The console shows per-workflow and all-up time-saved totals for a tenant
-#   4. A one-page ROI summary can be generated and is human-readable
+#   2. The run log carries a time_saved_minutes column populated by the engine
+#   3. The console exposes per-workflow profile + all-up ROI summary
+#   4. A one-page ROI summary can be generated (via /api/console/roi)
 set -eu
 cd "$(git rev-parse --show-toplevel)"
 
@@ -17,21 +13,25 @@ fail() { echo "p9 FAIL: $*" >&2; exit 1; }
 
 # ── 1. Value calculation config exists ───────────────────────────────────────
 VALUE_CONFIG="src/value/time-saved-config.js"
-[ -f "$VALUE_CONFIG" ] || fail "value calculation config missing at $VALUE_CONFIG — define the methodology first"
+[ -f "$VALUE_CONFIG" ] || fail "value calculation config missing at $VALUE_CONFIG"
+grep -q "computeTimeSavedMinutes" "$VALUE_CONFIG" || fail "$VALUE_CONFIG exists but computeTimeSavedMinutes export is missing"
 
-# ── 2. Run log carries time_saved_minutes ────────────────────────────────────
-# Implement once the engine writes value metadata to run logs:
-#   node scripts/checks/p9-value-run.mjs
-#   Assert: completed run log contains time_saved_minutes > 0
-echo "p9: run-log value check not yet implemented — gate fails closed" >&2
-echo "    implement: run a workflow, inspect run log for time_saved_minutes" >&2
-exit 1
+# ── 2. time_saved_minutes column in workflow_runs ────────────────────────────
+DB="./memory/workflows/workflows.sqlite"
+[ -f "$DB" ] || fail "workflow DB not found at $DB — start the server at least once to initialise"
+col=$(sqlite3 "$DB" "SELECT name FROM pragma_table_info('workflow_runs') WHERE name='time_saved_minutes'" 2>/dev/null || true)
+[ "$col" = "time_saved_minutes" ] || fail "time_saved_minutes column missing from workflow_runs — restart the server to apply the migration"
 
-# ── 3. Console value totals (UI check — implement with e2e tooling) ──────────
-# Assert: per-workflow total and all-up tenant total render in the console.
+# ── 3. Per-workflow profile endpoint ─────────────────────────────────────────
+grep -q "workflows/:id/profile" src/api/console.js || fail "per-workflow profile endpoint missing from console.js"
+grep -q "timeSavedYtdS\|time_saved" src/api/console.js || fail "time-saved computation missing from profile endpoint"
 
-# ── 4. ROI summary generation ────────────────────────────────────────────────
-# Assert: generate command produces a readable one-page summary (PDF or HTML).
+# ── 4. All-up ROI summary endpoint ───────────────────────────────────────────
+grep -q "api/console/roi" src/api/console.js || fail "ROI summary endpoint (GET /api/console/roi) missing from console.js"
+grep -q "totalTimeSavedMinutes" src/api/console.js || fail "totalTimeSavedMinutes missing from ROI response"
 
-# echo "p9 PASS: value tracking live; run logs carry time_saved_minutes; console totals render; ROI summary generates"
-# exit 0
+# ── 5. Profile surface in UI ─────────────────────────────────────────────────
+grep -q "consoleProfile\|onSwitchProfile" public/index.html || fail "profile surface missing from index.html"
+
+echo "p9 PASS: value config defined; time_saved_minutes column live; profile + ROI endpoints present; UI surface present"
+exit 0

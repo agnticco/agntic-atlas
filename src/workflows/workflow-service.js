@@ -149,7 +149,7 @@ export class WorkflowService {
         name:          patch.name          ?? current.name,
         description:   patch.description   ?? current.description,
         triggers:      patch.triggers      ?? current.triggers,
-        nodes:         patch.nodes         ?? current.nodes,
+        nodes:         this._applyConfigDefaults(patch.nodes ?? current.nodes ?? []),
         edges:         patch.edges         ?? current.edges,
         errorHandling: patch.errorHandling ?? current.error_handling,
       };
