@@ -11,6 +11,7 @@
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
+import { googleProviderConfig } from '../../auth/oauth-client.js';
 
 const __dir = dirname(fileURLToPath(import.meta.url));
 // Some Google APIs have their own subdomain hosts and drop the service prefix.
@@ -31,6 +32,62 @@ export const googleCapabilities = JSON.parse(
 );
 
 export const GOOGLE_CONNECTOR_ID = 'google';
+
+const REFRESH_SKEW_MS = 5 * 60 * 1000; // refresh 5 min before expiry
+
+/**
+ * Async token resolver with auto-refresh — mirrors getAirtableAccessToken.
+ * Checks the stored expiry; if the token is stale, exchanges the refresh
+ * token for a new one and persists it before returning.
+ */
+export async function getGoogleAccessToken({ oauthTokenStore, cipher, tenantId, userId }) {
+  if (!userId) return null;
+  const row = oauthTokenStore.get({ tenantId, userId, connectorId: GOOGLE_CONNECTOR_ID });
+  if (!row) return null;
+
+  const fresh = !row.expiry || row.expiry - REFRESH_SKEW_MS > Date.now();
+  if (fresh) {
+    try { return cipher.decrypt(row.access_token_enc); } catch { return null; }
+  }
+
+  if (!row.refresh_token_enc) {
+    // No refresh token — return stale, let the API call surface the 401.
+    try { return cipher.decrypt(row.access_token_enc); } catch { return null; }
+  }
+
+  try {
+    const cfg          = googleProviderConfig();
+    const refreshToken = cipher.decrypt(row.refresh_token_enc);
+    const res = await fetch(cfg.tokenEndpoint, {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded', Accept: 'application/json' },
+      body: new URLSearchParams({
+        grant_type:    'refresh_token',
+        refresh_token: refreshToken,
+        client_id:     cfg.clientId,
+        client_secret: cfg.clientSecret,
+      }).toString(),
+    });
+    if (!res.ok) {
+      try { return cipher.decrypt(row.access_token_enc); } catch { return null; }
+    }
+    const tok = await res.json();
+    if (!tok.access_token) {
+      try { return cipher.decrypt(row.access_token_enc); } catch { return null; }
+    }
+    const expiry = tok.expires_in ? Date.now() + Number(tok.expires_in) * 1000 : 0;
+    oauthTokenStore.updateTokens({
+      tenantId, userId, connectorId: GOOGLE_CONNECTOR_ID,
+      accessTokenEnc:  cipher.encrypt(tok.access_token),
+      refreshTokenEnc: tok.refresh_token ? cipher.encrypt(tok.refresh_token) : null,
+      expiry,
+    });
+    return tok.access_token;
+  } catch {
+    // Refresh attempt threw — fall back to stale token.
+    try { return cipher.decrypt(row.access_token_enc); } catch { return null; }
+  }
+}
 
 // ── Scope detection ──────────────────────────────────────────────────────────
 
@@ -103,11 +160,16 @@ export function createGoogleCapabilityProvider({ oauthTokenStore }) {
  * Reads the decrypted token from the vault; auto-throws if not connected.
  */
 export function makeGoogleApi({ oauthTokenStore, cipher, tenantId, userId }) {
+  // Fail fast if not connected at all.
   const row = oauthTokenStore.get({ tenantId, userId, connectorId: GOOGLE_CONNECTOR_ID });
   if (!row) throw new Error('google: this account has not connected Google — authorize via /connectors/google/authorize');
-  const token = cipher.decrypt(row.access_token_enc);
 
   return async function gapi(method, path, { body, params } = {}) {
+    // Resolve (and auto-refresh if expired) per call so long-running routes
+    // never hit the 1-hour expiry silently.
+    const token = await getGoogleAccessToken({ oauthTokenStore, cipher, tenantId, userId });
+    if (!token) throw new Error('google: could not obtain access token — user may need to reconnect Google');
+
     let url = googleApiUrl(path);
     if (params) {
       const qs = new URLSearchParams(
