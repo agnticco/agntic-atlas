@@ -68,7 +68,7 @@ import {
 } from '../connectors/airtable/oauth.js';
 import { InteractionStore } from '../converger/interaction-store.js';
 import { InboxStore } from '../inbox/inbox-store.js';
-import { registerInboxCapability } from '../inbox/index.js';
+import { registerInboxCapability, INBOX_CAPABILITY_IDS } from '../inbox/index.js';
 import { registerFilesystemCapabilities, FILESYSTEM_CAPABILITY_IDS } from '../connectors/filesystem.js';
 import { registerWebCapabilities, webConnectionStatus, WEB_CAPABILITY_IDS } from '../connectors/web/index.js';
 import { mountBuilderRoutes } from './builder.js';
@@ -232,6 +232,17 @@ function injectInboxContext(spec, tenantId, userId, extras = {}) {
   return { ...spec, nodes };
 }
 
+// Inject tenant identity into search_inbox connector-action nodes.
+function injectInboxCapabilityContext(spec, tenantId) {
+  if (!tenantId || !(spec?.nodes?.length)) return spec;
+  const isInboxCap = (n) => n?.type === 'connector-action' && INBOX_CAPABILITY_IDS.has(n?.config?.action);
+  if (!spec.nodes.some(isInboxCap)) return spec;
+  const nodes = spec.nodes.map((n) => isInboxCap(n)
+    ? { ...n, config: { ...n.config, _tenantId: tenantId } }
+    : n);
+  return { ...spec, nodes };
+}
+
 // Inject tenant identity into filesystem_read / filesystem_list nodes so the
 // handler can validate the path against the tenant's approved folders.
 function injectFilesystemContext(spec, tenantId) {
@@ -280,7 +291,9 @@ async function dispatchSlackEvent(spine, body) {
   for (const wf of flows) {
     logEvent('slack.event.dispatch', { tenant: tenantId, workflow: wf.slug, channel: ev.channel });
     let tenantWf = await injectTenantTokens(wf, tenantId, { ...slackDeps, userId: wf.user_id });
+    tenantWf = injectInboxContext(tenantWf, tenantId, tenantWf.user_id ?? '');
     tenantWf = injectFilesystemContext(tenantWf, tenantId);
+    tenantWf = injectInboxCapabilityContext(tenantWf, tenantId);
     try { await spine.engine.workflowScheduler._executeFlow(tenantWf, { trigger: 'event', emailContext: context }); }
     catch (err) { logEvent('slack.event.error', { tenant: tenantId, workflow: wf.slug, ...errFields(err) }); }
   }
@@ -322,7 +335,9 @@ async function dispatchAirtableEvent(spine, body) {
   for (const wf of flows) {
     logEvent('airtable.event.dispatch', { tenant: tenantId, workflow: wf.slug });
     let tenantWf = await injectTenantTokens(wf, tenantId, { ...airtableDeps, userId: wf.user_id });
+    tenantWf = injectInboxContext(tenantWf, tenantId, tenantWf.user_id ?? '');
     tenantWf = injectFilesystemContext(tenantWf, tenantId);
+    tenantWf = injectInboxCapabilityContext(tenantWf, tenantId);
     try { await spine.engine.workflowScheduler._executeFlow(tenantWf, { trigger: 'event', emailContext: context }); }
     catch (err) { logEvent('airtable.event.error', { tenant: tenantId, workflow: wf.slug, ...errFields(err) }); }
   }
@@ -452,6 +467,47 @@ function buildRag() {
 }
 
 /**
+ * Per-tenant inbox RAG store — same embedder/splitter as the company store but
+ * backed by inbox.sqlite so inbox artifacts are independently queryable.
+ */
+function buildInboxRag(sharedRag) {
+  const { embedder, splitter } = sharedRag;
+  const handles = new Map();
+
+  async function forTenant(tenantId) {
+    if (!tenantId) throw new Error('InboxRAG requires a tenant (refusing unscoped access)');
+    const cached = handles.get(tenantId);
+    if (cached) return cached;
+    const safe = String(tenantId).replace(/[^a-z0-9_-]/gi, '');
+    if (!safe) throw new Error('InboxRAG requires a valid tenant');
+    const dbPath = join(VECTOR_DIR, safe, 'inbox.sqlite');
+    ensureDir(dbPath);
+    const vectorStore = new VectorStore({ sqlitePath: dbPath });
+    await vectorStore.load();
+    const h = {
+      vectorStore, dbPath,
+      async ingest(text, metadata = {}) {
+        const chunks = await splitter._call([{ pageContent: text, metadata }]);
+        const embeddings = await embedder._call(chunks.map(c => c.pageContent));
+        await vectorStore.add(chunks, embeddings);
+        return chunks.length;
+      },
+      async query(q, k = 5) {
+        const qemb = await embedder._call(q);
+        return vectorStore.search(qemb, k);
+      },
+    };
+    handles.set(tenantId, h);
+    return h;
+  }
+
+  return {
+    forTenant,
+    close() { for (const h of handles.values()) { try { h.vectorStore.close?.(); } catch { /* ignore */ } } },
+  };
+}
+
+/**
  * Boot every wired subsystem. Returns live handles + close(). Throws on a failed
  * boot — a failed boot must not serve traffic.
  */
@@ -498,6 +554,7 @@ export async function bootSpine() {
     });
     w = injectInboxContext(w, w.tenant_id ?? 'default', w.user_id ?? '');
     w = injectFilesystemContext(w, w.tenant_id ?? 'default');
+    w = injectInboxCapabilityContext(w, w.tenant_id ?? 'default');
     return w;
   });
 
@@ -529,12 +586,15 @@ export async function bootSpine() {
   // Start the background tick loop (email polling + scheduled workflow execution).
   engine.workflowScheduler.start();
 
-  // Per-user inbox — delivery destination + RAG-indexed content store.
+  // Per-user inbox — delivery destination + dedicated inbox RAG store.
+  // inbox.sqlite is SEPARATE from company.sqlite so inbox artifacts are
+  // independently queryable from the general knowledge store.
   ensureDir(INBOX_DB);
   const inboxStore = new InboxStore({ dbPath: INBOX_DB });
+  const ragInbox = buildInboxRag(rag);
   registerInboxCapability(engine.capabilityRegistry, {
     inboxStore,
-    getRag: rag.forTenant.bind(rag),
+    getRagInbox: ragInbox.forTenant.bind(ragInbox),
   });
 
   // Filesystem connector — tenant-scoped read + list for workflows.
@@ -557,6 +617,7 @@ export async function bootSpine() {
     auth,
     engine,
     rag,
+    ragInbox,
     inboxStore,
     slack,
     slackOAuth,
@@ -575,6 +636,7 @@ export async function bootSpine() {
       try { engine.workflowScheduler.stop?.(); } catch { /* ignore */ }
       try { workflowStore.close?.(); } catch { /* ignore */ }
       try { rag.close?.(); } catch { /* ignore */ }
+      try { ragInbox.close?.(); } catch { /* ignore */ }
       try { inboxStore.close?.(); } catch { /* ignore */ }
       try { auth.close?.(); } catch { /* ignore */ }
     },
@@ -611,6 +673,7 @@ export function createApp(spine) {
   });
 
   app.use(express.static(join(process.cwd(), 'public')));
+  app.use('/recordings', express.static(join(process.cwd(), 'memory/recordings')));
 
   const optionalAuth = spine.auth?.middleware?.optionalAuth ?? ((_req, _res, next) => next());
   // RAG holds company context → no anonymous access. requireAuth resolves req.tenant,
@@ -872,6 +935,24 @@ export function createApp(spine) {
     res.json(result);
   });
 
+  // Semantic search over this tenant's inbox artifacts (inbox.sqlite, separate
+  // from the company-knowledge store). Body: { query, k? }.
+  app.post('/inbox/search', requireActiveTenant, async (req, res) => {
+    try {
+      const q = req.body?.query;
+      if (typeof q !== 'string' || !q.trim()) return res.status(400).json({ error: '`query` is required' });
+      const k = Math.min(Number(req.body?.k ?? 8), 20);
+      const rag = await spine.ragInbox.forTenant(req.tenant.id);
+      const hits = await rag.query(q, k);
+      res.json({
+        query: q,
+        hits: hits.map((h) => ({ score: h.score, content: h.pageContent ?? h.content ?? '', metadata: h.metadata ?? {} })),
+      });
+    } catch (err) {
+      res.status(500).json({ error: `inbox search failed: ${err.message ?? String(err)}` });
+    }
+  });
+
   // Query company context (this tenant only). Body: { query, k? }.
   app.post('/rag/query', requireActiveTenant, async (req, res) => {
     try {
@@ -1100,6 +1181,7 @@ export function createApp(spine) {
         spec = await injectTenantTokens(spec, req.tenant.id, deps);
         spec = injectInboxContext(spec, req.tenant.id, req.user.id);
         spec = injectFilesystemContext(spec, req.tenant.id);
+        spec = injectInboxCapabilityContext(spec, req.tenant.id);
       }
       let runId = null, completed = false, output = null;
       const steps = [];

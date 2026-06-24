@@ -174,7 +174,9 @@ Channel name aliases — map user requests to the correct channel id:
 - "calendar", "calendar event", "schedule meeting"       → "calendar_create_event"
 - "tasks", "google tasks", "to-do"                      → "tasks_create"
 - "search web", "web search", "look up online"          → connector-action with action "web_search"
-- "fetch url", "read page", "scrape url"                → connector-action with action "web_fetch"`;
+- "fetch url", "read page", "scrape url"                → connector-action with action "web_fetch"
+- "atlas inbox", "send to inbox", "store in inbox"      → "inbox_deliver"
+- "search inbox", "from inbox", "inbox context"         → connector-action with action "search_inbox"`;
 }
 
 // In-process session map: threadId → converger instance.
@@ -887,8 +889,46 @@ Rules:
       } catch (e) { /* non-fatal */ }
     }
 
+    // Activate draft workflows on first publish (draft pre-created by /api/builder/draft).
+    if (existing.status === 'draft') {
+      store.update(id, { status: 'active' }, { userId: req.user.id });
+      result.workflow.status = 'active';
+    }
+
     logEvent('builder.update.ok', { tenant: req.tenant?.id ?? null, workflowId: id });
     res.json({ ok: true, workflowId: result.workflow.id, workflow: result.workflow });
+  });
+
+  // ── PATCH /api/builder/workflows/:id/name ────────────────────────────────────
+  // Rename a workflow without running the validator (works for drafts with no nodes too).
+  app.patch('/api/builder/workflows/:id/name', requireActiveTenant, (req, res) => {
+    const { name } = req.body ?? {};
+    if (!name || !String(name).trim()) return res.status(400).json({ error: 'name is required' });
+    const store = spine.engine.workflowStore;
+    const wf = store.get(req.params.id, { userId: req.user.id });
+    if (!wf || wf.tenant_id !== req.tenant.id) return res.status(404).json({ error: 'Not found' });
+    store.update(req.params.id, { name: String(name).trim() }, { userId: req.user.id });
+    logEvent('builder.rename', { tenant: req.tenant?.id ?? null, workflowId: req.params.id });
+    res.json({ ok: true });
+  });
+
+  // ── POST /api/builder/draft ──────────────────────────────────────────────────
+  // Create a minimal empty draft so the sidebar entry persists immediately.
+  // Bypasses the validator (empty nodes would fail EMPTY_WORKFLOW check).
+  app.post('/api/builder/draft', requireActiveTenant, (req, res) => {
+    try {
+      const store = spine.engine.workflowStore;
+      const wf = store.create({
+        name: 'New workflow', nodes: [], edges: [], triggers: [],
+        userIntent: 'New workflow', status: 'draft', kind: 'flow',
+        userId: req.user.id, tenantId: req.tenant.id,
+      });
+      logEvent('builder.draft.create', { tenant: req.tenant?.id ?? null, workflowId: wf.id });
+      res.json({ ok: true, workflowId: wf.id });
+    } catch (err) {
+      logEvent('builder.draft.error', { tenant: req.tenant?.id ?? null, ...errFields(err) });
+      res.status(500).json({ ok: false, error: err.message ?? String(err) });
+    }
   });
 
   // ── POST /api/builder/workflows ──────────────────────────────────────────────
