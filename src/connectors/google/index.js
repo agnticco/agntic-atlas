@@ -293,9 +293,14 @@ export async function gmailSend(gapi, { to, subject, body }) {
   const bodyText = body ?? '';
   const isHtml = /<[a-z][\s\S]*>/i.test(bodyText);
   const contentType = isHtml ? 'text/html; charset=utf-8' : 'text/plain; charset=utf-8';
+  // RFC 2047: encode Subject header when it contains non-ASCII (emoji, accents, etc.)
+  // so email clients don't misread the raw UTF-8 bytes as Latin-1 and show garbage.
+  const subjectEncoded = /^[\x00-\x7F]*$/.test(subject ?? '')
+    ? (subject ?? '')
+    : `=?UTF-8?B?${Buffer.from(subject ?? '').toString('base64')}?=`;
   const raw = [
     `To: ${to}`,
-    `Subject: ${subject}`,
+    `Subject: ${subjectEncoded}`,
     `Content-Type: ${contentType}`,
     '',
     bodyText,
