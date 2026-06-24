@@ -220,6 +220,13 @@ export class WorkflowScheduler {
       }
     }
 
+    // Mark the workflow itself as broken so the sidebar dot turns red.
+    try {
+      this.workflowStore.update(workflow.id, { status: 'error' }, { userId: workflow.user_id });
+    } catch (e) {
+      log.warn(`[workflow-scheduler] could not mark workflow ${workflow.id} as error: ${e.message}`);
+    }
+
     if (this._errorNotifier) {
       try {
         await this._errorNotifier(workflow, lastError);
