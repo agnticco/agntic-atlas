@@ -52,6 +52,9 @@ export class DocumentLoader extends Runnable {
     this.extensions = options.extensions ?? ['.md', '.txt', '.text'];
     this.vaultRoot  = options.vaultRoot  ?? null;
     this.verbose    = options.verbose    ?? false;
+    // Optional async fn (filePath: string) => string — called for image files
+    // when Docling is not available. Intended for vision-model description.
+    this.visionFn   = options.visionFn   ?? null;
 
     if (options.docling === true) {
       this.docling = new DoclingProcessor({ verbose: this.verbose });
@@ -201,7 +204,40 @@ export class DocumentLoader extends Runnable {
       }];
     }
 
-    // Rich formats (PDF, DOCX, images, etc.) — extract via Docling if available
+    // HTML — strip tags to plain text via jsdom
+    if (ext === '.html' || ext === '.htm') {
+      const { JSDOM } = await import('jsdom');
+      const dom  = new JSDOM(raw);
+      const doc  = dom.window.document;
+      for (const el of doc.querySelectorAll('script, style, noscript')) el.remove();
+      const text = (doc.body?.textContent ?? doc.documentElement?.textContent ?? '')
+        .replace(/\s+/g, ' ').trim();
+      if (!text) return [];
+      return [{
+        pageContent: text,
+        metadata:    { ...baseMetadata, title: doc.title || path.basename(absPath, ext) },
+      }];
+    }
+
+    // Images — Docling first, then visionFn fallback
+    const imageExts = new Set(['.png', '.jpg', '.jpeg', '.tiff', '.tif', '.bmp', '.gif', '.webp']);
+    if (imageExts.has(ext)) {
+      if (this.docling && DoclingProcessor.supports(absPath)) {
+        const extracted = await this.docling.extract(absPath);
+        if (!extracted) return [];
+        return [{ pageContent: extracted, metadata: { ...baseMetadata, title: path.basename(absPath, ext) } }];
+      }
+      if (this.visionFn) {
+        try {
+          const description = await this.visionFn(absPath);
+          if (!description) return [];
+          return [{ pageContent: description, metadata: { ...baseMetadata, title: path.basename(absPath, ext), via: 'vision' } }];
+        } catch { return []; }
+      }
+      return [];  // No extractor — skip
+    }
+
+    // Rich formats (PDF, DOCX, etc.) — extract via Docling if available
     if (this.docling && DoclingProcessor.supports(absPath)) {
       const extracted = await this.docling.extract(absPath);
       if (!extracted) return [];  // Docling failed — skip rather than ingest binary
@@ -227,8 +263,7 @@ export class DocumentLoader extends Runnable {
     }
 
     // Binary formats with no extractor — skip rather than ingest garbage
-    const binaryExts = new Set(['.pdf', '.docx', '.pptx', '.xlsx', '.png', '.jpg',
-      '.jpeg', '.tiff', '.tif', '.bmp', '.gif', '.webp']);
+    const binaryExts = new Set(['.pdf', '.docx', '.pptx', '.xlsx']);
     if (binaryExts.has(ext)) return [];
 
     return [{
