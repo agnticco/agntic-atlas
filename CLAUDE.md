@@ -225,13 +225,14 @@ spec is actually executable, not just structurally similar to the frozen file.
 ## Known gotchas
 
 - **Delivery nodes need context-aware output formatting (unbuilt, P10+).** The
-  `deliver` node and connector-action delivery capabilities pass output through as-is.
-  If an upstream node (e.g. `summarize`, `llm`) emits HTML and the delivery target
-  is email, the recipient sees raw HTML tags. Conversely a plain-text summary in a
-  Slack delivery misses markdown rendering. Formatting must be gated on the delivery
-  channel: HTML→email, mrkdwn→Slack, plain text→SMS/webhook. The Airtable announcement
-  workflow reproduces this — it emails raw HTML. Fix in the delivery handler layer
-  (per-capability `handle` in `src/connectors/*/index.js`), not in the LLM prompt.
+  `deliver` node and connector-action delivery capabilities pass output through as-is,
+  with no awareness of the target channel's format requirements. The Airtable
+  announcement workflow is the canonical broken example: the LLM emits HTML and the
+  email delivery sends it verbatim, so recipients see raw `<p>` and `<br>` tags instead
+  of formatted text. Each delivery channel needs its own output transform: email should
+  render HTML properly (set Content-Type text/html) or strip tags to plain text; Slack
+  should convert to mrkdwn; SMS/webhooks should strip all markup. Fix belongs in each
+  capability's `handle` in `src/connectors/*/index.js`, not in the LLM prompt.
 
 - **`tool` / `mcp-tool` / `fetch` node types are NOT runnable in this build.** There is
   no `ToolRegistry` (no `src/tools/`, never instantiated), and `FlowTester` is built
