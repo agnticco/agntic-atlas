@@ -115,6 +115,7 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
     const usermsg = new HumanMessage(buildAnalyzePrompt({
       intent:         state.intent,
       clarifications: state.clarifications,
+      capabilities:   state.capabilities,
     }));
     const parsed = await llmJson(tier(llm, 'fast'), [sysmsg, usermsg]);
 
