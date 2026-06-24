@@ -43,6 +43,7 @@
   .new-wf-btn svg { transition: transform .5s cubic-bezier(.34,1.56,.64,1); }
   .new-wf-btn:hover svg { transform: rotate(90deg); }
   .wf-item-row:hover .wf-del { opacity: 1 !important; }
+  .wf-item-row:hover .wf-edit { opacity: 1 !important; }
   @keyframes tutBackdropIn { from { opacity:0; } to { opacity:1; } }
   @keyframes tutCardIn { from { opacity:0; transform:translateY(24px) scale(.97); } to { opacity:1; transform:none; } }
   @keyframes tutSlideIn { from { opacity:0; transform:translateY(10px); } to { opacity:1; transform:none; } }
@@ -96,7 +97,15 @@
               <sc-for list="{{ sidebarWorkflows }}" as="w" hint-placeholder-count="4">
                 <div class="{{ w.itemClass }} wf-item-row" onClick="{{ w.onClick }}" style="position:relative;display:flex;align-items:center;gap:10px;padding:10px;border-radius:9px;background:{{ w.bg }};border:1px solid {{ w.border }};cursor:pointer;color:{{ w.nameColor }};transition:color .15s" style-hover="background:rgba(255,255,255,.06)">
                   <span style="flex:none;width:7px;height:7px;border-radius:50%;background:{{ w.dot }};box-shadow:0 0 8px {{ w.glow }}"></span>
-                  <span style="flex:1;font-size:13px;color:inherit;letter-spacing:-0.01em;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ w.name }}</span>
+                  <sc-if value="{{ w.isRenaming }}">
+                    <input value="{{ w.renameValue }}" onInput="{{ w.onRenameInput }}" onKeydown="{{ w.onRenameKeydown }}" onBlur="{{ w.onRenameBlur }}" onClick="{{ w.onRenameInputClick }}" style="flex:1;min-width:0;background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.25);color:#fff;font-size:13px;letter-spacing:-0.01em;border-radius:5px;padding:1px 6px;outline:none;font-family:inherit;height:22px" />
+                  </sc-if>
+                  <sc-if value="{{ !w.isRenaming }}">
+                    <span style="flex:1;font-size:13px;color:inherit;letter-spacing:-0.01em;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ w.name }}</span>
+                    <span class="wf-edit" onClick="{{ w.onEditClick }}" title="Rename" style="flex:none;opacity:0;display:flex;align-items:center;justify-content:center;width:20px;height:20px;border-radius:5px;transition:opacity .15s,background .15s" style-hover="background:rgba(255,255,255,.12)">
+                      <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="rgba(255,255,255,.5)" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5Z"/></svg>
+                    </span>
+                  </sc-if>
                   <span class="wf-del" onClick="{{ w.onDelete }}" style="flex:none;opacity:0;display:flex;align-items:center;justify-content:center;width:20px;height:20px;border-radius:5px;transition:opacity .15s,background .15s" style-hover="background:rgba(255,255,255,.12)">
                     <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="rgba(255,255,255,.5)" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6M14 11v6"/><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/></svg>
                   </span>
@@ -409,7 +418,12 @@
                 <div></div>
                 <button onClick="{{ onToggleRight }}" title="Collapse" style="border:none;background:none;cursor:pointer;color:rgba(255,255,255,.4);width:26px;height:26px;border-radius:7px;display:flex;align-items:center;justify-content:center" style-hover="background:rgba(255,255,255,.06)"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M14 4v16"/><path d="M7.5 9.5 10 12 7.5 14.5"/></svg></button>
               </div>
-              <div style="position:relative;font-size:20px;font-weight:500;letter-spacing:-0.025em;color:{{ titleColor }};margin:14px 0 0;line-height:1.2">{{ workflowTitle }}</div>
+              <sc-if value="{{ builderTitleEditing }}">
+                <input value="{{ builderRenameValue }}" onInput="{{ onBuilderRenameInput }}" onKeydown="{{ onBuilderRenameKeydown }}" onBlur="{{ onBuilderRenameBlur }}" style="position:relative;font-size:20px;font-weight:500;letter-spacing:-0.025em;color:#fff;margin:14px 0 0;background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.2);border-radius:8px;padding:2px 8px;outline:none;font-family:inherit;display:block;width:100%;line-height:1.2" />
+              </sc-if>
+              <sc-if value="{{ !builderTitleEditing }}">
+                <div onClick="{{ onBuilderTitleClick }}" title="Click to rename" style="position:relative;font-size:20px;font-weight:500;letter-spacing:-0.025em;color:{{ titleColor }};margin:14px 0 0;line-height:1.2;cursor:pointer;border-radius:6px;padding:2px 4px;margin-left:-4px" style-hover="background:rgba(255,255,255,.05)">{{ workflowTitle }}</div>
+              </sc-if>
 
               <!-- test environment header -->
               <div style="position:relative;display:flex;align-items:center;justify-content:space-between;margin-top:18px">
@@ -846,7 +860,12 @@
         <div style="flex:none;padding:20px 32px 0">
           <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:24px">
             <div style="min-width:0">
-              <div style="font-size:28px;font-weight:500;letter-spacing:-0.025em;color:#fff;line-height:1.1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ consoleWfName }}</div>
+              <sc-if value="{{ consoleNameEditing }}">
+                <input value="{{ consoleRenameValue }}" onInput="{{ onConsoleRenameInput }}" onKeydown="{{ onConsoleRenameKeydown }}" onBlur="{{ onConsoleRenameBlur }}" style="font-size:28px;font-weight:500;letter-spacing:-0.025em;color:#fff;line-height:1.1;background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.2);border-radius:10px;padding:2px 10px;outline:none;font-family:inherit;display:block;max-width:100%" />
+              </sc-if>
+              <sc-if value="{{ !consoleNameEditing }}">
+                <div onClick="{{ onConsoleNameClick }}" title="Click to rename" style="font-size:28px;font-weight:500;letter-spacing:-0.025em;color:#fff;line-height:1.1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;cursor:pointer;border-radius:8px" style-hover="background:rgba(255,255,255,.05)">{{ consoleWfName }}</div>
+              </sc-if>
               <div style="display:flex;align-items:center;gap:12px;margin-top:10px">
                 <span style="display:inline-flex;align-items:center;gap:7px;font-size:12px;font-weight:500;color:{{ consoleStatusColor }};border:1px solid {{ consoleStatusColor }}33;background:{{ consoleStatusColor }}14;padding:4px 11px;border-radius:999px">
                   <span style="width:6px;height:6px;border-radius:50%;background:{{ consoleStatusDot }};box-shadow:0 0 8px {{ consoleStatusGlow }}"></span>{{ consoleStatusLabel }}
@@ -889,8 +908,9 @@
 
           <!-- SUB-NAV TABS -->
           <div style="display:flex;gap:4px;margin-top:18px">
-            <button onClick="{{ onSwitchDash }}" class="ab-seg" style="border:none;cursor:pointer;background:{{ consoleDashTabBg }};color:{{ consoleDashTabColor }};font-family:inherit;font-size:13px;font-weight:500;padding:8px 16px;border-radius:8px">Run history</button>
-            <button onClick="{{ onSwitchSop }}"  class="ab-seg" style="border:none;cursor:pointer;background:{{ consoleSopTabBg }};color:{{ consoleSopTabColor }};font-family:inherit;font-size:13px;font-weight:500;padding:8px 16px;border-radius:8px">SOP</button>
+            <button onClick="{{ onSwitchDash }}"    class="ab-seg" style="border:none;cursor:pointer;background:{{ consoleDashTabBg }};color:{{ consoleDashTabColor }};font-family:inherit;font-size:13px;font-weight:500;padding:8px 16px;border-radius:8px">Run history</button>
+            <button onClick="{{ onSwitchSop }}"     class="ab-seg" style="border:none;cursor:pointer;background:{{ consoleSopTabBg }};color:{{ consoleSopTabColor }};font-family:inherit;font-size:13px;font-weight:500;padding:8px 16px;border-radius:8px">SOP</button>
+            <button onClick="{{ onSwitchProfile }}" class="ab-seg" style="border:none;cursor:pointer;background:{{ consoleProfileTabBg }};color:{{ consoleProfileTabColor }};font-family:inherit;font-size:13px;font-weight:500;padding:8px 16px;border-radius:8px">Profile</button>
           </div>
           <div style="height:1px;background:rgba(255,255,255,.07);margin-top:12px"></div>
         </div>
@@ -975,6 +995,123 @@
             </sc-for>
           </div>
 
+        </div>
+        </sc-if>
+
+        <!-- ── PROFILE TAB ── -->
+        <sc-if value="{{ consoleViewProfile }}" hint-placeholder-val="{{ false }}">
+        <div class="ab-scroll" style="flex:1;overflow-y:auto;min-height:0;padding:20px 32px 64px">
+
+          <!-- STAT CARDS -->
+          <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;margin-bottom:28px">
+            <div style="padding:18px 20px;border-radius:12px;background:rgba(127,194,138,.07);border:1px solid rgba(127,194,138,.18)">
+              <div style="font-size:10px;font-weight:600;letter-spacing:.16em;text-transform:uppercase;color:rgba(127,194,138,.75);margin-bottom:10px">Time Saved YTD</div>
+              <div style="font-size:28px;font-weight:600;color:#fff;letter-spacing:-0.02em">{{ profileTimeSavedYtd }}</div>
+            </div>
+            <div style="padding:18px 20px;border-radius:12px;background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.1)">
+              <div style="font-size:10px;font-weight:600;letter-spacing:.16em;text-transform:uppercase;color:rgba(255,255,255,.4);margin-bottom:10px">Last Run</div>
+              <div style="font-size:28px;font-weight:600;color:#fff;letter-spacing:-0.02em">{{ profileLastRunDuration }}</div>
+            </div>
+            <div onClick="{{ onOpenBaselinePanel }}" style="padding:18px 20px;border-radius:12px;background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.1);cursor:pointer">
+              <div style="font-size:10px;font-weight:600;letter-spacing:.16em;text-transform:uppercase;color:rgba(255,255,255,.4);margin-bottom:10px">Baseline</div>
+              <div style="font-size:28px;font-weight:600;color:#fff;letter-spacing:-0.02em">{{ profileBaselineDuration }}</div>
+              <div style="font-size:11px;color:rgba(255,255,255,.28);margin-top:4px">{{ profileBaselineSetAt }}</div>
+            </div>
+          </div>
+
+          <!-- BASELINE RECORDING PLAYER (injected by _renderProfileRecording) -->
+          <div id="profile-recording"></div>
+
+          <!-- TIME SAVINGS CHART (SVG injected by _renderProfileChart) -->
+          <div id="profile-chart" style="margin-bottom:28px"></div>
+
+          <!-- RECENT OUTPUTS -->
+          <sc-if value="{{ profileHasRecentOutputs }}" hint-placeholder-val="{{ false }}">
+          <div>
+            <div style="font-size:10px;font-weight:600;letter-spacing:.16em;text-transform:uppercase;color:rgba(255,255,255,.35);margin-bottom:12px">Recent outputs</div>
+            <sc-for list="{{ profileRecentOutputRows }}" as="o" hint-placeholder-count="3">
+              <div style="margin-bottom:10px;padding:14px 16px;border-radius:10px;background:rgba(255,255,255,.03);border:1px solid rgba(255,255,255,.07)">
+                <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px">
+                  <span style="font-size:11.5px;color:rgba(255,255,255,.38)">{{ o.startedAt }}</span>
+                  <span style="font-size:11.5px;color:rgba(255,255,255,.28)">{{ o.duration }}</span>
+                </div>
+                <div style="font-size:13px;color:rgba(255,255,255,.72);line-height:1.55;word-break:break-word;white-space:pre-wrap">{{ o.outputText }}</div>
+                <sc-if value="{{ o.hasMore }}" hint-placeholder-val="{{ false }}">
+                  <button onClick="{{ o.onToggle }}" style="margin-top:8px;border:none;background:none;color:rgba(255,255,255,.38);font-family:inherit;font-size:12px;cursor:pointer;padding:0">{{ o.toggleLabel }}</button>
+                </sc-if>
+              </div>
+            </sc-for>
+          </div>
+          </sc-if>
+
+          <!-- NO BASELINE / EMPTY STATE -->
+          <sc-if value="{{ profileNeedsBaseline }}" hint-placeholder-val="{{ false }}">
+          <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;padding:48px 0;gap:14px;text-align:center">
+            <div style="width:44px;height:44px;border-radius:12px;border:1px solid rgba(255,255,255,.12);background:rgba(255,255,255,.04);display:flex;align-items:center;justify-content:center;font-size:20px;opacity:.55">⏱</div>
+            <div style="font-size:15px;color:rgba(255,255,255,.55)">Set a baseline to track time saved</div>
+            <div style="font-size:13px;color:rgba(255,255,255,.3);max-width:38ch;line-height:1.5">Time how long this task takes to do manually. Every run below the baseline counts as time saved.</div>
+            <button onClick="{{ onOpenBaselinePanel }}" style="border:1px solid rgba(255,255,255,.18);background:rgba(255,255,255,.06);color:rgba(255,255,255,.85);font-family:inherit;font-size:13px;font-weight:500;padding:9px 20px;border-radius:8px;cursor:pointer;margin-top:4px">Set baseline</button>
+          </div>
+          </sc-if>
+
+        </div>
+        </sc-if>
+
+        <!-- ── BASELINE PANEL ── -->
+        <sc-if value="{{ baselinePanelOpen }}" hint-placeholder-val="{{ false }}">
+        <div style="position:absolute;inset:0;z-index:30;display:flex">
+          <div onClick="{{ onCloseBaselinePanel }}" style="flex:1;background:rgba(0,0,0,.42)"></div>
+          <div style="flex:none;width:400px;height:100%;background:#0E0E10;border-left:1px solid rgba(255,255,255,.1);display:flex;flex-direction:column;box-shadow:-24px 0 60px rgba(0,0,0,.55)">
+            <div style="flex:none;display:flex;align-items:center;justify-content:space-between;padding:18px 20px;border-bottom:1px solid rgba(255,255,255,.08)">
+              <div>
+                <div style="font-size:15px;font-weight:600;color:#fff">Set baseline</div>
+                <div style="font-size:12px;color:rgba(255,255,255,.38);margin-top:3px">Time how long this task takes manually</div>
+              </div>
+              <button onClick="{{ onCloseBaselinePanel }}" style="border:none;background:rgba(255,255,255,.06);cursor:pointer;color:rgba(255,255,255,.55);width:28px;height:28px;border-radius:7px;display:flex;align-items:center;justify-content:center;font-size:15px">×</button>
+            </div>
+            <div class="ab-scroll" style="flex:1;overflow-y:auto;padding:22px 20px">
+
+              <!-- Screen recorder -->
+              <div style="margin-bottom:24px;padding:16px;border-radius:12px;background:rgba(255,255,255,.03);border:1px solid rgba(255,255,255,.08)">
+                <div style="font-size:11.5px;color:rgba(255,255,255,.45);margin-bottom:12px">Optional: record the manual process</div>
+                <sc-if value="{{ baselineRecorderIdle }}" hint-placeholder-val="{{ true }}">
+                  <button onClick="{{ onStartBaselineRecording }}" style="display:flex;align-items:center;gap:8px;border:1px solid rgba(232,120,120,.35);background:rgba(232,120,120,.08);color:#e87878;font-family:inherit;font-size:13px;font-weight:500;padding:9px 16px;border-radius:8px;cursor:pointer;width:100%">
+                    <span style="width:9px;height:9px;border-radius:50%;background:#e87878;flex:none"></span>Start recording
+                  </button>
+                </sc-if>
+                <sc-if value="{{ baselineRecorderRecording }}" hint-placeholder-val="{{ false }}">
+                  <div style="display:flex;align-items:center;justify-content:space-between;gap:10px">
+                    <div style="display:flex;align-items:center;gap:8px">
+                      <span style="width:9px;height:9px;border-radius:50%;background:#e87878;flex:none"></span>
+                      <span style="font-size:13px;font-weight:600;color:#e87878">Recording</span>
+                      <span style="font-size:12.5px;color:rgba(255,255,255,.45);font-variant-numeric:tabular-nums">{{ baselineTimerDisplay }}</span>
+                    </div>
+                    <button onClick="{{ onStopBaselineRecording }}" style="border:1px solid rgba(255,255,255,.2);background:rgba(255,255,255,.06);color:rgba(255,255,255,.75);font-family:inherit;font-size:12px;font-weight:500;padding:7px 14px;border-radius:7px;cursor:pointer">Stop</button>
+                  </div>
+                </sc-if>
+                <sc-if value="{{ baselineRecorderStopped }}" hint-placeholder-val="{{ false }}">
+                  <div style="display:flex;align-items:center;gap:8px">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#9fd6a8" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+                    <span style="font-size:13px;color:#9fd6a8">Recording saved</span>
+                  </div>
+                </sc-if>
+              </div>
+
+              <!-- Duration input -->
+              <div style="margin-bottom:24px">
+                <div style="font-size:11.5px;color:rgba(255,255,255,.45);margin-bottom:10px">Duration</div>
+                <div style="display:flex;align-items:center;gap:8px">
+                  <input type="number" min="0" max="999" placeholder="0" value="{{ baselineMinutes }}" onInput="{{ onBaselineMinInput }}" style="width:62px;background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.14);border-radius:8px;padding:9px 0;font-size:16px;font-weight:500;color:#fff;font-family:inherit;text-align:center;outline:none" />
+                  <span style="font-size:13px;color:rgba(255,255,255,.38)">min</span>
+                  <input type="number" min="0" max="59" placeholder="0" value="{{ baselineSeconds }}" onInput="{{ onBaselineSecInput }}" style="width:62px;background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.14);border-radius:8px;padding:9px 0;font-size:16px;font-weight:500;color:#fff;font-family:inherit;text-align:center;outline:none" />
+                  <span style="font-size:13px;color:rgba(255,255,255,.38)">sec</span>
+                </div>
+                <div style="font-size:11.5px;color:rgba(255,255,255,.28);margin-top:7px">{{ baselineDurationPreview }}</div>
+              </div>
+
+              <button onClick="{{ onSaveBaseline }}" style="width:100%;border:1px solid rgba(127,194,138,.3);background:rgba(127,194,138,.13);color:#9fd6a8;font-family:inherit;font-size:14px;font-weight:600;padding:11px 20px;border-radius:9px;cursor:pointer">Save baseline</button>
+            </div>
+          </div>
         </div>
         </sc-if>
 
@@ -1157,16 +1294,45 @@
                 <button onClick="{{ onCloseInbox }}" style="border:1px solid rgba(255,255,255,.1);background:none;cursor:pointer;color:rgba(255,255,255,.45);font-family:inherit;font-size:13px;padding:7px 16px;border-radius:99px;letter-spacing:-.01em" style-hover="border-color:rgba(255,255,255,.22);color:rgba(255,255,255,.85)">Back</button>
               </div>
 
-              <!-- Empty state -->
-              <sc-if value="{{ !inboxMessages.length }}">
+              <!-- Search bar -->
+              <div style="position:relative;margin-bottom:24px">
+                <input type="text" placeholder="Search inbox…" value="{{ inboxSearch }}" onInput="{{ onInboxSearchInput }}" onKeydown="{{ onInboxSearchKeydown }}" style="width:100%;box-sizing:border-box;background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.1);border-radius:10px;padding:10px 36px 10px 38px;font-size:14px;color:#fff;font-family:inherit;outline:none;letter-spacing:-0.01em" style-focus="border-color:rgba(255,255,255,.22);background:rgba(255,255,255,.07)">
+                <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="rgba(255,255,255,.3)" stroke-width="1.8" stroke-linecap="round" style="position:absolute;left:12px;top:50%;transform:translateY(-50%);pointer-events:none"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+                <sc-if value="{{ inboxSearch }}">
+                  <button onClick="{{ onInboxSearchClear }}" style="position:absolute;right:10px;top:50%;transform:translateY(-50%);background:none;border:none;cursor:pointer;color:rgba(255,255,255,.3);font-size:18px;line-height:1;padding:2px 4px" style-hover="color:rgba(255,255,255,.7)">×</button>
+                </sc-if>
+              </div>
+
+              <!-- Search results -->
+              <sc-if value="{{ inboxSearch && inboxSearchResults !== null }}">
+                <sc-if value="{{ inboxSearchLoading }}">
+                  <div style="text-align:center;padding:40px;color:rgba(255,255,255,.3);font-size:14px">Searching…</div>
+                </sc-if>
+                <sc-if value="{{ !inboxSearchLoading && !inboxSearchResults.length }}">
+                  <div style="text-align:center;padding:40px;color:rgba(255,255,255,.3);font-size:14px">No results found</div>
+                </sc-if>
+                <sc-if value="{{ !inboxSearchLoading && inboxSearchResults.length > 0 }}">
+                  <div style="font-size:11px;font-weight:500;letter-spacing:.2em;text-transform:uppercase;color:rgba(255,255,255,.28);margin-bottom:12px">{{ inboxSearchResults.length }} result{{ inboxSearchResults.length === 1 ? '' : 's' }}</div>
+                  <sc-for list="{{ inboxSearchResults }}" as="hit">
+                    <div style="border:1px solid rgba(255,255,255,.07);border-radius:14px;padding:16px 20px;margin-bottom:8px">
+                      <sc-if value="{{ hit.subject }}"><div style="font-size:13px;font-weight:500;color:rgba(255,255,255,.75);margin-bottom:6px;letter-spacing:-0.01em">{{ hit.subject }}</div></sc-if>
+                      <div style="font-size:13.5px;color:rgba(255,255,255,.6);line-height:1.65;letter-spacing:-0.005em">{{ hit.excerpt }}</div>
+                      <div style="font-size:11px;color:rgba(255,255,255,.22);margin-top:8px">{{ hit.scoreLabel }}</div>
+                    </div>
+                  </sc-for>
+                </sc-if>
+              </sc-if>
+
+              <!-- Empty state (only when not searching) -->
+              <sc-if value="{{ !inboxSearch && !inboxMessages.length }}">
                 <div style="border:1px solid rgba(255,255,255,.07);border-radius:16px;padding:56px 32px;text-align:center">
                   <svg viewBox="0 0 24 24" width="40" height="40" fill="none" stroke="rgba(255,255,255,.15)" stroke-width="1.3" style="display:block;margin:0 auto 16px"><polyline points="22 12 16 12 14 15 10 15 8 12 2 12"/><path d="M5.45 5.11L2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/></svg>
                   <div style="font-size:15px;color:rgba(255,255,255,.28);line-height:1.6">No messages yet.<br>Set a workflow's delivery to <strong style="color:rgba(255,255,255,.45);font-weight:500">Atlas Inbox</strong> to see output here.</div>
                 </div>
               </sc-if>
 
-              <!-- Message list / expanded detail -->
-              <sc-if value="{{ inboxMessages.length > 0 }}">
+              <!-- Message list / expanded detail (only when not in search mode) -->
+              <sc-if value="{{ !inboxSearch && inboxMessages.length > 0 }}">
                 <div style="font-size:11px;font-weight:500;letter-spacing:.2em;text-transform:uppercase;color:rgba(255,255,255,.28);margin-bottom:12px">Messages</div>
                 <sc-for list="{{ inboxMessages }}" as="msg">
                   <!-- Collapsed row -->
@@ -1814,7 +1980,8 @@ class Component extends DCLogic {
       testState: "idle",       // idle | running | passed | failed
       runStepIndex: 0,         // which step is currently firing (during running)
       runSteps: [], failIndex: -1, deliveries: [], runOutput: null, runError: "",
-      workflowId: null, isEditing: false, editingIntro: null, introMsg: null,
+      workflowId: null, isEditing: false, isDraftBuild: false, editingIntro: null, introMsg: null,
+      renamingWfId: null, renamingValue: "", draftName: null,
       leftOpen: true, rightOpen: true,
       connectionsOpen: false, accountOpen: false, profileOpen: false, connectionsClosing: false, accountClosing: false, deletedFolderClosing: false,
       authToken: null, userInitials: "—", userName: "Signing in…", userEmail: "",
@@ -1827,12 +1994,15 @@ class Component extends DCLogic {
       consoleOpen: false, sidebarSearch: "", connectorModal: null, connectorModalClosing: false,
       consoleWfId: null, consoleWf: null, consoleRuns: [],
       consoleMetrics: null, consoleView: "dashboard", consoleRunFilter: "all",
+      consoleProfile: null, consoleProfileLoading: false,
+      baselinePanelOpen: false, baselineRecorderState: "idle", baselineTimerMs: 0,
+      baselineMinutes: "", baselineSeconds: "", baselineRecordingPath: null, profileExpandedOutputs: {},
       consoleDrawerRun: null, consoleLoading: false, consoleRunning: false,
       homeOpen: true, homeData: null, homeReady: false, homeFading: false,
       homepageModules: ['ai_greeting'],
       tutorialOpen: false, tutorialSlide: 0,
       knowledgeOpen: false, knowledgeSources: [], knowledgeIndexing: false, knowledgeFolderInput: '', knowledgeTreeExpanded: {}, knowledgeAddingFolder: false,
-      inboxOpen: false, inboxMessages: [], inboxUnread: 0, inboxSelected: null,
+      inboxOpen: false, inboxMessages: [], inboxUnread: 0, inboxSelected: null, inboxSearch: '', inboxSearchResults: null, inboxSearchLoading: false,
     };
   }
 
@@ -1846,11 +2016,15 @@ class Component extends DCLogic {
     this.setState({
       phase: "chat", intent: null, threadId: null, msgs: [], inputMode: "chat",
       inputValue: "", thinking: false, spec: null, testState: "idle", runSteps: [],
-      runStepIndex: 0, failIndex: -1, deliveries: [], runOutput: null, runError: "", workflowId: null, isEditing: false, editingIntro: null,
+      runStepIndex: 0, failIndex: -1, deliveries: [], runOutput: null, runError: "", workflowId: null, isEditing: false, isDraftBuild: false, editingIntro: null,
+      renamingWfId: null, renamingValue: "", draftName: null,
       connectionsOpen: false, accountOpen: false, profileOpen: false, connectionsClosing: false, accountClosing: false,
       mentionOpen: false, mentionQuery: "", mentionAt: -1,
       consoleOpen: false, consoleWfId: null, consoleWf: null, sidebarSearch: "", connectorModal: null, connectorModalClosing: false,
       consoleRuns: [], consoleMetrics: null, consoleView: "dashboard", consoleRunFilter: "all",
+      consoleProfile: null, consoleProfileLoading: false,
+      baselinePanelOpen: false, baselineRecorderState: "idle", baselineTimerMs: 0,
+      baselineMinutes: "", baselineSeconds: "", baselineRecordingPath: null, profileExpandedOutputs: {},
       consoleDrawerRun: null, consoleLoading: false, consoleRunning: false,
       homeOpen: true, homeData: null, homeReady: false, homeFading: false,
     });
@@ -1858,8 +2032,50 @@ class Component extends DCLogic {
   }
 
   newWorkflow() {
+    var self = this;
     this.reset();
     this.setState({ homeOpen: false, inboxOpen: false, knowledgeOpen: false });
+    fetch('/api/builder/draft', { method: 'POST', headers: this._H() })
+      .then(function(r) { return r.ok ? r.json() : null; })
+      .then(function(d) {
+        if (d && d.workflowId) {
+          self.setState({ workflowId: d.workflowId, isDraftBuild: true });
+          self._loadWorkflows();
+        }
+      })
+      .catch(function() {});
+  }
+
+  startRename(wfId, currentName) {
+    this.setState({ renamingWfId: wfId, renamingValue: currentName || "" });
+  }
+  cancelRename() {
+    this.setState({ renamingWfId: null, renamingValue: "" });
+  }
+  commitRename(wfId) {
+    var name = (this.state.renamingValue || "").trim();
+    this.setState({ renamingWfId: null, renamingValue: "" });
+    if (!name || !wfId) return;
+    var self = this;
+    fetch('/api/builder/workflows/' + wfId + '/name', {
+      method: 'PATCH',
+      headers: this._H(),
+      body: JSON.stringify({ name: name })
+    })
+      .then(function(r) { return r.ok ? r.json() : null; })
+      .then(function(d) {
+        if (!d || !d.ok) return;
+        self._loadWorkflows();
+        if (self.state.workflowId === wfId) {
+          var update = { draftName: name };
+          if (self.state.spec) update.spec = Object.assign({}, self.state.spec, { name: name });
+          self.setState(update);
+        }
+        if (self.state.consoleWfId === wfId && self.state.consoleWf) {
+          self.setState({ consoleWf: Object.assign({}, self.state.consoleWf, { name: name }) });
+        }
+      })
+      .catch(function() {});
   }
 
   tutorialNext() {
@@ -1950,8 +2166,29 @@ class Component extends DCLogic {
   }
 
   openInbox() {
-    this.setState({ inboxOpen: true, homeOpen: false, consoleOpen: false, connectionsOpen: false, accountOpen: false });
+    this.setState({ inboxOpen: true, homeOpen: false, consoleOpen: false, knowledgeOpen: false, connectionsOpen: false, accountOpen: false, inboxSearch: '', inboxSearchResults: null, inboxSearchLoading: false });
     this._loadInbox();
+  }
+  searchInbox() {
+    const q = (this.state.inboxSearch || '').trim();
+    if (!q) { this.setState({ inboxSearchResults: null }); return; }
+    const self = this;
+    this.setState({ inboxSearchLoading: true, inboxSearchResults: [] });
+    fetch('/inbox/search', { method: 'POST', headers: this._H(), body: JSON.stringify({ query: q, k: 8 }) })
+      .then(function(r) { return r.ok ? r.json() : null; })
+      .then(function(d) {
+        if (!d) { self.setState({ inboxSearchLoading: false }); return; }
+        var results = (d.hits || []).map(function(h) {
+          var text = typeof h.content === 'string' ? h.content : '';
+          return {
+            scoreLabel: Math.round((h.score || 0) * 100) + '% match',
+            excerpt: text.length > 280 ? text.slice(0, 280) + '…' : text,
+            subject: (h.metadata || {}).subject || '',
+          };
+        });
+        self.setState({ inboxSearchLoading: false, inboxSearchResults: results });
+      })
+      .catch(function() { self.setState({ inboxSearchLoading: false }); });
   }
   _loadInbox() {
     const self = this;
@@ -2232,7 +2469,21 @@ class Component extends DCLogic {
       .catch(function(e) {});
   }
   openConsole(wfId) {
-    this.setState({ consoleOpen: true, consoleWfId: wfId, consoleDrawerRun: null, consoleView: "dashboard", consoleRunFilter: "all", consoleLoading: true, consoleRuns: [], consoleMetrics: null, consoleWf: null, connectionsOpen: false, accountOpen: false, profileOpen: false, homeOpen: false, inboxOpen: false, knowledgeOpen: false });
+    // Draft with no nodes → resume in builder instead of opening an empty console
+    var wf = (this.state.consoleSidebarWfs || []).find(function(w) { return w.id === wfId; });
+    if (wf && wf.status === 'draft' && !(wf.nodes && wf.nodes.length)) {
+      this.setState({
+        homeOpen: false, consoleOpen: false, inboxOpen: false, knowledgeOpen: false,
+        connectionsOpen: false, accountOpen: false, profileOpen: false,
+        workflowId: wf.id, isDraftBuild: true,
+        phase: "chat", msgs: [], spec: null, intent: wf.user_intent || null,
+        threadId: null, inputValue: "", thinking: false, testState: "idle",
+        runSteps: [], runStepIndex: 0, failIndex: -1, deliveries: [], runOutput: null, runError: "",
+        isEditing: false, editingIntro: null,
+      });
+      return;
+    }
+    this.setState({ consoleOpen: true, consoleWfId: wfId, consoleDrawerRun: null, consoleView: "dashboard", consoleRunFilter: "all", consoleLoading: true, consoleRuns: [], consoleMetrics: null, consoleWf: null, consoleProfile: null, baselinePanelOpen: false, baselineRecorderState: "idle", baselineTimerMs: 0, baselineMinutes: "", baselineSeconds: "", baselineRecordingPath: null, profileExpandedOutputs: {}, connectionsOpen: false, accountOpen: false, profileOpen: false, homeOpen: false, inboxOpen: false, knowledgeOpen: false });
     this._loadConsoleData(wfId);
   }
   closeConsole() {
@@ -2308,7 +2559,202 @@ class Component extends DCLogic {
     }
   }
   closeDrawer()  { this.setState({ consoleDrawerRun: null }); }
-  switchConsoleView(v) { this.setState({ consoleView: v }); }
+  switchConsoleView(v) {
+    this.setState({ consoleView: v });
+    if (v === "profile" && this.state.consoleWfId) {
+      this._loadConsoleProfile(this.state.consoleWfId);
+    } else if (v === "profile" && this.state.consoleProfile) {
+      const self = this;
+      setTimeout(function() { var p = self.state.consoleProfile; self._renderProfileChart(p); self._renderProfileRecording(p); }, 30);
+    }
+  }
+  _loadConsoleProfile(wfId) {
+    const self = this, H = this._H();
+    this.setState({ consoleProfileLoading: true });
+    fetch("/api/console/workflows/" + wfId + "/profile", { headers: H })
+      .then(function(r) { return r.ok ? r.json() : null; })
+      .then(function(d) {
+        const profile = d ? d.profile : null;
+        self.setState({ consoleProfile: profile, consoleProfileLoading: false });
+        setTimeout(function() { self._renderProfileChart(profile); self._renderProfileRecording(profile); }, 30);
+      })
+      .catch(function() { self.setState({ consoleProfileLoading: false }); });
+  }
+  _renderProfileRecording(profile) {
+    const el = document.getElementById("profile-recording");
+    if (!el) return;
+    const path = profile && profile.baseline && profile.baseline.recordingPath;
+    if (!path) { el.innerHTML = ""; return; }
+    const wrap = document.createElement("div");
+    wrap.style.cssText = "margin-bottom:28px;border-radius:12px;overflow:hidden;border:1px solid rgba(255,255,255,.1)";
+    const vid = document.createElement("video");
+    vid.controls = true;
+    vid.preload = "metadata";
+    vid.style.cssText = "width:100%;max-height:320px;display:block;background:#000";
+    const src = document.createElement("source");
+    src.src = path;
+    src.type = path.endsWith(".mp4") ? "video/mp4" : "video/webm";
+    vid.appendChild(src);
+    const bar = document.createElement("div");
+    bar.style.cssText = "padding:10px 16px;background:rgba(255,255,255,.03);display:flex;align-items:center;justify-content:space-between";
+    bar.innerHTML = '<span style="font-size:12px;color:rgba(255,255,255,.4)">Baseline recording</span>' +
+      '<a href="' + path + '" download style="border:1px solid rgba(255,255,255,.12);background:none;color:rgba(255,255,255,.45);font-size:11.5px;padding:5px 12px;border-radius:6px;cursor:pointer;text-decoration:none;font-family:inherit">Download</a>';
+    wrap.appendChild(vid);
+    wrap.appendChild(bar);
+    el.innerHTML = "";
+    el.appendChild(wrap);
+  }
+  _renderProfileChart(profile) {
+    const el = document.getElementById("profile-chart");
+    if (!el) return;
+    if (!profile || !profile.sparkline || !profile.sparkline.length) { el.innerHTML = ""; return; }
+
+    const runs = [...profile.sparkline].reverse(); // oldest → newest
+    const baselineS = profile.baseline && profile.baseline.durationS ? profile.baseline.durationS : null;
+
+    // Build cumulative series
+    let cumActual = 0, cumBaseline = 0;
+    const pts = runs.map(function(r, i) {
+      cumActual += r.durationMs / 1000;
+      cumBaseline += baselineS || 0;
+      return { i: i, cumA: cumActual, cumB: cumBaseline, at: r.startedAt };
+    });
+
+    // Layout
+    const W = 720, H = 190, pL = 54, pR = 20, pT = 18, pB = 36;
+    const iW = W - pL - pR, iH = H - pT - pB;
+    const n = pts.length;
+    const maxY = Math.max.apply(null, pts.map(function(p) { return Math.max(p.cumA, p.cumB); }).concat([1]));
+
+    function xOf(i) { return pL + (n > 1 ? (i / (n - 1)) : 0.5) * iW; }
+    function yOf(v) { return pT + iH - (v / maxY) * iH; }
+    function fmtY(s) { return s < 60 ? Math.round(s) + "s" : s < 3600 ? (s / 60).toFixed(1) + "m" : (s / 3600).toFixed(1) + "h"; }
+    function fmtDate(s) { try { return new Date(s).toLocaleDateString(undefined, { month: "short", day: "numeric" }); } catch(e) { return ""; } }
+
+    // Grid lines and y-axis ticks
+    var gridLines = "", yLabels = "";
+    [0, 0.25, 0.5, 0.75, 1].forEach(function(f) {
+      var yv = f * maxY, y = yOf(yv);
+      gridLines += '<line x1="' + pL + '" y1="' + y + '" x2="' + (W - pR) + '" y2="' + y + '" stroke="rgba(255,255,255,.06)" stroke-width="1"/>';
+      yLabels += '<text x="' + (pL - 7) + '" y="' + (y + 4) + '" text-anchor="end" font-size="10" fill="rgba(255,255,255,.32)">' + fmtY(yv) + "</text>";
+    });
+
+    // X-axis date labels (first, middle, last)
+    var xLabels = "";
+    [[0, "start"], [Math.floor((n-1)/2), "middle"], [n-1, "end"]].forEach(function(pair) {
+      var idx = pair[0], anchor = pair[1] === "start" ? "start" : pair[1] === "end" ? "end" : "middle";
+      if (idx < 0 || idx >= n) return;
+      xLabels += '<text x="' + xOf(idx) + '" y="' + (H - 8) + '" text-anchor="' + anchor + '" font-size="10" fill="rgba(255,255,255,.32)">' + fmtDate(pts[idx].at) + "</text>";
+    });
+
+    // Gold cumulative baseline path
+    var goldPts = pts.map(function(p, i) { return xOf(i) + "," + yOf(p.cumB); }).join(" ");
+
+    // Green actual path + area fill
+    var greenPts = pts.map(function(p, i) { return xOf(i) + "," + yOf(p.cumA); }).join(" ");
+    var areaD = "M " + xOf(0) + "," + yOf(pts[0].cumA) + " " +
+      pts.map(function(p, i) { return "L " + xOf(i) + "," + yOf(p.cumA); }).join(" ") +
+      " L " + xOf(n-1) + "," + (pT + iH) + " L " + xOf(0) + "," + (pT + iH) + " Z";
+
+    // Dots on green line
+    var dots = pts.map(function(p, i) {
+      return '<circle cx="' + xOf(i) + '" cy="' + yOf(p.cumA) + '" r="3" fill="#7fc28a"/>';
+    }).join("");
+
+    // Legend
+    var legendY = pT + 4;
+    var legend = baselineS ? (
+      '<line x1="' + (W - pR - 120) + '" y1="' + (legendY + 6) + '" x2="' + (W - pR - 100) + '" y2="' + (legendY + 6) + '" stroke="rgba(240,191,107,.75)" stroke-width="1.5" stroke-dasharray="4 3"/>' +
+      '<text x="' + (W - pR - 97) + '" y="' + (legendY + 10) + '" font-size="10" fill="rgba(255,255,255,.38)">Without automation</text>' +
+      '<line x1="' + (W - pR - 120) + '" y1="' + (legendY + 22) + '" x2="' + (W - pR - 100) + '" y2="' + (legendY + 22) + '" stroke="#7fc28a" stroke-width="2"/>' +
+      '<text x="' + (W - pR - 97) + '" y="' + (legendY + 26) + '" font-size="10" fill="rgba(255,255,255,.38)">Actual time spent</text>'
+    ) : "";
+
+    el.innerHTML = '<svg width="100%" viewBox="0 0 ' + W + ' ' + H + '" xmlns="http://www.w3.org/2000/svg" style="display:block;overflow:visible">' +
+      '<defs><linearGradient id="pcg" x1="0" y1="0" x2="0" y2="1">' +
+      '<stop offset="0%" stop-color="#7fc28a" stop-opacity=".18"/>' +
+      '<stop offset="100%" stop-color="#7fc28a" stop-opacity="0"/>' +
+      '</linearGradient></defs>' +
+      gridLines + yLabels + xLabels +
+      '<path d="' + areaD + '" fill="url(#pcg)"/>' +
+      (baselineS ? '<polyline points="' + goldPts + '" fill="none" stroke="rgba(240,191,107,.75)" stroke-width="1.5" stroke-dasharray="5 4"/>' : "") +
+      '<polyline points="' + greenPts + '" fill="none" stroke="#7fc28a" stroke-width="2"/>' +
+      dots + legend +
+      "</svg>";
+  }
+  openBaselinePanel() { this.setState({ baselinePanelOpen: true }); }
+  closeBaselinePanel() {
+    if (this._baselineTimerInterval) { clearInterval(this._baselineTimerInterval); this._baselineTimerInterval = null; }
+    if (this._baselineStream) { this._baselineStream.getTracks().forEach(function(t) { t.stop(); }); this._baselineStream = null; }
+    this.setState({ baselinePanelOpen: false, baselineRecorderState: "idle", baselineTimerMs: 0 });
+  }
+  startBaselineRecording() {
+    const self = this;
+    navigator.mediaDevices.getDisplayMedia({ video: true, audio: false }).then(function(stream) {
+      self._baselineStream = stream;
+      self._baselineChunks = [];
+      self._baselineRecorder = new MediaRecorder(stream);
+      self._baselineRecorder.ondataavailable = function(e) { if (e.data.size > 0) self._baselineChunks.push(e.data); };
+      self._baselineRecorder.onstop = function() { self._uploadBaselineRecording(); };
+      self._baselineRecorder.start();
+      self._baselineTimerStart = Date.now();
+      self._baselineTimerInterval = setInterval(function() {
+        self.setState({ baselineTimerMs: Date.now() - self._baselineTimerStart });
+      }, 1000);
+      stream.getVideoTracks()[0].onended = function() { self.stopBaselineRecording(); };
+      self.setState({ baselineRecorderState: "recording", baselineTimerMs: 0 });
+    }).catch(function() {});
+  }
+  stopBaselineRecording() {
+    if (this._baselineTimerInterval) { clearInterval(this._baselineTimerInterval); this._baselineTimerInterval = null; }
+    if (this._baselineRecorder && this._baselineRecorder.state !== "inactive") this._baselineRecorder.stop();
+    if (this._baselineStream) { this._baselineStream.getTracks().forEach(function(t) { t.stop(); }); this._baselineStream = null; }
+  }
+  _uploadBaselineRecording() {
+    const self = this;
+    const blob = new Blob(self._baselineChunks, { type: "video/webm" });
+    const wfId = self.state.consoleWfId;
+    const durationS = Math.round((Date.now() - self._baselineTimerStart) / 1000);
+    fetch("/api/console/workflows/" + wfId + "/baseline/recording", {
+      method: "POST",
+      headers: Object.assign({}, self._H(), { "Content-Type": "video/webm" }),
+      body: blob,
+    }).then(function(r) { return r.ok ? r.json() : null; })
+      .then(function(d) {
+        const path = d && d.path ? d.path : null;
+        const mins = Math.floor(durationS / 60), secs = durationS % 60;
+        self.setState({ baselineRecorderState: "stopped", baselineRecordingPath: path, baselineMinutes: String(mins), baselineSeconds: String(secs) });
+      }).catch(function() { self.setState({ baselineRecorderState: "stopped" }); });
+  }
+  saveBaseline() {
+    const self = this;
+    const mins = parseInt(self.state.baselineMinutes, 10) || 0;
+    const secs = parseInt(self.state.baselineSeconds, 10) || 0;
+    const durationS = mins * 60 + secs;
+    if (durationS <= 0) return;
+    const wfId = self.state.consoleWfId;
+    const body = { durationS };
+    if (self.state.baselineRecordingPath) body.recordingPath = self.state.baselineRecordingPath;
+    fetch("/api/console/workflows/" + wfId + "/baseline", {
+      method: "POST", headers: self._H(), body: JSON.stringify(body),
+    }).then(function(r) { return r.ok ? r.json() : null; })
+      .then(function() {
+        self.setState({ baselinePanelOpen: false, baselineRecorderState: "idle", baselineTimerMs: 0, baselineRecordingPath: null, baselineMinutes: "", baselineSeconds: "" });
+        self._loadConsoleProfile(wfId);
+      }).catch(function() {});
+  }
+  toggleProfileOutputExpand(runId) {
+    const cur = Object.assign({}, this.state.profileExpandedOutputs || {});
+    cur[runId] = !cur[runId];
+    this.setState({ profileExpandedOutputs: cur });
+  }
+  _fmtSeconds(s) {
+    if (!s || s <= 0) return "—";
+    const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = Math.round(s % 60);
+    if (h > 0) return h + "h " + m + "m";
+    if (m > 0) return m + "m" + (sec > 0 ? " " + sec + "s" : "");
+    return sec + "s";
+  }
   setConsoleFilter(f) { this.setState({ consoleRunFilter: f, consoleDrawerRun: null }); }
   consolePauseResume() {
     const wfId = this.state.consoleWfId, self = this;
@@ -2757,8 +3203,10 @@ class Component extends DCLogic {
           alert((r.data && r.data.error) || "Could not save workflow — please try again.");
           return;
         }
-        self.setState({ phase: "live", thinking: false, workflowId: r.data.workflowId });
+        var wfId = r.data.workflowId;
+        self.setState({ phase: "live", thinking: false, workflowId: wfId, isDraftBuild: false });
         self._loadWorkflows();
+        setTimeout(function() { self.openConsole(wfId); }, 1800);
       })
       .catch(function(e) {
         self.setState({ thinking: false, phase: "draft" });
@@ -3061,7 +3509,7 @@ class Component extends DCLogic {
       : TS === "failed" ? { show: true, icon: "✕", color: "#f0a896", border: "rgba(232,116,97,.4)", bg: "rgba(232,116,97,.08)", iconBg: "rgba(232,116,97,.16)", text: "Break: " + (S.runError || "a step failed") + ". Tell Atlas what to change." }
       : { show: false };
 
-    const wfName = (S.spec && S.spec.name) || (S.phase === "chat" ? "New workflow" : "Untitled workflow");
+    const wfName = (S.spec && S.spec.name) || S.draftName || (S.phase === "chat" ? "New workflow" : "Untitled workflow");
     const accent = published ? "#7fc28a" : (S.phase === "chat" ? "rgba(255,255,255,.3)" : "#f0bf6b");
     const accentGlow = published ? "rgba(127,194,138,.55)" : (S.phase === "chat" ? "rgba(255,255,255,0)" : "rgba(240,191,107,.55)");
 
@@ -3097,18 +3545,27 @@ class Component extends DCLogic {
         );
         const list = filtered.map(wf => {
           const isOpen = S.consoleOpen && S.consoleWfId === wf.id;
+          const isActiveEdit = S.workflowId === wf.id && (S.isEditing || S.isDraftBuild || (S.msgs && S.msgs.length > 0));
+          const isHighlighted = isOpen || (S.workflowId === wf.id && (S.isEditing || (S.msgs && S.msgs.length > 0)));
           const dot  = wf.status === "active" ? "#7fc28a" : wf.status === "paused" ? "#e87878" : "rgba(255,255,255,.25)";
           const glow = wf.status === "active" ? "rgba(127,194,138,.55)" : wf.status === "paused" ? "rgba(232,120,120,.55)" : "none";
-          return { name: wf.name || wf.user_intent || "Untitled", dot, glow, bg: "transparent", border: "transparent", nameColor: isOpen ? "#fff" : "rgba(255,255,255,.5)", itemClass: isOpen ? "" : "wf-item-inactive", onClick: () => this.openConsole(wf.id), onDelete: (e) => { e.stopPropagation(); this.softDeleteWorkflow(wf.id); } };
+          const onClick = isActiveEdit
+            ? () => this.setState({ homeOpen: false, consoleOpen: false, inboxOpen: false, knowledgeOpen: false, connectionsOpen: false, accountOpen: false, profileOpen: false })
+            : () => this.openConsole(wf.id);
+          const isRenaming = S.renamingWfId === wf.id;
+          return { name: wf.name || wf.user_intent || "Untitled", dot, glow, bg: "transparent", border: "transparent", nameColor: isHighlighted ? "#fff" : "rgba(255,255,255,.5)", itemClass: isHighlighted ? "" : "wf-item-inactive", onClick, onDelete: (e) => { e.stopPropagation(); this.softDeleteWorkflow(wf.id); }, isRenaming, renameValue: isRenaming ? S.renamingValue : "", onEditClick: (e) => { e.stopPropagation(); this.startRename(wf.id, wf.name || wf.user_intent || "Untitled"); }, onRenameInput: (e) => this.setState({ renamingValue: e.target.value }), onRenameKeydown: (e) => { if (e.key === "Enter") { e.preventDefault(); this.commitRename(wf.id); } if (e.key === "Escape") { e.preventDefault(); this.cancelRename(); } }, onRenameBlur: () => this.commitRename(wf.id), onRenameInputClick: (e) => e.stopPropagation() };
         });
-        // Show in-progress build entry only when the builder is the active main content (not home, not console)
-        if (!S.consoleOpen && !S.homeOpen) {
+        // Show in-progress build entry when builder is the active view OR when a session with content exists
+        // (so navigating to home/console/inbox doesn't lose the entry while a build is in flight)
+        const builderIsActive = !S.consoleOpen && !S.homeOpen && !S.inboxOpen && !S.knowledgeOpen;
+        const hasActiveBuild = (S.msgs && S.msgs.length > 0) || !!S.spec;
+        if (builderIsActive || hasActiveBuild) {
           const alreadyInList = S.workflowId && (S.consoleSidebarWfs || []).some(w => w.id === S.workflowId);
           if (!alreadyInList) {
             const label = S.phase === "chat" ? "New workflow" : wfName;
             const wfIdForDel = S.workflowId;
             const onDelBuilder = (e) => { e.stopPropagation(); if (wfIdForDel) { this.softDeleteWorkflow(wfIdForDel); } else { this.reset(); } };
-            list.unshift({ name: label, dot: "#f3cd86", glow: "rgba(240,191,107,.5)", bg: "transparent", border: "transparent", nameColor: "#fff", itemClass: "", onClick: () => this.setState({ homeOpen: false, consoleOpen: false, connectionsOpen: false, accountOpen: false, profileOpen: false }), onDelete: onDelBuilder });
+            list.unshift({ name: label, dot: "#f3cd86", glow: "rgba(240,191,107,.5)", bg: "transparent", border: "transparent", nameColor: "#fff", itemClass: "", onClick: () => this.setState({ homeOpen: false, consoleOpen: false, inboxOpen: false, knowledgeOpen: false, connectionsOpen: false, accountOpen: false, profileOpen: false }), onDelete: onDelBuilder });
           }
         }
         // Only show a placeholder when actively searching with no results
@@ -3199,6 +3656,12 @@ class Component extends DCLogic {
       mentionOpen: S.mentionOpen && this._mentionList().length > 0,
       // right test panel
       workflowTitle: wfName, titleColor: (S.spec ? "#fff" : "rgba(255,255,255,.4)"),
+      builderTitleEditing: S.renamingWfId !== null && S.renamingWfId === S.workflowId && !S.consoleOpen,
+      onBuilderTitleClick: () => { if (S.workflowId) { var nm = (S.spec && S.spec.name) || S.draftName || wfName; this.startRename(S.workflowId, nm); } },
+      builderRenameValue: S.renamingValue,
+      onBuilderRenameInput: (e) => this.setState({ renamingValue: e.target.value }),
+      onBuilderRenameKeydown: (e) => { if (e.key === 'Enter') { e.preventDefault(); this.commitRename(S.workflowId); } if (e.key === 'Escape') { e.preventDefault(); this.cancelRename(); } },
+      onBuilderRenameBlur: () => { if (S.workflowId) this.commitRename(S.workflowId); },
       testStatusLabel: published ? "Live" : (S.phase === "chat" ? "Not started" : (!testUnlocked ? "Incomplete" : (TS === "running" ? "Testing…" : (TS === "passed" ? "All steps passed" : (TS === "failed" ? "Break found" : "Ready to test"))))),
       testStatusColor: (TS === "passed" || published) ? "#9fd6a8" : (TS === "failed" ? "#f0a896" : (TS === "running" ? "#f3cd86" : "rgba(255,255,255,.45)")),
       testStatusGlow: (TS === "passed" || published) ? "rgba(127,194,138,.55)" : (TS === "failed" ? "rgba(232,116,97,.5)" : (TS === "running" ? "rgba(240,191,107,.5)" : "rgba(255,255,255,0)")),
@@ -3247,6 +3710,12 @@ class Component extends DCLogic {
         onToggle: () => this.toggleKnowledgeFolder(src.path),
         onRemove: () => this.removeKnowledgeSource(src.path),
       })),
+      inboxSearch: S.inboxSearch || '',
+      inboxSearchResults: S.inboxSearchResults,
+      inboxSearchLoading: S.inboxSearchLoading || false,
+      onInboxSearchInput: (e) => this.setState({ inboxSearch: e.target.value, inboxSearchResults: e.target.value ? S.inboxSearchResults : null }),
+      onInboxSearchKeydown: (e) => { if (e.key === 'Enter') this.searchInbox(); },
+      onInboxSearchClear: () => this.setState({ inboxSearch: '', inboxSearchResults: null }),
       inboxMessages: (S.inboxMessages || []).map(m => ({
         ...m,
         isUnread: !m.read_at,
@@ -3318,19 +3787,69 @@ class Component extends DCLogic {
       onDownloadMd: () => this.downloadSop("md"),
       consoleLoading: S.consoleLoading,
       consoleWfName: (S.consoleWf && (S.consoleWf.name || S.consoleWf.user_intent)) || (S.consoleLoading ? "Loading…" : "Workflow"),
+      consoleNameEditing: S.renamingWfId !== null && S.renamingWfId === S.consoleWfId,
+      onConsoleNameClick: () => { var nm = (S.consoleWf && (S.consoleWf.name || S.consoleWf.user_intent)) || 'Untitled'; if (S.consoleWfId) this.startRename(S.consoleWfId, nm); },
+      consoleRenameValue: S.renamingValue,
+      onConsoleRenameInput: (e) => this.setState({ renamingValue: e.target.value }),
+      onConsoleRenameKeydown: (e) => { if (e.key === 'Enter') { e.preventDefault(); this.commitRename(S.consoleWfId); } if (e.key === 'Escape') { e.preventDefault(); this.cancelRename(); } },
+      onConsoleRenameBlur: () => { if (S.consoleWfId) this.commitRename(S.consoleWfId); },
       consoleStatusLabel: S.consoleWf ? S.consoleWf.status : "—",
       consoleStatusColor: !S.consoleWf ? "rgba(255,255,255,.5)" : S.consoleWf.status === "active" ? "#9fd6a8" : S.consoleWf.status === "paused" ? "#e87878" : "rgba(255,255,255,.5)",
       consoleStatusDot:   !S.consoleWf ? "rgba(255,255,255,.28)" : S.consoleWf.status === "active" ? "#7fc28a" : S.consoleWf.status === "paused" ? "#e87878" : "rgba(255,255,255,.28)",
       consoleStatusGlow:  !S.consoleWf ? "none" : S.consoleWf.status === "active" ? "rgba(127,194,138,.55)" : S.consoleWf.status === "paused" ? "rgba(232,120,120,.55)" : "none",
       // sub-nav tabs
-      consoleViewDash: S.consoleView !== "sop",
+      consoleViewDash: S.consoleView !== "sop" && S.consoleView !== "profile",
       consoleViewSop: S.consoleView === "sop",
+      consoleViewProfile: S.consoleView === "profile",
       onSwitchDash: () => this.switchConsoleView("dashboard"),
       onSwitchSop: () => this.switchConsoleView("sop"),
-      consoleDashTabBg: S.consoleView !== "sop" ? "rgba(255,255,255,.07)" : "transparent",
+      onSwitchProfile: () => this.switchConsoleView("profile"),
+      consoleDashTabBg: (S.consoleView !== "sop" && S.consoleView !== "profile") ? "rgba(255,255,255,.07)" : "transparent",
       consoleSopTabBg: S.consoleView === "sop" ? "rgba(255,255,255,.07)" : "transparent",
-      consoleDashTabColor: S.consoleView !== "sop" ? "#fff" : "rgba(255,255,255,.48)",
+      consoleProfileTabBg: S.consoleView === "profile" ? "rgba(255,255,255,.07)" : "transparent",
+      consoleDashTabColor: (S.consoleView !== "sop" && S.consoleView !== "profile") ? "#fff" : "rgba(255,255,255,.48)",
       consoleSopTabColor: S.consoleView === "sop" ? "#fff" : "rgba(255,255,255,.48)",
+      consoleProfileTabColor: S.consoleView === "profile" ? "#fff" : "rgba(255,255,255,.48)",
+      // profile tab
+      onOpenBaselinePanel: () => this.openBaselinePanel(),
+      onCloseBaselinePanel: () => this.closeBaselinePanel(),
+      onStartBaselineRecording: () => this.startBaselineRecording(),
+      onStopBaselineRecording: () => this.stopBaselineRecording(),
+      onSaveBaseline: () => this.saveBaseline(),
+      baselinePanelOpen: S.baselinePanelOpen,
+      baselineRecorderIdle: !S.baselineRecorderState || S.baselineRecorderState === "idle",
+      baselineRecorderRecording: S.baselineRecorderState === "recording",
+      baselineRecorderStopped: S.baselineRecorderState === "stopped",
+      baselineTimerDisplay: (() => { const ms = S.baselineTimerMs || 0, s = Math.floor(ms / 1000), m = Math.floor(s / 60); return String(m).padStart(2, "0") + ":" + String(s % 60).padStart(2, "0"); })(),
+      baselineMinutes: S.baselineMinutes || "",
+      baselineSeconds: S.baselineSeconds || "",
+      onBaselineMinInput: (e) => this.setState({ baselineMinutes: e.target.value }),
+      onBaselineSecInput: (e) => this.setState({ baselineSeconds: e.target.value }),
+      baselineDurationPreview: (() => { const m = parseInt(S.baselineMinutes, 10) || 0, s = parseInt(S.baselineSeconds, 10) || 0, t = m * 60 + s; return t > 0 ? "Baseline: " + this._fmtSeconds(t) : ""; })(),
+      profileTimeSavedYtd: (() => { const p = S.consoleProfile; return p ? this._fmtSeconds(p.timeSavedYtdS) : "—"; })(),
+      profileLastRunDuration: (() => { const p = S.consoleProfile; if (!p || p.lastRunMs == null) return "—"; return this._fmtSeconds(p.lastRunMs / 1000); })(),
+      profileBaselineDuration: (() => { const p = S.consoleProfile; if (!p || !p.baseline || !p.baseline.durationS) return "Not set"; return this._fmtSeconds(p.baseline.durationS); })(),
+      profileBaselineSetAt: (() => { const p = S.consoleProfile; return p && p.baseline && p.baseline.setAt ? "Set " + this._relTime(p.baseline.setAt) : "Click to set"; })(),
+      profileNeedsBaseline: (() => { const p = S.consoleProfile; return !p || !p.baseline || !p.baseline.durationS; })(),
+      profileHasRecentOutputs: (() => { const p = S.consoleProfile; return !!(p && p.recentOutputs && p.recentOutputs.length); })(),
+      profileRecentOutputRows: (() => {
+        const p = S.consoleProfile;
+        if (!p || !p.recentOutputs) return [];
+        const expanded = S.profileExpandedOutputs || {};
+        const PREVIEW = 240;
+        return p.recentOutputs.map(o => {
+          const text = String(o.output || "");
+          const isExpanded = !!expanded[o.id];
+          return {
+            startedAt: this._relTime(o.startedAt),
+            duration: this._fmtSeconds((o.durationMs || 0) / 1000),
+            outputText: text.length > PREVIEW && !isExpanded ? text.slice(0, PREVIEW) + "…" : text,
+            hasMore: text.length > PREVIEW,
+            toggleLabel: isExpanded ? "Show less" : "Show more",
+            onToggle: () => this.toggleProfileOutputExpand(o.id),
+          };
+        });
+      })(),
       // metrics
       consoleMTotal: S.consoleMetrics ? String(S.consoleMetrics.total) : "—",
       consoleMRate: S.consoleMetrics && S.consoleMetrics.rate != null ? S.consoleMetrics.rate + "%" : "—",

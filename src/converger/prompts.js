@@ -30,7 +30,7 @@ function deliverySummary(capabilities) {
   if (!usable || !usable.length) {
     return `    • channel "slack": post to a Slack channel. config: { channel:"slack", target:"#channel-name" }
     • channel "slack_dm": direct-message one person. config: { channel:"slack_dm", user:"<email or @handle>" }
-    • channel "in_app": the in-app inbox. config: { channel:"in_app" }
+    • channel "inbox_deliver": Atlas Inbox — stores output as a retrievable artifact; future workflows can search it. config: { channel:"inbox_deliver", subject:"<title>" }
     • channel "webhook": POST to a URL. config: { channel:"webhook", url:"https://…" }`;
   }
   return usable.map(c => {
