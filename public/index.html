@@ -98,9 +98,7 @@
               <sc-for list="{{ sidebarWorkflows }}" as="w" hint-placeholder-count="4">
                 <div class="{{ w.itemClass }} wf-item-row" onClick="{{ w.onClick }}" style="position:relative;display:flex;align-items:center;gap:10px;padding:10px;border-radius:9px;background:{{ w.bg }};border:1px solid {{ w.border }};cursor:pointer;color:{{ w.nameColor }};transition:color .15s" style-hover="background:rgba(255,255,255,.06)">
                   <span style="flex:none;width:8px;height:8px;{{ w.radius }};background:{{ w.dot }};filter:{{ w.glow }}"></span>
-                  <sc-if value="{{ w.showTrigger }}">
-                    <span title="{{ w.triggerLabel }}" style="flex:none;font-size:10px;color:rgba(255,255,255,.32);line-height:1;user-select:none">{{ w.triggerGlyph }}</span>
-                  </sc-if>
+
                   <sc-if value="{{ w.isRenaming }}">
                     <input value="{{ w.renameValue }}" onInput="{{ w.onRenameInput }}" onKeydown="{{ w.onRenameKeydown }}" onBlur="{{ w.onRenameBlur }}" onClick="{{ w.onRenameInputClick }}" style="flex:1;min-width:0;background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.25);color:#fff;font-size:13px;letter-spacing:-0.01em;border-radius:5px;padding:1px 6px;outline:none;font-family:inherit;height:22px" />
                   </sc-if>
@@ -3671,7 +3669,6 @@ class Component extends DCLogic {
           const isActiveEdit = S.workflowId === wf.id && (S.isEditing || S.isDraftBuild || (S.msgs && S.msgs.length > 0));
           const isHighlighted = isOpen || (S.workflowId === wf.id && (S.isEditing || (S.msgs && S.msgs.length > 0)));
           const isPublished = wf.status !== 'draft';
-          const tinfo = isPublished ? this._getTriggerInfo(wf) : null;
           const isRunning = S.sidebarRunningId === wf.id;
           const dot    = isRunning ? '#f0bf6b' : wf.status === "active" ? SVG_PLAY : (wf.status === "paused" || wf.status === "error") ? SVG_PAUSE : '#f0bf6b';
           const glow   = isRunning ? 'drop-shadow(0 0 5px rgba(240,191,107,.8))' : wf.status === "active" ? 'drop-shadow(0 0 5px rgba(127,194,138,.85))' : (wf.status === "paused" || wf.status === "error") ? 'drop-shadow(0 0 5px rgba(232,116,97,.85))' : 'drop-shadow(0 0 5px rgba(240,191,107,.7))';
@@ -3680,7 +3677,7 @@ class Component extends DCLogic {
             ? () => this.setState({ view: 'build', connectionsOpen: false, accountOpen: false, profileOpen: false })
             : () => this.openConsole(wf.id);
           const isRenaming = S.renamingWfId === wf.id;
-          return { name: wf.name || wf.user_intent || "Untitled", dot, glow, radius, bg: "transparent", border: "transparent", nameColor: isHighlighted ? "#fff" : "rgba(255,255,255,.5)", itemClass: isHighlighted ? "" : "wf-item-inactive", onClick, onDelete: (e) => { e.stopPropagation(); this.softDeleteWorkflow(wf.id); }, isRenaming, renameValue: isRenaming ? S.renamingValue : "", onEditClick: (e) => { e.stopPropagation(); this.startRename(wf.id, wf.name || wf.user_intent || "Untitled"); }, onRenameInput: (e) => this.setState({ renamingValue: e.target.value }), onRenameKeydown: (e) => { if (e.key === "Enter") { e.preventDefault(); this.commitRename(wf.id); } if (e.key === "Escape") { e.preventDefault(); this.cancelRename(); } }, onRenameBlur: () => this.commitRename(wf.id), onRenameInputClick: (e) => e.stopPropagation(), showTrigger: isPublished, triggerGlyph: tinfo ? (isRunning ? "◌" : tinfo.glyph) : "", triggerLabel: tinfo ? tinfo.label : "", showRun: isPublished && !isRunning, onRun: (e) => { e.stopPropagation(); this.runWorkflowFromSidebar(wf.id); } };
+          return { name: wf.name || wf.user_intent || "Untitled", dot, glow, radius, bg: "transparent", border: "transparent", nameColor: isHighlighted ? "#fff" : "rgba(255,255,255,.5)", itemClass: isHighlighted ? "" : "wf-item-inactive", onClick, onDelete: (e) => { e.stopPropagation(); this.softDeleteWorkflow(wf.id); }, isRenaming, renameValue: isRenaming ? S.renamingValue : "", onEditClick: (e) => { e.stopPropagation(); this.startRename(wf.id, wf.name || wf.user_intent || "Untitled"); }, onRenameInput: (e) => this.setState({ renamingValue: e.target.value }), onRenameKeydown: (e) => { if (e.key === "Enter") { e.preventDefault(); this.commitRename(wf.id); } if (e.key === "Escape") { e.preventDefault(); this.cancelRename(); } }, onRenameBlur: () => this.commitRename(wf.id), onRenameInputClick: (e) => e.stopPropagation(), showRun: isPublished && !isRunning, onRun: (e) => { e.stopPropagation(); this.runWorkflowFromSidebar(wf.id); } };
         });
         // Show in-progress build entry when builder is the active view OR when a session with content exists
         // (so navigating to home/console/inbox doesn't lose the entry while a build is in flight)
@@ -3692,11 +3689,11 @@ class Component extends DCLogic {
             const label = S.phase === "chat" ? "New workflow" : wfName;
             const wfIdForDel = S.workflowId;
             const onDelBuilder = (e) => { e.stopPropagation(); if (wfIdForDel) { this.softDeleteWorkflow(wfIdForDel); } else { this.reset(); } };
-            list.unshift({ name: label, dot: "#f3cd86", glow: "drop-shadow(0 0 5px rgba(240,191,107,.7))", radius: "border-radius:50%", bg: "transparent", border: "transparent", nameColor: "#fff", itemClass: "", onClick: () => this.setState({ view: 'build', connectionsOpen: false, accountOpen: false, profileOpen: false }), onDelete: onDelBuilder, showTrigger: false, triggerGlyph: "", triggerLabel: "", showRun: false, onRun: null });
+            list.unshift({ name: label, dot: "#f3cd86", glow: "drop-shadow(0 0 5px rgba(240,191,107,.7))", radius: "border-radius:50%", bg: "transparent", border: "transparent", nameColor: "#fff", itemClass: "", onClick: () => this.setState({ view: 'build', connectionsOpen: false, accountOpen: false, profileOpen: false }), onDelete: onDelBuilder, showRun: false, onRun: null });
           }
         }
         // Only show a placeholder when actively searching with no results
-        if (!list.length && search) list.push({ name: "No results", dot: "rgba(255,255,255,.15)", glow: "none", radius: "border-radius:50%", bg: "transparent", border: "transparent", nameColor: "rgba(255,255,255,.3)", itemClass: "", onClick: () => {}, onDelete: null, showTrigger: false, triggerGlyph: "", triggerLabel: "", showRun: false, onRun: null });
+        if (!list.length && search) list.push({ name: "No results", dot: "rgba(255,255,255,.15)", glow: "none", radius: "border-radius:50%", bg: "transparent", border: "transparent", nameColor: "rgba(255,255,255,.3)", itemClass: "", onClick: () => {}, onDelete: null, showRun: false, onRun: null });
         return list;
       })(),
       sidebarSearchVal: S.sidebarSearch || "",
