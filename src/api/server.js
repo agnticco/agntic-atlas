@@ -1263,6 +1263,9 @@ export function createApp(spine) {
           return res.json({ runId, completed: false, error: ev.error, steps });
         }
       }
+      // Read cost from the CostTracker before it gets evicted. The flow tester
+      // registers costs under sessionId "flow-run-<runId>".
+      const runCost = spine.llm?.costTracker?.getSessionCost?.(`flow-run-${runId}`) ?? null;
       logEvent('run.ok', { tenant: tenantId, runId, steps: steps.length, ms: Date.now() - t0 });
       // step_completed outputs are shrunk to strings by the executor; coerce back
       // to objects so delivery results (e.g. the Slack { delivered, ts }) surface.
@@ -1272,7 +1275,7 @@ export function createApp(spine) {
         return null;
       };
       const deliveries = steps.map((s) => coerce(s.output)).filter((o) => o && o.delivered);
-      res.json({ runId, completed, output, deliveries, steps });
+      res.json({ runId, completed, output, deliveries, steps, cost: runCost });
     } catch (err) {
       logEvent('run.error', { tenant: tenantId, ms: Date.now() - t0, ...errFields(err) });
       res.status(500).json({ error: `run failed: ${err.message ?? String(err)}` });

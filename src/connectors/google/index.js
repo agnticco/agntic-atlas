@@ -339,10 +339,28 @@ export async function calendarCreateEvent(gapi, { title, start, end, description
 
 /** drive_list_files. */
 export async function driveListFiles(gapi, { query, maxResults = 10 }) {
-  const params = { pageSize: maxResults, fields: 'files(id,name,mimeType,webViewLink,modifiedTime)' };
-  if (query) params.q = query;
+  const params = {
+    pageSize: maxResults,
+    fields: 'files(id,name,mimeType,webViewLink,webContentLink,thumbnailLink,modifiedTime)',
+    // Search personal Drive + all Shared Drives the user has access to.
+    supportsAllDrives:        true,
+    includeItemsFromAllDrives: true,
+  };
+  // Always exclude trashed files; append caller's query if provided.
+  const trashClause = 'trashed = false';
+  params.q = query ? `(${query}) and ${trashClause}` : trashClause;
   const data = await gapi('GET', '/drive/v3/files', { params });
-  return { files: (data.files ?? []).map((f) => ({ id: f.id, name: f.name, mimeType: f.mimeType, link: f.webViewLink, modified: f.modifiedTime })) };
+  return {
+    files: (data.files ?? []).map((f) => ({
+      id:           f.id,
+      name:         f.name,
+      mimeType:     f.mimeType,
+      link:         f.webViewLink,       // browser view URL
+      downloadLink: f.webContentLink,    // direct download / embed URL for images
+      thumbnail:    f.thumbnailLink,
+      modified:     f.modifiedTime,
+    })),
+  };
 }
 
 /** sheets_read. */
