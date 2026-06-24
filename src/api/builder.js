@@ -928,9 +928,9 @@ Rules:
         const run = store.startRun(id, { isTest: true });
         for (const step of (testRun.steps || [])) store.appendStep(run.id, step);
         if (testRun.status === 'success') {
-          store.completeRun(run.id, testRun.output ?? null);
+          store.completeRun(run.id, testRun.output ?? null, testRun.cost ?? null);
         } else {
-          store.failRun(run.id, testRun.error || 'Test failed');
+          store.failRun(run.id, testRun.error || 'Test failed', testRun.cost ?? null);
         }
       } catch (e) { /* non-fatal */ }
     }
@@ -1022,9 +1022,9 @@ Rules:
         const run = store.startRun(result.workflow.id, { isTest: true });
         for (const step of (testRun.steps || [])) store.appendStep(run.id, step);
         if (testRun.status === 'success') {
-          store.completeRun(run.id, testRun.output ?? null);
+          store.completeRun(run.id, testRun.output ?? null, testRun.cost ?? null);
         } else {
-          store.failRun(run.id, testRun.error || 'Test failed');
+          store.failRun(run.id, testRun.error || 'Test failed', testRun.cost ?? null);
         }
       } catch (e) { /* non-fatal — run logged best-effort */ }
     }

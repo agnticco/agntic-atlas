@@ -166,7 +166,7 @@ TRIGGER INFERENCE RULES:
 
 AVAILABLE NODE TYPES (only these — every one is runnable by the engine today):
 - summarize: Summarize text with AI (config: instructions, format)
-- llm: Run a custom AI prompt (config: prompt, model)
+- llm: Run a custom AI prompt (config: prompt, model). IMPORTANT: when this node consumes connector-action outputs (Drive files, Airtable records, etc.), the prompt MUST begin with a guard clause, e.g.: "If the provided data is empty or missing (e.g. files:[], records:[]), output EXACTLY: ERROR: required data not found — do not compose content." This prevents silent hallucination when a connector returns no results.
 - extract: Extract structured fields from text (config: fields[])
 - rewrite: Rewrite/transform text (config: instructions, tone)
 - connector-action: Call a connector capability MID-workflow to GET or DO something, then pass the result to the next step (config: { action:"<id>", ...params }). Use this ONLY when the workflow genuinely needs to reach into a connector mid-flow — e.g. pull a Slack channel's history, look up a user, create/invite to a channel. Do NOT use it to "fetch" the data a trigger already delivers, and never for the final delivery (use deliver). If no connector action is needed, skip it entirely. Available actions:
