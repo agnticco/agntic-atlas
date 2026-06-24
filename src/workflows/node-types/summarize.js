@@ -20,6 +20,12 @@ const STYLE_GUIDE = {
   plain:     'plain conversational language, no jargon',
 };
 
+function _deliveryFormatSuffix(channel) {
+  if (channel === 'email') return ' Your output will be delivered by email — format it as clean HTML: use <h2>, <p>, <ul>, <li>, <strong>, <em> tags. Do NOT include <!DOCTYPE>, <html>, or <body> wrappers — only inner body content.';
+  if (channel === 'slack') return ' Your output will be posted to Slack — format it as Slack mrkdwn: use *bold*, _italic_, `code`, and • bullet points. No HTML tags.';
+  return '';
+}
+
 export const summarizeNodeType = {
   type: 'summarize',
   label: 'Summarize',
@@ -54,7 +60,8 @@ export const summarizeNodeType = {
     const focus  = cfg.focus ? `\n\nEmphasise: ${cfg.focus}.` : '';
 
     const prompt = `Summarize the following content.\n\nTarget length: ${length}.\nTarget style: ${style}.${focus}\n\nReturn ONLY the summary — no preamble, no commentary on your choices.\n\n---\n${input}`;
-    const system = 'You are a careful writer producing a workflow-stage summary. Keep every factual detail that matters; do not invent or infer. Preserve inline links [text](url) and embedded images ![alt](url) that were in the source if they are relevant to your summary.';
+    const formatSuffix = _deliveryFormatSuffix(ctx.deliveryChannel);
+    const system = `You are a careful writer producing a workflow-stage summary. Keep every factual detail that matters; do not invent or infer. Preserve inline links [text](url) and embedded images ![alt](url) that were in the source if they are relevant to your summary.${formatSuffix}`;
 
     const res = await services.llm.invoke(
       [new SystemMessage(system), new HumanMessage(prompt)],

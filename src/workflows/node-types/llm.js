@@ -35,7 +35,8 @@ export const llmNodeType = {
       prompt = `${prompt}\n\n---\nInput:\n${priorOutput}`;
     }
 
-    const system = cfg.system ?? 'You are a helpful assistant running inside a workflow. Transform the input as instructed. Be concise. Do not ask clarifying questions — work with what you have.';
+    const formatSuffix = _deliveryFormatSuffix(ctx.deliveryChannel);
+    const system = cfg.system ?? `You are a helpful assistant running inside a workflow. Transform the input as instructed. Be concise. Do not ask clarifying questions — work with what you have.${formatSuffix}`;
     const timeoutMs = cfg.timeoutMs ?? 120_000;
     let timeoutHandle;
     try {
@@ -62,4 +63,10 @@ function _stringify(v) {
   if (typeof v === 'string') return v;
   if (typeof v === 'object' && 'text' in v) return v.text;
   try { return JSON.stringify(v); } catch { return String(v); }
+}
+
+function _deliveryFormatSuffix(channel) {
+  if (channel === 'email') return ' Your output will be delivered by email — format it as clean HTML: use <h2>, <p>, <ul>, <li>, <strong>, <em> tags. Do NOT include <!DOCTYPE>, <html>, or <body> wrappers — only the inner body content.';
+  if (channel === 'slack') return ' Your output will be posted to Slack — format it as Slack mrkdwn: use *bold*, _italic_, `code`, and • bullet points. No HTML tags.';
+  return '';
 }

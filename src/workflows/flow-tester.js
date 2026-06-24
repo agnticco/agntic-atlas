@@ -92,6 +92,40 @@ export class FlowTester {
       return seen;
     };
 
+    // Forward adjacency — used to inject delivery-format hints into content
+    // nodes (llm, summarize, rewrite) so their system prompts can say
+    // "format as HTML for email" or "format as Slack mrkdwn" etc.
+    const children = new Map();
+    for (const e of edges) {
+      if (!e?.from || !e?.to) continue;
+      if (!children.has(e.from)) children.set(e.from, new Set());
+      children.get(e.from).add(e.to);
+    }
+    const descendantsOf = (nodeId) => {
+      const seen = new Set();
+      const stack = [...(children.get(nodeId) ?? [])];
+      while (stack.length) {
+        const c = stack.pop();
+        if (seen.has(c)) continue;
+        seen.add(c);
+        for (const cc of (children.get(c) ?? [])) stack.push(cc);
+      }
+      return seen;
+    };
+    const nodeById = new Map(nodes.map(n => [n.id, n]));
+    const deliveryChannelFor = new Map();
+    for (const node of order) {
+      for (const descId of descendantsOf(node.id)) {
+        const desc = nodeById.get(descId);
+        if (!desc) continue;
+        const action = desc.config?.action ?? desc.config?.channel ?? '';
+        if (desc.type === 'connector-action' || desc.type === 'deliver') {
+          if (action.includes('slack')) { deliveryChannelFor.set(node.id, 'slack'); break; }
+          if (action === 'gmail_send') { deliveryChannelFor.set(node.id, 'email'); break; }
+        }
+      }
+    }
+
     const runId = options.runId ?? `test-${Date.now()}`;
     const costConfig = {
       configurable: {
@@ -133,7 +167,7 @@ export class FlowTester {
             type:  n.type,
             output: outputs.get(n.id),
           }));
-        const output = await this._runNode(node, { outputs, lastOutput, costConfig: nodeCostConfig, ancestorOutputs });
+        const output = await this._runNode(node, { outputs, lastOutput, costConfig: nodeCostConfig, ancestorOutputs, deliveryChannel: deliveryChannelFor.get(node.id) ?? null });
         outputs.set(node.id, output);
         lastOutput = output;
         yield {

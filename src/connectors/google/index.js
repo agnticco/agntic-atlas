@@ -288,14 +288,17 @@ export async function gmailGetMessage(gapi, { messageId }) {
   return parseMessage(msg);
 }
 
-/** gmail_send — send an email. */
+/** gmail_send — send an email. Auto-detects HTML body and sets Content-Type accordingly. */
 export async function gmailSend(gapi, { to, subject, body }) {
+  const bodyText = body ?? '';
+  const isHtml = /<[a-z][\s\S]*>/i.test(bodyText);
+  const contentType = isHtml ? 'text/html; charset=utf-8' : 'text/plain; charset=utf-8';
   const raw = [
     `To: ${to}`,
     `Subject: ${subject}`,
-    'Content-Type: text/plain; charset=utf-8',
+    `Content-Type: ${contentType}`,
     '',
-    body ?? '',
+    bodyText,
   ].join('\r\n');
   const encoded = Buffer.from(raw).toString('base64url');
   const sent = await gapi('POST', '/gmail/v1/users/me/messages/send', {
