@@ -160,8 +160,16 @@ export class WorkflowStore {
       }
     }
 
-    // Always ensure the composite index exists after any migration above
-    this.db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_wf_user_slug ON workflows(user_id, slug);`);
+    // Ensure the composite slug index is a PARTIAL index (WHERE deleted_at IS NULL)
+    // so soft-deleted slugs don't block new workflows with the same name.
+    // Existing full indexes are replaced idempotently.
+    {
+      const idxRow = this.db.prepare("SELECT sql FROM sqlite_master WHERE type='index' AND name='idx_wf_user_slug'").get();
+      if (!idxRow || !idxRow.sql.toLowerCase().includes('where')) {
+        this.db.exec('DROP INDEX IF EXISTS idx_wf_user_slug');
+        this.db.exec('CREATE UNIQUE INDEX idx_wf_user_slug ON workflows(user_id, slug) WHERE deleted_at IS NULL');
+      }
+    }
     this.db.exec(`CREATE INDEX IF NOT EXISTS idx_wf_user ON workflows(user_id);`);
     this.db.exec(`CREATE INDEX IF NOT EXISTS idx_wf_tenant ON workflows(tenant_id);`);
 

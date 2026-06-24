@@ -2446,15 +2446,17 @@ class Component extends DCLogic {
   softDeleteWorkflow(wfId) {
     const self = this;
     const wasOpenConsole = this.state.view === 'console' && this.state.consoleWfId === wfId;
+    // Optimistic: remove immediately so the sidebar updates before the round-trip
+    self.setState({ consoleSidebarWfs: (self.state.consoleSidebarWfs || []).filter(function(w) { return w.id !== wfId; }) });
     fetch('/api/builder/workflows/' + wfId, { method: 'DELETE', headers: this._H() })
       .then(function(r) { return r.json(); })
       .then(function(d) {
         if (d.ok !== false) {
           if (wasOpenConsole) { self.setState({ view: 'home', consoleWfId: null, consoleWf: null, homeData: null, homeReady: false, homeFading: false }); self._loadHomeData(); }
-          self._loadWorkflows();
         }
+        self._loadWorkflows();
       })
-      .catch(function(e) {});
+      .catch(function(e) { self._loadWorkflows(); });
   }
   _loadDeletedWorkflows() {
     const self = this;
