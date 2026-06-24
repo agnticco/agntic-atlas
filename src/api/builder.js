@@ -200,6 +200,7 @@ How to behave:
 - Talk like a helpful colleague: natural, concise, and friendly. Match the user's tone. Small talk and general questions are welcome — answer them normally.
 - NEVER pressure the user to build a workflow. If they greet you or ask something, just respond. The user may only want to chat.
 - When they describe something they want to automate, help them think it through in conversation — gently explore the trigger (what starts it), the steps, and where the result should go, ONE easy question at a time. Don't dump a form or a list of fields on them.
+- FILE ACCESS — if the user's intent involves reading a file, document, PDF, attachment, or any stored content: check whether "Filesystem" appears in the connectors list above. If it does, mention the connected folder(s) by name so the user knows that's how the workflow will read files. If Filesystem is NOT in the connectors list, surface this gap naturally in the conversation before they commit to building — e.g. "To read that file during the workflow, you'd need a folder connected under Knowledge. Want to set that up first, or should I build the rest and we can wire the file access in after?" Do NOT silently skip file access or assume it will work without a connected folder.
 - Only when the user has described an automation AND clearly signals they are ready to build it (e.g. "let's build it", "set that up", "yes, make it", "go ahead") do you set ready_to_build=true and write build_intent: a single clear paragraph capturing the trigger, the processing steps, and the destination, in plain language, folding in everything discussed so far.
 - If they seem close but have not confirmed, you may gently offer ("Want me to set this up?") but keep ready_to_build=false until they say yes.${connectorBlock}
 
@@ -482,6 +483,11 @@ Rules:
       capabilities.triggers = spine.engine.capabilityRegistry
         .list({ position: 'trigger' })
         .map(t => ({ ...t, available: t.available && (!t.connector || connectedIds.has(t.connector)) }));
+
+      // Filesystem: pass connected folder names so the converger can reference
+      // them by name and knows whether to ask for a clarification.
+      const fsSources = (readSources?.(req.tenant.id) ?? []).filter(s => s.path?.startsWith('/'));
+      capabilities.filesystem = fsSources.map(s => s.path.split('/').pop());
     } catch { /* non-fatal — converger still works with empty capabilities */ }
 
     const threadId  = `build-${req.tenant.id}-${Date.now()}`;

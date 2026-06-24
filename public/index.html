@@ -400,6 +400,14 @@
             <div style="display:flex;align-items:center;gap:10px;border-radius:22px;padding:13px 10px 13px 18px;background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.14);backdrop-filter:blur(24px) saturate(180%);-webkit-backdrop-filter:blur(24px) saturate(180%);box-shadow:inset 0 1px 0 rgba(255,255,255,.06),0 8px 28px rgba(0,0,0,.32)">
               <span style="flex:none;color:rgba(255,255,255,.42);font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:0.86em;user-select:none;line-height:1">›</span>
               <div ref="{{ chatInputRef }}" contenteditable="{{ chatInputEditable }}" onInput="{{ onIntentInput }}" onKeyDown="{{ onIntentKey }}" class="chat-input" data-ph="{{ inputPlaceholder }}" style="flex:1;min-width:0;outline:none;color:#fff;font-family:'Inter Tight',-apple-system,BlinkMacSystemFont,'Helvetica Neue',sans-serif;font-size:15px;letter-spacing:-0.005em;line-height:1.5;cursor:text;word-break:break-word"></div>
+              <button onClick="{{ onAttachFolder }}" title="{{ chatFolderIndexing ? 'Indexing folder…' : 'Attach a folder to Knowledge' }}" disabled="{{ chatFolderIndexing }}" style="flex:none;border:none;background:none;cursor:pointer;color:rgba(255,255,255,.35);padding:4px 6px;border-radius:8px;display:flex;align-items:center;justify-content:center;transition:color .15s" style-hover="color:rgba(255,255,255,.75)">
+                <sc-if value="{{ chatFolderIndexing }}">
+                  <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"/></svg>
+                </sc-if>
+                <sc-if value="{{ !chatFolderIndexing }}">
+                  <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/><line x1="12" y1="11" x2="12" y2="17"/><line x1="9" y1="14" x2="15" y2="14"/></svg>
+                </sc-if>
+              </button>
             </div>
             <div style="font-size:11.5px;color:rgba(255,255,255,.32);margin-top:10px;padding-left:4px">Atlas proposes one step at a time. Confirm, tweak, or undo any step — nothing goes live until you publish.</div>
           </div>
@@ -2017,6 +2025,7 @@ class Component extends DCLogic {
       homepageModules: ['ai_greeting'],
       tutorialOpen: false, tutorialSlide: 0,
       knowledgeSources: [], knowledgeIndexing: false, knowledgeFolderInput: '', knowledgeTreeExpanded: {}, knowledgeAddingFolder: false,
+      chatFolderIndexing: false,
       inboxMessages: [], inboxUnread: 0, inboxSelected: null, inboxSearch: '', inboxSearchResults: null, inboxSearchLoading: false,
     };
   }
@@ -2154,6 +2163,39 @@ class Component extends DCLogic {
       })
       .catch(err => {
         self.setState({ knowledgeIndexing: false });
+        alert('Upload failed: ' + err.message);
+      });
+  }
+  // Attach a folder from inside the builder chat. Same upload flow as the
+  // Knowledge page, but injects a note in the conversation and refreshes
+  // the Knowledge view state so the new folder appears there immediately.
+  _attachFolderFromChat(fileList) {
+    const all = Array.from(fileList || []);
+    if (!all.length) return;
+    const folderName = (all[0].webkitRelativePath || '').split('/')[0] || 'uploaded-folder';
+    const textFiles  = all.filter(f => /\.(md|txt|csv)$/i.test(f.name)).slice(0, 300);
+    if (!textFiles.length) {
+      alert('No .md, .txt, or .csv files found in that folder.');
+      return;
+    }
+    const self = this;
+    this.setState({ chatFolderIndexing: true });
+    Promise.all(textFiles.map(f => f.text().then(content => ({ path: f.webkitRelativePath, content }))))
+      .then(files => fetch('/rag/ingest-files', {
+        method: 'POST', headers: self._H(),
+        body: JSON.stringify({ folderName, files }),
+      }))
+      .then(r => r.json())
+      .then(d => {
+        self.setState({ chatFolderIndexing: false });
+        if (d.error) { alert('Index error: ' + d.error); return; }
+        // Refresh Knowledge view state so the new folder shows up there.
+        self._loadKnowledge();
+        // Inject a note in the conversation confirming the folder is connected.
+        self.setState({ msgs: [...self.state.msgs, { isNote: true, text: `Folder "${folderName}" connected — I can now read files from it in workflows.` }] });
+      })
+      .catch(err => {
+        self.setState({ chatFolderIndexing: false });
         alert('Upload failed: ' + err.message);
       });
   }
@@ -3693,6 +3735,14 @@ class Component extends DCLogic {
       thread: this.buildThread(), thinking: S.thinking, scrollRef: (el) => { this.el = el; },
       chatInputRef: (el) => { this._chatInputEl = el; },
       chatInputEditable: inputEnabled ? 'true' : 'false',
+      chatFolderIndexing: !!S.chatFolderIndexing,
+      onAttachFolder: () => {
+        const input = document.createElement('input');
+        input.type = 'file';
+        input.webkitdirectory = true;
+        input.onchange = (e) => this._attachFolderFromChat(e.target.files);
+        input.click();
+      },
       inputValue: S.inputValue,
       onIntentInput: (e) => this.onInputChange(e),
       onIntentKey: (e) => {
