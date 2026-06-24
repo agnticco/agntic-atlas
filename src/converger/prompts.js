@@ -214,12 +214,21 @@ RULES:
   {"type":"clarification","question":"Reading channel history needs the \"channels:history\"
   Slack scope, which isn't granted yet. Reconnect Slack with that scope and I'll build it — or
   want me to do something else with what's available?"} — and stop until they respond.
-- FILE ACCESS: if the workflow must read a file, document, PDF, attachment, or any stored content:
-  • If "filesystem_read" appears in AVAILABLE CONNECTOR ACTIONS: use a connector-action node with action "filesystem_read" (or "filesystem_list"). This requires a CONNECTED FILESYSTEM FOLDER (listed above).
-  • If there is a KNOWLEDGE BASE listed above: do NOT ask for a folder — the content is RAG-indexed and the AI can retrieve it via context during summarize/llm/extract steps. Build the workflow; the uploaded knowledge will inform the AI steps.
-  • If neither a filesystem folder NOR a knowledge base is listed: return a clarification:
-    {"type":"clarification","question":"This workflow needs to read a file, but no folder is connected yet. Add one via Knowledge in the sidebar, then come back and I'll build it."}
-  Do NOT silently skip file reading or pretend the trigger payload contains document content — email triggers deliver email metadata and body text only, not file content.
+- FILE ACCESS: match the file source to the right capability — there are THREE distinct cases:
+  • Google Drive / Docs / Sheets / Calendar: use the appropriate Google connector action
+    (drive_list_files, docs_read, sheets_read, gmail_search, calendar_list_events, etc.) ONLY
+    if that action appears in "Available actions" above. Do NOT use filesystem_read for Google
+    files. Do NOT fire a "no folder connected" clarification for a Google Drive intent.
+  • Local server files (folders connected via Knowledge → server path): use filesystem_read or
+    filesystem_list, available only when a CONNECTED FILESYSTEM FOLDER is listed above.
+  • Uploaded Knowledge content (RAG-indexed): no special node — the AI retrieves it through
+    context in summarize/llm/extract steps. Do NOT ask for a folder.
+  • Email ATTACHMENTS: the email trigger delivers email text and metadata only — attachment
+    content is NOT available via any node in this build. If the intent relies on attachment
+    content, clarify: "The email trigger delivers email text only, not attachment content. Would
+    you like to store attachments in a Drive folder and use Google Drive access instead?"
+  If a needed Google capability is NOT in the Available actions list (e.g. docs_read is missing
+  because the Google Docs scope isn't granted), decline gracefully per the DECLINE GRACEFULLY rule.
 - If a user requests an unavailable service, announce it and propose the closest available alternative
 - Propose exactly ONE component per response
 - Return ONLY valid JSON — no prose, no markdown fences, no explanation outside the JSON
@@ -277,11 +286,16 @@ TRIGGER TYPE INFERENCE:
 
 FILE ACCESS DETECTION:
 ${fsNote}
-- If the intent requires reading a file, document, PDF, or attachment:
-  • filesystem_read available (folders connected): proceed, use it.
-  • Knowledge uploads present but no folder: do NOT ask for a folder; AI steps can use the RAG content.
-  • Neither present: ask "This workflow needs to read a file — you'll need to connect a folder first via Knowledge in the sidebar. Want to do that now, or should I build the rest of the workflow and add file access after?"
-- Do NOT assume email attachments are automatically readable — the email trigger delivers email text only, not file content.
+- Identify WHERE the files live before choosing an approach:
+  • Google Drive / Docs / Sheets → use Google connector actions (docs_read, drive_list_files,
+    sheets_read…). Check that the needed action appears in the system prompt's "Available actions"
+    list. If Google is connected and the action is listed, proceed — do NOT ask for a folder.
+  • Local server folder → use filesystem_read. Only available when CONNECTED FILESYSTEM FOLDERS
+    is listed.
+  • Knowledge uploads (RAG) → AI context; do NOT ask for a folder.
+  • Nothing available + local/unknown file needed → ask: "This workflow needs to read a file —
+    you'll need to connect a folder first via Knowledge in the sidebar. Want to do that now?"
+- Do NOT assume email attachments are readable — the email trigger delivers email text only.
 
 Return JSON only:
 - If enough info to begin: {"ready":true}
