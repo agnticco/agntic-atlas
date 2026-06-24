@@ -1207,28 +1207,30 @@
                 <button onClick="{{ onCloseKnowledge }}" style="border:1px solid rgba(255,255,255,.1);background:none;cursor:pointer;color:rgba(255,255,255,.45);font-family:inherit;font-size:13px;padding:7px 16px;border-radius:99px;letter-spacing:-.01em;flex:none;margin-left:24px" style-hover="border-color:rgba(255,255,255,.22);color:rgba(255,255,255,.85)">Back</button>
               </div>
 
-              <!-- Connect folder action -->
+              <!-- Upload area: drag-drop zone + folder / file pickers -->
               <div style="margin-top:28px;margin-bottom:32px">
-                <sc-if value="{{ !knowledgeAddingFolder }}">
-                  <button onClick="{{ onToggleAddFolder }}" style="display:inline-flex;align-items:center;gap:8px;border:1px solid rgba(255,255,255,.14);background:rgba(255,255,255,.04);cursor:pointer;color:rgba(255,255,255,.85);font-family:inherit;font-size:13px;font-weight:500;padding:9px 18px;border-radius:10px;letter-spacing:-.01em" style-hover="border-color:rgba(255,255,255,.24);background:rgba(255,255,255,.07)">
-                    <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-                    Connect folder
-                  </button>
+                <sc-if value="{{ knowledgeIndexing }}">
+                  <div style="border:1px solid rgba(255,255,255,.1);border-radius:14px;padding:24px 20px;background:rgba(255,255,255,.02);display:flex;align-items:center;gap:14px">
+                    <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="rgba(255,255,255,.4)" stroke-width="2" stroke-linecap="round"><path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"/></svg>
+                    <span style="font-size:13px;color:rgba(255,255,255,.5)">Indexing files…</span>
+                  </div>
                 </sc-if>
-                <sc-if value="{{ knowledgeAddingFolder }}">
-                  <div style="border:1px solid rgba(255,255,255,.1);border-radius:14px;padding:18px 20px;background:rgba(255,255,255,.02)">
-                    <div style="display:flex;align-items:center;gap:12px">
-                      <button onClick="{{ onOpenFolderPicker }}" style="display:flex;align-items:center;gap:9px;flex:1;border:1px dashed rgba(255,255,255,.15);border-radius:10px;background:rgba(255,255,255,.03);cursor:pointer;color:rgba(255,255,255,.7);font-family:inherit;font-size:13px;font-weight:500;padding:14px 16px;text-align:left" style-hover="border-color:rgba(255,255,255,.3);background:rgba(255,255,255,.05);color:#fff">
-                        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.7" style="flex:none"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/><line x1="12" y1="11" x2="12" y2="17"/><line x1="9" y1="14" x2="15" y2="14"/></svg>
-                        <sc-if value="{{ knowledgeIndexing }}"><span>Indexing files…</span></sc-if>
-                        <sc-if value="{{ !knowledgeIndexing }}">
-                          <span>Browse for folder…</span>
-                          <span style="margin-left:auto;font-size:12px;color:rgba(255,255,255,.3);font-weight:400">opens file picker</span>
-                        </sc-if>
+                <sc-if value="{{ !knowledgeIndexing }}">
+                  <div onDragOver="{{ onKnowledgeDragOver }}" onDrop="{{ onKnowledgeDrop }}" style="border:1px dashed rgba(255,255,255,.13);border-radius:14px;padding:28px 24px;background:rgba(255,255,255,.015);text-align:center;transition:border-color .15s,background .15s" style-hover="border-color:rgba(255,255,255,.28);background:rgba(255,255,255,.03)">
+                    <svg viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="rgba(255,255,255,.22)" stroke-width="1.5" style="display:block;margin:0 auto 10px"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+                    <div style="font-size:13.5px;color:rgba(255,255,255,.5);margin-bottom:14px">Drop files or folders here</div>
+                    <div style="display:flex;align-items:center;justify-content:center;gap:10px;flex-wrap:wrap">
+                      <button onClick="{{ onOpenFolderPicker }}" style="display:inline-flex;align-items:center;gap:7px;border:1px solid rgba(255,255,255,.14);background:rgba(255,255,255,.04);cursor:pointer;color:rgba(255,255,255,.8);font-family:inherit;font-size:13px;font-weight:500;padding:8px 16px;border-radius:9px;letter-spacing:-.01em" style-hover="border-color:rgba(255,255,255,.26);background:rgba(255,255,255,.08)">
+                        <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+                        Connect folder
                       </button>
-                      <button onClick="{{ onToggleAddFolder }}" style="border:1px solid rgba(255,255,255,.1);background:none;cursor:pointer;color:rgba(255,255,255,.35);font-family:inherit;font-size:13px;padding:9px 14px;border-radius:9px;flex:none;white-space:nowrap" style-hover="border-color:rgba(255,255,255,.22);color:rgba(255,255,255,.65)">Cancel</button>
+                      <span style="font-size:12px;color:rgba(255,255,255,.2)">or</span>
+                      <button onClick="{{ onOpenFilePicker }}" style="display:inline-flex;align-items:center;gap:7px;border:1px solid rgba(255,255,255,.14);background:rgba(255,255,255,.04);cursor:pointer;color:rgba(255,255,255,.8);font-family:inherit;font-size:13px;font-weight:500;padding:8px 16px;border-radius:9px;letter-spacing:-.01em" style-hover="border-color:rgba(255,255,255,.26);background:rgba(255,255,255,.08)">
+                        <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+                        Upload files
+                      </button>
                     </div>
-                    <div style="margin-top:10px;font-size:12px;color:rgba(255,255,255,.28);line-height:1.5">Indexes <code style="background:rgba(255,255,255,.07);padding:1px 5px;border-radius:4px;font-size:11px">.md</code> <code style="background:rgba(255,255,255,.07);padding:1px 5px;border-radius:4px;font-size:11px">.txt</code> <code style="background:rgba(255,255,255,.07);padding:1px 5px;border-radius:4px;font-size:11px">.csv</code> <code style="background:rgba(255,255,255,.07);padding:1px 5px;border-radius:4px;font-size:11px">.html</code> <code style="background:rgba(255,255,255,.07);padding:1px 5px;border-radius:4px;font-size:11px">.png</code> <code style="background:rgba(255,255,255,.07);padding:1px 5px;border-radius:4px;font-size:11px">.jpg</code> — images are described by AI for search.</div>
+                    <div style="margin-top:14px;font-size:11.5px;color:rgba(255,255,255,.22);line-height:1.6"><code style="background:rgba(255,255,255,.06);padding:1px 5px;border-radius:3px;font-size:10.5px">.md</code> <code style="background:rgba(255,255,255,.06);padding:1px 5px;border-radius:3px;font-size:10.5px">.txt</code> <code style="background:rgba(255,255,255,.06);padding:1px 5px;border-radius:3px;font-size:10.5px">.csv</code> <code style="background:rgba(255,255,255,.06);padding:1px 5px;border-radius:3px;font-size:10.5px">.html</code> <code style="background:rgba(255,255,255,.06);padding:1px 5px;border-radius:3px;font-size:10.5px">.png</code> <code style="background:rgba(255,255,255,.06);padding:1px 5px;border-radius:3px;font-size:10.5px">.jpg</code> <code style="background:rgba(255,255,255,.06);padding:1px 5px;border-radius:3px;font-size:10.5px">.jpeg</code> — images described by AI</div>
                   </div>
                 </sc-if>
               </div>
@@ -2024,7 +2026,7 @@ class Component extends DCLogic {
       homeData: null, homeReady: false, homeFading: false,
       homepageModules: ['ai_greeting'],
       tutorialOpen: false, tutorialSlide: 0,
-      knowledgeSources: [], knowledgeIndexing: false, knowledgeFolderInput: '', knowledgeTreeExpanded: {}, knowledgeAddingFolder: false,
+      knowledgeSources: [], knowledgeIndexing: false, knowledgeFolderInput: '', knowledgeTreeExpanded: {},
       chatFolderIndexing: false,
       inboxMessages: [], inboxUnread: 0, inboxSelected: null, inboxSearch: '', inboxSearchResults: null, inboxSearchLoading: false,
     };
@@ -2154,14 +2156,17 @@ class Component extends DCLogic {
   _handleFolderPickerFiles(fileList) {
     const all = Array.from(fileList || []);
     if (!all.length) return;
-    const folderName = (all[0].webkitRelativePath || '').split('/')[0] || 'uploaded-folder';
+    // For folder picks, webkitRelativePath = "FolderName/file.ext"; for
+    // individual file picks or drag-drop, it may be empty — use "Uploads".
+    const firstPath = all[0].webkitRelativePath || '';
+    const folderName = firstPath.includes('/') ? firstPath.split('/')[0] : 'Uploads';
     const supported  = all.filter(f => /\.(md|txt|csv|html?|png|jpe?g|gif|webp)$/i.test(f.name)).slice(0, 300);
     if (!supported.length) {
-      alert('No supported files found (.md, .txt, .csv, .html, .png, .jpg, .jpeg).');
+      alert('No supported files found. Accepted: .md .txt .csv .html .png .jpg .jpeg');
       return;
     }
     const self = this;
-    this.setState({ knowledgeIndexing: true, knowledgeFolderInput: folderName, knowledgeAddingFolder: true });
+    this.setState({ knowledgeIndexing: true });
     Promise.all(supported.map(f => self._readFileForUpload(f)))
       .then(files => fetch('/rag/ingest-files', {
         method: 'POST', headers: self._H(),
@@ -2169,13 +2174,13 @@ class Component extends DCLogic {
       }))
       .then(r => r.json())
       .then(d => {
-        self.setState({ knowledgeIndexing: false, knowledgeFolderInput: '', knowledgeAddingFolder: false });
+        self.setState({ knowledgeIndexing: false });
         if (d.error) { alert('Index error: ' + d.error); return; }
         self._loadKnowledge();
       })
       .catch(err => {
         self.setState({ knowledgeIndexing: false });
-        alert('Upload failed: ' + err.message);
+        alert('Upload failed: ' + (err.message || String(err)));
       });
   }
   // Attach a folder from inside the builder chat. Same upload flow as the
@@ -3825,6 +3830,20 @@ class Component extends DCLogic {
       knowledgeAddingFolder: S.knowledgeAddingFolder || false,
       onToggleAddFolder: () => this.setState({ knowledgeAddingFolder: !this.state.knowledgeAddingFolder }),
       onOpenFolderPicker: () => this.openFolderPicker(),
+      onOpenFilePicker: () => {
+        var input = document.createElement('input');
+        input.type = 'file';
+        input.multiple = true;
+        input.accept = '.md,.txt,.csv,.html,.htm,.png,.jpg,.jpeg,.gif,.webp';
+        input.onchange = (e) => this._handleFolderPickerFiles(e.target.files);
+        input.click();
+      },
+      onKnowledgeDragOver: (e) => { e.preventDefault(); e.dataTransfer.dropEffect = 'copy'; },
+      onKnowledgeDrop: (e) => {
+        e.preventDefault();
+        var files = e.dataTransfer.files;
+        if (files && files.length) this._handleFolderPickerFiles(files);
+      },
       knowledgeFolders: (S.knowledgeSources || []).map(src => ({
         ...src,
         isExpanded: !!(S.knowledgeTreeExpanded || {})[src.path],
