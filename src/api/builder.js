@@ -189,12 +189,17 @@ function pubUser(u) {
 
 // Build the conversational system prompt with live connector context injected.
 // connectorLines: string[] of "- ConnectorName: what it can do" per connected connector.
-function buildChatSystem(connectorLines = []) {
+// user: { name, email } — injected so the model knows who it's talking to.
+function buildChatSystem(connectorLines = [], user = null) {
   const connectorBlock = connectorLines.length
     ? `\nConnectors this workspace has connected:\n${connectorLines.join('\n')}`
     : `\nNo connectors are connected yet. If asked, say none are set up and suggest visiting Connections in the sidebar.`;
 
-  return `You are Atlas, a warm assistant for non-technical business operators. You help people automate repetitive work — but you are also happy to just chat, answer questions, or think an idea through.
+  const userBlock = user
+    ? `\nYou are speaking with ${user.name}${user.email ? ` (${user.email})` : ''}.`
+    : '';
+
+  return `You are Atlas, a warm assistant for non-technical business operators. You help people automate repetitive work — but you are also happy to just chat, answer questions, or think an idea through.${userBlock}
 
 OUTPUT FORMAT — you MUST respond with valid JSON every time, no exceptions, no markdown fences:
 {"reply":"<your message to the user>","ready_to_build":false,"build_intent":null}
@@ -403,7 +408,8 @@ Rules:
         }
       } catch { /* non-fatal */ }
 
-      const raw = await withLLMRetry(() => t.invoke([{ role: 'system', content: buildChatSystem(connectorLines) + ragBlock }, ...history]));
+      const chatUser = { name: req.user.display_name || req.user.email, email: req.user.email };
+      const raw = await withLLMRetry(() => t.invoke([{ role: 'system', content: buildChatSystem(connectorLines, chatUser) + ragBlock }, ...history]));
       const text = (typeof raw === 'string' ? raw : raw?.content ?? '').trim();
 
       let parsed = null;
@@ -1016,7 +1022,8 @@ Rules:
     try {
       const store = spine.engine.workflowStore;
       const wf = store.create({
-        name: 'New workflow', nodes: [], edges: [], triggers: [],
+        name: 'New workflow', slug: `new-workflow-${Date.now().toString(36)}`,
+        nodes: [], edges: [], triggers: [],
         userIntent: 'New workflow', status: 'draft', kind: 'flow',
         userId: req.user.id, tenantId: req.tenant.id,
       });
