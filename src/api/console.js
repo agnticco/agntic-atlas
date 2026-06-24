@@ -13,6 +13,7 @@
  *   GET  /api/console/workflows/:id/sop             — SOP as Markdown (or PDF)
  */
 
+import { promises as fs } from 'node:fs';
 import { logEvent, errFields } from '../utils/event-log.js';
 import { generateSopMarkdown } from '../workflows/sop-generator.js';
 
@@ -154,6 +155,171 @@ export function mountConsoleRoutes(app, { spine, requireActiveTenant }) {
     } catch (err) {
       logEvent('console.workflow.run.error', errFields(err));
       res.status(500).json({ ok: false, error: err.message ?? String(err) });
+    }
+  });
+
+  // ── Profile (P9) ─────────────────────────────────────────────────────────
+
+  app.get('/api/console/workflows/:id/profile', requireActiveTenant, (req, res) => {
+    try {
+      const wf = store.get(req.params.id, { userId: req.user.id });
+      if (!wf || wf.tenant_id !== req.tenant.id) return res.status(404).json({ error: 'Not found' });
+
+      const baselineDurationS = wf.baseline_duration_s ?? 0;
+      const runs = store.getRuns(req.params.id, 100, {
+        userId:   req.user.id,
+        tenantId: req.tenant.id,
+      }).filter(r => !r.is_test && r.status === 'success' && r.started_at && r.completed_at);
+
+      const runTimesMs = runs.map(r => new Date(r.completed_at) - new Date(r.started_at));
+
+      const yearStart = new Date(new Date().getFullYear(), 0, 1).toISOString();
+      let ytdTimeSavedS = 0;
+      for (let i = 0; i < runs.length; i++) {
+        if (runs[i].started_at < yearStart) continue;
+        const durationS = runTimesMs[i] / 1000;
+        ytdTimeSavedS += Math.max(0, baselineDurationS - durationS);
+      }
+
+      const lastRunMs = runTimesMs[0] ?? null;
+
+      const sparkline = runs.slice(0, 20).map((r, i) => ({
+        durationMs: runTimesMs[i],
+        startedAt:  r.started_at,
+      }));
+
+      const recentOutputs = runs.slice(0, 5).map((r, i) => {
+        let output = typeof r.output === 'string' ? r.output : JSON.stringify(r.output ?? '');
+        // Prefer the last non-delivery step's human-readable output over the delivery metadata
+        try {
+          const steps = r.steps ? (typeof r.steps === 'string' ? JSON.parse(r.steps) : r.steps) : [];
+          const meaningful = (Array.isArray(steps) ? steps : [])
+            .filter(s => s.type === 'step_completed' && s.nodeId && !String(s.nodeId).includes('deliver') && typeof s.output === 'string' && s.output.length > 10);
+          if (meaningful.length > 0) output = meaningful[meaningful.length - 1].output;
+        } catch {}
+        return { id: r.id, startedAt: r.started_at, durationMs: runTimesMs[i], output };
+      });
+
+      res.json({
+        profile: {
+          baseline: {
+            durationS:     baselineDurationS,
+            recordingPath: wf.baseline_recording_path || null,
+            setAt:         wf.baseline_set_at || null,
+          },
+          timeSavedYtdS: Math.max(0, ytdTimeSavedS),
+          lastRunMs,
+          sparkline,
+          recentOutputs,
+        },
+      });
+    } catch (err) {
+      logEvent('console.profile.error', errFields(err));
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.post('/api/console/workflows/:id/baseline', requireActiveTenant, (req, res) => {
+    try {
+      const wf = store.get(req.params.id, { userId: req.user.id });
+      if (!wf || wf.tenant_id !== req.tenant.id) return res.status(404).json({ error: 'Not found' });
+
+      const { durationS, recordingPath } = req.body;
+      if (typeof durationS !== 'number' || durationS <= 0) return res.status(400).json({ error: 'durationS must be a positive number' });
+
+      const fields = {
+        baseline_duration_s: Math.round(durationS),
+        baseline_set_at:     new Date().toISOString(),
+      };
+      if (recordingPath) fields.baseline_recording_path = recordingPath;
+
+      store.update(req.params.id, fields, { userId: req.user.id });
+      logEvent('console.baseline.set', { workflowId: req.params.id, durationS, tenant: req.tenant.id });
+      res.json({ ok: true });
+    } catch (err) {
+      logEvent('console.baseline.error', errFields(err));
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Raw binary upload (video/webm). We stream the body ourselves so we don't
+  // need express.raw — express.json only parses application/json, leaving other
+  // content-types untouched and the stream still readable here.
+  app.post('/api/console/workflows/:id/baseline/recording', requireActiveTenant, async (req, res) => {
+    try {
+      const wf = store.get(req.params.id, { userId: req.user.id });
+      if (!wf || wf.tenant_id !== req.tenant.id) return res.status(404).json({ error: 'Not found' });
+
+      const dir = './memory/recordings';
+      await fs.mkdir(dir, { recursive: true });
+
+      const chunks = [];
+      await new Promise((resolve, reject) => {
+        req.on('data', c => chunks.push(c));
+        req.on('end', resolve);
+        req.on('error', reject);
+      });
+      const ext = (req.headers['content-type'] || '').includes('mp4') ? 'mp4' : 'webm';
+      const filename = `${req.params.id}-${Date.now()}.${ext}`;
+      await fs.writeFile(`${dir}/${filename}`, Buffer.concat(chunks));
+
+      const publicPath = `/recordings/${filename}`;
+      store.update(req.params.id, { baseline_recording_path: publicPath }, { userId: req.user.id });
+      logEvent('console.baseline.recording', { workflowId: req.params.id, filename, tenant: req.tenant.id });
+      res.json({ ok: true, path: publicPath });
+    } catch (err) {
+      logEvent('console.baseline.recording.error', errFields(err));
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // ── All-up ROI summary (P9) ───────────────────────────────────────────────
+
+  app.get('/api/console/roi', requireActiveTenant, (req, res) => {
+    try {
+      const workflows = store.list({ userId: req.user.id, tenantId: req.tenant.id });
+      let totalTimeSavedMinutes = 0;
+      let totalRuns = 0;
+      const byWorkflow = [];
+
+      for (const wf of workflows) {
+        const runs = store.getRuns(wf.id, 500, { userId: req.user.id, tenantId: req.tenant.id })
+          .filter(r => !r.is_test && r.status === 'success' && r.started_at && r.completed_at);
+        const baselineS = wf.baseline_duration_s ?? 0;
+        let wfSavedMinutes = 0;
+
+        for (const r of runs) {
+          if (r.time_saved_minutes != null) {
+            wfSavedMinutes += r.time_saved_minutes;
+          } else if (baselineS > 0) {
+            // Backfill for runs recorded before P9 (no time_saved_minutes column yet)
+            const durationS = (new Date(r.completed_at) - new Date(r.started_at)) / 1000;
+            wfSavedMinutes += Math.max(0, (baselineS - durationS) / 60);
+          }
+        }
+
+        totalTimeSavedMinutes += wfSavedMinutes;
+        totalRuns += runs.length;
+        byWorkflow.push({
+          id: wf.id,
+          name: wf.name || wf.user_intent || 'Untitled',
+          runs: runs.length,
+          baselineDurationS: baselineS,
+          timeSavedMinutes: Math.round(wfSavedMinutes * 10) / 10,
+        });
+      }
+
+      res.json({
+        roi: {
+          totalTimeSavedMinutes: Math.round(totalTimeSavedMinutes * 10) / 10,
+          totalRuns,
+          byWorkflow,
+          generatedAt: new Date().toISOString(),
+        },
+      });
+    } catch (err) {
+      logEvent('console.roi.error', errFields(err));
+      res.status(500).json({ error: err.message });
     }
   });
 

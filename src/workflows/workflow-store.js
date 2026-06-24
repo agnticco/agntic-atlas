@@ -84,7 +84,23 @@ const ADDITIVE_COLUMNS = [
   { col: 'version',        type: 'INTEGER NOT NULL DEFAULT 1' },
   { col: 'user_id',        type: 'TEXT' },
   { col: 'tenant_id',      type: "TEXT NOT NULL DEFAULT 'default'" },
-  { col: 'deleted_at',     type: 'TEXT' },
+  { col: 'deleted_at',              type: 'TEXT' },
+  { col: 'baseline_duration_s',     type: 'INTEGER NOT NULL DEFAULT 0' },
+  { col: 'baseline_recording_path', type: "TEXT NOT NULL DEFAULT ''" },
+  { col: 'baseline_set_at',         type: "TEXT NOT NULL DEFAULT ''" },
+];
+
+// Additive columns for workflow_runs (same idempotent pattern as ADDITIVE_COLUMNS).
+const ADDITIVE_RUN_COLUMNS = [
+  { col: 'tokens_in',         type: 'INTEGER' },
+  { col: 'tokens_out',        type: 'INTEGER' },
+  { col: 'cost_usd',          type: 'REAL' },
+  { col: 'llm_calls',         type: 'INTEGER' },
+  { col: 'user_id',           type: 'TEXT' },
+  { col: 'tenant_id',         type: 'TEXT' },
+  { col: 'warnings',          type: 'TEXT' },
+  { col: 'error_explanation', type: 'TEXT' },
+  { col: 'time_saved_minutes', type: 'REAL' },
 ];
 
 export class WorkflowStore {
@@ -110,6 +126,15 @@ export class WorkflowStore {
       if (!existing.has(col)) {
         try { this.db.exec(`ALTER TABLE workflows ADD COLUMN ${col} ${type}`); }
         catch (e) { log.warn(`[workflow-store] could not add column ${col}: ${e.message}`); }
+      }
+    }
+
+    // Apply additive columns to workflow_runs
+    const existingRun = new Set(this.db.prepare("PRAGMA table_info(workflow_runs)").all().map(r => r.name));
+    for (const { col, type } of ADDITIVE_RUN_COLUMNS) {
+      if (!existingRun.has(col)) {
+        try { this.db.exec(`ALTER TABLE workflow_runs ADD COLUMN ${col} ${type}`); }
+        catch (e) { log.warn(`[workflow-store] could not add run column ${col}: ${e.message}`); }
       }
     }
 
@@ -449,6 +474,9 @@ export class WorkflowStore {
       config: 'config', status: 'status', lastRun: 'last_run', name: 'name',
       description: 'description', triggers: 'triggers', nodes: 'nodes', edges: 'edges',
       errorHandling: 'error_handling', kind: 'kind',
+      baseline_duration_s: 'baseline_duration_s',
+      baseline_recording_path: 'baseline_recording_path',
+      baseline_set_at: 'baseline_set_at',
     };
     const jsonCols = new Set(['config', 'triggers', 'nodes', 'edges', 'error_handling']);
     const definitionCols = new Set(['name', 'description', 'triggers', 'nodes', 'edges', 'error_handling', 'config', 'schedule', 'delivery']);
@@ -590,7 +618,7 @@ export class WorkflowStore {
    * @param {object} [cost]      - { inputTokens, outputTokens, costUsd, calls } from CostTracker
    * @param {Array}  [warnings]  - output-validator warnings (advisory; doesn't fail the run)
    */
-  completeRun(runId, output, cost = null, warnings = null) {
+  completeRun(runId, output, cost = null, warnings = null, timeSavedMinutes = null) {
     const now = new Date().toISOString();
     const sets = ['status = \'success\'', 'output = ?', 'completed_at = ?'];
     const vals = [typeof output === 'string' ? output : JSON.stringify(output), now];
@@ -601,6 +629,10 @@ export class WorkflowStore {
     if (warnings) {
       sets.push('warnings = ?');
       vals.push(JSON.stringify(warnings));
+    }
+    if (timeSavedMinutes != null) {
+      sets.push('time_saved_minutes = ?');
+      vals.push(timeSavedMinutes);
     }
     vals.push(runId);
     this.db.prepare(`UPDATE workflow_runs SET ${sets.join(', ')} WHERE id = ?`).run(...vals);

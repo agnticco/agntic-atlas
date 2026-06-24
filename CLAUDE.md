@@ -315,6 +315,6 @@ Update as gates close. `git log --grep "^Gate:"` is the authoritative ledger.
 - [~] **P6** — *(scrapped 2026-06-20)* current sidebar + surface switching is sufficient; floating pill / launcher layer dropped from scope.
 - [x] **P7** — Airtable + Google write + error handling + sub-daily scheduling
 - [x] **P8** — web research (`search_web` native Anthropic tool, already built) + filesystem connector (`filesystem_read`/`filesystem_list`, tenant-sandboxed to Knowledge-page approved folders)
-- [ ] **P9** — value tracking: time-saved metrics per run, all-up ROI summary, customer-facing report
+- [x] **P9** — value tracking: time-saved metrics per run, all-up ROI summary, customer-facing report
 - [ ] **P10** — admin observability: standalone admin app, per-tenant usage + cost monitoring
 - [ ] **P11** — E2E validation + production hardening + VPS migration

@@ -272,6 +272,7 @@ export class WorkflowScheduler {
         if (evt.type === 'run_failed')    failed = evt.error;
       }
       const runCost = this.costTracker?.getSessionCost(`flow-run-${run.id}`) ?? null;
+      const actualDurationS = (Date.now() - startedAt) / 1000;
       if (failed) {
         const explanation = translateError(failed, { workflow });
         this.workflowStore.failRun(run.id, failed, runCost, explanation);
@@ -286,7 +287,9 @@ export class WorkflowScheduler {
         const finalRun = this.workflowStore.getRun(run.id);
         const probeRun = { ...finalRun, output: typeof lastOutput === 'string' ? lastOutput : JSON.stringify(lastOutput), steps: finalRun?.steps ?? [] };
         const warnings = validateRunOutput(probeRun, workflow);
-        this.workflowStore.completeRun(run.id, lastOutput, runCost, warnings);
+        const baselineS = workflow.baseline_duration_s ?? 0;
+        const timeSavedMinutes = baselineS > 0 ? Math.max(0, (baselineS - actualDurationS) / 60) : null;
+        this.workflowStore.completeRun(run.id, lastOutput, runCost, warnings, timeSavedMinutes);
         this.emitWorkflowRun({
           workflow, run, trigger, sessionId, startedAt, runCost,
           status: 'success', stepCount,
