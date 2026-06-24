@@ -889,14 +889,28 @@ Rules:
       } catch (e) { /* non-fatal */ }
     }
 
-    // Activate draft workflows on first publish (draft pre-created by /api/builder/draft).
-    if (existing.status === 'draft') {
+    // Activate draft workflows on first publish; also clear error status on re-publish.
+    if (existing.status === 'draft' || existing.status === 'error') {
       store.update(id, { status: 'active' }, { userId: req.user.id });
       result.workflow.status = 'active';
     }
 
     logEvent('builder.update.ok', { tenant: req.tenant?.id ?? null, workflowId: id });
     res.json({ ok: true, workflowId: result.workflow.id, workflow: result.workflow });
+  });
+
+  // ── PATCH /api/builder/workflows/:id/status ─────────────────────────────────
+  // Mark a workflow broken (error) or recover it (active). Used by the tester
+  // to surface a red dot on a failed test run without requiring a re-publish.
+  app.patch('/api/builder/workflows/:id/status', requireActiveTenant, (req, res) => {
+    const { status } = req.body ?? {};
+    if (!['error', 'active'].includes(status)) return res.status(400).json({ error: 'status must be error or active' });
+    const store = spine.engine.workflowStore;
+    const wf = store.get(req.params.id, { userId: req.user.id });
+    if (!wf || wf.tenant_id !== req.tenant.id) return res.status(404).json({ error: 'Not found' });
+    store.update(req.params.id, { status }, { userId: req.user.id });
+    logEvent('builder.workflow.status', { tenant: req.tenant?.id ?? null, workflowId: req.params.id, status });
+    res.json({ ok: true, status });
   });
 
   // ── PATCH /api/builder/workflows/:id/name ────────────────────────────────────

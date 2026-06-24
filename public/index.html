@@ -1973,7 +1973,7 @@ class Component extends DCLogic {
 
   fresh() {
     return {
-      phase: "chat",           // chat | building | ratified | draft | live
+      phase: "chat",           // chat | building | proposed | draft | published
       intent: null, threadId: null,
       msgs: [], inputMode: "chat", inputValue: "", thinking: false,
       spec: null,
@@ -1991,18 +1991,19 @@ class Component extends DCLogic {
       mentionOpen: false, mentionQuery: "", mentionAt: -1, _pickerIdx: 0,
       // console (P5)
       consoleSidebarWfs: [], deletedWorkflows: [], deletedFolderOpen: false, deletedFolderClosing: false,
-      consoleOpen: false, sidebarSearch: "", connectorModal: null, connectorModalClosing: false,
+      view: 'home',           // 'home' | 'build' | 'console' | 'inbox' | 'knowledge'
+      sidebarSearch: "", connectorModal: null, connectorModalClosing: false,
       consoleWfId: null, consoleWf: null, consoleRuns: [],
       consoleMetrics: null, consoleView: "dashboard", consoleRunFilter: "all",
       consoleProfile: null, consoleProfileLoading: false,
       baselinePanelOpen: false, baselineRecorderState: "idle", baselineTimerMs: 0,
       baselineMinutes: "", baselineSeconds: "", baselineRecordingPath: null, profileExpandedOutputs: {},
       consoleDrawerRun: null, consoleLoading: false, consoleRunning: false,
-      homeOpen: true, homeData: null, homeReady: false, homeFading: false,
+      homeData: null, homeReady: false, homeFading: false,
       homepageModules: ['ai_greeting'],
       tutorialOpen: false, tutorialSlide: 0,
-      knowledgeOpen: false, knowledgeSources: [], knowledgeIndexing: false, knowledgeFolderInput: '', knowledgeTreeExpanded: {}, knowledgeAddingFolder: false,
-      inboxOpen: false, inboxMessages: [], inboxUnread: 0, inboxSelected: null, inboxSearch: '', inboxSearchResults: null, inboxSearchLoading: false,
+      knowledgeSources: [], knowledgeIndexing: false, knowledgeFolderInput: '', knowledgeTreeExpanded: {}, knowledgeAddingFolder: false,
+      inboxMessages: [], inboxUnread: 0, inboxSelected: null, inboxSearch: '', inboxSearchResults: null, inboxSearchLoading: false,
     };
   }
 
@@ -2020,13 +2021,13 @@ class Component extends DCLogic {
       renamingWfId: null, renamingValue: "", draftName: null,
       connectionsOpen: false, accountOpen: false, profileOpen: false, connectionsClosing: false, accountClosing: false,
       mentionOpen: false, mentionQuery: "", mentionAt: -1,
-      consoleOpen: false, consoleWfId: null, consoleWf: null, sidebarSearch: "", connectorModal: null, connectorModalClosing: false,
+      consoleWfId: null, consoleWf: null, sidebarSearch: "", connectorModal: null, connectorModalClosing: false,
       consoleRuns: [], consoleMetrics: null, consoleView: "dashboard", consoleRunFilter: "all",
       consoleProfile: null, consoleProfileLoading: false,
       baselinePanelOpen: false, baselineRecorderState: "idle", baselineTimerMs: 0,
       baselineMinutes: "", baselineSeconds: "", baselineRecordingPath: null, profileExpandedOutputs: {},
       consoleDrawerRun: null, consoleLoading: false, consoleRunning: false,
-      homeOpen: true, homeData: null, homeReady: false, homeFading: false,
+      view: 'home', homeData: null, homeReady: false, homeFading: false,
     });
     this._loadHomeData();
   }
@@ -2034,7 +2035,7 @@ class Component extends DCLogic {
   newWorkflow() {
     var self = this;
     this.reset();
-    this.setState({ homeOpen: false, inboxOpen: false, knowledgeOpen: false });
+    this.setState({ view: 'build' });
     fetch('/api/builder/draft', { method: 'POST', headers: this._H() })
       .then(function(r) { return r.ok ? r.json() : null; })
       .then(function(d) {
@@ -2093,12 +2094,12 @@ class Component extends DCLogic {
   }
 
   openHome() {
-    this.setState({ homeOpen: true, homeData: null, homeReady: false, homeFading: false, consoleOpen: false, inboxOpen: false, connectionsOpen: false, accountOpen: false, profileOpen: false, knowledgeOpen: false });
+    this.setState({ view: 'home', homeData: null, homeReady: false, homeFading: false, connectionsOpen: false, accountOpen: false, profileOpen: false });
     this._loadHomeData();
   }
 
   openKnowledge() {
-    this.setState({ knowledgeOpen: true, homeOpen: false, consoleOpen: false, inboxOpen: false, connectionsOpen: false, accountOpen: false });
+    this.setState({ view: 'knowledge', connectionsOpen: false, accountOpen: false });
     this._loadKnowledge();
   }
   toggleKnowledgeFolder(path) {
@@ -2166,7 +2167,7 @@ class Component extends DCLogic {
   }
 
   openInbox() {
-    this.setState({ inboxOpen: true, homeOpen: false, consoleOpen: false, knowledgeOpen: false, connectionsOpen: false, accountOpen: false, inboxSearch: '', inboxSearchResults: null, inboxSearchLoading: false });
+    this.setState({ view: 'inbox', connectionsOpen: false, accountOpen: false, inboxSearch: '', inboxSearchResults: null, inboxSearchLoading: false });
     this._loadInbox();
   }
   searchInbox() {
@@ -2326,10 +2327,10 @@ class Component extends DCLogic {
   // restore it on sign-in. Published workflows still live server-side; the full
   // server-backed workflow list is P5 (inventory).
   _buildKey(tid, email) { return "atlas_build_v1:" + (tid != null ? tid : (this.state.tenantId || "")) + ":" + (email != null ? email : (this.state.userEmail || "")); }
-  // Only persist phases whose view is rebuilt from `spec` (ratified/draft/live).
+  // Only persist phases whose view is rebuilt from `spec` (proposed/draft/published).
   // Mid-elicitation (chat/building) proposal cards carry function handlers that
   // can't survive JSON serialization, so restoring them would yield dead buttons.
-  _persistable(s) { return !!s && (s.phase === "ratified" || s.phase === "draft" || s.phase === "live"); }
+  _persistable(s) { return !!s && (s.phase === "proposed" || s.phase === "draft" || s.phase === "published"); }
   _saveBuild() {
     const S = this.state;
     if (!S.authToken) return; // not signed in yet
@@ -2351,7 +2352,7 @@ class Component extends DCLogic {
       if (!this._persistable(slice)) return;
       this._lastBuildStr = raw;
       // Drop transient flags so we don't restore a mid-flight "thinking" spinner.
-      this.setState(Object.assign({}, slice, { thinking: false, inputValue: "", mentionOpen: false, mentionQuery: "", mentionAt: -1, connectionsOpen: false, accountOpen: false, profileOpen: false }));
+      this.setState(Object.assign({}, slice, { view: 'build', thinking: false, inputValue: "", mentionOpen: false, mentionQuery: "", mentionAt: -1, connectionsOpen: false, accountOpen: false, profileOpen: false }));
     } catch (e) { /* corrupt / unavailable — ignore */ }
   }
   _clearBuild() { this._lastBuildStr = ""; try { localStorage.removeItem(this._buildKey()); } catch (e) {} }
@@ -2436,19 +2437,19 @@ class Component extends DCLogic {
         const S = self.state;
         // If viewing a console that no longer exists in the active list, go home.
         if (S.consoleOpen && S.consoleWfId && !wfs.some(function(w) { return w.id === S.consoleWfId; })) {
-          self.setState({ consoleOpen: false, consoleWfId: null, consoleWf: null, homeOpen: true, homeData: null, homeReady: false, homeFading: false });
+          self.setState({ view: 'home', consoleWfId: null, consoleWf: null, homeData: null, homeReady: false, homeFading: false });
         }
       })
       .catch(() => {});
   }
   softDeleteWorkflow(wfId) {
     const self = this;
-    const wasOpenConsole = this.state.consoleOpen && this.state.consoleWfId === wfId;
+    const wasOpenConsole = this.state.view === 'console' && this.state.consoleWfId === wfId;
     fetch('/api/builder/workflows/' + wfId, { method: 'DELETE', headers: this._H() })
       .then(function(r) { return r.json(); })
       .then(function(d) {
         if (d.ok !== false) {
-          if (wasOpenConsole) self.setState({ consoleOpen: false, consoleWfId: null, consoleWf: null, homeOpen: true, homeData: null, homeReady: false, homeFading: false });
+          if (wasOpenConsole) self.setState({ view: 'home', consoleWfId: null, consoleWf: null, homeData: null, homeReady: false, homeFading: false });
           self._loadWorkflows();
         }
       })
@@ -2473,8 +2474,7 @@ class Component extends DCLogic {
     var wf = (this.state.consoleSidebarWfs || []).find(function(w) { return w.id === wfId; });
     if (wf && wf.status === 'draft' && !(wf.nodes && wf.nodes.length)) {
       this.setState({
-        homeOpen: false, consoleOpen: false, inboxOpen: false, knowledgeOpen: false,
-        connectionsOpen: false, accountOpen: false, profileOpen: false,
+        view: 'build', connectionsOpen: false, accountOpen: false, profileOpen: false,
         workflowId: wf.id, isDraftBuild: true,
         phase: "chat", msgs: [], spec: null, intent: wf.user_intent || null,
         threadId: null, inputValue: "", thinking: false, testState: "idle",
@@ -2483,11 +2483,11 @@ class Component extends DCLogic {
       });
       return;
     }
-    this.setState({ consoleOpen: true, consoleWfId: wfId, consoleDrawerRun: null, consoleView: "dashboard", consoleRunFilter: "all", consoleLoading: true, consoleRuns: [], consoleMetrics: null, consoleWf: null, consoleProfile: null, baselinePanelOpen: false, baselineRecorderState: "idle", baselineTimerMs: 0, baselineMinutes: "", baselineSeconds: "", baselineRecordingPath: null, profileExpandedOutputs: {}, connectionsOpen: false, accountOpen: false, profileOpen: false, homeOpen: false, inboxOpen: false, knowledgeOpen: false });
+    this.setState({ view: 'console', consoleWfId: wfId, consoleDrawerRun: null, consoleView: "dashboard", consoleRunFilter: "all", consoleLoading: true, consoleRuns: [], consoleMetrics: null, consoleWf: null, consoleProfile: null, baselinePanelOpen: false, baselineRecorderState: "idle", baselineTimerMs: 0, baselineMinutes: "", baselineSeconds: "", baselineRecordingPath: null, profileExpandedOutputs: {}, connectionsOpen: false, accountOpen: false, profileOpen: false });
     this._loadConsoleData(wfId);
   }
   closeConsole() {
-    this.setState({ consoleOpen: false, consoleWfId: null, consoleWf: null, consoleRuns: [], consoleMetrics: null, consoleDrawerRun: null });
+    this.setState({ view: 'home', consoleWfId: null, consoleWf: null, consoleRuns: [], consoleMetrics: null, consoleDrawerRun: null });
   }
   editWorkflowFromConsole() {
     const wf = this.state.consoleWf;
@@ -2495,7 +2495,7 @@ class Component extends DCLogic {
     this._clearBuild();
     const spec = { name: wf.name, description: wf.description, triggers: wf.triggers || [], nodes: wf.nodes || [], edges: wf.edges || [], errorHandling: wf.error_handling || {} };
     this.setState({
-      phase: "ratified", intent: wf.user_intent || wf.name || null,
+      view: 'build', phase: "proposed", intent: wf.user_intent || wf.name || null,
       threadId: null, msgs: [], inputMode: "change",
       inputValue: "", thinking: false, spec,
       testState: "idle", runStepIndex: 0, runSteps: [], failIndex: -1,
@@ -2503,7 +2503,7 @@ class Component extends DCLogic {
       workflowId: wf.id, isEditing: true, editingIntro: null,
       connectionsOpen: false, accountOpen: false, profileOpen: false,
       mentionOpen: false, mentionQuery: "", mentionAt: -1,
-      consoleOpen: false, consoleWfId: null, consoleWf: null, consoleDrawerRun: null,
+      consoleWfId: null, consoleWf: null, consoleDrawerRun: null,
     });
     this._fetchEditIntro(wf);
   }
@@ -2521,19 +2521,19 @@ class Component extends DCLogic {
       .then(r => this._readJson(r))
       .then(r => {
         if (!r.ok || r.data.ok === false) {
-          self.setState({ msgs: [...self.state.msgs, { isAtlas: true, text: "I couldn't apply that change — " + ((r.data && r.data.error) || "something went wrong.") + " Try rephrasing.", hasReason: false }], thinking: false, inputMode: "change", phase: "ratified" });
+          self.setState({ msgs: [...self.state.msgs, { isAtlas: true, text: "I couldn't apply that change — " + ((r.data && r.data.error) || "something went wrong.") + " Try rephrasing.", hasReason: false }], thinking: false, inputMode: "change", phase: "proposed" });
           return;
         }
         const { spec: newSpec, explanation } = r.data;
         self.setState({
           spec: newSpec,
           msgs: [...self.state.msgs, { isAtlas: true, text: explanation || "Done — I've updated the workflow.", hasReason: false }],
-          thinking: false, inputMode: "change", phase: "ratified",
+          thinking: false, inputMode: "change", phase: "proposed",
           testState: "idle", runStepIndex: 0, runSteps: [], failIndex: -1,
         });
       })
       .catch(e => {
-        self.setState({ msgs: [...self.state.msgs, { isAtlas: true, text: "Something went wrong: " + String(e), hasReason: false }], thinking: false, inputMode: "change", phase: "ratified" });
+        self.setState({ msgs: [...self.state.msgs, { isAtlas: true, text: "Something went wrong: " + String(e), hasReason: false }], thinking: false, inputMode: "change", phase: "proposed" });
       });
   }
   _loadConsoleData(wfId) {
@@ -2991,7 +2991,7 @@ class Component extends DCLogic {
       const msgs = this.state.msgs.map(m => m._id === this._slId ? { ...m, complete: true, onReset: _reset } : m);
       this._slId = null;
       this.setState({
-        spec: iv.spec, phase: "ratified", thinking: false, inputMode: "change",
+        spec: iv.spec, phase: "proposed", thinking: false, inputMode: "change",
         testState: "idle", runStepIndex: 0, runSteps: [], failIndex: -1, msgs,
       });
       return;
@@ -3087,7 +3087,7 @@ class Component extends DCLogic {
   // ── test (real engine run, required before publish) ───────────────
   runTest() {
     const S = this.state;
-    if (S.phase !== "ratified" || !S.spec || S.testState === "running") return;
+    if (S.phase !== "proposed" || !S.spec || S.testState === "running") return;
     const self = this;
     const stepCount = this._pipeline().length || 1;
 
@@ -3127,6 +3127,10 @@ class Component extends DCLogic {
         clearInterval(self._testInterval);
         self._testInterval = null;
         self.setState({ testState: "failed", runStepIndex: 0, failIndex: 0, runError: String(e) });
+        if (self.state.workflowId) {
+          fetch('/api/builder/workflows/' + self.state.workflowId + '/status', { method: 'PATCH', headers: self._H(), body: JSON.stringify({ status: 'error' }) })
+            .then(function() { self._loadWorkflows(); }).catch(function() {});
+        }
       });
   }
 
@@ -3140,6 +3144,10 @@ class Component extends DCLogic {
     } else {
       const steps = d.steps || [];
       this.setState({ testState: "failed", runSteps: steps, failIndex: steps.length, runError: (d.error && (d.error.message || d.error)) || "A step failed" });
+      if (this.state.workflowId) {
+        fetch('/api/builder/workflows/' + this.state.workflowId + '/status', { method: 'PATCH', headers: this._H(), body: JSON.stringify({ status: 'error' }) })
+          .then(() => this._loadWorkflows()).catch(function() {});
+      }
     }
 
     // Ask the LLM to narrate what happened in the chat
@@ -3177,7 +3185,7 @@ class Component extends DCLogic {
 
   // ── draft / publish / live ────────────────────────────────────────
   reviewDraft() { if (this.state.testState !== "passed") return; this.setState({ phase: "draft" }); }
-  keepBuilding() { this.setState({ phase: "ratified", inputMode: "change", connectionsOpen: false }); }
+  keepBuilding() { this.setState({ phase: "proposed", inputMode: "change", connectionsOpen: false }); }
   approveDraft() {
     if (this.state.phase !== "draft") return;
     this.setState({ thinking: true });
@@ -3204,7 +3212,7 @@ class Component extends DCLogic {
           return;
         }
         var wfId = r.data.workflowId;
-        self.setState({ phase: "live", thinking: false, workflowId: wfId, isDraftBuild: false });
+        self.setState({ phase: "published", thinking: false, workflowId: wfId, isDraftBuild: false });
         self._loadWorkflows();
         setTimeout(function() { self.openConsole(wfId); }, 1800);
       })
@@ -3321,7 +3329,7 @@ class Component extends DCLogic {
       else out.push(this._withParts({ isGreeting: true, text: S.introMsg }));
     }
     for (const m of S.msgs) out.push(this._withParts(m));
-    if (S.phase === "ratified") {
+    if (S.phase === "proposed") {
       const TS = S.testState;
       if (S.isEditing) {
         if (TS === "running") out.push(this._withParts({ isAtlas: true, text: "Running through each step — watch them fire on the right →", hasReason: false }));
@@ -3462,8 +3470,8 @@ class Component extends DCLogic {
 
   renderVals() {
     const S = this.state;
-    const published = S.phase === "live";
-    const testUnlocked = S.phase === "ratified";
+    const published = S.phase === "published";
+    const testUnlocked = S.phase === "proposed";
     const TS = S.testState;
     const pipeline = this._pipeline();
     const last = pipeline.length - 1;
@@ -3513,7 +3521,7 @@ class Component extends DCLogic {
     const accent = published ? "#7fc28a" : (S.phase === "chat" ? "rgba(255,255,255,.3)" : "#f0bf6b");
     const accentGlow = published ? "rgba(127,194,138,.55)" : (S.phase === "chat" ? "rgba(255,255,255,0)" : "rgba(240,191,107,.55)");
 
-    const inputEnabled = !S.thinking && S.phase !== "draft" && S.phase !== "live" && (S.phase === "chat" || S.inputMode === "clarify" || S.inputMode === "change");
+    const inputEnabled = !S.thinking && S.phase !== "draft" && S.phase !== "published" && (S.phase === "chat" || S.inputMode === "clarify" || S.inputMode === "change");
     const trg = (S.spec && S.spec.triggers && S.spec.triggers[0]) || {};
 
     return {
@@ -3524,17 +3532,17 @@ class Component extends DCLogic {
       onToggleLeft: () => this.toggleLeft(), onToggleRight: () => this.toggleRight(),
 
       // chrome / identity
-      windowTitle: S.consoleOpen
+      windowTitle: S.view === 'console'
         ? ((S.consoleWf && (S.consoleWf.name || S.consoleWf.user_intent))
             || ((S.consoleSidebarWfs || []).find(w => w.id === S.consoleWfId) || {}).name
             || ((S.consoleSidebarWfs || []).find(w => w.id === S.consoleWfId) || {}).user_intent
             || "Loading…")
         : wfName,
       windowTitleVisible: true,
-      titleBarMaxW:    !S.homeOpen ? "480px" : "0px",
-      titleBarOpacity: !S.homeOpen ? "1"    : "0",
-      titleBarTransform: !S.homeOpen ? "translateY(0)" : "translateY(-3px)",
-      titleBarPad:     !S.homeOpen ? "9px"  : "0px",
+      titleBarMaxW:    S.view !== 'home' ? "480px" : "0px",
+      titleBarOpacity: S.view !== 'home' ? "1"    : "0",
+      titleBarTransform: S.view !== 'home' ? "translateY(0)" : "translateY(-3px)",
+      titleBarPad:     S.view !== 'home' ? "9px"  : "0px",
       userInitials: S.userInitials, userName: S.userName, userEmail: S.userEmail,
       connectedCount: String(S.connected.length),
       statusDotColor: accent, statusDotGlow: accentGlow,
@@ -3544,20 +3552,20 @@ class Component extends DCLogic {
           !search || (wf.name || wf.user_intent || "").toLowerCase().includes(search)
         );
         const list = filtered.map(wf => {
-          const isOpen = S.consoleOpen && S.consoleWfId === wf.id;
+          const isOpen = S.view === 'console' && S.consoleWfId === wf.id;
           const isActiveEdit = S.workflowId === wf.id && (S.isEditing || S.isDraftBuild || (S.msgs && S.msgs.length > 0));
           const isHighlighted = isOpen || (S.workflowId === wf.id && (S.isEditing || (S.msgs && S.msgs.length > 0)));
-          const dot  = wf.status === "active" ? "#7fc28a" : wf.status === "paused" ? "#e87878" : "rgba(255,255,255,.25)";
-          const glow = wf.status === "active" ? "rgba(127,194,138,.55)" : wf.status === "paused" ? "rgba(232,120,120,.55)" : "none";
+          const dot  = wf.status === "active" ? "#7fc28a" : (wf.status === "paused" || wf.status === "error") ? "#e87878" : "rgba(255,255,255,.25)";
+          const glow = wf.status === "active" ? "rgba(127,194,138,.55)" : (wf.status === "paused" || wf.status === "error") ? "rgba(232,120,120,.55)" : "none";
           const onClick = isActiveEdit
-            ? () => this.setState({ homeOpen: false, consoleOpen: false, inboxOpen: false, knowledgeOpen: false, connectionsOpen: false, accountOpen: false, profileOpen: false })
+            ? () => this.setState({ view: 'build', connectionsOpen: false, accountOpen: false, profileOpen: false })
             : () => this.openConsole(wf.id);
           const isRenaming = S.renamingWfId === wf.id;
           return { name: wf.name || wf.user_intent || "Untitled", dot, glow, bg: "transparent", border: "transparent", nameColor: isHighlighted ? "#fff" : "rgba(255,255,255,.5)", itemClass: isHighlighted ? "" : "wf-item-inactive", onClick, onDelete: (e) => { e.stopPropagation(); this.softDeleteWorkflow(wf.id); }, isRenaming, renameValue: isRenaming ? S.renamingValue : "", onEditClick: (e) => { e.stopPropagation(); this.startRename(wf.id, wf.name || wf.user_intent || "Untitled"); }, onRenameInput: (e) => this.setState({ renamingValue: e.target.value }), onRenameKeydown: (e) => { if (e.key === "Enter") { e.preventDefault(); this.commitRename(wf.id); } if (e.key === "Escape") { e.preventDefault(); this.cancelRename(); } }, onRenameBlur: () => this.commitRename(wf.id), onRenameInputClick: (e) => e.stopPropagation() };
         });
         // Show in-progress build entry when builder is the active view OR when a session with content exists
         // (so navigating to home/console/inbox doesn't lose the entry while a build is in flight)
-        const builderIsActive = !S.consoleOpen && !S.homeOpen && !S.inboxOpen && !S.knowledgeOpen;
+        const builderIsActive = S.view === 'build';
         const hasActiveBuild = (S.msgs && S.msgs.length > 0) || !!S.spec;
         if (builderIsActive || hasActiveBuild) {
           const alreadyInList = S.workflowId && (S.consoleSidebarWfs || []).some(w => w.id === S.workflowId);
@@ -3565,7 +3573,7 @@ class Component extends DCLogic {
             const label = S.phase === "chat" ? "New workflow" : wfName;
             const wfIdForDel = S.workflowId;
             const onDelBuilder = (e) => { e.stopPropagation(); if (wfIdForDel) { this.softDeleteWorkflow(wfIdForDel); } else { this.reset(); } };
-            list.unshift({ name: label, dot: "#f3cd86", glow: "rgba(240,191,107,.5)", bg: "transparent", border: "transparent", nameColor: "#fff", itemClass: "", onClick: () => this.setState({ homeOpen: false, consoleOpen: false, inboxOpen: false, knowledgeOpen: false, connectionsOpen: false, accountOpen: false, profileOpen: false }), onDelete: onDelBuilder });
+            list.unshift({ name: label, dot: "#f3cd86", glow: "rgba(240,191,107,.5)", bg: "transparent", border: "transparent", nameColor: "#fff", itemClass: "", onClick: () => this.setState({ view: 'build', connectionsOpen: false, accountOpen: false, profileOpen: false }), onDelete: onDelBuilder });
           }
         }
         // Only show a placeholder when actively searching with no results
@@ -3656,7 +3664,7 @@ class Component extends DCLogic {
       mentionOpen: S.mentionOpen && this._mentionList().length > 0,
       // right test panel
       workflowTitle: wfName, titleColor: (S.spec ? "#fff" : "rgba(255,255,255,.4)"),
-      builderTitleEditing: S.renamingWfId !== null && S.renamingWfId === S.workflowId && !S.consoleOpen,
+      builderTitleEditing: S.renamingWfId !== null && S.renamingWfId === S.workflowId && S.view !== 'console',
       onBuilderTitleClick: () => { if (S.workflowId) { var nm = (S.spec && S.spec.name) || S.draftName || wfName; this.startRename(S.workflowId, nm); } },
       builderRenameValue: S.renamingValue,
       onBuilderRenameInput: (e) => this.setState({ renamingValue: e.target.value }),
@@ -3678,15 +3686,15 @@ class Component extends DCLogic {
       onRunTest: () => this.runTest(), onReviewDraft: () => this.reviewDraft(),
 
       // workspace modes
-      modeHome: S.homeOpen && !S.inboxOpen && !S.knowledgeOpen,
-      modeBuild: !S.homeOpen && !S.consoleOpen && !S.inboxOpen && !S.knowledgeOpen && S.phase !== "draft" && S.phase !== "live",
-      modeDraft: !S.homeOpen && !S.consoleOpen && !S.inboxOpen && !S.knowledgeOpen && S.phase === "draft",
-      modeLive: !S.homeOpen && !S.consoleOpen && !S.inboxOpen && !S.knowledgeOpen && S.phase === "live",
+      modeHome: S.view === 'home',
+      modeBuild: S.view === 'build' && S.phase !== "draft" && S.phase !== "published",
+      modeDraft: S.view === 'build' && S.phase === "draft",
+      modeLive: S.view === 'build' && S.phase === "published",
       modeConnections: S.connectionsOpen,
       modeAccount: S.accountOpen,
-      modeConsole: S.consoleOpen && !S.inboxOpen && !S.knowledgeOpen,
-      modeKnowledge: S.knowledgeOpen,
-      modeInbox: S.inboxOpen,
+      modeConsole: S.view === 'console',
+      modeKnowledge: S.view === 'knowledge',
+      modeInbox: S.view === 'inbox',
       inboxUnread: S.inboxUnread,
       connectionsOpen: S.connectionsOpen, profileOpen: S.profileOpen,
       connBg: S.connectionsOpen ? "rgba(127,194,138,.1)" : "rgba(255,255,255,.03)",
