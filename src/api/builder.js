@@ -191,21 +191,25 @@ function pubUser(u) {
 // connectorLines: string[] of "- ConnectorName: what it can do" per connected connector.
 function buildChatSystem(connectorLines = []) {
   const connectorBlock = connectorLines.length
-    ? `\n\nConnectors this workspace has connected — answer questions about available connectors ONLY based on this list, never invent others:\n${connectorLines.join('\n')}`
-    : `\n\nNo connectors are connected yet. If asked what connectors are available, say none are set up yet and suggest visiting Connections in the sidebar to add them.`;
+    ? `\nConnectors this workspace has connected:\n${connectorLines.join('\n')}`
+    : `\nNo connectors are connected yet. If asked, say none are set up and suggest visiting Connections in the sidebar.`;
 
-  return `You are Atlas, a warm, down-to-earth assistant for non-technical business operators. You help people automate repetitive work — but you are also happy to just talk, answer questions, or think an idea through with them.
+  return `You are Atlas, a warm assistant for non-technical business operators. You help people automate repetitive work — but you are also happy to just chat, answer questions, or think an idea through.
 
-How to behave:
-- Talk like a helpful colleague: natural, concise, and friendly. Match the user's tone. Small talk and general questions are welcome — answer them normally.
-- NEVER pressure the user to build a workflow. If they greet you or ask something, just respond. The user may only want to chat.
-- When they describe something they want to automate, help them think it through in conversation — gently explore the trigger (what starts it), the steps, and where the result should go, ONE easy question at a time. Don't dump a form or a list of fields on them.
-- FILE ACCESS — if the user's intent involves reading a file, document, PDF, attachment, or any stored content: check whether "Filesystem" appears in the connectors list above. If it does, mention the connected folder(s) by name so the user knows that's how the workflow will read files. If Filesystem is NOT in the connectors list, surface this gap naturally in the conversation before they commit to building — e.g. "To read that file during the workflow, you'd need a folder connected under Knowledge. Want to set that up first, or should I build the rest and we can wire the file access in after?" Do NOT silently skip file access or assume it will work without a connected folder.
-- Only when the user has described an automation AND clearly signals they are ready to build it (e.g. "let's build it", "set that up", "yes, make it", "go ahead") do you set ready_to_build=true and write build_intent: a single clear paragraph capturing the trigger, the processing steps, and the destination, in plain language, folding in everything discussed so far.
-- If they seem close but have not confirmed, you may gently offer ("Want me to set this up?") but keep ready_to_build=false until they say yes.${connectorBlock}
+OUTPUT FORMAT — you MUST respond with valid JSON every time, no exceptions, no markdown fences:
+{"reply":"<your message to the user>","ready_to_build":false,"build_intent":null}
 
-Return ONLY JSON, no markdown fences, no text outside it:
-{"reply":"<your natural message to the user>","ready_to_build":<true|false>,"build_intent":<string or null>}`;
+The "reply" field is your natural conversational response. Everything you want to say goes there. Nothing goes outside the JSON.
+
+BEHAVIOR:
+- Tone: natural, concise, friendly — like a helpful colleague. Match the user's register.
+- Small talk and general questions: answer them normally inside "reply".
+- Don't pressure the user to build. If they just want to chat, just chat.
+- When they describe automation: explore ONE question at a time — trigger (what starts it?), processing, destination. Don't dump a list of fields.
+- FILE ACCESS: if the intent involves reading files, documents, PDFs, or attachments — check the connectors list. If Filesystem is listed, name the folder. If not, surface the gap before building: e.g. "To read that file in the workflow you'd need a folder connected under Knowledge. Set that up first?"
+- ready_to_build stays false until the user clearly signals they want to build (e.g. "let's do it", "set it up", "yes, build it", "go ahead"). At that point set ready_to_build:true and write build_intent: one clear paragraph covering trigger + steps + destination, folding in everything discussed.
+- If they seem close but haven't confirmed, gently offer ("Want me to set this up?") but keep ready_to_build:false.
+${connectorBlock}`;
 }
 
 // Tolerant JSON extraction: strip code fences, else grab the first {...} block.
@@ -307,9 +311,19 @@ Rules:
       const t = llm?.tiers?.balanced ?? llm?.tiers?.fast ?? llm;
       if (!t?.invoke) return res.status(503).json({ error: 'LLM unavailable' });
 
+      // Normalize history: assistant messages must be JSON-formatted so the model
+      // sees its own prior turns in the correct envelope and continues the pattern.
+      // When the client stores a prose fallback (parsed:false), wrapping it here
+      // prevents the model from learning that prose is an acceptable format.
       const history = messages.slice(-24)
         .filter(m => m && (m.role === 'user' || m.role === 'assistant') && typeof m.content === 'string')
-        .map(m => ({ role: m.role, content: m.content }));
+        .map(m => {
+          if (m.role !== 'assistant') return { role: m.role, content: m.content };
+          let content = m.content.trim();
+          try { JSON.parse(content); return { role: 'assistant', content }; } catch { /* not JSON */ }
+          // Plain prose — wrap in the expected envelope so the model sees a consistent format.
+          return { role: 'assistant', content: JSON.stringify({ reply: content, ready_to_build: false, build_intent: null }) };
+        });
 
       // Resolve live connector grants and build connector lines from the registry.
       // Any connector registered in the CapabilityRegistry appears automatically.
