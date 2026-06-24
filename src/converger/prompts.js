@@ -73,12 +73,27 @@ function connectorTriggerSummary(capabilities) {
   return `CONNECTOR EVENT TRIGGERS (available because the connector is connected):\n${lines.join('\n')}`;
 }
 
-// Describe the connected filesystem folders (or the absence of them) so the
-// converger knows whether file-reading steps are available and can name them.
+// Two kinds of knowledge sources have different capabilities:
+// - filesystem folders (absolute server paths) → accessible via filesystem_read in workflows
+// - knowledge uploads (browser-uploaded, RAG-indexed) → AI can reference in context; NOT via filesystem_read
 function filesystemSummary(capabilities) {
-  const folders = capabilities?.filesystem ?? [];
-  if (!folders.length) return '';
-  return `\nCONNECTED FILESYSTEM FOLDERS (available for filesystem_read / filesystem_list steps): ${folders.join(', ')}`;
+  const folders  = capabilities?.filesystem ?? [];
+  const uploads  = capabilities?.knowledgeUploads ?? [];
+  const parts = [];
+  if (folders.length)
+    parts.push(`CONNECTED FILESYSTEM FOLDERS (available for filesystem_read / filesystem_list steps): ${folders.join(', ')}`);
+  if (uploads.length)
+    parts.push(`KNOWLEDGE BASE (RAG-indexed, AI-accessible via context — NOT via filesystem_read): ${uploads.join(', ')}`);
+  return parts.length ? '\n' + parts.join('\n') : '';
+}
+
+// Actual RAG-retrieved content relevant to this intent — injected at session
+// creation time so the converger can reference real document content in proposals.
+function knowledgeContextBlock(capabilities) {
+  const ctx = capabilities?.knowledgeContext;
+  if (!ctx?.length) return '';
+  const chunks = ctx.map(c => `[${c.label}]\n${c.content}`).join('\n\n---\n\n');
+  return `\nKNOWLEDGE BASE CONTENT (relevant excerpts from this tenant's knowledge base — use these to inform proposals, e.g. correct field names, document structure, or domain terms):\n${chunks}\n`;
 }
 
 function operatorSummary(capabilities) {
@@ -134,7 +149,7 @@ AVAILABLE CONNECTOR ACTIONS:
 ${capabilitySummary(capabilities)}
 ${airtableSchemaSummary(capabilities)}
 ${filesystemSummary(capabilities)}
-
+${knowledgeContextBlock(capabilities)}
 AVAILABLE TRIGGER TYPES:
 ${triggerSummary(capabilities)}
 ${connectorTriggerSummary(capabilities)}
@@ -199,12 +214,11 @@ RULES:
   {"type":"clarification","question":"Reading channel history needs the \"channels:history\"
   Slack scope, which isn't granted yet. Reconnect Slack with that scope and I'll build it — or
   want me to do something else with what's available?"} — and stop until they respond.
-- FILE ACCESS: if the workflow must read a file, document, PDF, attachment, or any stored
-  content, you MUST use a connector-action node with action "filesystem_read" (or
-  "filesystem_list" to scan a folder). ONLY do this if "filesystem_read" appears in the
-  AVAILABLE CONNECTOR ACTIONS above. If the intent needs file access but no Filesystem
-  capability is listed, return a clarification:
-  {"type":"clarification","question":"This workflow needs to read a file, but no folder is connected yet. Add one via Knowledge in the sidebar, then come back and I'll build it."}
+- FILE ACCESS: if the workflow must read a file, document, PDF, attachment, or any stored content:
+  • If "filesystem_read" appears in AVAILABLE CONNECTOR ACTIONS: use a connector-action node with action "filesystem_read" (or "filesystem_list"). This requires a CONNECTED FILESYSTEM FOLDER (listed above).
+  • If there is a KNOWLEDGE BASE listed above: do NOT ask for a folder — the content is RAG-indexed and the AI can retrieve it via context during summarize/llm/extract steps. Build the workflow; the uploaded knowledge will inform the AI steps.
+  • If neither a filesystem folder NOR a knowledge base is listed: return a clarification:
+    {"type":"clarification","question":"This workflow needs to read a file, but no folder is connected yet. Add one via Knowledge in the sidebar, then come back and I'll build it."}
   Do NOT silently skip file reading or pretend the trigger payload contains document content — email triggers deliver email metadata and body text only, not file content.
 - If a user requests an unavailable service, announce it and propose the closest available alternative
 - Propose exactly ONE component per response
@@ -238,9 +252,15 @@ Clarification (only when genuinely ambiguous — ask ONE focused question):
 export function buildAnalyzePrompt({ intent, clarifications, capabilities }) {
   const prior = (clarifications ?? []).map(({ q, a }) => `Q: ${q}\nA: ${a}`).join('\n');
   const fsFolders = capabilities?.filesystem ?? [];
-  const fsNote = fsFolders.length
-    ? `Connected filesystem folders: ${fsFolders.join(', ')} — filesystem_read is available.`
-    : 'No filesystem folders are connected — filesystem_read is NOT available.';
+  const uploads   = capabilities?.knowledgeUploads ?? [];
+  let fsNote;
+  if (fsFolders.length) {
+    fsNote = `Connected filesystem folders: ${fsFolders.join(', ')} — filesystem_read IS available.`;
+  } else if (uploads.length) {
+    fsNote = `No server folder connected (filesystem_read NOT available). Knowledge base has RAG-indexed uploads: ${uploads.join(', ')}. Do NOT ask for a folder — the content is indexed and AI steps can reference it via context.`;
+  } else {
+    fsNote = 'No filesystem folders or knowledge uploads — filesystem_read is NOT available, and no RAG content exists.';
+  }
   return `Analyze this automation intent and determine if there is enough information to start proposing workflow components.
 
 INTENT: "${intent}"
@@ -257,12 +277,15 @@ TRIGGER TYPE INFERENCE:
 
 FILE ACCESS DETECTION:
 ${fsNote}
-- If the intent requires reading a file, document, PDF, or attachment AND no filesystem folder is connected, ask: "This workflow needs to read a file — you'll need to connect a folder first via Knowledge in the sidebar. Want to do that now, or should I build the rest of the workflow and add file access after?"
+- If the intent requires reading a file, document, PDF, or attachment:
+  • filesystem_read available (folders connected): proceed, use it.
+  • Knowledge uploads present but no folder: do NOT ask for a folder; AI steps can use the RAG content.
+  • Neither present: ask "This workflow needs to read a file — you'll need to connect a folder first via Knowledge in the sidebar. Want to do that now, or should I build the rest of the workflow and add file access after?"
 - Do NOT assume email attachments are automatically readable — the email trigger delivers email text only, not file content.
 
 Return JSON only:
 - If enough info to begin: {"ready":true}
-- If trigger type is ambiguous OR destination is unknown OR file access needed but no folder connected: {"ready":false,"question":"<single focused question>"}
+- If trigger type is ambiguous OR destination is unknown OR file access needed but no folder AND no knowledge uploads: {"ready":false,"question":"<single focused question>"}
 
 Only ask if the answer would materially change the spec. When the trigger type is inferable, proceed without asking.`;
 }
