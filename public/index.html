@@ -2436,8 +2436,9 @@ class Component extends DCLogic {
         self.setState({ consoleSidebarWfs: wfs });
         const S = self.state;
         // If viewing a console that no longer exists in the active list, go home.
-        if (S.consoleOpen && S.consoleWfId && !wfs.some(function(w) { return w.id === S.consoleWfId; })) {
+        if (S.view === 'console' && S.consoleWfId && !wfs.some(function(w) { return w.id === S.consoleWfId; })) {
           self.setState({ view: 'home', consoleWfId: null, consoleWf: null, homeData: null, homeReady: false, homeFading: false });
+          self._loadHomeData();
         }
       })
       .catch(() => {});
@@ -2449,7 +2450,7 @@ class Component extends DCLogic {
       .then(function(r) { return r.json(); })
       .then(function(d) {
         if (d.ok !== false) {
-          if (wasOpenConsole) self.setState({ view: 'home', consoleWfId: null, consoleWf: null, homeData: null, homeReady: false, homeFading: false });
+          if (wasOpenConsole) { self.setState({ view: 'home', consoleWfId: null, consoleWf: null, homeData: null, homeReady: false, homeFading: false }); self._loadHomeData(); }
           self._loadWorkflows();
         }
       })
