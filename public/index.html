@@ -70,10 +70,10 @@
     <div style="flex:1;display:flex;min-height:0">
 
       <!-- ░ LEFT (collapsible) ░ · sidebar: GET /workflows (list) · GET /connections (count) · + New → POST /workflows -->
-      <aside style="flex:none;width:{{ leftWidth }};background:#101012;border-right:1px solid rgba(255,255,255,.07);display:flex;flex-direction:column;overflow:hidden;transition:width .34s cubic-bezier(.4,.8,.3,1)">
+      <aside style="flex:none;width:{{ leftWidth }};background:#101012;display:flex;flex-direction:column;overflow:hidden;transition:{{ leftTransition }}">
 
         <sc-if value="{{ leftOpen }}" hint-placeholder-val="{{ true }}">
-          <div style="display:flex;flex-direction:column;height:100%;width:248px;padding:20px 16px">
+          <div style="display:flex;flex-direction:column;height:100%;width:100%;min-width:180px;padding:20px 16px">
             <div style="display:flex;align-items:center;justify-content:space-between;padding:2px 4px 0">
               <div onClick="{{ onOpenHome }}" style="display:flex;align-items:center;gap:9px;cursor:pointer;border-radius:8px;padding:3px 5px;margin:-3px -5px" style-hover="background:rgba(255,255,255,.05)">
                 <img src="assets/atlas-globe-white.svg" alt="atlas" style="height:21px;width:21px"/>
@@ -187,6 +187,7 @@
           </div>
         </sc-if>
       </aside>
+      <div onMousedown="{{ onLeftResizeStart }}" style="flex:none;width:4px;cursor:col-resize;background:rgba(255,255,255,.07);transition:background .15s" style-hover="background:rgba(255,255,255,.22)"></div>
 
       <!-- ░ MODE: BUILD (conversation + live pipeline) ░ -->
       <sc-if value="{{ modeBuild }}" hint-placeholder-val="{{ true }}">
@@ -2007,7 +2008,7 @@ class Component extends DCLogic {
       runSteps: [], failIndex: -1, deliveries: [], runOutput: null, runError: "",
       workflowId: null, isEditing: false, isDraftBuild: false, editingIntro: null, introMsg: null,
       renamingWfId: null, renamingValue: "", draftName: null,
-      leftOpen: true, rightOpen: true,
+      leftOpen: true, leftW: null, leftDragging: false, rightOpen: true,
       connectionsOpen: false, accountOpen: false, profileOpen: false, connectionsClosing: false, accountClosing: false, deletedFolderClosing: false,
       authToken: null, userInitials: "—", userName: "Signing in…", userEmail: "",
       userRole: "", tenantName: "", tenantId: "",
@@ -3333,8 +3334,33 @@ class Component extends DCLogic {
   }
 
   // ── panels ────────────────────────────────────────────────────────
-  toggleLeft() { this.setState(s => ({ leftOpen: !s.leftOpen })); }
+  toggleLeft() { this.setState(s => ({ leftOpen: !s.leftOpen, leftW: null })); }
   toggleRight() { this.setState(s => ({ rightOpen: !s.rightOpen })); }
+
+  _startLeftResize(e) {
+    e.preventDefault();
+    const startX   = e.clientX;
+    const startW   = this.state.leftOpen ? (this.state.leftW ?? 248) : 56;
+    const SNAP_COL = 100;   // below this → collapse
+    const MIN_OPEN = 180;   // minimum width when open
+    const MAX_OPEN = 520;
+    this.setState({ leftDragging: true });
+    const onMove = (mv) => {
+      const w = Math.max(40, Math.min(MAX_OPEN, startW + mv.clientX - startX));
+      if (w <= SNAP_COL) {
+        this.setState({ leftOpen: false, leftW: null });
+      } else {
+        this.setState({ leftOpen: true, leftW: Math.max(MIN_OPEN, w) });
+      }
+    };
+    const onUp = () => {
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup', onUp);
+      this.setState({ leftDragging: false });
+    };
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
+  }
   _closeFlyout(openKey, closingKey) {
     this.setState({ [closingKey]: true });
     clearTimeout(this[`_ft_${closingKey}`]);
@@ -3639,8 +3665,11 @@ class Component extends DCLogic {
 
     return {
       // panels
-      leftOpen: S.leftOpen, leftCollapsed: !S.leftOpen, leftWidth: S.leftOpen ? "248px" : "56px",
-      flyoutLeft: S.leftOpen !== false ? "260px" : "68px",
+      leftOpen: S.leftOpen, leftCollapsed: !S.leftOpen,
+      leftWidth: S.leftOpen ? `${S.leftW ?? 248}px` : "56px",
+      leftTransition: S.leftDragging ? 'none' : 'width .34s cubic-bezier(.4,.8,.3,1)',
+      flyoutLeft: S.leftOpen !== false ? `${(S.leftW ?? 248) + 16}px` : "68px",
+      onLeftResizeStart: (e) => this._startLeftResize(e),
       rightOpen: S.rightOpen, rightCollapsed: !S.rightOpen, rightWidth: S.rightOpen ? "400px" : "52px",
       onToggleLeft: () => this.toggleLeft(), onToggleRight: () => this.toggleRight(),
 
@@ -3922,7 +3951,7 @@ class Component extends DCLogic {
       connectorModalOrigin: (() => {
         if (!S._mtx) return '50% 50%';
         const vpW = window.innerWidth, vpH = window.innerHeight;
-        const sideW = S.leftOpen !== false ? 234 : 56;
+        const sideW = S.leftOpen !== false ? ((S.leftW ?? 248) + 4) : 60;
         const modalCx = sideW + (vpW - sideW) / 2;
         const modalCy = vpH / 2;
         const ox = Math.round(S._mtx - (modalCx - 180));
