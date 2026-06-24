@@ -357,19 +357,48 @@ Rules:
       } catch { /* non-fatal */ }
 
       // Retrieve relevant knowledge base + inbox context via RAG.
+      // If the user message contains /SourceName references, those sources are
+      // searched first with a lower threshold; results are prepended before the
+      // generic search so the LLM sees the pinned content prominently.
       let ragBlock = '';
       try {
         const lastUserMsg = [...history].reverse().find(m => m.role === 'user')?.content ?? '';
         if (lastUserMsg) {
           const rag  = await spine.rag.forTenant(req.tenant.id);
+
+          // Extract explicit /SourceName references (e.g. from the / picker pill).
+          const slashRefs = [...new Set(
+            (lastUserMsg.match(/\/([^\s/]+)/g) || []).map(r => r.slice(1).toLowerCase())
+          )];
+
+          let pinnedCtx = '';
+          if (slashRefs.length) {
+            // Fetch more candidates so filtering has enough to work with.
+            const allHits = await rag.query(lastUserMsg, 16);
+            const pinned = (allHits ?? []).filter(h => {
+              const src = (h.metadata?.source_path || h.metadata?.source || '').toLowerCase();
+              const name = src.split('/').filter(Boolean).pop() || src;
+              return slashRefs.some(ref => name.includes(ref) || src.includes(ref));
+            }).slice(0, 4);
+            if (pinned.length) {
+              pinnedCtx = pinned.map(h => {
+                const label = h.metadata?.subject || h.metadata?.source_path || h.metadata?.source || 'source';
+                return `[${label}]\n${h.pageContent ?? h.content ?? ''}`;
+              }).join('\n\n---\n\n');
+            }
+          }
+
+          // Generic search for remaining context (skip if pinned already covered enough).
           const hits = await rag.query(lastUserMsg, 6);
           const useful = (hits ?? []).filter(h => (h.score ?? 0) > 0.25).slice(0, 4);
-          if (useful.length) {
-            const ctx = useful.map(h => {
-              const label = h.metadata?.subject || h.metadata?.source_path || h.metadata?.source || 'source';
-              return `[${label}]\n${h.pageContent ?? h.content ?? ''}`;
-            }).join('\n\n---\n\n');
-            ragBlock = `\n\nRelevant content retrieved from the knowledge base and inbox:\n${ctx}`;
+          const generalCtx = useful.map(h => {
+            const label = h.metadata?.subject || h.metadata?.source_path || h.metadata?.source || 'source';
+            return `[${label}]\n${h.pageContent ?? h.content ?? ''}`;
+          }).join('\n\n---\n\n');
+
+          const fullCtx = [pinnedCtx, generalCtx].filter(Boolean).join('\n\n---\n\n');
+          if (fullCtx) {
+            ragBlock = `\n\nRelevant content retrieved from the knowledge base and inbox:\n${fullCtx}`;
           }
         }
       } catch { /* non-fatal */ }
@@ -589,6 +618,14 @@ Rules:
       if (isConnectorConnected(await spine.google.resolveForTenant(tenantId, req.user?.id))) {
         connectors.push({ id: 'google', name: 'Google', kind: 'connector' });
       }
+    } catch { /* non-fatal */ }
+    try {
+      const at = spine.airtable.resolveForTenant(tenantId);
+      if (at.connected) connectors.push({ id: 'airtable', name: 'Airtable', kind: 'connector' });
+    } catch { /* non-fatal */ }
+    try {
+      const web = webConnectionStatus();
+      if (web.connected) connectors.push({ id: 'web', name: 'Web', kind: 'connector' });
     } catch { /* non-fatal */ }
 
     res.json({ connectors, users });
