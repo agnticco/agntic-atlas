@@ -1442,7 +1442,7 @@
           <div style="padding:8px 16px 4px;font-size:10px;font-weight:600;letter-spacing:.16em;text-transform:uppercase;color:rgba(255,255,255,.25)">Connected</div>
           <sc-for list="{{ connectedList }}" as="c" hint-placeholder-count="1">
             <div onClick="{{ c.onAction }}" style="display:flex;align-items:center;gap:10px;padding:9px 16px;cursor:pointer" style-hover="background:rgba(255,255,255,.04)">
-              <img src="{{ c.logo }}" alt="{{ c.name }}" style="flex:none;width:28px;height:28px;object-fit:contain"/>
+              <img src="{{ c.logo }}" alt="{{ c.name }}" style="flex:none;width:22px;height:22px;object-fit:contain"/>
               <div style="flex:1;min-width:0">
                 <div style="font-size:13px;font-weight:500;color:#fff;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ c.name }}</div>
                 <div style="font-size:11px;color:rgba(255,255,255,.35);margin-top:1px">{{ c.statusText }}</div>
@@ -1453,7 +1453,7 @@
           <div style="padding:10px 16px 4px;margin-top:4px;font-size:10px;font-weight:600;letter-spacing:.16em;text-transform:uppercase;color:rgba(255,255,255,.25)">Inactive</div>
           <sc-for list="{{ availableList }}" as="c" hint-placeholder-count="1">
             <div onClick="{{ c.onAction }}" style="display:flex;align-items:center;gap:10px;padding:9px 16px;cursor:pointer;opacity:.55" style-hover="opacity:1;background:rgba(255,255,255,.04)">
-              <img src="{{ c.logo }}" alt="{{ c.name }}" style="flex:none;width:28px;height:28px;object-fit:contain"/>
+              <img src="{{ c.logo }}" alt="{{ c.name }}" style="flex:none;width:22px;height:22px;object-fit:contain"/>
               <div style="flex:1;min-width:0">
                 <div style="font-size:13px;font-weight:500;color:rgba(255,255,255,.65);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ c.name }}</div>
                 <div style="font-size:11px;color:rgba(255,255,255,.3);margin-top:1px">{{ c.statusText }}</div>
@@ -1709,15 +1709,15 @@ class Component extends DCLogic {
       '@notion':     { dark:true, svg:`<svg viewBox="0 0 24 24" ${W}><path fill="#1a1a1a" d="M6 5.4 14.4 4.8c1-.08 1.3.1 1.95.6l2.3 1.62c.4.3.55.4.55.9v11.4c0 .9-.3 1.4-1.4 1.5l-9.8.6c-.85.05-1.25-.1-1.7-.65l-2-2.6c-.5-.65-.7-1.1-.7-1.7V6.8c0-.7.32-1.3 1.1-1.4z"/><path fill="#fff" d="M8.2 8v7.9l1.5.1V11l3.6 5.2 1.5.1V8.3l-1.5-.1v4.6L9.6 7.9z"/></svg>` },
       '@figma':      { svg:`<svg viewBox="0 0 24 24" ${W}><path fill="#fff" d="M9.4 3.5h2.6v4.3H9.4a2.15 2.15 0 1 1 0-4.3z"/><path fill="#fff" d="M12 3.5h2.6a2.15 2.15 0 0 1 0 4.3H12z"/><path fill="#fff" d="M9.4 7.85h2.6v4.3H9.4a2.15 2.15 0 0 1 0-4.3z"/><circle cx="14.15" cy="12" r="2.15" fill="#fff"/><path fill="#fff" d="M9.4 12.2h2.6v2.15a2.15 2.15 0 1 1-2.6-2.1z"/></svg>` },
       '@quickbooks': { svg:`<svg viewBox="0 0 24 24" ${W}><circle cx="12" cy="12" r="8.4" fill="none" stroke="#fff" stroke-width="2.1"/><path fill="none" stroke="#fff" stroke-width="2.1" stroke-linecap="round" d="M11.3 8.2a3.9 3.9 0 0 0 0 7.6V6.6M12.7 15.8a3.9 3.9 0 0 0 0-7.6v9.2"/></svg>` },
-      '@google':     { swatchBg:'#fff', svg:`<svg viewBox="0 0 24 24" ${W}><path fill="#4285F4" d="M21 12.2c0-.64-.06-1.25-.16-1.84H12v3.48h5.05a4.32 4.32 0 0 1-1.87 2.84v2.36h3.02C19.96 17.46 21 15.05 21 12.2z"/><path fill="#34A853" d="M12 21.4c2.43 0 4.47-.8 5.96-2.18l-3.02-2.36c-.84.56-1.92.9-2.94.9-2.26 0-4.18-1.53-4.87-3.58H3.96v2.44A9 9 0 0 0 12 21.4z"/><path fill="#FBBC05" d="M7.13 14.18a5.4 5.4 0 0 1 0-3.44V8.3H3.96a9 9 0 0 0 0 8.32z"/><path fill="#EA4335" d="M12 7.32c1.32 0 2.5.46 3.44 1.35l2.58-2.58C16.46 4.6 14.43 3.7 12 3.7a9 9 0 0 0-8.04 4.6l3.17 2.44C7.82 8.7 9.74 7.32 12 7.32z"/></svg>` },
+      '@google':     { swatchBg:'#fff', svg:`<img src="assets/google-black.svg" style="width:100%;height:100%;object-fit:contain">` },
       '@asana':      { svg:`<svg viewBox="0 0 24 24" ${W}><circle cx="12" cy="6.8" r="3.05" fill="#fff"/><circle cx="6.4" cy="15.6" r="3.05" fill="#fff"/><circle cx="17.6" cy="15.6" r="3.05" fill="#fff"/></svg>` },
       '@canva':      { svg:`<svg viewBox="0 0 24 24" ${W}><circle cx="12" cy="12" r="8.6" fill="#fff"/><path fill="none" stroke="#3da9e8" stroke-width="2.3" stroke-linecap="round" d="M15.2 9.6a3.4 3.4 0 1 0 .2 5"/></svg>` },
       '@github':     { dark:true, svg:`<svg viewBox="0 0 24 24" ${W}><path fill="#1a1a1a" d="M12 3a9 9 0 0 0-2.84 17.54c.45.08.62-.2.62-.43v-1.5c-2.5.55-3.03-1.2-3.03-1.2-.41-1.04-1-1.32-1-1.32-.82-.56.06-.55.06-.55.9.06 1.38.93 1.38.93.8 1.38 2.1.98 2.62.75.08-.58.31-.98.57-1.2-2-.23-4.1-1-4.1-4.45 0-.98.35-1.79.93-2.42-.1-.23-.4-1.16.08-2.4 0 0 .76-.25 2.48.92a8.5 8.5 0 0 1 4.5 0c1.72-1.17 2.48-.92 2.48-.92.48 1.24.18 2.17.09 2.4.58.63.92 1.44.92 2.42 0 3.46-2.1 4.22-4.11 4.44.32.28.6.82.6 1.65v2.45c0 .24.16.52.62.43A9 9 0 0 0 12 3z"/></svg>` },
       '@linear':     { svg:`<svg viewBox="0 0 24 24" ${W}><path fill="#fff" d="M3.9 13.6 10.4 20.1a8.1 8.1 0 0 1-6.5-6.5z"/><path fill="#fff" d="M3.7 10.7 13.3 20.3c.78-.12 1.52-.34 2.2-.66L4.36 8.5c-.32.68-.54 1.42-.66 2.2z"/><path fill="#fff" d="M5.2 6.7 17.3 18.8a8.2 8.2 0 0 0 1.5-1.86L7.06 5.2A8.2 8.2 0 0 0 5.2 6.7z"/><path fill="#fff" d="M8.9 4.2 19.8 15.1A8.1 8.1 0 0 0 8.9 4.2z"/></svg>` },
       '@calendly':   { svg:`<svg viewBox="0 0 24 24" ${W}><path fill="none" stroke="#fff" stroke-width="2.4" stroke-linecap="round" d="M16.6 8.2a5.6 5.6 0 1 0 0 7.6"/><path fill="none" stroke="#fff" stroke-width="2.4" stroke-linecap="round" d="M18 7.2h1.4M18 16.8h1.4"/></svg>` },
       '@shopify':    { svg:`<svg viewBox="0 0 24 24" ${W}><path fill="#fff" d="M14.7 6.9c-.02-.08-.1-.13-.16-.13-.07 0-1.36-.1-1.36-.1s-.9-.9-1-1c-.1-.1-.3-.07-.36-.05l-.5.15C11.1 5.1 10.7 4.7 10 4.7c-1 0-1.7 1.2-2 2.3l-1 .3c-.6.2-.6.2-.7.8L4.8 18.3 13 19.8l4.5-1.1S14.74 7 14.7 6.9z"/></svg>` },
-      '@slack':      { swatchBg:'#1a1d21', svg:`<svg viewBox="0 0 100 100" ${W}><path fill="#36C5F0" d="M33 56a8 8 0 1 1-8-8h8z"/><path fill="#36C5F0" d="M37 56a8 8 0 0 1 16 0v20a8 8 0 0 1-16 0z"/><path fill="#2EB67D" d="M45 33a8 8 0 1 1 8-8v8z"/><path fill="#2EB67D" d="M45 37a8 8 0 0 1 0 16H25a8 8 0 0 1 0-16z"/><path fill="#ECB22E" d="M67 45a8 8 0 1 1 8 8h-8z"/><path fill="#ECB22E" d="M63 45a8 8 0 0 1-16 0V25a8 8 0 0 1 16 0z"/><path fill="#E01E5A" d="M55 67a8 8 0 1 1-8 8v-8z"/><path fill="#E01E5A" d="M55 63a8 8 0 0 1 0-16h20a8 8 0 0 1 0 16z"/></svg>` },
-      '@web':        { swatchBg:'linear-gradient(135deg,#1a3a5c,#0d6efd)', svg:`<img src="assets/atlas-web-search-white.svg" style="width:100%;height:100%;object-fit:contain">` },
+      '@slack':      { swatchBg:'#1a1d21', svg:`<img src="assets/slack-white.svg" style="width:100%;height:100%;object-fit:contain">` },
+      '@web':        { swatchBg:'linear-gradient(135deg,#1a3a5c,#0d6efd)', svg:`<img src="assets/atlas-web-search-white.svg?v=4" style="width:100%;height:100%;object-fit:contain">` },
     };
     const result = {};
     const data = [
@@ -2505,14 +2505,14 @@ class Component extends DCLogic {
     Promise.all([get("/connectors/slack/status"), get("/connectors/google/status"), get("/connectors/airtable/status"), get("/connectors/web/status")]).then(([s, g, a, w]) => {
       const isC = (d) => !!(d && (d.connected || d.authorized || d.ok || d.team || d.email || d.workspace || d.account));
       const connected = [], available = [];
-      (isC(s) ? connected : available).push({ name: "Slack", logo: "/assets/connectors/slack.svg", provider: "slack", meta: isC(s) ? (((s && (s.team || s.workspace || s.account)) || "Workspace connected")) : "Post messages to channels" });
+      (isC(s) ? connected : available).push({ name: "Slack", logo: "assets/slack-white.svg", provider: "slack", meta: isC(s) ? (((s && (s.team || s.workspace || s.account)) || "Workspace connected")) : "Post messages to channels" });
       // ONE Google Workspace connector — the OAuth grant spans Gmail, Calendar,
       // Drive, Sheets, Docs & Tasks, not just email.
-      (isC(g) ? connected : available).push({ name: "Google Workspace", logo: "/assets/connectors/google.svg", provider: "google", meta: isC(g) ? (((g && (g.email || g.account)) || "Workspace connected")) : "Gmail, Calendar, Drive, Sheets, Docs & more" });
-      (isC(a) ? connected : available).push({ name: "Airtable", logo: "/assets/connectors/airtable.svg", provider: "airtable", meta: isC(a) ? "Workspace connected" : "Automate records, tables & views" });
+      (isC(g) ? connected : available).push({ name: "Google Workspace", logo: "assets/google-white.svg", provider: "google", meta: isC(g) ? (((g && (g.email || g.account)) || "Workspace connected")) : "Gmail, Calendar, Drive, Sheets, Docs & more" });
+      (isC(a) ? connected : available).push({ name: "Airtable", logo: "assets/airtable-white.svg", provider: "airtable", meta: isC(a) ? "Workspace connected" : "Automate records, tables & views" });
       const webC = !!(w && w.connected);
       const webApiKey = !!(w && w.anthropic);
-      const webLogo = 'assets/atlas-web-search-white.svg';
+      const webLogo = 'assets/atlas-web-search-white.svg?v=4';
       (webC ? connected : available).push({ name: "Web", logo: webLogo, provider: "web", meta: webC ? "Search & fetch" : "Web access", isApiKey: !webApiKey });
       self.setState({ connected, available });
     });
