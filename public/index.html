@@ -3632,8 +3632,8 @@ class Component extends DCLogic {
       : { show: false };
 
     const wfName = (S.spec && S.spec.name) || S.draftName || (S.phase === "chat" ? "New workflow" : "Untitled workflow");
-    const accent = published ? SVG_PLAY : (S.phase === "chat" ? "rgba(255,255,255,.3)" : "#f0bf6b");
-    const accentGlow = published ? "drop-shadow(0 0 5px rgba(127,194,138,.85))" : (S.phase === "chat" ? "none" : "drop-shadow(0 0 5px rgba(240,191,107,.7))");
+    const accent = published ? SVG_PLAY : "#f0bf6b";
+    const accentGlow = published ? "drop-shadow(0 0 5px rgba(127,194,138,.85))" : "drop-shadow(0 0 5px rgba(240,191,107,.7))";
     const accentRadius = published ? "border-radius:2px" : "border-radius:50%";
 
     const inputEnabled = !S.thinking && S.phase !== "draft" && S.phase !== "published" && (S.phase === "chat" || S.inputMode === "clarify" || S.inputMode === "change");
@@ -3673,8 +3673,8 @@ class Component extends DCLogic {
           const isPublished = wf.status !== 'draft';
           const tinfo = isPublished ? this._getTriggerInfo(wf) : null;
           const isRunning = S.sidebarRunningId === wf.id;
-          const dot    = isRunning ? '#f0bf6b' : wf.status === "active" ? SVG_PLAY : (wf.status === "paused" || wf.status === "error") ? SVG_PAUSE : "rgba(255,255,255,.25)";
-          const glow   = isRunning ? 'drop-shadow(0 0 5px rgba(240,191,107,.8))' : wf.status === "active" ? 'drop-shadow(0 0 5px rgba(127,194,138,.85))' : (wf.status === "paused" || wf.status === "error") ? 'drop-shadow(0 0 5px rgba(232,116,97,.85))' : 'none';
+          const dot    = isRunning ? '#f0bf6b' : wf.status === "active" ? SVG_PLAY : (wf.status === "paused" || wf.status === "error") ? SVG_PAUSE : '#f0bf6b';
+          const glow   = isRunning ? 'drop-shadow(0 0 5px rgba(240,191,107,.8))' : wf.status === "active" ? 'drop-shadow(0 0 5px rgba(127,194,138,.85))' : (wf.status === "paused" || wf.status === "error") ? 'drop-shadow(0 0 5px rgba(232,116,97,.85))' : 'drop-shadow(0 0 5px rgba(240,191,107,.7))';
           const radius = (!isRunning && (wf.status === "active" || wf.status === "paused" || wf.status === "error")) ? 'border-radius:2px' : 'border-radius:50%';
           const onClick = isActiveEdit
             ? () => this.setState({ view: 'build', connectionsOpen: false, accountOpen: false, profileOpen: false })
@@ -4217,8 +4217,8 @@ class Component extends DCLogic {
         const isActive = w.status === 'active';
         const isPaused = w.status === 'paused';
         const hasFail  = w.lastRunStatus === 'error';
-        const dot   = isActive && !hasFail ? SVG_PLAY : isPaused ? SVG_PAUSE : hasFail ? '#e87461' : "rgba(255,255,255,.25)";
-        const glow  = isActive && !hasFail ? 'drop-shadow(0 0 5px rgba(127,194,138,.85))' : isPaused ? 'drop-shadow(0 0 5px rgba(232,116,97,.85))' : hasFail ? 'drop-shadow(0 0 5px rgba(232,116,97,.6))' : 'none';
+        const dot   = isActive && !hasFail ? SVG_PLAY : isPaused ? SVG_PAUSE : hasFail ? '#e87461' : '#f0bf6b';
+        const glow  = isActive && !hasFail ? 'drop-shadow(0 0 5px rgba(127,194,138,.85))' : isPaused ? 'drop-shadow(0 0 5px rgba(232,116,97,.85))' : hasFail ? 'drop-shadow(0 0 5px rgba(232,116,97,.6))' : 'drop-shadow(0 0 5px rgba(240,191,107,.7))';
         const radius = (isActive && !hasFail) || isPaused ? 'border-radius:2px' : 'border-radius:50%';
         const lastRun = w.lastRunAt ? (() => { const d = new Date(w.lastRunAt); const now = new Date(); const diff = now - d; if (diff < 3600000) return Math.round(diff/60000) + 'm ago'; if (diff < 86400000) return Math.round(diff/3600000) + 'h ago'; return d.toLocaleDateString(); })() : 'Never';
         return { id: w.id, name: w.name, trigger: w.trigger, runCount: String(w.runCount), lastRun, dot, glow, radius, statusLabel: isActive ? (hasFail ? 'Failed last run' : 'Active') : (isPaused ? 'Paused' : w.status), onClick: () => this.openConsole(w.id) };
