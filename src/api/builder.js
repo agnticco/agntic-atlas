@@ -268,13 +268,13 @@ function buildChatTools(registry, connectedSet) {
 async function injectCapabilityCredentials(cap, config, { auth, tenant, user }) {
   if (!cap?.connector) return config;
   if (cap.connector === 'google') {
-    const tok = await getGoogleAccessToken({ oauthTokenStore: auth.oauthTokenStore, cipher: auth.cipher, tenantId: tenant.id, userId: user.id });
+    const tok = await getGoogleAccessToken({ oauthTokenStore: auth.oauthTokenStore, cipher: auth.tokenCipher, tenantId: tenant.id, userId: user.id });
     if (tok) config.googleToken = tok;
   } else if (cap.connector === 'slack') {
-    const grant = getSlackToken({ oauthTokenStore: auth.oauthTokenStore, cipher: auth.cipher, tenantId: tenant.id });
+    const grant = getSlackToken({ oauthTokenStore: auth.oauthTokenStore, cipher: auth.tokenCipher, tenantId: tenant.id });
     if (grant?.botToken) config.token = grant.botToken;
   } else if (cap.connector === 'airtable') {
-    const tok = await getAirtableAccessToken({ oauthTokenStore: auth.oauthTokenStore, cipher: auth.cipher, tenantId: tenant.id });
+    const tok = await getAirtableAccessToken({ oauthTokenStore: auth.oauthTokenStore, cipher: auth.tokenCipher, tenantId: tenant.id });
     if (tok) config.airtableToken = tok;
   }
   return config;
@@ -360,15 +360,31 @@ Rules:
   // BUILD a workflow once the user is clearly ready. Stateless: the client sends
   // the running message history each turn.
   // Body:    { messages: [{ role:'user'|'assistant', content }] }
-  // Returns: { reply, readyToBuild, buildIntent }
+  // Returns: SSE stream of events: {type:'tool',name} | {type:'reply',reply,readyToBuild,buildIntent}
+  // SSE keeps bytes flowing to Cloudflare Tunnel so long tool-use turns don't 524.
   app.post('/api/builder/chat', requireActiveTenant, async (req, res) => {
     const { messages } = req.body ?? {};
     if (!Array.isArray(messages) || !messages.length) {
       return res.status(400).json({ error: 'messages[] is required' });
     }
+
+    // Flush SSE headers immediately so Cloudflare sees a response before any timeouts fire.
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('X-Accel-Buffering', 'no');
+    res.flushHeaders();
+
+    let closed = false;
+    req.on('close', () => { closed = true; });
+
+    const sseWrite = (obj) => {
+      if (closed) return;
+      try { res.write(`data: ${JSON.stringify(obj)}\n\n`); } catch { closed = true; }
+    };
+
     try {
       const llm = spine.llm;
-      if (!llm?.invoke) return res.status(503).json({ error: 'LLM unavailable' });
+      if (!llm?.invoke) { sseWrite({ type: 'error', error: 'LLM unavailable' }); res.end(); return; }
       // Route through ModelPool (not a raw tier) so _trackUsage() fires.
       const chatSessionId = `chat-${req.user?.id ?? 'anon'}-${Date.now()}`;
       spine.costTracker?.setSessionUser?.(chatSessionId, req.user?.id);
@@ -492,8 +508,9 @@ Rules:
         // (required for Anthropic to accept the subsequent tool_result turn).
         msgArray.push(new AIMessage(raw.content ?? '', raw.additionalKwargs ?? {}));
 
-        // Execute each tool call and append ToolMessage results.
+        // Execute each tool call; emit an SSE event per tool so Cloudflare stays alive.
         await Promise.all(toolCalls.map(async (tc) => {
+          sseWrite({ type: 'tool', name: tc.name });
           let resultStr;
           try {
             const registry = spine.engine?.capabilityRegistry;
@@ -513,24 +530,38 @@ Rules:
         }));
       }
 
-      const text = (typeof raw === 'string' ? raw : raw?.content ?? '').trim();
+      let text = (typeof raw === 'string' ? raw : raw?.content ?? '').trim();
+
+      // After tool use, the model often responds in plain prose rather than the required
+      // JSON envelope. If we used tools and the result isn't JSON, make one more call
+      // with an explicit reminder so the UI always gets the structured format.
+      const usedTools = msgArray.length > 2 + history.length; // > system + history
+      if (usedTools && text) {
+        let quickParsed = null;
+        try { quickParsed = JSON.parse(extractJsonLoose(text)); } catch { /* not json */ }
+        if (!quickParsed?.reply) {
+          msgArray.push(new AIMessage(text));
+          msgArray.push({ role: 'user', content: 'Summarize what you just did in one or two sentences and respond in the required JSON format: {"reply":"...","ready_to_build":false,"build_intent":null}' });
+          const remind = await withLLMRetry(() => llm.invoke(msgArray, { configurable: { modelTier: 'fast', sessionId: chatSessionId, costContext: 'chat.format' } }));
+          text = (typeof remind === 'string' ? remind : remind?.content ?? text).trim();
+        }
+      }
 
       let parsed = null;
       try { parsed = JSON.parse(extractJsonLoose(text)); } catch { /* fall through */ }
       if (parsed && typeof parsed.reply === 'string') {
         logEvent('chat.reply', { tenant: req.tenant?.id ?? null, turns: messages.length, readyToBuild: !!parsed.ready_to_build });
-        return res.json({
-          reply: parsed.reply,
-          readyToBuild: !!parsed.ready_to_build,
-          buildIntent: (typeof parsed.build_intent === 'string' && parsed.build_intent.trim()) ? parsed.build_intent.trim() : null,
-        });
+        sseWrite({ type: 'reply', reply: parsed.reply, readyToBuild: !!parsed.ready_to_build, buildIntent: (typeof parsed.build_intent === 'string' && parsed.build_intent.trim()) ? parsed.build_intent.trim() : null });
+      } else {
+        // Model didn't return our JSON envelope — treat its text as a plain reply.
+        logEvent('chat.reply', { tenant: req.tenant?.id ?? null, turns: messages.length, parsed: false });
+        sseWrite({ type: 'reply', reply: text || "I'm here — what would you like to work on?", readyToBuild: false, buildIntent: null });
       }
-      // Model didn't return our JSON envelope — treat its text as a plain reply.
-      logEvent('chat.reply', { tenant: req.tenant?.id ?? null, turns: messages.length, parsed: false });
-      return res.json({ reply: text || "I'm here — what would you like to work on?", readyToBuild: false, buildIntent: null });
+      res.end();
     } catch (err) {
       logEvent('chat.error', { tenant: req.tenant?.id ?? null, ...errFields(err) });
-      res.status(500).json({ error: cleanLLMError(err) });
+      sseWrite({ type: 'error', error: cleanLLMError(err) });
+      res.end();
     }
   });
 
