@@ -43,20 +43,22 @@ for (const ep of requiredEndpoints) {
   pass(`endpoint registered: ${ep.method.toUpperCase()} ${ep.path}`);
 }
 
-// ── 3. All endpoints guarded by adminOnly (requirePlatformAdmin) ────────────
+// ── 3. Data endpoints guarded by adminOnly (requirePlatformAdmin) ────────────
 
-// Every app.get call should use adminOnly — verify the variable is defined and used
+// adminOnly guard must be defined
 if (!adminSrc.includes('const adminOnly = [requireAuth, requirePlatformAdmin]')) {
   fail('adminOnly guard not defined as [requireAuth, requirePlatformAdmin]');
 }
-// All app.get calls should reference adminOnly
-const appGetCalls = adminSrc.match(/app\.get\([^)]+\)/g) ?? [];
-for (const call of appGetCalls) {
-  if (!call.includes('adminOnly')) {
-    fail(`Route without adminOnly guard: ${call.substring(0, 80)}`);
+// Data routes must use adminOnly; public routes (/admin, /admin/ui, /admin/me) are exempt
+const DATA_ROUTES = ['/admin/tenants', '/admin/tenants/:id', '/admin/tenants/:id/runs', '/admin/tenants/:id/cost', '/admin/usage'];
+for (const route of DATA_ROUTES) {
+  const escaped = route.replace(/[-[\]{}()*+?.,\\^$|#\s]/g, '\\$&');
+  const withGuard = new RegExp(`app\\.(?:get|post|put|delete)\\(\\s*['"\`]${escaped}['"\`]\\s*,\\s*adminOnly`);
+  if (!withGuard.test(adminSrc)) {
+    fail(`Data route missing adminOnly guard: ${route}`);
   }
 }
-pass('all routes guarded by adminOnly (requirePlatformAdmin)');
+pass('all data routes guarded by adminOnly (requirePlatformAdmin)');
 
 // ── 4. Cross-tenant isolation: per-tenant queries use WHERE tenant_id = ? ───
 

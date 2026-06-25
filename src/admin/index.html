@@ -94,27 +94,88 @@
     .row > * { flex: 1; }
     .cost { font-variant-numeric: tabular-nums; }
     .mono { font-family: 'SF Mono', Consolas, monospace; font-size: 12px; }
+
+    /* ── Login screen ── */
+    #login-screen {
+      display: none; position: fixed; inset: 0; background: var(--bg);
+      align-items: center; justify-content: center; z-index: 100;
+    }
+    #login-screen.visible { display: flex; }
+    .login-card {
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: 12px; padding: 40px; width: 360px;
+    }
+    .login-card h2 { font-size: 22px; font-weight: 700; margin-bottom: 4px; }
+    .login-card p  { color: var(--muted); font-size: 13px; margin-bottom: 28px; }
+    .field { margin-bottom: 16px; }
+    .field label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 6px; text-transform: uppercase; letter-spacing: .05em; }
+    .field input {
+      width: 100%; padding: 10px 14px; background: var(--bg);
+      border: 1px solid var(--border); border-radius: 6px;
+      color: var(--text); font-size: 14px; outline: none;
+      transition: border-color .15s;
+    }
+    .field input:focus { border-color: var(--accent); }
+    .btn-primary {
+      width: 100%; padding: 11px; background: var(--accent); color: #fff;
+      border: none; border-radius: 6px; font-size: 14px; font-weight: 600;
+      cursor: pointer; margin-top: 8px; transition: opacity .15s;
+    }
+    .btn-primary:hover { opacity: .85; }
+    .btn-primary:disabled { opacity: .5; cursor: not-allowed; }
+    .login-error { color: var(--red); font-size: 13px; margin-top: 12px; text-align: center; min-height: 20px; }
+
+    /* ── App shell hidden until logged in ── */
+    #app { display: none; width: 100%; }
+    #app.visible { display: flex; }
   </style>
 </head>
 <body>
 
-<aside id="sidebar">
-  <div class="logo">
-    <h1>Atlas</h1>
-    <span>Admin Console</span>
+<!-- Login screen — shown when not authenticated or not platform admin -->
+<div id="login-screen">
+  <div class="login-card">
+    <h2>Atlas Admin</h2>
+    <p>Sign in with your platform admin account</p>
+    <form id="login-form">
+      <div class="field">
+        <label>Email</label>
+        <input id="email" type="email" autocomplete="email" placeholder="admin@example.com" required>
+      </div>
+      <div class="field">
+        <label>Password</label>
+        <input id="password" type="password" autocomplete="current-password" required>
+      </div>
+      <button class="btn-primary" type="submit" id="login-btn">Sign in</button>
+      <div class="login-error" id="login-error"></div>
+    </form>
   </div>
-  <nav id="nav">
-    <div class="nav-section">Overview</div>
-    <a href="#" data-view="overview" class="active">Dashboard</a>
-    <a href="#" data-view="usage">Usage &amp; Cost</a>
-    <div class="nav-section">Tenants</div>
-    <div id="tenant-nav"></div>
-  </nav>
-</aside>
+</div>
 
-<main id="main">
-  <div id="view" class="loading">Loading…</div>
-</main>
+<!-- App shell — shown after successful auth -->
+<div id="app">
+  <aside id="sidebar">
+    <div class="logo">
+      <h1>Atlas</h1>
+      <span>Admin Console</span>
+    </div>
+    <nav id="nav">
+      <div class="nav-section">Overview</div>
+      <a href="#" data-view="overview" class="active">Dashboard</a>
+      <a href="#" data-view="usage">Usage &amp; Cost</a>
+      <div class="nav-section">Tenants</div>
+      <div id="tenant-nav"></div>
+    </nav>
+    <div style="margin-top:auto;padding:16px 20px;border-top:1px solid var(--border)">
+      <span id="current-user" style="font-size:12px;color:var(--muted)"></span>
+      <a href="#" id="logout-btn" style="display:block;font-size:12px;color:var(--accent);margin-top:6px;text-decoration:none">Sign out</a>
+    </div>
+  </aside>
+
+  <main id="main">
+    <div id="view" class="loading">Loading…</div>
+  </main>
+</div>
 
 <script>
 const API = '';
@@ -122,11 +183,73 @@ let _tenants = [];
 let _activeView = 'overview';
 let _activeTenantId = null;
 
+// ── Auth ─────────────────────────────────────────────────────────────────────
+
+function showLogin(msg = '') {
+  document.getElementById('app').classList.remove('visible');
+  document.getElementById('login-screen').classList.add('visible');
+  if (msg) document.getElementById('login-error').textContent = msg;
+}
+
+function showApp(user) {
+  document.getElementById('login-screen').classList.remove('visible');
+  document.getElementById('app').classList.add('visible');
+  document.getElementById('current-user').textContent = user.email ?? user.id;
+}
+
+document.getElementById('login-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const btn = document.getElementById('login-btn');
+  const errEl = document.getElementById('login-error');
+  errEl.textContent = '';
+  btn.disabled = true;
+  btn.textContent = 'Signing in…';
+  try {
+    const r = await fetch('/auth/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify({
+        email: document.getElementById('email').value,
+        password: document.getElementById('password').value,
+      }),
+    });
+    const data = await r.json();
+    if (!r.ok || !data.ok) {
+      errEl.textContent = data.error ?? 'Login failed';
+      return;
+    }
+    // Verify the user is actually a platform admin
+    const meR = await fetch('/admin/me', { credentials: 'include' });
+    const me = await meR.json();
+    if (!me.isAdmin) {
+      errEl.textContent = 'This account does not have platform admin access.';
+      return;
+    }
+    showApp(me.user);
+    await loadTenants();
+    render();
+  } catch (err) {
+    errEl.textContent = err.message ?? 'Network error';
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Sign in';
+  }
+});
+
+document.getElementById('logout-btn').addEventListener('click', async (e) => {
+  e.preventDefault();
+  try { await fetch('/auth/logout', { method: 'POST', credentials: 'include' }); } catch { /* ignore */ }
+  showLogin();
+  document.getElementById('email').value = '';
+  document.getElementById('password').value = '';
+});
+
 // ── API ─────────────────────────────────────────────────────────────────────
 
 async function api(path) {
   const r = await fetch(API + path, { credentials: 'include' });
-  if (r.status === 403) { location.href = '/'; return null; }
+  if (r.status === 401 || r.status === 403) { showLogin('Session expired — please sign in again.'); return null; }
   if (!r.ok) throw new Error(`API ${path} → ${r.status}`);
   return r.json();
 }
@@ -424,21 +547,37 @@ function fmtDate(s) {
   return d.toLocaleDateString() + ' ' + d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 }
 
-// ── Init ──────────────────────────────────────────────────────────────────────
+// ── Tenant loading ────────────────────────────────────────────────────────────
 
-async function init() {
+async function loadTenants() {
   try {
     const data = await api('/admin/tenants');
     if (!data) return;
     _tenants = data.tenants ?? [];
-    const navEl = document.getElementById('tenant-nav');
-    navEl.innerHTML = _tenants.map(t =>
+    document.getElementById('tenant-nav').innerHTML = _tenants.map(t =>
       `<a href="#" data-view="tenant" data-tenant="${t.id}">${t.name ?? t.slug ?? t.id}</a>`
     ).join('');
   } catch (err) {
     console.error('Failed to load tenants:', err);
   }
-  await render();
+}
+
+// ── Init ──────────────────────────────────────────────────────────────────────
+
+async function init() {
+  try {
+    const r = await fetch('/admin/me', { credentials: 'include' });
+    const me = await r.json();
+    if (!me.isAdmin) {
+      showLogin();
+      return;
+    }
+    showApp(me.user);
+    await loadTenants();
+    await render();
+  } catch (err) {
+    showLogin('Unable to reach server.');
+  }
 }
 
 init();
