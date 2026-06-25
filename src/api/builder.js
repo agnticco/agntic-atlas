@@ -382,6 +382,14 @@ Rules:
       try { res.write(`data: ${JSON.stringify(obj)}\n\n`); } catch { closed = true; }
     };
 
+    // Heartbeat: send an SSE comment every 15 s to keep Cloudflare Tunnel alive.
+    // Without this, a >100 s LLM call (e.g. processing large web search results)
+    // produces no bytes, Cloudflare aborts the body stream, and the browser sees
+    // "Failed to fetch" even though the server eventually completed the work.
+    const heartbeat = setInterval(() => {
+      if (!closed) try { res.write(': heartbeat\n\n'); } catch { closed = true; }
+    }, 15000);
+
     try {
       const llm = spine.llm;
       if (!llm?.invoke) { sseWrite({ type: 'error', error: 'LLM unavailable' }); res.end(); return; }
@@ -557,8 +565,10 @@ Rules:
         logEvent('chat.reply', { tenant: req.tenant?.id ?? null, turns: messages.length, parsed: false });
         sseWrite({ type: 'reply', reply: text || "I'm here — what would you like to work on?", readyToBuild: false, buildIntent: null });
       }
+      clearInterval(heartbeat);
       res.end();
     } catch (err) {
+      clearInterval(heartbeat);
       logEvent('chat.error', { tenant: req.tenant?.id ?? null, ...errFields(err) });
       sseWrite({ type: 'error', error: cleanLLMError(err) });
       res.end();
