@@ -19,7 +19,7 @@
 
 import { createConverger } from '../converger/index.js';
 import { GraphInterrupt }  from '../graph/index.js';
-import { SystemMessage, HumanMessage } from '../core/message.js';
+import { SystemMessage, HumanMessage, AIMessage, ToolMessage } from '../core/message.js';
 import { logEvent, errFields } from '../utils/event-log.js';
 import { channelIdForCapability } from '../connectors/slack/index.js';
 import { webConnectionStatus } from '../connectors/web/index.js';
@@ -218,6 +218,8 @@ BEHAVIOR:
 - FILE ACCESS: if the intent involves reading files, documents, PDFs, or attachments — check the connectors list. If Filesystem is listed, name the folder. If not, surface the gap before building: e.g. "To read that file in the workflow you'd need a folder connected under Knowledge. Set that up first?"
 - ready_to_build stays false until the user clearly signals they want to build (e.g. "let's do it", "set it up", "yes, build it", "go ahead"). At that point set ready_to_build:true and write build_intent: one clear paragraph covering trigger + steps + destination, folding in everything discussed.
 - If they seem close but haven't confirmed, gently offer ("Want me to set this up?") but keep ready_to_build:false.
+
+DIRECT ACTIONS — you have tools for each connected service. When the user asks you to DO something now (e.g. "send an email to...", "create a folder called...", "search my calendar", "look up that Airtable record"), use the appropriate tool immediately — do not ask them to confirm, just act. After the tool completes, report what happened in your reply field in the normal JSON format. Do NOT use tools speculatively or when the user is just exploring — only when they explicitly ask you to perform an action.
 ${connectorBlock}`;
 }
 
@@ -227,6 +229,55 @@ function extractJsonLoose(text) {
   if (fenced) return fenced[1].trim();
   const obj = text.match(/\{[\s\S]*\}/);
   return obj ? obj[0] : text.trim();
+}
+
+// Convert a capability's configSchema array to an Anthropic JSON Schema for tool input.
+function configSchemaToInputSchema(configSchema) {
+  const properties = {};
+  const required = [];
+  for (const field of (configSchema ?? [])) {
+    if (!field.key) continue;
+    properties[field.key] = {
+      type: field.type === 'number' ? 'number' : 'string',
+      description: [field.label, field.hint].filter(Boolean).join('. '),
+    };
+    if (!field.optional) required.push(field.key);
+  }
+  return { type: 'object', properties, required };
+}
+
+// Build Anthropic tool definitions for all step-position capabilities that belong
+// to a connected connector. Triggers and delivery-only capabilities are excluded —
+// they aren't meaningful as one-off chat actions.
+function buildChatTools(registry, connectedSet) {
+  if (!registry) return [];
+  const tools = [];
+  for (const cap of registry.list({ position: 'step' })) {
+    if (cap.connector && !connectedSet.has(cap.connector)) continue;
+    tools.push({
+      name:         cap.id,
+      description:  cap.description || cap.name,
+      input_schema: configSchemaToInputSchema(cap.configSchema),
+    });
+  }
+  return tools;
+}
+
+// Inject connector credentials into a capability config object (mutates config).
+// Mirrors the workflow run path's token injection — same connectors, same store access.
+async function injectCapabilityCredentials(cap, config, { auth, tenant, user }) {
+  if (!cap?.connector) return config;
+  if (cap.connector === 'google') {
+    const tok = await getGoogleAccessToken({ oauthTokenStore: auth.oauthTokenStore, cipher: auth.cipher, tenantId: tenant.id, userId: user.id });
+    if (tok) config.googleToken = tok;
+  } else if (cap.connector === 'slack') {
+    const grant = getSlackToken({ oauthTokenStore: auth.oauthTokenStore, cipher: auth.cipher, tenantId: tenant.id });
+    if (grant?.botToken) config.token = grant.botToken;
+  } else if (cap.connector === 'airtable') {
+    const tok = await getAirtableAccessToken({ oauthTokenStore: auth.oauthTokenStore, cipher: auth.cipher, tenantId: tenant.id });
+    if (tok) config.airtableToken = tok;
+  }
+  return config;
 }
 
 function isConnectorConnected(cap) {
@@ -339,13 +390,13 @@ Rules:
       // Resolve live connector grants and build connector lines from the registry.
       // Any connector registered in the CapabilityRegistry appears automatically.
       const connectorLines = [];
+      const connectedSet = new Set();
       try {
         const sl  = await spine.slack.resolveForTenant(req.tenant.id);
         const go  = await spine.google.resolveForTenant(req.tenant.id, req.user.id);
         const at  = spine.airtable.resolveForTenant(req.tenant.id);
         const web = webConnectionStatus();
 
-        const connectedSet = new Set();
         if (sl.connected)  connectedSet.add('slack');
         if (go.connected)  connectedSet.add('google');
         if (at.connected)  connectedSet.add('airtable');
@@ -415,10 +466,53 @@ Rules:
       } catch { /* non-fatal */ }
 
       const chatUser = { name: req.user.display_name || req.user.email, email: req.user.email };
-      const raw = await withLLMRetry(() => llm.invoke(
-        [{ role: 'system', content: buildChatSystem(connectorLines, chatUser) + ragBlock }, ...history],
-        { configurable: { modelTier: 'balanced', sessionId: chatSessionId, costContext: 'chat' } },
-      ));
+      const chatTools = buildChatTools(spine.engine?.capabilityRegistry, connectedSet);
+      const invokeConfig = {
+        configurable: { modelTier: 'balanced', sessionId: chatSessionId, costContext: 'chat' },
+        ...(chatTools.length ? { tools: chatTools } : {}),
+      };
+
+      // Tool-use loop: the model may call tools before returning the final JSON reply.
+      // Max 3 rounds to prevent runaway loops. Each iteration:
+      //   1. Call the LLM (with tools on every turn so it can chain calls).
+      //   2. If the model issued tool calls, execute each capability and append results.
+      //   3. Repeat until no tool calls or max iterations reached.
+      const msgArray = [
+        { role: 'system', content: buildChatSystem(connectorLines, chatUser) + ragBlock },
+        ...history,
+      ];
+      const MAX_TOOL_ROUNDS = 3;
+      let raw;
+      for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
+        raw = await withLLMRetry(() => llm.invoke(msgArray, invokeConfig));
+        const toolCalls = raw?.additionalKwargs?.toolCalls;
+        if (!Array.isArray(toolCalls) || !toolCalls.length) break;
+
+        // Append the assistant message preserving the raw Anthropic content array
+        // (required for Anthropic to accept the subsequent tool_result turn).
+        msgArray.push(new AIMessage(raw.content ?? '', raw.additionalKwargs ?? {}));
+
+        // Execute each tool call and append ToolMessage results.
+        await Promise.all(toolCalls.map(async (tc) => {
+          let resultStr;
+          try {
+            const registry = spine.engine?.capabilityRegistry;
+            const handler  = registry?.getHandler(tc.name);
+            if (!handler) throw new Error(`Unknown tool: ${tc.name}`);
+            const cap    = registry.get(tc.name);
+            const config = { ...(tc.args ?? {}) };
+            await injectCapabilityCredentials(cap, config, { auth: spine.auth, tenant: req.tenant, user: req.user });
+            const result = await handler({ config, body: null });
+            resultStr = JSON.stringify(result ?? {});
+            logEvent('chat.tool.ok', { tenant: req.tenant?.id ?? null, tool: tc.name });
+          } catch (toolErr) {
+            resultStr = JSON.stringify({ error: toolErr.message ?? String(toolErr) });
+            logEvent('chat.tool.error', { tenant: req.tenant?.id ?? null, tool: tc.name, ...errFields(toolErr) });
+          }
+          msgArray.push(new ToolMessage(resultStr, tc.id));
+        }));
+      }
+
       const text = (typeof raw === 'string' ? raw : raw?.content ?? '').trim();
 
       let parsed = null;
@@ -689,24 +783,7 @@ Rules:
       if (!handler) return res.status(400).json({ error: `Capability not found: ${capabilityId}` });
 
       const cap    = registry.get(capabilityId);
-      const config = { ...params };
-
-      // Inject connector credentials the same way the workflow run path does.
-      if (cap.connector === 'google') {
-        const tok = await getGoogleAccessToken({
-          oauthTokenStore: spine.auth.oauthTokenStore,
-          cipher: spine.auth.cipher,
-          tenantId: req.tenant.id,
-          userId: req.user.id,
-        });
-        if (tok) config.googleToken = tok;
-      } else if (cap.connector === 'slack') {
-        const grant = getSlackToken({ oauthTokenStore: spine.auth.oauthTokenStore, cipher: spine.auth.cipher, tenantId: req.tenant.id });
-        if (grant?.botToken) config.token = grant.botToken;
-      } else if (cap.connector === 'airtable') {
-        const tok = await getAirtableAccessToken({ oauthTokenStore: spine.auth.oauthTokenStore, cipher: spine.auth.cipher, tenantId: req.tenant.id });
-        if (tok) config.airtableToken = tok;
-      }
+      const config = await injectCapabilityCredentials(cap, { ...params }, { auth: spine.auth, tenant: req.tenant, user: req.user });
 
       const result = await handler({ config, body: null });
       logEvent('builder.setup.ok', { tenant: req.tenant.id, capabilityId });
