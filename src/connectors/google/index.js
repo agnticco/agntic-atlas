@@ -13,6 +13,25 @@ import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { googleProviderConfig } from '../../auth/oauth-client.js';
 
+/** Strip HTML tags and decode common entities to plain text for non-HTML destinations. */
+function stripHtml(str) {
+  if (!str || typeof str !== 'string') return str;
+  return str
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<\/p>/gi, '\n\n')
+    .replace(/<\/li>/gi, '\n')
+    .replace(/<[^>]+>/g, '')
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&#39;/g, "'")
+    .replace(/&quot;/g, '"')
+    .replace(/[ \t]{2,}/g, ' ')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
 const __dir = dirname(fileURLToPath(import.meta.url));
 // Some Google APIs have their own subdomain hosts and drop the service prefix.
 // e.g. /docs/v1/documents → https://docs.googleapis.com/v1/documents
@@ -448,8 +467,9 @@ export async function docsRead(gapi, { documentId }) {
 export async function docsCreate(gapi, { title, content }) {
   const doc = await gapi('POST', '/docs/v1/documents', { body: { title } });
   if (content) {
+    const text = stripHtml(content);
     await gapi('POST', `/docs/v1/documents/${doc.documentId}:batchUpdate`, {
-      body: { requests: [{ insertText: { location: { index: 1 }, text: content } }] },
+      body: { requests: [{ insertText: { location: { index: 1 }, text } }] },
     });
   }
   return { documentId: doc.documentId, link: `https://docs.google.com/document/d/${doc.documentId}` };
@@ -521,6 +541,7 @@ export function registerGoogleChannels(capabilityRegistry) {
     id: 'gmail_send', connector: 'google', positions: ['step', 'delivery'],
     name: 'Send Email (Gmail)', icon: 'mail',
     description: 'Send an email from the connected Gmail account.',
+    outputFormat: 'html',
     configSchema: [
       { key: 'to',      label: 'To',      type: 'string',   optional: false },
       { key: 'subject', label: 'Subject', type: 'string',   optional: false },
@@ -561,6 +582,7 @@ export function registerGoogleChannels(capabilityRegistry) {
     id: 'calendar_create_event', connector: 'google', positions: ['step', 'delivery'],
     name: 'Create Calendar Event', icon: 'calendar',
     description: 'Add an event to the connected Google Calendar.',
+    outputFormat: 'plain',
     configSchema: [
       { key: 'title',       label: 'Title',                            type: 'string', optional: false },
       { key: 'start',       label: 'Start (ISO datetime)',              type: 'string', optional: false },
@@ -603,6 +625,7 @@ export function registerGoogleChannels(capabilityRegistry) {
     id: 'sheets_append', connector: 'google', positions: ['step', 'delivery'],
     name: 'Append to Google Sheet', icon: 'table',
     description: 'Add rows of data to a spreadsheet.',
+    outputFormat: 'plain',
     configSchema: [
       { key: 'spreadsheetId', label: 'Spreadsheet ID',    type: 'string', optional: false },
       { key: 'range',         label: 'Range / Sheet',      type: 'string', optional: true,  hint: 'Sheet name or range; defaults to first sheet' },
@@ -629,6 +652,7 @@ export function registerGoogleChannels(capabilityRegistry) {
     id: 'docs_create', connector: 'google', positions: ['step', 'delivery'],
     name: 'Create Google Doc', icon: 'file-text',
     description: 'Create a new Google Doc with optional initial content.',
+    outputFormat: 'plain',
     configSchema: [
       { key: 'title',   label: 'Title',   type: 'string',   optional: false },
       { key: 'content', label: 'Content', type: 'textarea', optional: true, hint: 'Initial content; omit to use prior step output' },
@@ -655,6 +679,7 @@ export function registerGoogleChannels(capabilityRegistry) {
     id: 'tasks_create', connector: 'google', positions: ['step', 'delivery'],
     name: 'Create Task', icon: 'check-square',
     description: 'Add a task to a Google Tasks list.',
+    outputFormat: 'plain',
     configSchema: [
       { key: 'title',      label: 'Title',       type: 'string', optional: false },
       { key: 'notes',      label: 'Notes',       type: 'string', optional: true  },

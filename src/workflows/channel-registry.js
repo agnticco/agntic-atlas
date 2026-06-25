@@ -50,6 +50,7 @@ export class ChannelRegistry {
       icon:           def.icon        ?? 'send',
       configSchema:   def.configSchema  ?? [],
       requiredScopes: def.requiredScopes ?? [],
+      outputFormat:   def.outputFormat ?? 'plain',
       isReady:        def.isReady     ?? (() => true),
       handle:         def.deliver,
     });

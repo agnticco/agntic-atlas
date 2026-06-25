@@ -18,11 +18,12 @@ export const INBOX_CAPABILITY_IDS = new Set(['search_inbox']);
 export function registerInboxCapability(registry, { inboxStore, getRagInbox }) {
   // ── Delivery ──────────────────────────────────────────────────────────────
   registry.register({
-    id:          'inbox_deliver',
-    connector:   'atlas',
-    name:        'Atlas Inbox',
-    description: 'Deliver workflow output to the user\'s Atlas inbox and index it for future retrieval',
-    positions:   ['delivery'],
+    id:           'inbox_deliver',
+    connector:    'atlas',
+    name:         'Atlas Inbox',
+    description:  'Deliver workflow output to the user\'s Atlas inbox and index it for future retrieval',
+    positions:    ['delivery'],
+    outputFormat: 'plain',
     configSchema: [
       { key: 'subject', label: 'Subject', type: 'text', optional: true,
         hint: 'Message title shown in the inbox list. Defaults to the workflow name.' },

@@ -24,6 +24,7 @@ export function registerInAppChannel(registry) {
     name: 'Inbox (in-app)',
     description: 'Delivers the result to the Agntic Inbox. Shown in the sidebar with an unread badge.',
     icon: 'inbox',
+    outputFormat: 'plain',
     configSchema: [
       { key: 'title', label: 'Title', type: 'string', optional: true, hint: 'Shown as the inbox item title. Supports {{date}}.' },
     ],
@@ -52,6 +53,7 @@ export function registerWebhookChannel(registry) {
     name: 'Webhook (HTTP POST)',
     description: 'POSTs the result as JSON to a URL you control. Good for piping Flow output into external systems you own.',
     icon: 'link',
+    outputFormat: 'plain',
     configSchema: [
       { key: 'url',     label: 'URL',     type: 'string', optional: false },
       { key: 'headers', label: 'Headers', type: 'object', optional: true, hint: 'Extra HTTP headers as an object (e.g. auth tokens)' },

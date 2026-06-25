@@ -243,6 +243,7 @@ export function registerSlackChannel(registry, { fetchImpl = fetch } = {}) {
   registry.register({
     id: 'slack', name: 'Slack', icon: 'slack',
     description: 'Posts a message to a Slack channel.',
+    outputFormat: 'mrkdwn',
     configSchema: [
       { key: 'target',     label: 'Channel',      type: 'string',   optional: false },
       { key: 'body',       label: 'Message',       type: 'textarea', optional: true  },
@@ -266,6 +267,7 @@ export function registerSlackChannel(registry, { fetchImpl = fetch } = {}) {
   registry.register({
     id: 'slack_dm', name: 'Slack DM', icon: 'slack',
     description: 'Sends a direct message to a user (by Slack user ID or email).',
+    outputFormat: 'mrkdwn',
     configSchema: [
       { key: 'user', label: 'User (ID or email)', type: 'string',   optional: false },
       { key: 'body', label: 'Message',            type: 'textarea', optional: true  },
