@@ -20,12 +20,6 @@ const STYLE_GUIDE = {
   plain:     'plain conversational language, no jargon',
 };
 
-function _deliveryFormatSuffix(channel) {
-  if (channel === 'email') return ` Your output will be delivered as an HTML email. Write well-designed HTML with inline styles for visual hierarchy. Use semantic structure: <h2 style="font-size:20px;font-weight:600;color:#0d0d0d;margin:0 0 10px"> for section headers, <p style="color:#333;line-height:1.7"> for body text, <ul style="color:#333;line-height:1.7"> for lists. For callout sections or highlight cards use <div class="card"> or <div class="callout"> (these CSS classes are provided by the email shell). Use <hr> to separate major sections. Do NOT include <!DOCTYPE>, <html>, <head>, or <body> wrappers — only the inner content. Aim for something that looks like a well-designed newsletter, not a plain document.`;
-  if (channel === 'slack') return ' Your output will be posted to Slack — format it as Slack mrkdwn: use *bold*, _italic_, `code`, and • bullet points. No HTML tags.';
-  return '';
-}
-
 export const summarizeNodeType = {
   type: 'summarize',
   label: 'Summarize',
@@ -60,8 +54,7 @@ export const summarizeNodeType = {
     const focus  = cfg.focus ? `\n\nEmphasise: ${cfg.focus}.` : '';
 
     const prompt = `Summarize the following content.\n\nTarget length: ${length}.\nTarget style: ${style}.${focus}\n\nReturn ONLY the summary — no preamble, no commentary on your choices.\n\n---\n${input}`;
-    const formatSuffix = _deliveryFormatSuffix(ctx.deliveryChannel);
-    const system = `You are a careful writer producing a workflow-stage summary. Keep every factual detail that matters; do not invent or infer. Preserve inline links [text](url) and embedded images ![alt](url) that were in the source if they are relevant to your summary.${formatSuffix}`;
+    const system = 'You are a careful writer producing a workflow-stage summary. Keep every factual detail that matters; do not invent or infer. Preserve inline links [text](url) and embedded images ![alt](url) that were in the source if they are relevant to your summary.';
 
     const res = await services.llm.invoke(
       [new SystemMessage(system), new HumanMessage(prompt)],
