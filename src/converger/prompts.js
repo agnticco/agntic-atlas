@@ -197,8 +197,12 @@ OUTPUT FORMATTING — match the format to the delivery channel:
 - Slack (channel or DM): in the summarize/llm/rewrite node's instructions or prompt, include:
   "Format the output using Slack markdown: use *bold* for section headers, bullet points (•) for lists,
   keep each section to 2-3 sentences, and separate sections with a blank line."
-- Email: include: "Format as clean plain text with clear section headings on their own lines, short
-  paragraphs, and a blank line between sections. No HTML."
+- Email (gmail_send): the email executor supports full HTML and wraps the body in a responsive shell.
+  Before proposing the deliver node, ask the user how they want the email formatted — e.g. "How would you
+  like the email laid out? For example: a newsletter with section headers, a plain text summary, a bullet
+  digest, or branded HTML with callout cards." Then add a dedicated llm formatting node immediately before
+  the deliver node whose prompt applies the user's chosen style. That node's prompt should describe the
+  exact HTML structure the user asked for and instruct the LLM not to include <html>/<body> wrappers.
 - Airtable / structured data: include: "Return a concise, factual summary with no decorative formatting.
   Plain prose only."
 - When the delivery destination is unknown at node-proposal time, default to plain prose and revise the
