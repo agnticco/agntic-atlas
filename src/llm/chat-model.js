@@ -26,7 +26,7 @@ export class ChatModel extends Runnable {
    * @param {string} options.model           - Model ID, e.g. 'claude-sonnet-4-6' (REQUIRED)
    * @param {string} options.apiKey          - API key (REQUIRED)
    * @param {number} [options.temperature]   - 0–1, default 0.7
-   * @param {number} [options.maxTokens]     - Max output tokens, default 2048
+   * @param {number} [options.maxTokens]     - Max output tokens, default 8192
    * @param {boolean} [options.verbose]      - Log requests, default false
    */
   constructor(options = {}) {
@@ -46,7 +46,7 @@ export class ChatModel extends Runnable {
     this.model       = options.model;
     this.apiKey      = options.apiKey;
     this.temperature = options.temperature ?? 0.7;
-    this.maxTokens   = options.maxTokens   ?? 2048;
+    this.maxTokens   = options.maxTokens   ?? 8192;
     this.verbose     = options.verbose     ?? false;
 
     this._client = null;
