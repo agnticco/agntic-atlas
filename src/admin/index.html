@@ -319,7 +319,7 @@ async function renderOverview(el) {
     </div>
     <div class="card-grid">
       ${statCard('Total Runs', fmt(o.total_runs), 'scheduled runs (non-test)')}
-      ${statCard('Total Cost', '$' + (o.cost_usd ?? 0).toFixed(4), 'estimated USD')}
+      ${statCard('Total Cost', '$' + (o.cost_usd ?? 0).toFixed(4), `${fmt(o.total_calls)} LLM calls`)}
       ${statCard('Tokens In', fmtK(o.tokens_in), 'input tokens')}
       ${statCard('Tokens Out', fmtK(o.tokens_out), 'output tokens')}
     </div>
@@ -328,13 +328,13 @@ async function renderOverview(el) {
       <div class="table-wrap">
         <table>
           <thead><tr>
-            <th>Tenant</th><th>Runs</th><th>Tokens In</th><th>Tokens Out</th><th>Cost (USD)</th>
+            <th>Tenant</th><th>LLM Calls</th><th>Tokens In</th><th>Tokens Out</th><th>Cost (USD)</th>
           </tr></thead>
           <tbody>
             ${(data.perTenant ?? []).map(t => `
               <tr class="clickable" onclick="navigate('tenant','${t.tenantId}')">
                 <td>${t.name ?? t.tenantId}</td>
-                <td>${fmt(t.runs)}</td>
+                <td>${fmt(t.llmCalls)}</td>
                 <td>${fmtK(t.tokensIn)}</td>
                 <td>${fmtK(t.tokensOut)}</td>
                 <td class="cost">$${(t.costUsd ?? 0).toFixed(4)}</td>
@@ -472,12 +472,14 @@ async function renderTenantCost(el, tenantId) {
   if (!data) return;
   const daily = data.daily ?? [];
   const maxCost = Math.max(...daily.map(d => d.cost_usd ?? 0), 0.0001);
+  const byContext = data.byContext ?? [];
+  const byWorkflow = data.byWorkflow ?? [];
   el.innerHTML = `
     <div class="breadcrumb">
       <a href="#" onclick="navigate('overview');return false">Dashboard</a> <span>/</span>
       <a href="#" onclick="navigate('tenant','${tenantId}');return false">${tenantId}</a> <span>/</span> Cost
     </div>
-    <div class="page-header"><h2>Cost Breakdown</h2><p>Scheduled runs only — test runs excluded</p></div>
+    <div class="page-header"><h2>Cost Breakdown</h2><p>All LLM calls — converger, workflow nodes, web search</p></div>
     <div class="card-grid">
       ${statCard('Total Cost', '$' + (data.costUsd ?? 0).toFixed(4), 'estimated USD')}
       ${statCard('LLM Calls', fmt(data.llmCalls))}
@@ -486,33 +488,53 @@ async function renderTenantCost(el, tenantId) {
     </div>
     ${daily.length > 0 ? `
     <div class="card gap">
-      <div class="section-title">Daily Cost (30 days)</div>
+      <div class="section-title">Daily Cost — 30 days</div>
       <div class="chart-wrap">
         ${daily.map(d => {
           const h = Math.round(((d.cost_usd ?? 0) / maxCost) * 100);
-          return `<div title="${d.day}: $${(d.cost_usd ?? 0).toFixed(4)}" class="bar" style="height:${Math.max(h,2)}%"></div>`;
+          return `<div title="${d.day}: $${(d.cost_usd ?? 0).toFixed(4)} (${fmt(d.calls)} calls)" class="bar" style="height:${Math.max(h,2)}%"></div>`;
         }).join('')}
       </div>
     </div>` : ''}
     <div class="card">
-      <div class="section-title">Cost per Workflow</div>
+      <div class="section-title">By Surface</div>
       <div class="table-wrap">
         <table>
-          <thead><tr><th>Workflow</th><th>Runs</th><th>Tokens In</th><th>Tokens Out</th><th>LLM Calls</th><th>Cost (USD)</th></tr></thead>
+          <thead><tr><th>Context</th><th>Calls</th><th>Tokens In</th><th>Tokens Out</th><th>Web Searches</th><th>Cost (USD)</th><th>Last Call</th></tr></thead>
           <tbody>
-            ${(data.byWorkflow ?? []).map(w => `
+            ${byContext.length ? byContext.map(c => `
+              <tr>
+                <td class="mono" style="font-size:12px">${c.context ?? '(unknown)'}</td>
+                <td>${fmt(c.calls)}</td>
+                <td>${fmtK(c.tokens_in)}</td>
+                <td>${fmtK(c.tokens_out)}</td>
+                <td>${c.web_searches > 0 ? fmt(c.web_searches) : '—'}</td>
+                <td class="cost">$${(c.cost_usd ?? 0).toFixed(4)}</td>
+                <td class="mono">${fmtDate(c.last_call_at)}</td>
+              </tr>`).join('') : '<tr><td colspan="7" style="text-align:center;color:var(--muted);padding:24px">No cost data yet — LLM calls will appear here once traffic flows through</td></tr>'}
+          </tbody>
+        </table>
+      </div>
+    </div>
+    ${byWorkflow.length ? `
+    <div class="card">
+      <div class="section-title">Workflow Runs</div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Workflow</th><th>Runs</th><th>Succeeded</th><th>Failed</th><th>Last Run</th></tr></thead>
+          <tbody>
+            ${byWorkflow.map(w => `
               <tr>
                 <td>${w.name ?? w.slug ?? w.workflow_id}</td>
                 <td>${fmt(w.runs)}</td>
-                <td>${fmtK(w.tokens_in)}</td>
-                <td>${fmtK(w.tokens_out)}</td>
-                <td>${fmt(w.llm_calls)}</td>
-                <td class="cost">$${(w.cost_usd ?? 0).toFixed(4)}</td>
+                <td>${w.succeeded > 0 ? `<span class="badge badge-green">${w.succeeded}</span>` : '—'}</td>
+                <td>${w.failed > 0 ? `<span class="badge badge-red">${w.failed}</span>` : '—'}</td>
+                <td class="mono">${fmtDate(w.last_run_at)}</td>
               </tr>`).join('')}
           </tbody>
         </table>
       </div>
-    </div>`;
+    </div>` : ''}`;
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────

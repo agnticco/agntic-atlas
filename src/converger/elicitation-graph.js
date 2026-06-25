@@ -41,8 +41,8 @@ function extractJson(text) {
   return text.trim();
 }
 
-async function llmJson(llm, messages) {
-  const res = await llm.invoke(messages);
+async function llmJson(llm, messages, config = {}) {
+  const res = await llm.invoke(messages, config);
   try {
     return JSON.parse(extractJson(typeof res === 'string' ? res : res.content));
   } catch {
@@ -59,13 +59,14 @@ export const DRAFT_DEFAULT = {
   errorHandling: {},
 };
 
-// ── Tier helpers ──────────────────────────────────────────────────────────────
-// Always access models through tier names — never hardcode a provider or model
-// ID here. Whoever configures the ModelPool decides what "fast" and "balanced"
-// mean (Haiku/Sonnet, gpt-4o-mini/gpt-4o, local/local, etc.).
+// ── Tier config helper ────────────────────────────────────────────────────────
+// Build an invoke config that routes through ModelPool to the requested tier.
+// Always call llm.invoke(messages, tierCfg(name, sessionId)) rather than
+// extracting a raw ChatModel — this keeps _trackUsage() in the call path so
+// cost records are emitted for every converger turn.
 
-function tier(llm, name) {
-  return llm.tiers?.[name] ?? llm.tiers?.balanced ?? llm;
+function tierCfg(tierName, sessionId) {
+  return { configurable: { modelTier: tierName, sessionId, costContext: 'converger' } };
 }
 
 // ── Graph builder ─────────────────────────────────────────────────────────────
@@ -104,7 +105,8 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
   // must not get stuck asking questions when answers are vague.
   const MAX_CLARIFICATIONS = 2;
 
-  graph.addNode('analyze', async (state) => {
+  graph.addNode('analyze', async (state, cfg) => {
+    const sessionId = cfg?.configurable?.threadId;
     const gap = scoreGap(state.draft);
     if (gap.complete) return { phase: 'ratifying' };
 
@@ -117,7 +119,7 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
       clarifications: state.clarifications,
       capabilities:   state.capabilities,
     }));
-    const parsed = await llmJson(tier(llm, 'fast'), [sysmsg, usermsg]);
+    const parsed = await llmJson(llm, [sysmsg, usermsg], tierCfg('fast', sessionId));
 
     if (parsed?.ready === false && parsed.question) {
       return { phase: 'clarifying', _pendingQuestion: parsed.question };
@@ -143,7 +145,8 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
 
   // ── propose ────────────────────────────────────────────────────────────────
   // Generate the next component proposal; interrupt for 3-way confirmation.
-  graph.addNode('propose', async (state) => {
+  graph.addNode('propose', async (state, cfg) => {
+    const sessionId = cfg?.configurable?.threadId;
     const gap    = scoreGap(state.draft);
     const sysmsg = new SystemMessage(buildSystemPrompt(state.capabilities));
     const usermsg = new HumanMessage(buildProposePrompt({
@@ -153,7 +156,7 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
       gap,
     }));
 
-    const proposal = await llmJson(tier(llm, 'balanced'), [sysmsg, usermsg]);
+    const proposal = await llmJson(llm, [sysmsg, usermsg], tierCfg('balanced', sessionId));
 
     // If the LLM returned unparseable output, surface it as a clarification
     // rather than silently skipping — guarantees we always interrupt so the
@@ -184,7 +187,7 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
         original:     proposal,
         modification: confirmation.modification,
       }));
-      const updated = await llmJson(tier(llm, 'fast'), [modSysmsg, modUsermsg]);
+      const updated = await llmJson(llm, [modSysmsg, modUsermsg], tierCfg('fast', sessionId));
       const merged  = updated ?? proposal;
       newDraft = applyProposal(state.draft, merged, { type: 'accept' });
       logEntry.mergedProposal = merged;

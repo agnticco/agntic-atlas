@@ -42,7 +42,11 @@ export const connectorActionNodeType = {
     if (!handler) throw new Error(`Connector action "${actionId}" has no handler`);
 
     // Pass the upstream output through as `body` (some actions consume it; pure
-    // read/lookup actions ignore it and work from config alone).
-    return handler({ config: cfg, body: stringifyOutput(ctx.lastOutput), title: cfg.title ?? null, lastOutput: ctx.lastOutput });
+    // read/lookup actions ignore it and work from config alone). Forward the
+    // cost-tracking sessionId so LLM-backed connectors (e.g. web_search) emit
+    // cost records under the workflow run's session rather than 'unknown'.
+    const sessionId   = ctx.costConfig?.configurable?.sessionId;
+    const costContext = ctx.costConfig?.configurable?.costContext;
+    return handler({ config: cfg, body: stringifyOutput(ctx.lastOutput), title: cfg.title ?? null, lastOutput: ctx.lastOutput, sessionId, costContext });
   },
 };

@@ -17,6 +17,7 @@
  */
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { randomUUID } from 'node:crypto';
 import { dirname, resolve, join } from 'node:path';
 import { createHmac, timingSafeEqual } from 'node:crypto';
 
@@ -521,6 +522,43 @@ export async function bootSpine() {
   });
 
   const costTracker = new CostTracker();
+
+  // Wire CostTracker to persist every LLM call to llm_cost_log, with tenant
+  // attribution derived from userId → tenant_id via the user store.
+  // Must run after auth is initialized so userStore is available.
+  {
+    const userStore = auth.userStore;
+    const _tenantCache = new Map();
+    costTracker.setStore({
+      recordCost(record) {
+        try {
+          let tenantId = null;
+          if (record.userId) {
+            if (!_tenantCache.has(record.userId)) {
+              _tenantCache.set(record.userId, userStore.findById(record.userId)?.tenant_id ?? null);
+            }
+            tenantId = _tenantCache.get(record.userId);
+          }
+          workflowStore.insertCostCall({
+            id:          randomUUID(),
+            ts:          record.timestamp,
+            sessionId:   record.sessionId,
+            userId:      record.userId,
+            tenantId,
+            tier:        record.tier,
+            model:       record.model,
+            context:     record.context,
+            tokensIn:    record.inputTokens,
+            tokensOut:   record.outputTokens,
+            costUsd:     record.costUsd ?? 0,
+            webSearches: record.webSearchRequests ?? 0,
+          });
+        } catch { /* never crash a workflow over a cost log write */ }
+      },
+      recordCompression() { /* not persisted */ },
+    });
+  }
+
   const llm = buildLLM(costTracker);
   const engine = await buildEngine(workflowStore, llm, costTracker);
   const rag = buildRag();
@@ -1259,11 +1297,23 @@ export function createApp(spine) {
       if (spec.id) {
         try { dbRun = spine.engine.workflowStore.startRun(spec.id, { isTest: true }); } catch { /* best-effort */ }
       }
+      // Pre-register userId when dbRun is available — ensures cost records
+      // before the first LLM call carry tenant attribution.
+      if (dbRun && req.user?.id) {
+        spine.costTracker?.setSessionUser?.(`flow-run-${dbRun.id}`, req.user.id);
+      }
       let runId = null, completed = false, output = null;
       const steps = [];
       const flowOpts = { ...(initialContext != null ? { initialContext } : {}), ...(dbRun ? { runId: dbRun.id } : {}) };
       for await (const ev of spine.engine.flowTester.run(spec, flowOpts)) {
-        if (ev.type === 'run_started') runId = ev.runId;
+        if (ev.type === 'run_started') {
+          runId = ev.runId;
+          // Register when dbRun was unavailable (spec had no id) — sessionId
+          // only known after FlowTester generates it.
+          if (!dbRun && req.user?.id) {
+            spine.costTracker?.setSessionUser?.(`flow-run-${runId}`, req.user.id);
+          }
+        }
         else if (ev.type === 'step_completed') { steps.push({ nodeId: ev.nodeId, output: ev.output }); logEvent('run.step', { tenant: tenantId, runId, nodeId: ev.nodeId }); }
         else if (ev.type === 'run_completed') { completed = true; output = ev.output; }
         else if (ev.type === 'run_failed') {

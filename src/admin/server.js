@@ -108,40 +108,56 @@ export function mountAdminRoutes(app, { spine, requireAuth, requirePlatformAdmin
   });
 
   // ── Per-tenant cost breakdown ─────────────────────────────────────────────
-  // Required by P10 gate: /admin/tenants/:id/cost returns cost breakdown
+  // Required by P10 gate: /admin/tenants/:id/cost returns cost breakdown.
+  // Queries llm_cost_log for full coverage: converger turns, workflow nodes,
+  // web search, and any other LLM call surface — not just workflow_runs.
 
   app.get('/admin/tenants/:id/cost', adminOnly, (req, res) => {
     try {
       const tenant = tenants.get(req.params.id);
       if (!tenant) return res.status(404).json({ error: 'Tenant not found' });
       const totals = _tenantCostMetrics(store.db, tenant.id);
+      // Break down by context label (converger / web_search / workflow:slug:nodeId / etc.)
+      const byContext = store.db.prepare(`
+        SELECT context,
+               COUNT(*)           AS calls,
+               SUM(tokens_in)     AS tokens_in,
+               SUM(tokens_out)    AS tokens_out,
+               SUM(cost_usd)      AS cost_usd,
+               SUM(web_searches)  AS web_searches,
+               MAX(ts)            AS last_call_at
+        FROM llm_cost_log
+        WHERE tenant_id = ?
+        GROUP BY context
+        ORDER BY cost_usd DESC
+      `).all(tenant.id);
+      const daily = store.db.prepare(`
+        SELECT date(ts)          AS day,
+               SUM(tokens_in)   AS tokens_in,
+               SUM(tokens_out)  AS tokens_out,
+               SUM(cost_usd)    AS cost_usd,
+               COUNT(*)         AS calls,
+               SUM(web_searches) AS web_searches
+        FROM llm_cost_log
+        WHERE tenant_id = ?
+          AND ts >= date('now', '-30 days')
+        GROUP BY day
+        ORDER BY day
+      `).all(tenant.id);
+      // Execution-level run breakdown (run count, status) — still useful alongside cost log
       const byWorkflow = store.db.prepare(`
         SELECT w.name, w.slug, r.workflow_id,
                COUNT(*) AS runs,
-               SUM(r.tokens_in)  AS tokens_in,
-               SUM(r.tokens_out) AS tokens_out,
-               SUM(r.cost_usd)   AS cost_usd,
-               SUM(r.llm_calls)  AS llm_calls,
+               SUM(CASE WHEN r.status = 'success' THEN 1 ELSE 0 END) AS succeeded,
+               SUM(CASE WHEN r.status = 'error'   THEN 1 ELSE 0 END) AS failed,
                MAX(r.started_at) AS last_run_at
         FROM workflow_runs r
         LEFT JOIN workflows w ON w.id = r.workflow_id
         WHERE r.tenant_id = ? AND r.is_test = 0
         GROUP BY r.workflow_id
-        ORDER BY cost_usd DESC
+        ORDER BY last_run_at DESC
       `).all(tenant.id);
-      const daily = store.db.prepare(`
-        SELECT date(r.started_at) AS day,
-               SUM(r.tokens_in)   AS tokens_in,
-               SUM(r.tokens_out)  AS tokens_out,
-               SUM(r.cost_usd)    AS cost_usd,
-               COUNT(*)           AS runs
-        FROM workflow_runs r
-        WHERE r.tenant_id = ? AND r.is_test = 0
-          AND r.started_at >= date('now', '-30 days')
-        GROUP BY day
-        ORDER BY day
-      `).all(tenant.id);
-      res.json({ tenantId: tenant.id, ...totals, byWorkflow, daily });
+      res.json({ tenantId: tenant.id, ...totals, byContext, daily, byWorkflow });
     } catch (err) {
       logEvent('admin.tenant.cost.error', errFields(err));
       res.status(500).json({ error: err.message });
@@ -149,31 +165,37 @@ export function mountAdminRoutes(app, { spine, requireAuth, requirePlatformAdmin
   });
 
   // ── System-wide usage summary ─────────────────────────────────────────────
+  // Totals from llm_cost_log (full coverage) + run counts from workflow_runs.
 
   app.get('/admin/usage', adminOnly, (req, res) => {
     try {
       const allTenants = tenants.list();
-      const overall = store.db.prepare(`
-        SELECT COUNT(*)        AS total_runs,
-               SUM(tokens_in)  AS tokens_in,
-               SUM(tokens_out) AS tokens_out,
-               SUM(cost_usd)   AS cost_usd,
-               SUM(llm_calls)  AS llm_calls
-        FROM workflow_runs
-        WHERE is_test = 0
+      const overallCost = store.db.prepare(`
+        SELECT COUNT(*)          AS total_calls,
+               SUM(tokens_in)   AS tokens_in,
+               SUM(tokens_out)  AS tokens_out,
+               SUM(cost_usd)    AS cost_usd,
+               SUM(web_searches) AS web_searches
+        FROM llm_cost_log
       `).get();
+      const overallRuns = store.db.prepare(`
+        SELECT COUNT(*) AS total_runs
+        FROM workflow_runs WHERE is_test = 0
+      `).get();
+      const overall = { ...overallCost, total_runs: overallRuns.total_runs ?? 0 };
       const perTenant = allTenants.map(t => ({
         tenantId: t.id,
         name:     t.name ?? t.slug,
         ...(_tenantCostMetrics(store.db, t.id)),
       }));
       const daily = store.db.prepare(`
-        SELECT date(started_at) AS day,
+        SELECT date(ts)   AS day,
                tenant_id,
-               SUM(cost_usd) AS cost_usd,
-               COUNT(*) AS runs
-        FROM workflow_runs
-        WHERE is_test = 0 AND started_at >= date('now', '-30 days')
+               SUM(cost_usd)    AS cost_usd,
+               COUNT(*)         AS calls,
+               SUM(web_searches) AS web_searches
+        FROM llm_cost_log
+        WHERE ts >= date('now', '-30 days')
         GROUP BY day, tenant_id
         ORDER BY day
       `).all();
@@ -211,19 +233,19 @@ function _tenantRunMetrics(db, tenantId) {
 
 function _tenantCostMetrics(db, tenantId) {
   const row = db.prepare(`
-    SELECT COUNT(*)        AS runs,
-           SUM(tokens_in)  AS tokens_in,
-           SUM(tokens_out) AS tokens_out,
-           SUM(cost_usd)   AS cost_usd,
-           SUM(llm_calls)  AS llm_calls
-    FROM workflow_runs WHERE tenant_id = ? AND is_test = 0
+    SELECT COUNT(*)          AS calls,
+           SUM(tokens_in)   AS tokens_in,
+           SUM(tokens_out)  AS tokens_out,
+           SUM(cost_usd)    AS cost_usd,
+           SUM(web_searches) AS web_searches
+    FROM llm_cost_log WHERE tenant_id = ?
   `).get(tenantId);
   return {
-    runs:        row.runs ?? 0,
-    tokensIn:    row.tokens_in  ?? 0,
-    tokensOut:   row.tokens_out ?? 0,
-    costUsd:     +(row.cost_usd  ?? 0).toFixed(6),
-    llmCalls:    row.llm_calls  ?? 0,
+    llmCalls:    row.calls        ?? 0,
+    tokensIn:    row.tokens_in    ?? 0,
+    tokensOut:   row.tokens_out   ?? 0,
+    costUsd:     +(row.cost_usd   ?? 0).toFixed(6),
+    webSearches: row.web_searches ?? 0,
   };
 }
 
