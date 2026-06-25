@@ -80,7 +80,6 @@ export async function createAuthSubsystem({
   const tenantStore  = new TenantStore({ db });
   await tenantStore.init();
   tenantStore.ensurePlatformTenant();
-  tenantStore.ensureDefaultTenant(); // home for migrated single-user pilot data
 
   const tokenService = TokenService.fromEnvOrFile({ secretPath });
   const authProvider = new LocalAuthProvider({ userStore });
