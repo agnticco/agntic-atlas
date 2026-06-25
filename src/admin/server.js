@@ -20,26 +20,31 @@ import path from 'node:path';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
-export function mountAdminRoutes(app, { spine, requireAuth, requirePlatformAdmin }) {
+export function mountAdminRoutes(app, { spine, requireAuth, requirePlatformAdmin, optionalAuth }) {
   const store    = spine.engine.workflowStore;
   const tenants  = spine.auth.tenantStore;
 
-  // Guard: every admin route requires an authenticated platform admin.
+  // Guard: every data route requires an authenticated platform admin.
   // requirePlatformAdmin already calls requireAuth first.
   const adminOnly = [requireAuth, requirePlatformAdmin];
 
-  // ── Admin UI shell ────────────────────────────────────────────────────────
+  // ── Admin UI shell (no auth — HTML is public; data calls enforce auth) ────
 
-  app.get('/admin', adminOnly, (_req, res) => {
+  app.get('/admin', (_req, res) => {
     const uiPath = path.join(__dirname, 'index.html');
-    if (existsSync(uiPath)) {
-      return res.sendFile(uiPath);
-    }
+    if (existsSync(uiPath)) return res.sendFile(uiPath);
     res.status(404).send('Admin UI not found');
   });
 
-  app.get('/admin/ui', adminOnly, (_req, res) => {
-    res.redirect('/admin');
+  app.get('/admin/ui', (_req, res) => res.redirect('/admin'));
+
+  // Who-am-I: returns the current user so the admin SPA can decide whether to
+  // show the login form or the dashboard. Uses optionalAuth — no 401/403 thrown.
+  app.get('/admin/me', optionalAuth ?? ((_req, _res, next) => next()), (req, res) => {
+    if (!req.user) return res.json({ user: null, isAdmin: false });
+    const platformTenantId = spine.auth.platformTenantId;
+    const isAdmin = req.user.role === 'admin' && req.user.tenant_id === platformTenantId;
+    res.json({ user: { id: req.user.id, email: req.user.email, role: req.user.role }, isAdmin });
   });
 
   // ── Tenant list ───────────────────────────────────────────────────────────

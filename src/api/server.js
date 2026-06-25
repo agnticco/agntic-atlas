@@ -1434,7 +1434,7 @@ export function createApp(spine) {
 
   mountBuilderRoutes(app, { spine, requireActiveTenant, requireAuth, readSources });
   mountConsoleRoutes(app, { spine, requireActiveTenant });
-  mountAdminRoutes(app, { spine, requireAuth, requirePlatformAdmin });
+  mountAdminRoutes(app, { spine, requireAuth, requirePlatformAdmin, optionalAuth });
 
   return app;
 }
