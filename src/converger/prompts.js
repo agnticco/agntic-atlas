@@ -247,7 +247,21 @@ RULES:
 - Propose exactly ONE component per response
 - Return ONLY valid JSON — no prose, no markdown fences, no explanation outside the JSON
 
+SETUP ACTIONS — use when the workflow requires a resource that doesn't exist yet (e.g. a Drive
+folder the user named but hasn't created). Propose ONCE per missing resource, BEFORE the node
+that uses it. Never re-propose a setup action that already appears in SETUP COMPLETED above.
+
+Available setup actions:
+- google_create_folder: Create a Google Drive folder. params: { name, parentId? (folderId of parent) }
+  result: { folderId, name, link }
+
+After a setup action executes, its result appears in SETUP COMPLETED. Use the returned folderId,
+channelId, etc. directly in the subsequent node's config — no placeholders.
+
 PROPOSAL FORMATS (return exactly one):
+
+Setup action:
+{"component":"setup_action","action":"google_create_folder","params":{"name":"<folder name>"},"stores_as":"<camelCase key for the result>","rationale":"<one sentence>"}
 
 Trigger examples (use the appropriate type):
 {"component":"trigger","spec":{"type":"email","filter":"from:ups.com","maxResults":5},"rationale":"<one sentence>"}
@@ -320,7 +334,17 @@ Only ask if the answer would materially change the spec. When the trigger type i
 
 // ── Propose prompt — generate next component ─────────────────────────────────
 
-export function buildProposePrompt({ intent, clarifications, draft, gap }) {
+function setupResultsSummary(setupResults) {
+  const entries = Object.entries(setupResults ?? {});
+  if (!entries.length) return '';
+  const lines = ['SETUP COMPLETED (use these exact values in node configs — do not re-propose these actions):'];
+  for (const [key, val] of entries) {
+    lines.push(`  ${key}: ${JSON.stringify(val)}`);
+  }
+  return '\n' + lines.join('\n') + '\n';
+}
+
+export function buildProposePrompt({ intent, clarifications, draft, gap, setupResults }) {
   const prior = (clarifications ?? []).map(({ q, a }) => `  Q: ${q}\n  A: ${a}`).join('\n');
   const draftStr = JSON.stringify({
     triggers: draft.triggers,
@@ -332,7 +356,7 @@ export function buildProposePrompt({ intent, clarifications, draft, gap }) {
   return `Build the next component of this workflow.
 
 INTENT: "${intent}"
-${prior ? `\nCLARIFICATIONS:\n${prior}\n` : ''}
+${prior ? `\nCLARIFICATIONS:\n${prior}\n` : ''}${setupResultsSummary(setupResults)}
 CURRENT DRAFT:
 ${draftStr}
 

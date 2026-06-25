@@ -5,9 +5,10 @@
  * inside createApp(). Each route is auth-gated at the requireActiveTenant level.
  *
  * Session lifecycle:
- *   POST /api/builder/sessions          — start a converger session
- *   POST /api/builder/sessions/:id/respond — send accept/reject/modify/clarify/approve
- *   DELETE /api/builder/sessions/:id    — abandon
+ *   POST /api/builder/sessions                  — start a converger session
+ *   POST /api/builder/sessions/:id/respond      — accept|reject|modify|clarify|approve|setup_executed
+ *   POST /api/builder/sessions/:id/setup        — execute a one-off setup action (create folder, etc.)
+ *   DELETE /api/builder/sessions/:id            — abandon
  *
  * Workflow persistence:
  *   POST /api/builder/workflows         — create + activate a converger-emitted spec
@@ -22,6 +23,7 @@ import { SystemMessage, HumanMessage } from '../core/message.js';
 import { logEvent, errFields } from '../utils/event-log.js';
 import { channelIdForCapability } from '../connectors/slack/index.js';
 import { webConnectionStatus } from '../connectors/web/index.js';
+import { getGoogleAccessToken } from '../connectors/google/index.js';
 
 // Retry an LLM call up to maxRetries times on transient provider errors (500/529/503).
 async function withLLMRetry(fn, maxRetries = 2) {
@@ -663,6 +665,49 @@ Rules:
     logEvent('respond.ok', { tenant: req.tenant?.id ?? null, threadId, sent: req.body?.type, interrupt: result?.type });
     if (result?.type === 'done') sessions.delete(threadId);
     res.json(result);
+  });
+
+  // ── POST /api/builder/sessions/:threadId/setup ───────────────────────────────
+  // Execute a one-off setup action during a converger session (e.g. create a Drive
+  // folder that a workflow node needs). The client calls this after user confirms a
+  // setup_action proposal, then sends { type:'setup_executed', result } to /respond.
+  // Supported actions:
+  //   google_create_folder  — params: { name, parentId? } → { folderId, name, link }
+
+  app.post('/api/builder/sessions/:threadId/setup', requireActiveTenant, async (req, res) => {
+    const { action, params = {} } = req.body ?? {};
+    try {
+      if (action === 'google_create_folder') {
+        const token = await getGoogleAccessToken({
+          oauthTokenStore: spine.auth.oauthTokenStore,
+          cipher:          spine.auth.cipher,
+          tenantId:        req.tenant.id,
+          userId:          req.user.id,
+        });
+        if (!token) return res.status(400).json({ error: 'Google is not connected for this account' });
+
+        const metadata = { name: String(params.name || 'New Folder'), mimeType: 'application/vnd.google-apps.folder' };
+        if (params.parentId) metadata.parents = [String(params.parentId)];
+
+        const r = await fetch('https://www.googleapis.com/drive/v3/files', {
+          method:  'POST',
+          headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+          body:    JSON.stringify(metadata),
+        });
+        if (!r.ok) {
+          const err = await r.json().catch(() => ({}));
+          return res.status(400).json({ error: err?.error?.message ?? `Drive API error ${r.status}` });
+        }
+        const file = await r.json();
+        logEvent('builder.setup.ok', { tenant: req.tenant.id, action, folderId: file.id });
+        return res.json({ result: { folderId: file.id, name: file.name, link: `https://drive.google.com/drive/folders/${file.id}` } });
+      }
+
+      return res.status(400).json({ error: `Unknown setup action: ${action}` });
+    } catch (err) {
+      logEvent('builder.setup.error', { tenant: req.tenant?.id ?? null, action, ...errFields(err) });
+      return res.status(500).json({ error: err.message ?? String(err) });
+    }
   });
 
   // ── DELETE /api/builder/sessions/:threadId ───────────────────────────────────
