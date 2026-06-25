@@ -38,7 +38,7 @@ import {
   WorkflowService,
 } from '../workflows/index.js';
 import { CapabilityRegistry } from '../connectors/capability-registry.js';
-import { LlamaCppLLM, ModelPool, ChatModel } from '../llm/index.js';
+import { LlamaCppLLM, ModelPool, ChatModel, CostTracker } from '../llm/index.js';
 import { EmbeddingModel, TextSplitter, VectorStore, DocumentLoader } from '../rag/index.js';
 import { registerSlackChannel, registerSlackTriggers, createSlackCapabilityProvider } from '../connectors/slack/index.js';
 import {
@@ -73,6 +73,7 @@ import { registerFilesystemCapabilities, FILESYSTEM_CAPABILITY_IDS } from '../co
 import { registerWebCapabilities, webConnectionStatus, WEB_CAPABILITY_IDS } from '../connectors/web/index.js';
 import { mountBuilderRoutes } from './builder.js';
 import { mountConsoleRoutes } from './console.js';
+import { mountAdminRoutes } from '../admin/server.js';
 import { logEvent, errFields } from '../utils/event-log.js';
 
 const PORT = Number(process.env.PORT ?? 3000);
@@ -347,7 +348,7 @@ async function dispatchAirtableEvent(spine, body) {
  * Returns null only when nothing is configured — engine still boots but llm nodes
  * fail at run time with a clear message.
  */
-function buildLLM() {
+function buildLLM(costTracker = null) {
   const anthropicKey = process.env.ANTHROPIC_API_KEY?.trim();
   const openaiKey    = process.env.OPENAI_API_KEY?.trim();
 
@@ -355,23 +356,23 @@ function buildLLM() {
     const fast      = new ChatModel({ provider: 'anthropic', model: 'claude-haiku-4-5-20251001', apiKey: anthropicKey });
     const balanced  = new ChatModel({ provider: 'anthropic', model: 'claude-sonnet-4-6',         apiKey: anthropicKey });
     const powerful  = new ChatModel({ provider: 'anthropic', model: 'claude-sonnet-4-6',         apiKey: anthropicKey });
-    return new ModelPool({ tiers: { fast, balanced, powerful }, defaultTier: 'balanced' });
+    return new ModelPool({ tiers: { fast, balanced, powerful }, defaultTier: 'balanced', costTracker });
   }
 
   if (openaiKey) {
     const fast      = new ChatModel({ provider: 'openai', model: 'gpt-4o-mini', apiKey: openaiKey });
     const balanced  = new ChatModel({ provider: 'openai', model: 'gpt-4o',      apiKey: openaiKey });
     const powerful  = new ChatModel({ provider: 'openai', model: 'gpt-4o',      apiKey: openaiKey });
-    return new ModelPool({ tiers: { fast, balanced, powerful }, defaultTier: 'balanced' });
+    return new ModelPool({ tiers: { fast, balanced, powerful }, defaultTier: 'balanced', costTracker });
   }
 
   if (!existsSync(LOCAL_MODEL_PATH)) return null;
   const local = new LlamaCppLLM({ modelPath: LOCAL_MODEL_PATH, contextSize: 2048 });
-  return new ModelPool({ tiers: { fast: local, balanced: local, powerful: local }, defaultTier: 'balanced' });
+  return new ModelPool({ tiers: { fast: local, balanced: local, powerful: local }, defaultTier: 'balanced', costTracker });
 }
 
 /** Construct the execution engine with `llm` (a ModelPool) injected. */
-async function buildEngine(workflowStore, llm) {
+async function buildEngine(workflowStore, llm, costTracker = null) {
   ensureDir(SOURCES_DB);
   const sourceRegistry = new SourceRegistry({ dbPath: SOURCES_DB });
   await sourceRegistry.init();
@@ -392,7 +393,7 @@ async function buildEngine(workflowStore, llm) {
 
   // Scheduler is constructed (FlowTester uses it for preview fetches) but NOT
   // started — the spine runs no background tick yet; scheduled triggers are P2/P7.
-  const workflowScheduler = new WorkflowScheduler({ workflowStore, sourceRegistry });
+  const workflowScheduler = new WorkflowScheduler({ workflowStore, sourceRegistry, costTracker });
   const flowTester = new FlowTester({
     sourceRegistry,
     scheduler: workflowScheduler,
@@ -519,8 +520,9 @@ export async function bootSpine() {
     dbPath: AUTH_DB, secretPath: AUTH_SECRET, oauthDbPath: OAUTH_DB, oauthKeyPath: OAUTH_KEY,
   });
 
-  const llm = buildLLM();
-  const engine = await buildEngine(workflowStore, llm);
+  const costTracker = new CostTracker();
+  const llm = buildLLM(costTracker);
+  const engine = await buildEngine(workflowStore, llm, costTracker);
   const rag = buildRag();
   // Slack capability provider: auto-detects the bot token's granted scopes (cached)
   // and resolves the capability map so /capabilities + the converger see only what
@@ -624,6 +626,7 @@ export async function bootSpine() {
     airtable: airtableProvider,
     interactionStore,
     get llm() { return engine.llm; },
+    costTracker,
     // Dispose Metal contexts/models before exit — freeing an embedding context
     // and a chat model together at process exit can trip an upstream llama.cpp
     // Metal assert (node-llama-cpp PR #17869). Ordered disposal avoids it.
@@ -1248,14 +1251,25 @@ export function createApp(spine) {
         spec = injectFilesystemContext(spec, req.tenant.id);
         spec = injectInboxCapabilityContext(spec, req.tenant.id);
       }
+      // If spec has a persisted workflow_id, open a workflow_run row so the admin
+      // console can track test-run cost. Non-test (scheduled) runs are handled
+      // by WorkflowScheduler.  startRun() also resolves tenant/user from the
+      // workflow row — no risk of cross-tenant attribution.
+      let dbRun = null;
+      if (spec.id) {
+        try { dbRun = spine.engine.workflowStore.startRun(spec.id, { isTest: true }); } catch { /* best-effort */ }
+      }
       let runId = null, completed = false, output = null;
       const steps = [];
-      for await (const ev of spine.engine.flowTester.run(spec, initialContext != null ? { initialContext } : {})) {
+      const flowOpts = { ...(initialContext != null ? { initialContext } : {}), ...(dbRun ? { runId: dbRun.id } : {}) };
+      for await (const ev of spine.engine.flowTester.run(spec, flowOpts)) {
         if (ev.type === 'run_started') runId = ev.runId;
         else if (ev.type === 'step_completed') { steps.push({ nodeId: ev.nodeId, output: ev.output }); logEvent('run.step', { tenant: tenantId, runId, nodeId: ev.nodeId }); }
         else if (ev.type === 'run_completed') { completed = true; output = ev.output; }
         else if (ev.type === 'run_failed') {
           logEvent('run.failed', { tenant: tenantId, runId, failedStep: steps.length, error: typeof ev.error === 'string' ? ev.error : (ev.error?.message ?? JSON.stringify(ev.error)), ms: Date.now() - t0 });
+          const failCost = spine.costTracker?.getSessionCost?.(`flow-run-${runId}`) ?? null;
+          if (dbRun) { try { spine.engine.workflowStore.failRun(dbRun.id, ev.error, failCost); } catch { /* best-effort */ } }
           // A failed STEP is an expected test outcome, not a gateway error. Return
           // 200 with completed:false so the real error reaches the UI — a 5xx here
           // gets swallowed and replaced by Cloudflare's own error page through the
@@ -1265,7 +1279,8 @@ export function createApp(spine) {
       }
       // Read cost from the CostTracker before it gets evicted. The flow tester
       // registers costs under sessionId "flow-run-<runId>".
-      const runCost = spine.llm?.costTracker?.getSessionCost?.(`flow-run-${runId}`) ?? null;
+      const runCost = spine.costTracker?.getSessionCost?.(`flow-run-${runId}`) ?? null;
+      if (dbRun) { try { spine.engine.workflowStore.completeRun(dbRun.id, output, runCost); } catch { /* best-effort */ } }
       logEvent('run.ok', { tenant: tenantId, runId, steps: steps.length, ms: Date.now() - t0 });
       // step_completed outputs are shrunk to strings by the executor; coerce back
       // to objects so delivery results (e.g. the Slack { delivered, ts }) surface.
@@ -1419,6 +1434,7 @@ export function createApp(spine) {
 
   mountBuilderRoutes(app, { spine, requireActiveTenant, requireAuth, readSources });
   mountConsoleRoutes(app, { spine, requireActiveTenant });
+  mountAdminRoutes(app, { spine, requireAuth, requirePlatformAdmin });
 
   return app;
 }
