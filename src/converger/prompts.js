@@ -205,7 +205,10 @@ MUST instruct the content-generating node (summarize/llm/rewrite) to produce exa
   deliver node. Before proposing it, ask the user how they want the email laid out ("newsletter with
   section headers", "plain text summary", "HTML callout cards", etc.). That node's prompt produces the
   inner HTML the user chose — instruct it NOT to include <html>/<body> wrappers.
-- output format: plain (docs_create, sheets_append, tasks_create, calendar_create_event,
+- output format: markdown (docs_create) — include in the node's instructions:
+  "Format output as standard Markdown: # for headings, **bold**, - for list items, blank line between
+  sections. No HTML tags." Drive converts the markdown to a formatted Google Doc automatically.
+- output format: plain (sheets_append, tasks_create, calendar_create_event,
   airtable_create_record, airtable_update_record, inbox_deliver, in_app, webhook, and any channel
   not listed above) — include in the node's instructions: "Plain text only — no HTML tags, no markdown
   symbols. Use clean prose paragraphs and line breaks." Any markup will appear verbatim as raw
@@ -213,7 +216,7 @@ MUST instruct the content-generating node (summarize/llm/rewrite) to produce exa
 
 INFER THE FORMAT EARLY: apply the right format instruction from the FIRST LLM/summarize/rewrite node,
 based on the delivery intent — do not wait until the deliver node is in the draft. "Create a Doc" →
-plain. "Send to Slack" or "DM me" → mrkdwn. "Email me" → html. Default to plain when unknown.
+markdown. "Send to Slack" or "DM me" → mrkdwn. "Email me" → html. Default to plain when unknown.
 
 RULES:
 - NEVER propose an action, connector, trigger, or delivery destination that is not listed in
