@@ -2725,13 +2725,20 @@ class Component extends DCLogic {
   softDeleteWorkflow(wfId) {
     const self = this;
     const wasOpenConsole = this.state.view === 'console' && this.state.consoleWfId === wfId;
-    // Optimistic: remove immediately so the sidebar updates before the round-trip
-    self.setState({ consoleSidebarWfs: (self.state.consoleSidebarWfs || []).filter(function(w) { return w.id !== wfId; }) });
+    // Optimistic: remove from sidebar and home list immediately before the round-trip.
+    const newSidebarWfs = (self.state.consoleSidebarWfs || []).filter(function(w) { return w.id !== wfId; });
+    const oldHomeData = self.state.homeData;
+    const newHomeData = oldHomeData && oldHomeData.workflows
+      ? Object.assign({}, oldHomeData, { workflows: oldHomeData.workflows.filter(function(w) { return w.id !== wfId; }) })
+      : oldHomeData;
+    self.setState({ consoleSidebarWfs: newSidebarWfs, homeData: newHomeData });
     fetch('/api/builder/workflows/' + wfId, { method: 'DELETE', headers: this._H() })
       .then(function(r) { return r.json(); })
       .then(function(d) {
         if (d.ok !== false) {
-          if (wasOpenConsole) { self.setState({ view: 'home', consoleWfId: null, consoleWf: null, homeData: null, homeReady: false, homeFading: false }); self._loadHomeData(); }
+          if (wasOpenConsole) { self.setState({ view: 'home', consoleWfId: null, consoleWf: null, homeReady: false, homeFading: false }); }
+          // Always refresh home data so the workflow list stays in sync after delete.
+          self._loadHomeData();
         }
         self._loadWorkflows();
       })
