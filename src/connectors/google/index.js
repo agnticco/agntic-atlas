@@ -290,7 +290,9 @@ export async function gmailGetMessage(gapi, { messageId }) {
 
 /** gmail_send — send an email. Auto-detects HTML body and wraps it in a styled shell. */
 export async function gmailSend(gapi, { to, subject, body }) {
-  const bodyText = body ?? '';
+  // Strip markdown code fences — LLMs commonly wrap HTML output in ```html...```
+  // which renders as literal text in the email client and cuts off the content.
+  const bodyText = (body ?? '').replace(/^```(?:html)?\s*\n?/i, '').replace(/\n?```\s*$/i, '').trim();
   const isHtml = /<[a-z][\s\S]*>/i.test(bodyText);
   // Wrap HTML content in a responsive email shell unless it already has one.
   // The shell gives every email a consistent professional base (max-width, fonts,
