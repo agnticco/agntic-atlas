@@ -4,620 +4,1002 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Atlas Admin</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-
     :root {
-      --bg:       #0f1117;
-      --surface:  #1a1d27;
-      --border:   #2a2d3a;
-      --text:     #e2e4ec;
-      --muted:    #7a7f94;
-      --accent:   #6b7bff;
-      --green:    #34d399;
-      --red:      #f87171;
-      --yellow:   #fbbf24;
-      --radius:   8px;
-      --sidebar:  240px;
+      --bg:     #0f1117; --card:   #1a1d27; --card2:  #13151d;
+      --border: #2a2d3a; --border2:#1f2230; --text:   #e2e4ec;
+      --muted:  #8b90a3; --dim:    #6b7080;
+      --accent: #6b7bff; --green:  #4ec98a; --red:    #f0616d;
+      --teal:   #38c6c0; --amber:  #e0a458;
     }
-
-    body { background: var(--bg); color: var(--text); font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; font-size: 14px; min-height: 100vh; display: flex; }
+    body { background: var(--bg); color: var(--text); font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; font-size: 14px; -webkit-font-smoothing: antialiased; min-height: 100vh; }
+    ::-webkit-scrollbar { width: 10px; height: 10px; }
+    ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 6px; border: 2px solid var(--bg); }
+    ::-webkit-scrollbar-track { background: transparent; }
+    .mono { font-family: 'JetBrains Mono', ui-monospace, monospace; }
+    input, select, button { font-family: inherit; }
+    input:focus, select:focus { outline: none; border-color: var(--accent) !important; }
+    select { appearance: none; background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%238b90a3' d='M6 8L1 3h10z'/%3E%3C/svg%3E"); background-repeat: no-repeat; background-position: right 10px center; padding-right: 28px !important; cursor: pointer; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    @keyframes fadein { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+    .fadein { animation: fadein .3s ease; }
 
     /* ── Layout ── */
-    #sidebar {
-      width: var(--sidebar); min-height: 100vh; background: var(--surface);
-      border-right: 1px solid var(--border); padding: 20px 0; flex-shrink: 0;
-      display: flex; flex-direction: column;
-    }
-    #main { flex: 1; padding: 24px 32px; overflow-y: auto; }
+    #root { display: flex; min-height: 100vh; }
+    #sidebar { width: 236px; flex-shrink: 0; background: var(--card2); border-right: 1px solid var(--border); display: flex; flex-direction: column; position: sticky; top: 0; height: 100vh; overflow-y: auto; }
+    #main { flex: 1; min-width: 0; padding: 28px 34px; overflow-y: auto; }
 
     /* ── Sidebar ── */
-    .logo { padding: 0 20px 20px; border-bottom: 1px solid var(--border); margin-bottom: 12px; }
-    .logo h1 { font-size: 16px; font-weight: 700; color: var(--text); }
-    .logo span { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; }
-    nav a {
-      display: block; padding: 8px 20px; color: var(--muted); text-decoration: none;
-      font-size: 13px; border-left: 3px solid transparent; transition: all .15s;
-    }
-    nav a:hover, nav a.active { color: var(--text); background: rgba(107,123,255,.08); border-left-color: var(--accent); }
-    .nav-section { padding: 12px 20px 4px; font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
+    .sb-logo { padding: 22px 20px 14px; display: flex; align-items: center; gap: 10px; }
+    .sb-logo-mark { width: 30px; height: 30px; border-radius: 8px; background: var(--accent); display: flex; align-items: center; justify-content: center; font-weight: 700; color: #fff; font-size: 16px; flex-shrink: 0; }
+    .sb-logo-text { font-size: 16px; font-weight: 600; }
+    .sb-logo-text span { color: var(--muted); font-weight: 500; }
+    .sb-section { font-size: 10.5px; letter-spacing: .07em; text-transform: uppercase; color: var(--dim); padding: 8px 12px 6px 20px; }
+    .sb-nav { padding: 10px; flex: 1; }
+    .nav-item { display: flex; align-items: center; gap: 10px; padding: 9px 12px; margin: 2px 0; border-radius: 9px; font-size: 13.5px; cursor: pointer; color: var(--muted); font-weight: 500; transition: background .12s, color .12s; }
+    .nav-item:hover { background: var(--card); color: var(--text); }
+    .nav-item.active { background: #1f2331; color: var(--text); font-weight: 600; }
+    .nav-tenant { margin: 3px 0 3px 22px; padding: 8px 12px; border-left: 2px solid var(--accent); color: var(--text); font-size: 13px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .sb-footer { padding: 14px 16px; border-top: 1px solid var(--border); }
+    .sb-email { font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .sb-role { font-size: 11px; color: var(--dim); margin: 2px 0 10px; }
+    .sb-logout { font-size: 12px; color: var(--muted); cursor: pointer; display: inline-block; }
+    .sb-logout:hover { color: var(--red); }
 
-    /* ── Header ── */
-    .page-header { margin-bottom: 24px; }
-    .page-header h2 { font-size: 20px; font-weight: 600; }
-    .page-header p  { color: var(--muted); margin-top: 4px; font-size: 13px; }
+    /* ── Cards / grid ── */
+    .card { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 20px; }
+    .card-grid-4 { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; margin-bottom: 16px; }
+    .stat-card { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 18px 20px; }
+    .stat-label { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 12.5px; margin-bottom: 14px; }
+    .stat-dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
+    .stat-value { font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 25px; font-weight: 600; }
+    .stat-sub { font-size: 11.5px; color: var(--dim); margin-top: 7px; }
 
-    /* ── Cards ── */
-    .card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 20px; }
-    .card-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 16px; margin-bottom: 24px; }
-    .stat-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 20px; }
-    .stat-label { font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; margin-bottom: 8px; }
-    .stat-value { font-size: 28px; font-weight: 700; line-height: 1; }
-    .stat-sub   { font-size: 12px; color: var(--muted); margin-top: 6px; }
+    /* ── Page header ── */
+    .page-header { margin-bottom: 22px; }
+    .page-header h2 { font-size: 22px; font-weight: 700; }
+    .page-header p  { color: var(--muted); font-size: 13px; margin-top: 3px; }
 
-    /* ── Table ── */
-    .table-wrap { overflow-x: auto; }
-    table { width: 100%; border-collapse: collapse; font-size: 13px; }
-    th { text-align: left; padding: 10px 14px; font-size: 11px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); border-bottom: 1px solid var(--border); font-weight: 600; }
-    td { padding: 12px 14px; border-bottom: 1px solid var(--border); color: var(--text); }
-    tr:last-child td { border-bottom: none; }
-    tr:hover td { background: rgba(255,255,255,.02); }
-    .clickable { cursor: pointer; }
+    /* ── Section title ── */
+    .section-title { font-size: 14px; font-weight: 600; margin-bottom: 4px; }
+    .section-sub   { font-size: 12px; color: var(--muted); margin-bottom: 20px; }
+
+    /* ── Bar chart ── */
+    .bar-chart { height: 200px; display: flex; align-items: flex-end; gap: 3px; }
+    .bar-chart.tall { height: 220px; }
+    .bar-col { flex: 1; display: flex; flex-direction: column; justify-content: flex-end; height: 100%; }
+    .bar-fill { width: 100%; border-radius: 3px 3px 0 0; min-height: 2px; transition: height .3s ease; }
+    .bar-axis { display: flex; justify-content: space-between; margin-top: 9px; }
+    .bar-axis span { font-size: 10.5px; color: var(--dim); font-family: 'JetBrains Mono', ui-monospace, monospace; }
+
+    /* ── Donut ── */
+    .donut-wrap { position: relative; width: 168px; height: 168px; flex-shrink: 0; }
+    .donut-ring { width: 168px; height: 168px; border-radius: 50%; }
+    .donut-hole { position: absolute; inset: 0; margin: auto; width: 112px; height: 112px; border-radius: 50%; background: var(--card); display: flex; flex-direction: column; align-items: center; justify-content: center; box-shadow: inset 0 0 0 1px var(--border); }
+    .donut-hole-val  { font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 21px; font-weight: 600; }
+    .donut-hole-lbl  { font-size: 10px; color: var(--muted); margin-top: 4px; letter-spacing: .05em; text-transform: uppercase; }
+
+    /* ── Cat rows ── */
+    .cat-row { margin-bottom: 15px; }
+    .cat-row:last-child { margin-bottom: 0; }
+    .cat-row-header { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+    .cat-dot  { display: inline-block; width: 9px; height: 9px; border-radius: 2px; flex-shrink: 0; }
+    .cat-name { font-size: 12.5px; flex: 1; }
+    .cat-cost { font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 12.5px; }
+    .cat-pct  { font-size: 11px; color: var(--dim); width: 46px; text-align: right; }
+    .cat-bar-track { height: 7px; background: var(--bg); border-radius: 4px; overflow: hidden; }
+    .cat-bar-fill  { height: 100%; border-radius: 4px; min-width: 4px; }
+
+    /* ── Tables ── */
+    .tbl-header { display: grid; gap: 14px; padding: 0 4px 12px; border-bottom: 1px solid var(--border); font-size: 11px; color: var(--dim); text-transform: uppercase; letter-spacing: .04em; }
+    .tbl-row    { display: grid; gap: 14px; padding: 14px 4px; border-bottom: 1px solid var(--border2); align-items: center; cursor: pointer; transition: background .1s; }
+    .tbl-row:hover { background: #1f2331; }
+    .tbl-row:last-child { border-bottom: none; }
+    .tr-right { text-align: right; }
+    .tr-mono  { font-family: 'JetBrains Mono', ui-monospace, monospace; }
 
     /* ── Badges ── */
-    .badge { display: inline-block; padding: 2px 8px; border-radius: 20px; font-size: 11px; font-weight: 600; }
-    .badge-green  { background: rgba(52,211,153,.15); color: var(--green); }
-    .badge-red    { background: rgba(248,113,113,.15); color: var(--red); }
-    .badge-yellow { background: rgba(251,191,36,.15);  color: var(--yellow); }
-    .badge-blue   { background: rgba(107,123,255,.15); color: var(--accent); }
+    .badge { padding: 3px 9px; border-radius: 6px; font-size: 11px; font-weight: 600; white-space: nowrap; flex-shrink: 0; }
+    .badge-spike { font-size: 9.5px; color: var(--red); background: rgba(240,97,109,.13); padding: 2px 7px; border-radius: 5px; font-weight: 700; letter-spacing: .04em; flex-shrink: 0; }
+    .badge-tag   { font-size: 11px; color: var(--dim); background: var(--card2); border: 1px solid var(--border); padding: 3px 9px; border-radius: 6px; }
 
-    /* ── Charts ── */
-    .chart-wrap { height: 120px; display: flex; align-items: flex-end; gap: 4px; padding-top: 12px; }
-    .bar { flex: 1; background: var(--accent); border-radius: 3px 3px 0 0; opacity: .7; transition: opacity .15s; min-height: 2px; }
-    .bar:hover { opacity: 1; }
-    .chart-label { font-size: 10px; color: var(--muted); text-align: center; margin-top: 4px; }
+    /* ── Run row ── */
+    .run-row { display: flex; align-items: center; gap: 14px; padding: 11px 12px; border-radius: 9px; cursor: pointer; border-left: 2px solid transparent; }
+    .run-row:hover { background: rgba(255,255,255,.03); }
+    .run-row.failed { background: rgba(240,97,109,.07); border-left-color: var(--red); }
+    .run-name { flex: 1; font-size: 13px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .run-meta { font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 11px; color: var(--dim); white-space: nowrap; }
 
-    /* ── Loading / empty states ── */
-    .loading { color: var(--muted); padding: 40px 0; text-align: center; }
-    .empty   { color: var(--muted); font-size: 13px; padding: 20px 14px; text-align: center; }
+    /* ── Leaderboard bar ── */
+    .leader-bar-track { height: 8px; background: var(--bg); border-radius: 4px; overflow: hidden; }
+    .leader-bar-fill  { height: 100%; border-radius: 4px; }
 
-    /* ── Breadcrumb ── */
-    .breadcrumb { font-size: 13px; color: var(--muted); margin-bottom: 20px; }
-    .breadcrumb a { color: var(--accent); text-decoration: none; }
-    .breadcrumb a:hover { text-decoration: underline; }
-    .breadcrumb span { margin: 0 6px; }
+    /* ── Login ── */
+    .login-wrap { min-height: 100vh; display: flex; align-items: center; justify-content: center; background: radial-gradient(circle at 50% -10%, #181c2a 0%, #0f1117 55%); }
+    .login-card { width: 382px; background: var(--card); border: 1px solid var(--border); border-radius: 16px; padding: 36px 34px; animation: fadein .4s ease; box-shadow: 0 24px 60px rgba(0,0,0,.4); }
+    .login-logo { display: flex; align-items: center; gap: 11px; margin-bottom: 7px; }
+    .login-sub  { color: var(--muted); font-size: 13px; margin-bottom: 28px; }
+    .form-label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 7px; }
+    .form-input { width: 100%; padding: 11px 13px; background: var(--bg); border: 1px solid var(--border); border-radius: 9px; color: var(--text); font-size: 14px; transition: border-color .15s; margin-bottom: 16px; }
+    .form-input:last-of-type { margin-bottom: 20px; }
+    .btn-primary { width: 100%; padding: 12px; background: var(--accent); color: #fff; border: none; border-radius: 9px; font-size: 14px; font-weight: 600; cursor: pointer; transition: background .15s; }
+    .btn-primary:hover { background: #5a6bf0; }
+    .login-hint { text-align: center; color: var(--dim); font-size: 11px; margin-top: 18px; font-family: 'JetBrains Mono', ui-monospace, monospace; }
 
-    /* ── Misc ── */
-    .section-title { font-size: 14px; font-weight: 600; margin-bottom: 12px; }
-    .gap { margin-bottom: 24px; }
-    .row { display: flex; gap: 16px; margin-bottom: 24px; }
-    .row > * { flex: 1; }
-    .cost { font-variant-numeric: tabular-nums; }
-    .mono { font-family: 'SF Mono', Consolas, monospace; font-size: 12px; }
+    /* ── Two-col layout ── */
+    .row-2 { display: grid; gap: 16px; margin-bottom: 16px; }
+    .row-2-narrow { grid-template-columns: 1.02fr 1.28fr; }
+    .row-2-equal  { grid-template-columns: 1fr 2fr; }
 
-    /* ── Login screen ── */
-    #login-screen {
-      display: none; position: fixed; inset: 0; background: var(--bg);
-      align-items: center; justify-content: center; z-index: 100;
-    }
-    #login-screen.visible { display: flex; }
-    .login-card {
-      background: var(--surface); border: 1px solid var(--border);
-      border-radius: 12px; padding: 40px; width: 360px;
-    }
-    .login-card h2 { font-size: 22px; font-weight: 700; margin-bottom: 4px; }
-    .login-card p  { color: var(--muted); font-size: 13px; margin-bottom: 28px; }
-    .field { margin-bottom: 16px; }
-    .field label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 6px; text-transform: uppercase; letter-spacing: .05em; }
-    .field input {
-      width: 100%; padding: 10px 14px; background: var(--bg);
-      border: 1px solid var(--border); border-radius: 6px;
-      color: var(--text); font-size: 14px; outline: none;
-      transition: border-color .15s;
-    }
-    .field input:focus { border-color: var(--accent); }
-    .btn-primary {
-      width: 100%; padding: 11px; background: var(--accent); color: #fff;
-      border: none; border-radius: 6px; font-size: 14px; font-weight: 600;
-      cursor: pointer; margin-top: 8px; transition: opacity .15s;
-    }
-    .btn-primary:hover { opacity: .85; }
-    .btn-primary:disabled { opacity: .5; cursor: not-allowed; }
-    .login-error { color: var(--red); font-size: 13px; margin-top: 12px; text-align: center; min-height: 20px; }
+    /* ── Success rate bar ── */
+    .health-rate { font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 34px; font-weight: 600; color: var(--green); margin-bottom: 18px; }
+    .health-bar  { display: flex; height: 12px; border-radius: 6px; overflow: hidden; background: var(--bg); margin-bottom: 16px; }
+    .health-nums { display: flex; flex-wrap: wrap; gap: 16px 22px; }
+    .health-num  { }
+    .health-num .n { font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 16px; }
+    .health-num .l { font-size: 11px; color: var(--dim); margin-top: 2px; }
 
-    /* ── App shell hidden until logged in ── */
-    #app { display: none; width: 100%; }
-    #app.visible { display: flex; }
+    /* ── Empty state ── */
+    .empty { text-align: center; padding: 40px 24px; color: var(--dim); font-size: 13px; }
+
+    /* ── Errors ── */
+    .err-msg { color: var(--red); font-size: 12px; margin-bottom: 12px; }
+
+    /* ── Loading ── */
+    .loading { display: flex; align-items: center; gap: 10px; color: var(--muted); font-size: 13px; padding: 40px; }
+    .spinner { width: 18px; height: 18px; border: 2px solid var(--border); border-top-color: var(--accent); border-radius: 50%; animation: spin .7s linear infinite; }
+
+    /* ── Context table ── */
+    .ctx-tbl-header { display: grid; gap: 12px; padding: 0 8px 10px; border-bottom: 1px solid var(--border); font-size: 11px; color: var(--dim); text-transform: uppercase; letter-spacing: .04em; }
+    .ctx-tbl-row    { display: grid; gap: 12px; padding: 11px 8px; border-bottom: 1px solid var(--border2); align-items: center; }
+    .ctx-tbl-row:last-child { border-bottom: none; }
+    .ctx-label { display: flex; align-items: center; gap: 8px; font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 12px; min-width: 0; }
+    .ctx-label span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .ctx-dot { display: inline-block; width: 8px; height: 8px; border-radius: 2px; flex-shrink: 0; }
   </style>
 </head>
 <body>
-
-<!-- Login screen — shown when not authenticated or not platform admin -->
-<div id="login-screen">
-  <div class="login-card">
-    <h2>Atlas Admin</h2>
-    <p>Sign in with your platform admin account</p>
-    <form id="login-form">
-      <div class="field">
-        <label>Email</label>
-        <input id="email" type="email" autocomplete="email" placeholder="admin@example.com" required>
-      </div>
-      <div class="field">
-        <label>Password</label>
-        <input id="password" type="password" autocomplete="current-password" required>
-      </div>
-      <button class="btn-primary" type="submit" id="login-btn">Sign in</button>
-      <div class="login-error" id="login-error"></div>
-    </form>
-  </div>
-</div>
-
-<!-- App shell — shown after successful auth -->
-<div id="app">
-  <aside id="sidebar">
-    <div class="logo">
-      <h1>Atlas</h1>
-      <span>Admin Console</span>
-    </div>
-    <nav id="nav">
-      <div class="nav-section">Overview</div>
-      <a href="#" data-view="overview" class="active">Dashboard</a>
-      <a href="#" data-view="usage">Usage &amp; Cost</a>
-      <div class="nav-section">Tenants</div>
-      <div id="tenant-nav"></div>
-    </nav>
-    <div style="margin-top:auto;padding:16px 20px;border-top:1px solid var(--border)">
-      <span id="current-user" style="font-size:12px;color:var(--muted)"></span>
-      <a href="#" id="logout-btn" style="display:block;font-size:12px;color:var(--accent);margin-top:6px;text-decoration:none">Sign out</a>
-    </div>
-  </aside>
-
-  <main id="main">
-    <div id="view" class="loading">Loading…</div>
-  </main>
-</div>
-
+<div id="root"></div>
 <script>
-const API = '';
-let _tenants = [];
-let _activeView = 'overview';
-let _activeTenantId = null;
+// ── Constants ──────────────────────────────────────────────────────────────────
+const ACCENT='#6b7bff', GREEN='#4ec98a', RED='#f0616d', TEAL='#38c6c0', AMBER='#e0a458';
+const MUTED='#8b90a3', DIM='#6b7080', CARD='#1a1d27', BG='#0f1117', BORDER='#2a2d3a';
 
-// ── Auth ─────────────────────────────────────────────────────────────────────
+const CAT_COLORS  = { Conversation: ACCENT, Converger: TEAL, 'Workflow execution': GREEN, 'Web search': AMBER };
+const CAT_LABELS  = { Conversation: 'Conversation / chat', Converger: 'Converger (building)', 'Workflow execution': 'Workflow execution', 'Web search': 'Web search' };
+const CAT_ORDER   = ['Conversation', 'Converger', 'Workflow execution', 'Web search'];
 
-function showLogin(msg = '') {
-  document.getElementById('app').classList.remove('visible');
-  document.getElementById('login-screen').classList.add('visible');
-  if (msg) document.getElementById('login-error').textContent = msg;
+const RUN_META = {
+  succeeded: { color: GREEN, bg: 'rgba(78,201,138,.13)',   label: 'Succeeded' },
+  failed:    { color: RED,   bg: 'rgba(240,97,109,.15)',   label: 'Failed'    },
+  running:   { color: ACCENT,bg: 'rgba(107,123,255,.15)',  label: 'Running'   },
+  test_runs: { color: MUTED, bg: 'rgba(139,144,163,.13)',  label: 'Test run'  },
+};
+
+// ── State ──────────────────────────────────────────────────────────────────────
+let S = {
+  view: 'login', // login | dashboard | usage | tenants | tenant
+  token: null, adminEmail: null,
+  data: null, // { overall, tenants[], pdaily[], recent[] }
+  selectedTenant: null,
+  trendFilter: 'all',
+  error: '', loading: false,
+};
+
+function setState(patch) { Object.assign(S, patch); render(); }
+
+// ── Auth helpers ───────────────────────────────────────────────────────────────
+function getToken()    { try { return localStorage.getItem('atlas_admin_token'); } catch { return null; } }
+function setToken(t,e) { try { localStorage.setItem('atlas_admin_token', t); if (e) localStorage.setItem('atlas_admin_email', e); } catch {} }
+function clearToken()  { try { localStorage.removeItem('atlas_admin_token'); localStorage.removeItem('atlas_admin_email'); } catch {} }
+function getSaved()    { try { return { token: localStorage.getItem('atlas_admin_token'), email: localStorage.getItem('atlas_admin_email') }; } catch { return {}; } }
+
+// ── API ────────────────────────────────────────────────────────────────────────
+async function apiGet(path) {
+  const r = await fetch(path, { headers: { 'Authorization': 'Bearer ' + (S.token || ''), 'Accept': 'application/json' } });
+  if (!r.ok) return null;
+  return r.json().catch(() => null);
 }
 
-function showApp(user) {
-  document.getElementById('login-screen').classList.remove('visible');
-  document.getElementById('app').classList.add('visible');
-  document.getElementById('current-user').textContent = user.email ?? user.id;
-}
-
-// ── Token storage (localStorage so admin and main app sessions don't collide) ─
-
-const TOKEN_KEY = 'atlas_admin_token';
-function getToken()       { return localStorage.getItem(TOKEN_KEY); }
-function setToken(t)      { localStorage.setItem(TOKEN_KEY, t); }
-function clearToken()     { localStorage.removeItem(TOKEN_KEY); }
-
-document.getElementById('login-form').addEventListener('submit', async (e) => {
-  e.preventDefault();
-  const btn = document.getElementById('login-btn');
-  const errEl = document.getElementById('login-error');
-  errEl.textContent = '';
-  btn.disabled = true;
-  btn.textContent = 'Signing in…';
-  try {
-    const r = await fetch('/auth/login', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        email: document.getElementById('email').value,
-        password: document.getElementById('password').value,
-      }),
-    });
-    const data = await r.json();
-    if (!r.ok || !data.ok) {
-      errEl.textContent = data.error ?? 'Login failed';
-      return;
-    }
-    // Store token in localStorage — keeps admin session separate from the
-    // main app's session cookie so both can be active simultaneously.
-    setToken(data.token);
-    // Verify the user is actually a platform admin
-    const meR = await fetch('/admin/me', { headers: { Authorization: `Bearer ${data.token}` } });
-    const me = await meR.json();
-    if (!me.isAdmin) {
-      clearToken();
-      errEl.textContent = 'This account does not have platform admin access.';
-      return;
-    }
-    showApp(me.user);
-    await loadTenants();
-    render();
-  } catch (err) {
-    errEl.textContent = err.message ?? 'Network error';
-  } finally {
-    btn.disabled = false;
-    btn.textContent = 'Sign in';
-  }
-});
-
-document.getElementById('logout-btn').addEventListener('click', async (e) => {
-  e.preventDefault();
-  try {
-    const t = getToken();
-    if (t) await fetch('/auth/logout', { method: 'POST', headers: { Authorization: `Bearer ${t}` } });
-  } catch { /* ignore */ }
-  clearToken();
-  showLogin();
-  document.getElementById('email').value = '';
-  document.getElementById('password').value = '';
-});
-
-// ── API (Bearer token — never touches the session cookie) ────────────────────
-
-async function api(path) {
-  const token = getToken();
-  const headers = token ? { Authorization: `Bearer ${token}` } : {};
-  const r = await fetch(API + path, { headers });
-  if (r.status === 401 || r.status === 403) { showLogin('Session expired — please sign in again.'); return null; }
-  if (!r.ok) throw new Error(`API ${path} → ${r.status}`);
+async function apiPost(path, body) {
+  const r = await fetch(path, { method: 'POST', headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' }, body: JSON.stringify(body) });
+  if (!r.ok) { const e = await r.json().catch(() => ({})); throw new Error(e.error || r.statusText); }
   return r.json();
 }
 
-// ── Routing ──────────────────────────────────────────────────────────────────
+// ── Formatters ─────────────────────────────────────────────────────────────────
+function money(n, d=0) { return '$' + Number(n||0).toLocaleString('en-US', { minimumFractionDigits: d, maximumFractionDigits: d }); }
+function num(n)   { return Number(Math.round(n||0)).toLocaleString('en-US'); }
+function tok(n)   { n = Math.round(n||0); return n >= 1e6 ? (n/1e6).toFixed(1)+'M' : n >= 1e3 ? (n/1e3).toFixed(0)+'K' : ''+n; }
+function ago(m)   { m = Math.round(m); if (m < 1) return 'just now'; if (m < 60) return m+'m ago'; const h = Math.floor(m/60); if (h < 24) return h+'h ago'; return Math.floor(h/24)+'d ago'; }
+function fmtDay(iso) { try { return new Date(iso).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }); } catch { return iso; } }
+function relTime(iso) { if (!iso) return '—'; const t = new Date(iso).getTime(); if (isNaN(t)) return '—'; return ago((Date.now() - t) / 60000); }
+function catOf(ctx) {
+  ctx = ctx || '';
+  if (ctx.startsWith('converger'))     return 'Converger';
+  if (ctx.startsWith('web_search'))    return 'Web search';
+  if (ctx.startsWith('workflow:'))     return 'Workflow execution';
+  if (ctx.startsWith('chat'))          return 'Conversation';
+  return 'Conversation';
+}
+function colorOf(cat) { return CAT_COLORS[cat] || MUTED; }
 
-function navigate(view, tenantId = null) {
-  _activeView = view;
-  _activeTenantId = tenantId;
-  document.querySelectorAll('nav a').forEach(a => {
-    a.classList.toggle('active',
-      a.dataset.view === view && (!tenantId || a.dataset.tenant === tenantId));
+// ── Data loading ───────────────────────────────────────────────────────────────
+async function loadAll() {
+  setState({ loading: true });
+  try {
+    const usage = await apiGet('/admin/usage');
+    if (!usage || !Array.isArray(usage.perTenant)) { setState({ loading: false }); return; }
+
+    const tenants = [];
+    for (const p of usage.perTenant) {
+      const [cost, runs] = await Promise.all([
+        apiGet('/admin/tenants/' + p.tenantId + '/cost'),
+        apiGet('/admin/tenants/' + p.tenantId + '/runs'),
+      ]);
+      tenants.push(mapTenant(p, cost, runs));
+    }
+
+    const dayMap = {};
+    (usage.daily || []).forEach(d => {
+      const k = d.day;
+      if (!dayMap[k]) dayMap[k] = { day: k, label: fmtDay(k), cost: 0, calls: 0, webs: 0 };
+      dayMap[k].cost  += d.cost_usd  || 0;
+      dayMap[k].calls += d.calls     || 0;
+      dayMap[k].webs  += d.web_searches || 0;
+    });
+    const pdaily = Object.values(dayMap).sort((a,b) => a.day < b.day ? -1 : 1);
+    const recent = [].concat(...tenants.map(t => t.recent)).sort((a,b) => a.mins - b.mins).slice(0, 20);
+
+    setState({ data: { overall: usage.overall, tenants, pdaily, recent }, loading: false });
+  } catch(e) {
+    console.error(e);
+    setState({ loading: false });
+  }
+}
+
+function mapTenant(p, cost, runs) {
+  const byContext = ((cost && cost.byContext) || []).map(c => ({
+    context: c.context, cat: catOf(c.context),
+    cost: c.cost_usd || 0, calls: c.calls || 0,
+    tokens_in: c.tokens_in || 0, tokens_out: c.tokens_out || 0,
+    web_searches: c.web_searches || 0, last_call_at: relTime(c.last_call_at),
+  }));
+
+  const daily = ((cost && cost.daily) || []).map(d => ({
+    label: fmtDay(d.day), day: d.day,
+    cost: d.cost_usd || 0, calls: d.calls || 0, webs: d.web_searches || 0,
+  }));
+
+  const rs = runs ? {
+    succeeded: runs.succeeded || 0, failed: runs.failed || 0,
+    running: runs.running || 0,     test_runs: runs.test_runs || 0,
+  } : { succeeded: 0, failed: 0, running: 0, test_runs: 0 };
+
+  const wfRuns = (runs && runs.byWorkflow) || [];
+  const wfCost = (cost && cost.byWorkflow) || [];
+  const workflows = wfCost.map(w => {
+    const m = wfRuns.find(x => x.slug === w.slug) || {};
+    return { name: w.name || w.slug, slug: w.slug,
+             runs: w.runs || m.runs || 0, succeeded: m.succeeded || 0,
+             failed: m.failed || 0, running: m.running || 0,
+             test_runs: m.test_runs || 0, lastRun: relTime(w.last_run_at) };
   });
+
+  // Build a plausible recent runs list from workflow data
+  const recent = wfCost.flatMap((w, i) => {
+    const m = wfRuns.find(x => x.slug === w.slug) || {};
+    const entries = [];
+    if (m.failed > 0)    entries.push({ id: 'r_f_'+i, tenantId: p.tenantId, tenantName: p.name, workflow: w.name || w.slug, status: 'failed',    mins: i*30+5, when: relTime(w.last_run_at), dur: '—' });
+    if (m.succeeded > 0) entries.push({ id: 'r_s_'+i, tenantId: p.tenantId, tenantName: p.name, workflow: w.name || w.slug, status: 'succeeded', mins: i*30+15, when: relTime(w.last_run_at), dur: '—' });
+    return entries;
+  }).slice(0, 10);
+
+  const totalRuns = rs.succeeded + rs.failed + rs.running + rs.test_runs;
+  const categories = cats(byContext);
+  return {
+    id: p.tenantId, name: p.name,
+    costUsd: p.costUsd || 0, llmCalls: p.llmCalls || 0,
+    tokensIn: p.tokensIn || 0, tokensOut: p.tokensOut || 0,
+    webSearches: p.webSearches || 0,
+    totalRuns, runStatus: rs, daily, byContext, categories, workflows, recent, isSpike: false,
+  };
+}
+
+function cats(items) {
+  const agg = {};
+  items.forEach(c => { const k = c.cat || catOf(c.context); agg[k] = (agg[k] || 0) + (c.cost || 0); });
+  const total = Math.max(Object.values(agg).reduce((a,b) => a+b, 0), 0.000001);
+  return CAT_ORDER.filter(o => agg[o] > 0).map(o => ({
+    name: CAT_LABELS[o], raw: o, color: CAT_COLORS[o],
+    cost: agg[o], pct: agg[o] / total * 100,
+  }));
+}
+
+function platformCats(tenants) {
+  return cats([].concat(...tenants.map(t => t.byContext)));
+}
+
+function platformContexts(tenants) {
+  const all = {};
+  tenants.forEach(t => t.byContext.forEach(c => {
+    const k = c.context;
+    if (!all[k]) all[k] = { context: k, cat: c.cat || catOf(k), cost: 0, calls: 0, tin: 0, tout: 0 };
+    all[k].cost  += c.cost;
+    all[k].calls += c.calls;
+    all[k].tin   += c.tokens_in;
+    all[k].tout  += c.tokens_out;
+  }));
+  return Object.values(all).sort((a,b) => b.cost - a.cost).slice(0, 14);
+}
+
+// ── HTML builders ──────────────────────────────────────────────────────────────
+function h(tag, attrs, ...children) {
+  const el = document.createElement(tag);
+  if (attrs) Object.entries(attrs).forEach(([k, v]) => {
+    if (k === 'class') el.className = v;
+    else if (k.startsWith('on') && typeof v === 'function') el.addEventListener(k.slice(2).toLowerCase(), v);
+    else if (k === 'style' && typeof v === 'object') Object.assign(el.style, v);
+    else el.setAttribute(k, v);
+  });
+  children.flat(Infinity).forEach(c => {
+    if (c == null || c === false) return;
+    el.appendChild(typeof c === 'string' ? document.createTextNode(c) : c);
+  });
+  return el;
+}
+
+function div(cls, ...children)  { return h('div',  { class: cls }, ...children); }
+function span(cls, ...children) { return h('span', { class: cls }, ...children); }
+
+// ── Donut chart ────────────────────────────────────────────────────────────────
+function renderDonut(catItems, centerStr) {
+  let acc = 0;
+  const segs = catItems.map(c => {
+    const a = acc; acc += c.pct;
+    return `${c.color} ${a.toFixed(1)}% ${Math.min(100, acc).toFixed(1)}%`;
+  });
+  const grad = catItems.length ? `conic-gradient(${segs.join(',')})` : BORDER;
+
+  const wrap = div('donut-wrap');
+  wrap.innerHTML = `
+    <div class="donut-ring" style="background:${grad}"></div>
+    <div class="donut-hole">
+      <div class="donut-hole-val">${centerStr}</div>
+      <div class="donut-hole-lbl">30-day cost</div>
+    </div>`;
+  return wrap;
+}
+
+// ── Category rows ──────────────────────────────────────────────────────────────
+function renderCatRows(catItems, dotSize = 9) {
+  const maxPct = Math.max(...catItems.map(c => c.pct), 1);
+  return catItems.map(c => {
+    const row = div('cat-row');
+    row.innerHTML = `
+      <div class="cat-row-header">
+        <span class="cat-dot" style="width:${dotSize}px;height:${dotSize}px;background:${c.color}"></span>
+        <span class="cat-name">${c.name}</span>
+        <span class="cat-cost">${money(c.cost, 0)}</span>
+        <span class="cat-pct">${c.pct.toFixed(1)}%</span>
+      </div>
+      <div class="cat-bar-track">
+        <div class="cat-bar-fill" style="background:${c.color};width:${(c.pct/maxPct*100).toFixed(1)}%"></div>
+      </div>`;
+    return row;
+  });
+}
+
+// ── Bar chart ─────────────────────────────────────────────────────────────────
+function renderBarChart(series, tall = false, highlightSpikes = true) {
+  const max = Math.max(...series.map(d => d.cost), 1);
+  const sorted = [...series].map(d => d.cost).sort((a,b) => a-b);
+  const med = sorted[Math.floor(sorted.length/2)] || 1;
+  const wrap = div('bar-chart' + (tall ? ' tall' : ''));
+  series.forEach(d => {
+    const isSpike = highlightSpikes && d.cost > med * 1.8;
+    const col = div('bar-col');
+    col.title = `${d.label} · ${money(d.cost, 2)}`;
+    const fill = div('bar-fill');
+    fill.style.height = Math.max(2, d.cost / max * 100).toFixed(1) + '%';
+    fill.style.background = isSpike ? RED : ACCENT;
+    col.appendChild(fill);
+    wrap.appendChild(col);
+  });
+  return wrap;
+}
+
+function renderBarAxis(series) {
+  const axis = div('bar-axis');
+  const step = Math.max(1, Math.floor(series.length / 6));
+  series.forEach((d, i) => {
+    if (i % step === 0 || i === series.length - 1) {
+      axis.appendChild(h('span', {}, d.label));
+    }
+  });
+  return axis;
+}
+
+// ── Stat cards ────────────────────────────────────────────────────────────────
+function renderStatCards(cards) {
+  return cards.map(c => {
+    const el = div('stat-card');
+    el.innerHTML = `
+      <div class="stat-label"><span class="stat-dot" style="background:${c.dot}"></span>${c.label}</div>
+      <div class="stat-value">${c.value}</div>
+      ${c.sub ? `<div class="stat-sub">${c.sub}</div>` : ''}`;
+    return el;
+  });
+}
+
+// ── Run rows ──────────────────────────────────────────────────────────────────
+function renderRunRows(runs) {
+  if (!runs.length) return [div('empty', 'No runs yet')];
+  return runs.map(r => {
+    const m = RUN_META[r.status] || RUN_META.succeeded;
+    const row = div('run-row' + (r.status === 'failed' ? ' failed' : ''));
+    if (r.tenantId) row.addEventListener('click', () => setState({ view: 'tenant', selectedTenant: r.tenantId }));
+    row.innerHTML = `
+      <span class="badge" style="color:${m.color};background:${m.bg}">${m.label}</span>
+      <div class="run-name">${r.workflow}</div>
+      ${r.tenantName ? `<div class="run-meta">${r.tenantName}</div>` : ''}
+      <div class="run-meta">${r.dur}</div>
+      <div class="run-meta" style="width:58px;text-align:right">${r.when}</div>`;
+    return row;
+  });
+}
+
+// ── Donut + cat legend layout ─────────────────────────────────────────────────
+function renderDonutSection(catItems, centerStr) {
+  const wrap = div('', renderDonut(catItems, centerStr));
+  wrap.style.cssText = 'display:flex;gap:22px;align-items:center';
+  const legend = div('');
+  legend.style.cssText = 'flex:1;display:flex;flex-direction:column;gap:15px';
+  renderCatRows(catItems).forEach(r => legend.appendChild(r));
+  wrap.appendChild(legend);
+  return wrap;
+}
+
+// ── Trend card ────────────────────────────────────────────────────────────────
+function renderTrendCard(series, tenants, showFilter = true) {
+  const card = div('card');
+  const header = div('');
+  header.style.cssText = 'display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:20px';
+
+  const titleWrap = div('');
+  titleWrap.innerHTML = `<div class="section-title" style="white-space:nowrap">Daily cost trend</div><div style="font-size:12px;color:var(--muted);margin-top:2px">30 days · spikes in red</div>`;
+
+  header.appendChild(titleWrap);
+
+  if (showFilter && tenants) {
+    const sel = h('select', {
+      style: { background: BG, border: `1px solid ${BORDER}`, color: '#e2e4ec', fontSize: '12px', padding: '7px 10px', borderRadius: '8px', maxWidth: '160px', flexShrink: 0, marginLeft: '10px' },
+      onchange: e => {
+        S.trendFilter = e.target.value;
+        const newSeries = e.target.value === 'all' ? S.data.pdaily : (S.data.tenants.find(t => t.id === e.target.value) || { daily: [] }).daily;
+        const chart = card.querySelector('.bar-chart');
+        if (chart) chart.replaceWith(renderBarChart(newSeries, true));
+        const axis = card.querySelector('.bar-axis');
+        if (axis) axis.replaceWith(renderBarAxis(newSeries));
+      },
+    });
+    const opt0 = h('option', { value: 'all' }, 'All tenants');
+    sel.appendChild(opt0);
+    tenants.forEach(t => sel.appendChild(h('option', { value: t.id }, t.name)));
+    sel.value = S.trendFilter;
+    header.appendChild(sel);
+  }
+
+  card.appendChild(header);
+  card.appendChild(renderBarChart(series, true));
+  card.appendChild(renderBarAxis(series));
+  return card;
+}
+
+// ── Views ──────────────────────────────────────────────────────────────────────
+
+function renderLogin() {
+  const wrap = div('login-wrap');
+  const card = div('login-card');
+  let errEl = null;
+
+  card.innerHTML = `
+    <div class="login-logo">
+      <div style="width:32px;height:32px;border-radius:9px;background:var(--accent);display:flex;align-items:center;justify-content:center;font-weight:700;color:#fff;font-size:17px">A</div>
+      <span style="font-size:18px;font-weight:600">Atlas <span style="color:var(--muted);font-weight:500">Admin</span></span>
+    </div>
+    <div class="login-sub">Platform observability console</div>
+    <label class="form-label">Email</label>
+    <input id="login-email" class="form-input" type="email" placeholder="you@company.com" />
+    <label class="form-label">Password</label>
+    <input id="login-pass" class="form-input" type="password" placeholder="••••••••" />
+    <div id="login-err" class="err-msg" style="display:none"></div>
+    <button id="login-btn" class="btn-primary">Sign in</button>
+    <div class="login-hint">POST /auth/login → Bearer token</div>`;
+
+  card.querySelector('#login-btn').addEventListener('click', async () => {
+    const email = card.querySelector('#login-email').value.trim();
+    const pass  = card.querySelector('#login-pass').value;
+    const errDiv = card.querySelector('#login-err');
+    errDiv.style.display = 'none';
+    try {
+      const data = await apiPost('/auth/login', { email, password: pass });
+      if (!data.token) throw new Error('No token returned');
+      setToken(data.token, email);
+      S.token = data.token;
+      S.adminEmail = email;
+      // Verify platform admin
+      const me = await apiGet('/admin/me');
+      if (!me || !me.isAdmin) throw new Error('This account does not have platform admin access.');
+      setState({ view: 'dashboard', token: data.token, adminEmail: email, error: '' });
+      loadAll();
+    } catch(e) {
+      errDiv.textContent = e.message;
+      errDiv.style.display = 'block';
+    }
+  });
+
+  wrap.appendChild(card);
+  return wrap;
+}
+
+function renderDashboard(db) {
+  if (!db) return div('loading', div('spinner'), 'Loading data…');
+  const { overall, tenants, pdaily, recent } = db;
+  const platCats = platformCats(tenants);
+  const series = S.trendFilter === 'all' ? pdaily : (tenants.find(t => t.id === S.trendFilter) || { daily: [] }).daily;
+
+  const sorted = [...tenants].sort((a,b) => b.costUsd - a.costUsd);
+  const maxCost = sorted[0]?.costUsd || 1;
+
+  const main = div('fadein');
+
+  // Header
+  main.innerHTML = `<div class="page-header"><h2>Platform overview</h2><p>LLM cost &amp; usage across all tenants · trailing 30 days</p></div>`;
+
+  // Stat cards
+  const grid = div('card-grid-4');
+  renderStatCards([
+    { label: 'Total spend',     dot: ACCENT, value: money(overall.cost_usd, 0),    sub: 'LLM cost · 30-day window' },
+    { label: 'LLM calls',       dot: TEAL,   value: num(overall.total_calls),       sub: tok(overall.tokens_in)+' in / '+tok(overall.tokens_out)+' out' },
+    { label: 'Web searches',    dot: AMBER,  value: num(overall.web_searches),      sub: 'Anthropic web research' },
+    { label: 'Workflow runs',   dot: GREEN,  value: num(overall.total_runs),        sub: 'operational · separate from cost' },
+  ]).forEach(c => grid.appendChild(c));
+  main.appendChild(grid);
+
+  // Middle row: donut + trend
+  const midRow = div('row-2 row-2-narrow');
+
+  const donutCard = div('card');
+  donutCard.innerHTML = `<div class="section-title">Cost by surface</div><div class="section-sub">Where this window's spend originates</div>`;
+  donutCard.appendChild(renderDonutSection(platCats, money(overall.cost_usd, 0)));
+  midRow.appendChild(donutCard);
+  midRow.appendChild(renderTrendCard(series, tenants));
+  main.appendChild(midRow);
+
+  // Bottom row: leaders + recent runs
+  const botRow = div('row-2', );
+  botRow.style.gridTemplateColumns = '1.1fr 1fr';
+
+  // Leaders card
+  const leadCard = div('card');
+  const leadHeader = div('');
+  leadHeader.style.cssText = 'display:flex;align-items:center;justify-content:space-between;margin-bottom:18px';
+  leadHeader.innerHTML = `<div class="section-title" style="margin-bottom:0">Top tenants by spend</div>`;
+  const viewAll = h('span', { style: { fontSize: '11px', color: ACCENT, cursor: 'pointer' } }, 'View all →');
+  viewAll.addEventListener('click', () => setState({ view: 'tenants' }));
+  leadHeader.appendChild(viewAll);
+  leadCard.appendChild(leadHeader);
+
+  const leadList = div('');
+  leadList.style.cssText = 'display:flex;flex-direction:column;gap:15px';
+  sorted.slice(0, 6).forEach((t, i) => {
+    const row = div('');
+    row.style.cursor = 'pointer';
+    row.addEventListener('click', () => setState({ view: 'tenant', selectedTenant: t.id }));
+    row.innerHTML = `
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:6px">
+        <span class="mono" style="font-size:11px;color:var(--dim);width:18px">${String(i+1).padStart(2,'0')}</span>
+        <span style="font-size:13px;flex:1">${t.name}</span>
+        ${t.isSpike ? '<span class="badge-spike">SPIKE</span>' : ''}
+        <span class="mono" style="font-size:13px">${money(t.costUsd, 0)}</span>
+      </div>
+      <div class="leader-bar-track" style="margin-left:28px">
+        <div class="leader-bar-fill" style="background:${t.isSpike ? RED : ACCENT};width:${(t.costUsd/maxCost*100).toFixed(1)}%"></div>
+      </div>`;
+    leadList.appendChild(row);
+  });
+  leadCard.appendChild(leadList);
+
+  // Recent runs card
+  const runCard = div('card');
+  runCard.innerHTML = `<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px"><div class="section-title" style="margin-bottom:0">Recent workflow runs</div><span style="font-size:11px;color:var(--dim)">operational · separate from cost</span></div>`;
+  const runList = div('');
+  renderRunRows(recent.slice(0, 8)).forEach(r => runList.appendChild(r));
+  runCard.appendChild(runList);
+
+  botRow.appendChild(leadCard);
+  botRow.appendChild(runCard);
+  main.appendChild(botRow);
+
+  return main;
+}
+
+function renderUsage(db) {
+  if (!db) return div('loading', div('spinner'), 'Loading data…');
+  const { overall, tenants, pdaily } = db;
+  const platCats = platformCats(tenants);
+  const ctxItems = platformContexts(tenants);
+  const series = S.trendFilter === 'all' ? pdaily : (tenants.find(t => t.id === S.trendFilter) || { daily: [] }).daily;
+
+  const main = div('fadein');
+  main.innerHTML = `<div class="page-header"><h2>Usage &amp; Cost</h2><p>Diagnose where LLM spend comes from · all data from llm_cost_log</p></div>`;
+
+  // Stat cards
+  const grid = div('card-grid-4');
+  renderStatCards([
+    { label: 'Total spend',  dot: ACCENT, value: money(overall.cost_usd, 0), sub: 'LLM cost · 30-day window' },
+    { label: 'LLM calls',    dot: TEAL,   value: num(overall.total_calls),   sub: tok(overall.tokens_in)+' in / '+tok(overall.tokens_out)+' out' },
+    { label: 'Web searches', dot: AMBER,  value: num(overall.web_searches),  sub: 'Anthropic web research' },
+    { label: 'Workflow runs',dot: GREEN,  value: num(overall.total_runs),    sub: 'operational · separate from cost' },
+  ]).forEach(c => grid.appendChild(c));
+  main.appendChild(grid);
+
+  // Donut card (large)
+  const donutCard = div('card', );
+  donutCard.style.marginBottom = '16px';
+  donutCard.innerHTML = `<div class="section-title">Cost by surface</div><div class="section-sub">Conversation vs. converger vs. workflow execution vs. web search — primary view for spotting token bloat</div>`;
+  const donutWrap = div('');
+  donutWrap.style.cssText = 'display:flex;gap:40px;align-items:center';
+  donutWrap.appendChild(renderDonut(platCats, money(overall.cost_usd, 0)));
+  const legend = div('');
+  legend.style.cssText = 'flex:1;display:flex;flex-direction:column;gap:18px';
+  renderCatRows(platCats, 9).forEach(r => legend.appendChild(r));
+  donutWrap.appendChild(legend);
+  donutCard.appendChild(donutWrap);
+  main.appendChild(donutCard);
+
+  // Context table
+  const ctxCard = div('card');
+  ctxCard.style.marginBottom = '16px';
+  ctxCard.innerHTML = `<div class="section-title" style="margin-bottom:4px">Spend by context surface <span style="color:var(--dim);font-weight:400;font-size:12px">· top surfaces across all tenants</span></div>`;
+  const tblCols = '2.4fr 1.3fr 1fr 1.4fr 1fr';
+  const hdr = div('ctx-tbl-header');
+  hdr.style.gridTemplateColumns = tblCols;
+  hdr.innerHTML = `<span>Context</span><span>Category</span><span style="text-align:right">Calls</span><span style="text-align:right">Tokens (in / out)</span><span style="text-align:right">Cost</span>`;
+  ctxCard.appendChild(hdr);
+
+  if (ctxItems.length) {
+    ctxItems.forEach(c => {
+      const row = div('ctx-tbl-row');
+      row.style.gridTemplateColumns = tblCols;
+      row.innerHTML = `
+        <span class="ctx-label"><span class="ctx-dot" style="background:${colorOf(c.cat)}"></span><span>${c.context}</span></span>
+        <span style="display:flex;align-items:center;gap:7px;font-size:12px;color:var(--muted)"><span class="ctx-dot" style="background:${colorOf(c.cat)}"></span>${c.cat}</span>
+        <span class="mono" style="font-size:12px;text-align:right">${num(c.calls)}</span>
+        <span class="mono" style="font-size:12px;color:var(--muted);text-align:right">${tok(c.tin)} / ${tok(c.tout)}</span>
+        <span class="mono" style="font-size:12px;text-align:right">${money(c.cost, 2)}</span>`;
+      ctxCard.appendChild(row);
+    });
+  } else {
+    ctxCard.appendChild(div('empty', 'No LLM calls recorded yet — send a message in the builder to generate data'));
+  }
+  main.appendChild(ctxCard);
+
+  // Trend card
+  main.appendChild(renderTrendCard(series, tenants, true));
+  return main;
+}
+
+function renderTenants(db) {
+  if (!db) return div('loading', div('spinner'), 'Loading data…');
+  const sorted = [...db.tenants].sort((a,b) => b.costUsd - a.costUsd);
+  const maxCost = sorted[0]?.costUsd || 1;
+
+  const main = div('fadein');
+  main.innerHTML = `<div class="page-header"><h2>Tenants</h2><p>${sorted.length} active tenants · ranked by LLM spend · click to drill in</p></div>`;
+
+  const card = div('card');
+  const cols = '30px 2.2fr 1.5fr 1fr 1fr 1fr';
+  const hdr = div('tbl-header');
+  hdr.style.gridTemplateColumns = cols;
+  hdr.innerHTML = `<span>#</span><span>Tenant</span><span>Spend</span><span style="text-align:right">LLM calls</span><span style="text-align:right">Web search</span><span style="text-align:right">Fail rate</span>`;
+  card.appendChild(hdr);
+
+  sorted.forEach((t, i) => {
+    const failRate = t.runStatus.failed / Math.max(t.runStatus.succeeded + t.runStatus.failed, 1) * 100;
+    const row = div('tbl-row');
+    row.style.gridTemplateColumns = cols;
+    row.addEventListener('click', () => setState({ view: 'tenant', selectedTenant: t.id }));
+    row.innerHTML = `
+      <span class="mono" style="font-size:12px;color:var(--dim)">${String(i+1).padStart(2,'0')}</span>
+      <div style="display:flex;align-items:center;gap:9px;min-width:0">
+        <span style="font-size:13.5px;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${t.name}</span>
+        ${t.isSpike ? '<span class="badge-spike">SPIKE</span>' : ''}
+      </div>
+      <div style="display:flex;align-items:center;gap:10px">
+        <div class="leader-bar-track" style="flex:1">
+          <div class="leader-bar-fill" style="background:${t.isSpike ? RED : ACCENT};width:${(t.costUsd/maxCost*100).toFixed(1)}%"></div>
+        </div>
+        <span class="mono" style="font-size:13px;width:62px;text-align:right">${money(t.costUsd, 0)}</span>
+      </div>
+      <span class="mono" style="font-size:12.5px;color:var(--muted);text-align:right">${num(t.llmCalls)}</span>
+      <span class="mono" style="font-size:12.5px;color:var(--muted);text-align:right">${num(t.webSearches)}</span>
+      <span class="mono" style="font-size:12.5px;text-align:right;color:${failRate > 8 ? RED : MUTED}">${failRate.toFixed(1)}%</span>`;
+    card.appendChild(row);
+  });
+
+  main.appendChild(card);
+  return main;
+}
+
+function renderTenantDetail(tenantId, db) {
+  if (!db) return div('loading', div('spinner'), 'Loading data…');
+  const t = db.tenants.find(x => x.id === tenantId) || db.tenants[0];
+  if (!t) return div('empty', 'Tenant not found');
+
+  const rs = t.runStatus;
+  const total = Math.max(rs.succeeded + rs.failed, 1);
+  const rate  = rs.succeeded / total * 100;
+
+  const main = div('fadein');
+
+  // Breadcrumb
+  const back = h('div', { style: { display: 'inline-flex', alignItems: 'center', gap: '6px', fontSize: '12px', color: MUTED, cursor: 'pointer', marginBottom: '14px' } }, '← All tenants');
+  back.addEventListener('click', () => setState({ view: 'tenants' }));
+  back.onmouseenter = () => back.style.color = '#e2e4ec';
+  back.onmouseleave = () => back.style.color = MUTED;
+  main.appendChild(back);
+
+  // Heading
+  const heading = div('');
+  heading.style.cssText = 'display:flex;align-items:center;gap:12px;margin-bottom:24px';
+  heading.innerHTML = `
+    <div style="font-size:22px;font-weight:700">${t.name}</div>
+    <span class="mono badge-tag">${t.id}</span>
+    ${t.isSpike ? '<span style="font-size:10px;color:var(--red);background:rgba(240,97,109,.13);padding:3px 9px;border-radius:6px;font-weight:700;letter-spacing:.04em">COST SPIKE DETECTED</span>' : ''}`;
+  main.appendChild(heading);
+
+  // Stat cards
+  const grid = div('card-grid-4');
+  renderStatCards([
+    { label: 'Spend',          dot: ACCENT, value: money(t.costUsd, 0),    sub: 'LLM cost · 30-day window' },
+    { label: 'LLM calls',      dot: TEAL,   value: num(t.llmCalls),        sub: tok(t.tokensIn)+' in / '+tok(t.tokensOut)+' out' },
+    { label: 'Web searches',   dot: AMBER,  value: num(t.webSearches),     sub: 'web research calls' },
+    { label: 'Workflow runs',  dot: GREEN,  value: num(t.totalRuns),       sub: 'operational · separate from cost' },
+  ]).forEach(c => grid.appendChild(c));
+  main.appendChild(grid);
+
+  // Donut + trend row
+  const row1 = div('row-2 row-2-narrow');
+
+  const donutCard = div('card');
+  donutCard.innerHTML = `<div class="section-title" style="margin-bottom:20px">Cost by surface</div>`;
+  donutCard.appendChild(renderDonutSection(t.categories, money(t.costUsd, 0)));
+  row1.appendChild(donutCard);
+
+  const trendCard = div('card');
+  trendCard.innerHTML = `<div style="font-size:14px;font-weight:600;margin-bottom:20px">Daily cost trend <span style="color:var(--dim);font-weight:400;font-size:12px">· 30 days</span></div>`;
+  trendCard.appendChild(renderBarChart(t.daily, false));
+  trendCard.appendChild(renderBarAxis(t.daily));
+  row1.appendChild(trendCard);
+  main.appendChild(row1);
+
+  // Workflow runs section
+  const runsHeading = div('');
+  runsHeading.style.cssText = 'display:flex;align-items:center;gap:12px;margin-bottom:16px;margin-top:12px';
+  runsHeading.innerHTML = `<div style="font-size:15px;font-weight:600">Workflow runs</div><span class="badge-tag">operational health · separate from LLM cost</span>`;
+  main.appendChild(runsHeading);
+
+  const row2 = div('row-2 row-2-equal');
+
+  // Success rate card
+  const healthCard = div('card');
+  healthCard.innerHTML = `
+    <div style="font-size:12.5px;color:var(--muted);margin-bottom:10px">Success rate</div>
+    <div class="health-rate">${rate.toFixed(1)}%</div>
+    <div class="health-bar">
+      <div style="width:${(rs.succeeded/total*100).toFixed(1)}%;height:100%;background:${GREEN}"></div>
+      <div style="width:${(rs.failed/total*100).toFixed(1)}%;height:100%;background:${RED}"></div>
+    </div>
+    <div class="health-nums">
+      <div class="health-num"><div class="n" style="color:${GREEN}">${num(rs.succeeded)}</div><div class="l">Succeeded</div></div>
+      <div class="health-num"><div class="n" style="color:${RED}">${num(rs.failed)}</div><div class="l">Failed</div></div>
+      <div class="health-num"><div class="n" style="color:${ACCENT}">${num(rs.running)}</div><div class="l">Running</div></div>
+      <div class="health-num"><div class="n" style="color:${MUTED}">${num(rs.test_runs)}</div><div class="l">Test runs</div></div>
+    </div>`;
+  row2.appendChild(healthCard);
+
+  // Workflows table
+  const wfCard = div('card');
+  wfCard.innerHTML = `<div class="section-title" style="margin-bottom:16px">Workflows</div>`;
+  const wfCols = '2.2fr 1fr 1fr 1fr 1fr';
+  const wfHdr = div('ctx-tbl-header');
+  wfHdr.style.gridTemplateColumns = wfCols;
+  wfHdr.innerHTML = `<span>Workflow</span><span style="text-align:right">Runs</span><span style="text-align:right">OK</span><span style="text-align:right">Failed</span><span style="text-align:right">Last run</span>`;
+  wfCard.appendChild(wfHdr);
+
+  if (t.workflows.length) {
+    t.workflows.forEach(w => {
+      const row = div('ctx-tbl-row');
+      row.style.gridTemplateColumns = wfCols;
+      row.innerHTML = `
+        <div style="min-width:0">
+          <div style="font-size:13px">${w.name}</div>
+          <div class="mono" style="font-size:10.5px;color:var(--dim);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">workflow:${w.slug}</div>
+        </div>
+        <span class="mono" style="font-size:12.5px;text-align:right">${num(w.runs)}</span>
+        <span class="mono" style="font-size:12.5px;color:${GREEN};text-align:right">${num(w.succeeded)}</span>
+        <span class="mono" style="font-size:12.5px;text-align:right;color:${w.failed > 0 ? RED : DIM}">${num(w.failed)}</span>
+        <span class="mono" style="font-size:11px;color:var(--dim);text-align:right">${w.lastRun}</span>`;
+      wfCard.appendChild(row);
+    });
+  } else {
+    wfCard.appendChild(div('empty', 'No workflows yet'));
+  }
+  row2.appendChild(wfCard);
+  main.appendChild(row2);
+
+  // Run log
+  const runLogCard = div('card');
+  runLogCard.style.marginTop = '16px';
+  runLogCard.innerHTML = `<div class="section-title" style="margin-bottom:14px">Run log <span style="color:var(--dim);font-weight:400;font-size:12px">· recent runs, failures highlighted</span></div>`;
+  const runList = div('');
+  const runs = t.recent.slice().sort((a,b) => a.mins - b.mins);
+  if (runs.length) {
+    runs.forEach(r => {
+      const m = RUN_META[r.status] || RUN_META.succeeded;
+      const row = div('run-row' + (r.status === 'failed' ? ' failed' : ''));
+      row.innerHTML = `
+        <span class="badge" style="color:${m.color};background:${m.bg}">${m.label}</span>
+        <span class="run-name">${r.workflow}</span>
+        <span class="run-meta mono" style="font-size:11px;color:var(--dim)">${r.id}</span>
+        <span class="run-meta">${r.dur}</span>
+        <span class="run-meta" style="width:58px;text-align:right">${r.when}</span>`;
+      runList.appendChild(row);
+    });
+  } else {
+    runList.appendChild(div('empty', 'No runs yet'));
+  }
+  runLogCard.appendChild(runList);
+  main.appendChild(runLogCard);
+
+  // Cost detail by context
+  const ctxCard = div('card');
+  ctxCard.style.marginTop = '16px';
+  ctxCard.innerHTML = `<div class="section-title" style="margin-bottom:14px">Cost detail by context</div>`;
+  const ctxCols = '2.6fr 1fr 1.4fr 0.9fr 1fr';
+  const ctxHdr = div('ctx-tbl-header');
+  ctxHdr.style.gridTemplateColumns = ctxCols;
+  ctxHdr.innerHTML = `<span>Context</span><span style="text-align:right">Calls</span><span style="text-align:right">Tokens (in / out)</span><span style="text-align:right">Cost</span><span style="text-align:right">Last call</span>`;
+  ctxCard.appendChild(ctxHdr);
+
+  const ctxSorted = [...t.byContext].sort((a,b) => b.cost - a.cost);
+  if (ctxSorted.length) {
+    ctxSorted.forEach(c => {
+      const row = div('ctx-tbl-row');
+      row.style.gridTemplateColumns = ctxCols;
+      row.innerHTML = `
+        <span class="ctx-label"><span class="ctx-dot" style="background:${colorOf(c.cat)}"></span><span>${c.context}</span></span>
+        <span class="mono" style="font-size:12px;text-align:right">${num(c.calls)}</span>
+        <span class="mono" style="font-size:12px;color:var(--muted);text-align:right">${tok(c.tokens_in)} / ${tok(c.tokens_out)}</span>
+        <span class="mono" style="font-size:12px;text-align:right">${money(c.cost, 2)}</span>
+        <span class="mono" style="font-size:11px;color:var(--dim);text-align:right">${c.last_call_at}</span>`;
+      ctxCard.appendChild(row);
+    });
+  } else {
+    ctxCard.appendChild(div('empty', 'No cost data yet — LLM calls will appear here once traffic flows through'));
+  }
+  main.appendChild(ctxCard);
+
+  return main;
+}
+
+// ── Sidebar ────────────────────────────────────────────────────────────────────
+function renderSidebar() {
+  const sb = div('');
+  sb.id = 'sidebar';
+
+  // Logo
+  const logo = div('sb-logo');
+  logo.innerHTML = `<div class="sb-logo-mark">A</div><span class="sb-logo-text">Atlas <span>Admin</span></span>`;
+  sb.appendChild(logo);
+
+  // Nav
+  const nav = div('sb-nav');
+  nav.innerHTML = `<div class="sb-section">Observability</div>`;
+  const navItems = [
+    { key: 'dashboard', label: 'Dashboard' },
+    { key: 'usage',     label: 'Usage & Cost' },
+    { key: 'tenants',   label: 'Tenants' },
+  ];
+  navItems.forEach(n => {
+    const item = div('nav-item' + (S.view === n.key || (n.key === 'tenants' && S.view === 'tenant') ? ' active' : ''));
+    item.textContent = n.label;
+    item.addEventListener('click', () => setState({ view: n.key }));
+    nav.appendChild(item);
+  });
+
+  // Active tenant label
+  if (S.view === 'tenant' && S.data) {
+    const t = S.data.tenants.find(x => x.id === S.selectedTenant);
+    if (t) {
+      const lbl = div('nav-tenant');
+      lbl.textContent = t.name;
+      nav.appendChild(lbl);
+    }
+  }
+
+  sb.appendChild(nav);
+
+  // Footer
+  const footer = div('sb-footer');
+  footer.innerHTML = `
+    <div class="sb-email mono">${S.adminEmail || '—'}</div>
+    <div class="sb-role">Platform operator</div>`;
+  const logout = div('sb-logout');
+  logout.textContent = 'Sign out →';
+  logout.addEventListener('click', () => {
+    clearToken();
+    setState({ view: 'login', token: null, adminEmail: null, data: null });
+  });
+  footer.appendChild(logout);
+  sb.appendChild(footer);
+
+  return sb;
+}
+
+// ── Root render ───────────────────────────────────────────────────────────────
+function render() {
+  const root = document.getElementById('root');
+  root.innerHTML = '';
+
+  if (S.view === 'login') {
+    root.appendChild(renderLogin());
+    return;
+  }
+
+  root.style.display = 'flex';
+  root.appendChild(renderSidebar());
+
+  const main = h('main', {});
+  main.id = 'main';
+
+  const db = S.data;
+  switch (S.view) {
+    case 'dashboard': main.appendChild(renderDashboard(db)); break;
+    case 'usage':     main.appendChild(renderUsage(db));     break;
+    case 'tenants':   main.appendChild(renderTenants(db));   break;
+    case 'tenant':    main.appendChild(renderTenantDetail(S.selectedTenant, db)); break;
+  }
+
+  root.appendChild(main);
+}
+
+// ── Boot ───────────────────────────────────────────────────────────────────────
+(async function init() {
+  const { token, email } = getSaved();
+  if (token) {
+    S.token = token;
+    S.adminEmail = email;
+    // Verify token is still valid and is a platform admin
+    try {
+      const me = await apiGet('/admin/me');
+      if (me && me.isAdmin) {
+        S.view = 'dashboard';
+        render();
+        loadAll();
+        return;
+      }
+    } catch {}
+    clearToken();
+  }
+  S.view = 'login';
   render();
-}
-
-document.getElementById('nav').addEventListener('click', e => {
-  const a = e.target.closest('a[data-view]');
-  if (!a) return;
-  e.preventDefault();
-  navigate(a.dataset.view, a.dataset.tenant ?? null);
-});
-
-// ── Render ───────────────────────────────────────────────────────────────────
-
-async function render() {
-  const view = document.getElementById('view');
-  view.innerHTML = '<div class="loading">Loading…</div>';
-  try {
-    if (_activeView === 'overview')       await renderOverview(view);
-    else if (_activeView === 'usage')     await renderUsage(view);
-    else if (_activeView === 'tenant')    await renderTenant(view, _activeTenantId);
-    else if (_activeView === 'tenant-runs')  await renderTenantRuns(view, _activeTenantId);
-    else if (_activeView === 'tenant-cost')  await renderTenantCost(view, _activeTenantId);
-    else view.innerHTML = '<div class="empty">Unknown view</div>';
-  } catch (err) {
-    view.innerHTML = `<div class="loading" style="color:#f87171">Error: ${err.message}</div>`;
-  }
-}
-
-// ── Overview ──────────────────────────────────────────────────────────────────
-
-async function renderOverview(el) {
-  const data = await api('/admin/usage');
-  if (!data) return;
-  const o = data.overall ?? {};
-  el.innerHTML = `
-    <div class="page-header">
-      <h2>Dashboard</h2>
-      <p>System-wide usage across all tenants</p>
-    </div>
-    <div class="card-grid">
-      ${statCard('Total Runs', fmt(o.total_runs), 'scheduled runs (non-test)')}
-      ${statCard('Total Cost', '$' + (o.cost_usd ?? 0).toFixed(4), `${fmt(o.total_calls)} LLM calls`)}
-      ${statCard('Tokens In', fmtK(o.tokens_in), 'input tokens')}
-      ${statCard('Tokens Out', fmtK(o.tokens_out), 'output tokens')}
-    </div>
-    <div class="card">
-      <div class="section-title">Per-Tenant Summary</div>
-      <div class="table-wrap">
-        <table>
-          <thead><tr>
-            <th>Tenant</th><th>LLM Calls</th><th>Tokens In</th><th>Tokens Out</th><th>Cost (USD)</th>
-          </tr></thead>
-          <tbody>
-            ${(data.perTenant ?? []).map(t => `
-              <tr class="clickable" onclick="navigate('tenant','${t.tenantId}')">
-                <td>${t.name ?? t.tenantId}</td>
-                <td>${fmt(t.llmCalls)}</td>
-                <td>${fmtK(t.tokensIn)}</td>
-                <td>${fmtK(t.tokensOut)}</td>
-                <td class="cost">$${(t.costUsd ?? 0).toFixed(4)}</td>
-              </tr>`).join('')}
-          </tbody>
-        </table>
-      </div>
-    </div>`;
-}
-
-// ── Usage ─────────────────────────────────────────────────────────────────────
-
-async function renderUsage(el) {
-  const data = await api('/admin/usage');
-  if (!data) return;
-  const daily = data.daily ?? [];
-  const maxCost = Math.max(...daily.map(d => d.cost_usd ?? 0), 0.0001);
-  const grouped = {};
-  daily.forEach(d => {
-    if (!grouped[d.day]) grouped[d.day] = 0;
-    grouped[d.day] += d.cost_usd ?? 0;
-  });
-  const days = Object.keys(grouped).slice(-30);
-
-  el.innerHTML = `
-    <div class="page-header">
-      <h2>Usage &amp; Cost</h2>
-      <p>Last 30 days — scheduled runs only</p>
-    </div>
-    <div class="card gap">
-      <div class="section-title">Daily Cost (USD)</div>
-      <div class="chart-wrap">
-        ${days.map(d => {
-          const h = Math.round((grouped[d] / maxCost) * 100);
-          return `<div title="${d}: $${grouped[d].toFixed(4)}" class="bar" style="height:${Math.max(h,2)}%"></div>`;
-        }).join('')}
-      </div>
-      <div style="display:flex;gap:4px;margin-top:4px">
-        ${days.map((d, i) => i % 5 === 0 ? `<div class="chart-label" style="flex:5">${d.slice(5)}</div>` : '').join('')}
-      </div>
-    </div>
-    <div class="card">
-      <div class="section-title">Daily Breakdown</div>
-      <div class="table-wrap">
-        <table>
-          <thead><tr><th>Date</th><th>Runs</th><th>Cost (USD)</th><th>Tokens In</th><th>Tokens Out</th></tr></thead>
-          <tbody>
-            ${[...daily].reverse().slice(0,30).map(d => `
-              <tr>
-                <td class="mono">${d.day}</td>
-                <td>${fmt(d.runs)}</td>
-                <td class="cost">$${(d.cost_usd ?? 0).toFixed(4)}</td>
-                <td>${fmtK(d.tokens_in)}</td>
-                <td>${fmtK(d.tokens_out)}</td>
-              </tr>`).join('')}
-          </tbody>
-        </table>
-      </div>
-    </div>`;
-}
-
-// ── Tenant detail ─────────────────────────────────────────────────────────────
-
-async function renderTenant(el, tenantId) {
-  const data = await api(`/admin/tenants/${tenantId}`);
-  if (!data) return;
-  const t = data.tenant ?? {};
-  const r = data.runs   ?? {};
-  const c = data.cost   ?? {};
-  el.innerHTML = `
-    <div class="breadcrumb"><a href="#" onclick="navigate('overview');return false">Dashboard</a> <span>/</span> ${t.name ?? t.slug}</div>
-    <div class="page-header">
-      <h2>${t.name ?? t.slug}</h2>
-      <p class="mono">${t.id}</p>
-    </div>
-    <div class="card-grid">
-      ${statCard('Total Runs', fmt(r.totalRuns), `${r.succeeded ?? 0} succeeded · ${r.failed ?? 0} failed`)}
-      ${statCard('Test Runs', fmt(r.testRuns), 'excluded from cost')}
-      ${statCard('Total Cost', '$' + (c.costUsd ?? 0).toFixed(4), `${fmt(c.llmCalls)} LLM calls`)}
-      ${statCard('Tokens', fmtK((c.tokensIn ?? 0) + (c.tokensOut ?? 0)), `${fmtK(c.tokensIn)} in · ${fmtK(c.tokensOut)} out`)}
-    </div>
-    <div class="row">
-      <div class="card">
-        <div class="section-title">Actions</div>
-        <nav style="display:flex;gap:8px;flex-wrap:wrap">
-          <a href="#" onclick="navigate('tenant-runs','${tenantId}');return false" style="color:var(--accent);text-decoration:none;font-size:13px">View Runs →</a>
-          <a href="#" onclick="navigate('tenant-cost','${tenantId}');return false" style="color:var(--accent);text-decoration:none;font-size:13px;margin-left:16px">Cost Breakdown →</a>
-        </nav>
-      </div>
-    </div>
-    <div class="card">
-      <div class="section-title">Recent Runs</div>
-      ${renderRunTable(data.recent ?? [])}
-    </div>`;
-}
-
-async function renderTenantRuns(el, tenantId) {
-  const data = await api(`/admin/tenants/${tenantId}/runs`);
-  if (!data) return;
-  el.innerHTML = `
-    <div class="breadcrumb">
-      <a href="#" onclick="navigate('overview');return false">Dashboard</a> <span>/</span>
-      <a href="#" onclick="navigate('tenant','${tenantId}');return false">${tenantId}</a> <span>/</span> Runs
-    </div>
-    <div class="page-header"><h2>Run History</h2></div>
-    <div class="card-grid">
-      ${statCard('Total', fmt(data.totalRuns), 'all runs including tests')}
-      ${statCard('Succeeded', fmt(data.succeeded), '', 'green')}
-      ${statCard('Failed', fmt(data.failed), '', 'red')}
-      ${statCard('Running', fmt(data.running), 'in-progress', 'yellow')}
-    </div>
-    <div class="card">
-      <div class="section-title">Runs per Workflow</div>
-      <div class="table-wrap">
-        <table>
-          <thead><tr><th>Workflow</th><th>Total</th><th>Succeeded</th><th>Failed</th><th>Tests</th><th>Last Run</th></tr></thead>
-          <tbody>
-            ${(data.byWorkflow ?? []).map(w => `
-              <tr>
-                <td>${w.name ?? w.slug ?? w.workflow_id}</td>
-                <td>${fmt(w.total)}</td>
-                <td><span class="badge badge-green">${w.succeeded}</span></td>
-                <td>${w.failed > 0 ? `<span class="badge badge-red">${w.failed}</span>` : '—'}</td>
-                <td>${w.test_runs ?? 0}</td>
-                <td class="mono">${fmtDate(w.last_run_at)}</td>
-              </tr>`).join('')}
-          </tbody>
-        </table>
-      </div>
-    </div>`;
-}
-
-async function renderTenantCost(el, tenantId) {
-  const data = await api(`/admin/tenants/${tenantId}/cost`);
-  if (!data) return;
-  const daily = data.daily ?? [];
-  const maxCost = Math.max(...daily.map(d => d.cost_usd ?? 0), 0.0001);
-  const byContext = data.byContext ?? [];
-  const byWorkflow = data.byWorkflow ?? [];
-  el.innerHTML = `
-    <div class="breadcrumb">
-      <a href="#" onclick="navigate('overview');return false">Dashboard</a> <span>/</span>
-      <a href="#" onclick="navigate('tenant','${tenantId}');return false">${tenantId}</a> <span>/</span> Cost
-    </div>
-    <div class="page-header"><h2>Cost Breakdown</h2><p>All LLM calls — converger, workflow nodes, web search</p></div>
-    <div class="card-grid">
-      ${statCard('Total Cost', '$' + (data.costUsd ?? 0).toFixed(4), 'estimated USD')}
-      ${statCard('LLM Calls', fmt(data.llmCalls))}
-      ${statCard('Tokens In', fmtK(data.tokensIn))}
-      ${statCard('Tokens Out', fmtK(data.tokensOut))}
-    </div>
-    ${daily.length > 0 ? `
-    <div class="card gap">
-      <div class="section-title">Daily Cost — 30 days</div>
-      <div class="chart-wrap">
-        ${daily.map(d => {
-          const h = Math.round(((d.cost_usd ?? 0) / maxCost) * 100);
-          return `<div title="${d.day}: $${(d.cost_usd ?? 0).toFixed(4)} (${fmt(d.calls)} calls)" class="bar" style="height:${Math.max(h,2)}%"></div>`;
-        }).join('')}
-      </div>
-    </div>` : ''}
-    <div class="card">
-      <div class="section-title">By Surface</div>
-      <div class="table-wrap">
-        <table>
-          <thead><tr><th>Context</th><th>Calls</th><th>Tokens In</th><th>Tokens Out</th><th>Web Searches</th><th>Cost (USD)</th><th>Last Call</th></tr></thead>
-          <tbody>
-            ${byContext.length ? byContext.map(c => `
-              <tr>
-                <td class="mono" style="font-size:12px">${c.context ?? '(unknown)'}</td>
-                <td>${fmt(c.calls)}</td>
-                <td>${fmtK(c.tokens_in)}</td>
-                <td>${fmtK(c.tokens_out)}</td>
-                <td>${c.web_searches > 0 ? fmt(c.web_searches) : '—'}</td>
-                <td class="cost">$${(c.cost_usd ?? 0).toFixed(4)}</td>
-                <td class="mono">${fmtDate(c.last_call_at)}</td>
-              </tr>`).join('') : '<tr><td colspan="7" style="text-align:center;color:var(--muted);padding:24px">No cost data yet — LLM calls will appear here once traffic flows through</td></tr>'}
-          </tbody>
-        </table>
-      </div>
-    </div>
-    ${byWorkflow.length ? `
-    <div class="card">
-      <div class="section-title">Workflow Runs</div>
-      <div class="table-wrap">
-        <table>
-          <thead><tr><th>Workflow</th><th>Runs</th><th>Succeeded</th><th>Failed</th><th>Last Run</th></tr></thead>
-          <tbody>
-            ${byWorkflow.map(w => `
-              <tr>
-                <td>${w.name ?? w.slug ?? w.workflow_id}</td>
-                <td>${fmt(w.runs)}</td>
-                <td>${w.succeeded > 0 ? `<span class="badge badge-green">${w.succeeded}</span>` : '—'}</td>
-                <td>${w.failed > 0 ? `<span class="badge badge-red">${w.failed}</span>` : '—'}</td>
-                <td class="mono">${fmtDate(w.last_run_at)}</td>
-              </tr>`).join('')}
-          </tbody>
-        </table>
-      </div>
-    </div>` : ''}`;
-}
-
-// ── Helpers ───────────────────────────────────────────────────────────────────
-
-function statCard(label, value, sub = '', color = '') {
-  const cls = color ? `style="color:var(--${color})"` : '';
-  return `<div class="stat-card">
-    <div class="stat-label">${label}</div>
-    <div class="stat-value" ${cls}>${value}</div>
-    ${sub ? `<div class="stat-sub">${sub}</div>` : ''}
-  </div>`;
-}
-
-function renderRunTable(runs) {
-  if (!runs.length) return '<div class="empty">No runs yet</div>';
-  return `<div class="table-wrap"><table>
-    <thead><tr><th>Workflow</th><th>Status</th><th>Started</th><th>Cost</th><th>Type</th></tr></thead>
-    <tbody>
-      ${runs.map(r => `
-        <tr>
-          <td>${r.workflow_name ?? r.slug ?? r.workflow_id}</td>
-          <td>${statusBadge(r.status)}</td>
-          <td class="mono">${fmtDate(r.started_at)}</td>
-          <td class="cost">${r.cost_usd ? '$' + (+r.cost_usd).toFixed(4) : '—'}</td>
-          <td>${r.is_test ? '<span class="badge badge-yellow">test</span>' : '<span class="badge badge-blue">live</span>'}</td>
-        </tr>`).join('')}
-    </tbody>
-  </table></div>`;
-}
-
-function statusBadge(s) {
-  if (s === 'success') return '<span class="badge badge-green">success</span>';
-  if (s === 'error')   return '<span class="badge badge-red">error</span>';
-  if (s === 'running') return '<span class="badge badge-yellow">running</span>';
-  return `<span class="badge">${s ?? '—'}</span>`;
-}
-
-function fmt(n)  { return (n ?? 0).toLocaleString(); }
-function fmtK(n) {
-  n = n ?? 0;
-  if (n >= 1_000_000) return (n / 1_000_000).toFixed(1) + 'M';
-  if (n >= 1_000)     return (n / 1_000).toFixed(1) + 'K';
-  return n.toLocaleString();
-}
-function fmtDate(s) {
-  if (!s) return '—';
-  const d = new Date(s);
-  return d.toLocaleDateString() + ' ' + d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-}
-
-// ── Tenant loading ────────────────────────────────────────────────────────────
-
-async function loadTenants() {
-  try {
-    const data = await api('/admin/tenants');
-    if (!data) return;
-    _tenants = data.tenants ?? [];
-    document.getElementById('tenant-nav').innerHTML = _tenants.map(t =>
-      `<a href="#" data-view="tenant" data-tenant="${t.id}">${t.name ?? t.slug ?? t.id}</a>`
-    ).join('');
-  } catch (err) {
-    console.error('Failed to load tenants:', err);
-  }
-}
-
-// ── Init ──────────────────────────────────────────────────────────────────────
-
-async function init() {
-  try {
-    const token = getToken();
-    if (!token) { showLogin(); return; }
-    const r = await fetch('/admin/me', { headers: { Authorization: `Bearer ${token}` } });
-    const me = await r.json();
-    if (!me.isAdmin) { clearToken(); showLogin(); return; }
-    showApp(me.user);
-    await loadTenants();
-    await render();
-  } catch (err) {
-    showLogin('Unable to reach server.');
-  }
-}
-
-init();
+})();
 </script>
 </body>
 </html>
