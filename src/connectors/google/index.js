@@ -624,6 +624,24 @@ export function registerGoogleChannels(capabilityRegistry) {
   });
 
   capabilityRegistry.register({
+    id: 'drive_create_folder', connector: 'google', positions: ['step'],
+    name: 'Create Drive Folder', icon: 'folder',
+    description: 'Create a new folder in Google Drive. Returns folderId and link — use these in downstream docs_create or drive_list_files configs.',
+    configSchema: [
+      { key: 'name',     label: 'Folder name', type: 'string', optional: false },
+      { key: 'parentId', label: 'Parent folder ID', type: 'string', optional: true, hint: 'Leave blank to create in My Drive root' },
+    ],
+    requiredScopes: ['https://www.googleapis.com/auth/drive'],
+    isReady: ready,
+    handle: makeHandle(async (gapi, config) => {
+      const metadata = { name: config.name, mimeType: 'application/vnd.google-apps.folder' };
+      if (config.parentId) metadata.parents = [config.parentId];
+      const file = await gapi('POST', '/drive/v3/files', { body: metadata });
+      return { folderId: file.id, name: file.name, link: `https://drive.google.com/drive/folders/${file.id}` };
+    }),
+  });
+
+  capabilityRegistry.register({
     id: 'drive_list_files', connector: 'google', positions: ['step'],
     name: 'List Drive Files', icon: 'folder',
     description: 'List files in Google Drive, optionally filtered by name or type.',

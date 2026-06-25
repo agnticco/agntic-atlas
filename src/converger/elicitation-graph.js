@@ -191,7 +191,7 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
         const result = confirmation.result ?? {};
         return {
           setup_results:   { [key]: result },
-          clarifications:  [{ q: `(setup: ${proposal.action})`, a: JSON.stringify(result) }],
+          clarifications:  [{ q: `(setup: ${proposal.capabilityId})`, a: JSON.stringify(result) }],
           confirmationLog: [logEntry],
           step:            state.step + 1,
           phase:           'analyzing',

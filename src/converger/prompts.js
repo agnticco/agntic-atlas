@@ -248,20 +248,18 @@ RULES:
 - Return ONLY valid JSON — no prose, no markdown fences, no explanation outside the JSON
 
 SETUP ACTIONS — use when the workflow requires a resource that doesn't exist yet (e.g. a Drive
-folder the user named but hasn't created). Propose ONCE per missing resource, BEFORE the node
+folder, a Slack channel, an Airtable record). Propose ONCE per missing resource, BEFORE the node
 that uses it. Never re-propose a setup action that already appears in SETUP COMPLETED above.
 
-Available setup actions:
-- google_create_folder: Create a Google Drive folder. params: { name, parentId? (folderId of parent) }
-  result: { folderId, name, link }
-
-After a setup action executes, its result appears in SETUP COMPLETED. Use the returned folderId,
-channelId, etc. directly in the subsequent node's config — no placeholders.
+Any capability listed under AVAILABLE CONNECTOR ACTIONS can be used as a setup action — you already
+know what's available. Use setup_action for capabilities that CREATE or CONFIGURE a resource
+(create a folder, create a channel, append a header row, etc.), not for capabilities that read data.
+The result is whatever that capability normally returns; it appears in SETUP COMPLETED on the next turn.
 
 PROPOSAL FORMATS (return exactly one):
 
-Setup action:
-{"component":"setup_action","action":"google_create_folder","params":{"name":"<folder name>"},"stores_as":"<camelCase key for the result>","rationale":"<one sentence>"}
+Setup action (capabilityId must be an id from AVAILABLE CONNECTOR ACTIONS):
+{"component":"setup_action","capabilityId":"<capability id>","params":{...},"stores_as":"<camelCase key>","rationale":"<one sentence>"}
 
 Trigger examples (use the appropriate type):
 {"component":"trigger","spec":{"type":"email","filter":"from:ups.com","maxResults":5},"rationale":"<one sentence>"}

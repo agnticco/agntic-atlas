@@ -3257,7 +3257,7 @@ class Component extends DCLogic {
             self.setState({ msgs: updSL(sl => ({ ...sl, steps: sl.steps.map(s => s.id !== sid ? s : { ...s, actionsVisible: false, setupPending: true }) })), thinking: true, inputMode: 'locked' });
             fetch('/api/builder/sessions/' + self.state.threadId + '/setup', {
               method: 'POST', headers: self._H(),
-              body: JSON.stringify({ action: p.action, params: p.params || {} }),
+              body: JSON.stringify({ capabilityId: p.capabilityId, params: p.params || {} }),
             })
               .then(function(r) { return r.json(); })
               .then(function(d) {
@@ -3379,13 +3379,12 @@ class Component extends DCLogic {
   _humanStep(p) {
     const comp = p.component, spec = p.spec || {}, rat = p.rationale || '';
     if (comp === 'setup_action') {
-      const action = p.action || '';
+      const capId = p.capabilityId || '';
       const params = p.params || {};
-      if (action === 'google_create_folder') {
-        const name = params.name || 'folder';
-        return { title: 'Create Drive folder "' + name + '"', desc: rat || 'This folder doesn\'t exist yet — Atlas will create it now so the workflow can use it.' };
-      }
-      return { title: 'Setup: ' + action, desc: rat || 'One-time setup action needed before this workflow can run.' };
+      const nameHint = params.name ? ' "' + params.name + '"' : '';
+      if (capId === 'drive_create_folder') return { title: 'Create Drive folder' + nameHint, desc: rat || 'This folder doesn\'t exist yet — Atlas will create it now so the workflow can use it.' };
+      if (capId === 'slack_create_channel') return { title: 'Create Slack channel' + nameHint, desc: rat || 'This channel doesn\'t exist yet — Atlas will create it before building the workflow.' };
+      return { title: 'Setup: ' + capId + nameHint, desc: rat || 'One-time action needed before this workflow can run.' };
     }
     if (comp === 'name') {
       const nm = typeof spec === 'string' ? spec : (spec.name || 'Workflow');
