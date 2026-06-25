@@ -236,16 +236,15 @@ function isConnectorConnected(cap) {
 // step proposal — so Atlas eases into building instead of dropping a config card
 // cold. Generated on the fast tier and run concurrently with the converger so it
 // adds no perceptible latency. Returns null on any failure (purely additive).
-async function introMessage(spine, intent) {
+async function introMessage(spine, intent, sessionId) {
   try {
     const llm = spine.llm;
-    const t = llm?.tiers?.fast ?? llm?.tiers?.balanced ?? llm;
-    if (!t?.invoke) return null;
+    if (!llm?.invoke) return null;
     const sys = new SystemMessage(
       'You are Atlas, a warm, plain-spoken assistant that builds automations by talking with non-technical business operators. Never use technical jargon.');
     const user = new HumanMessage(
       `The user wants to automate: "${intent}".\n\nReply with ONE short, friendly sentence (max ~20 words) that acknowledges what you'll help them set up and signals you'll go one step at a time. No opener like "Sure"/"Great", no lists, no quotes — just the sentence.`);
-    const res = await t.invoke([sys, user]);
+    const res = await llm.invoke([sys, user], { configurable: { modelTier: 'fast', sessionId, costContext: 'chat.intro' } });
     const text = (typeof res === 'string' ? res : res?.content ?? '').trim();
     return text || null;
   } catch { return null; }
@@ -265,12 +264,13 @@ export function mountBuilderRoutes(app, { spine, requireActiveTenant, requireAut
     const FALLBACK = "Hey, I'm Atlas. I can help you automate things — or we can just talk it through first. What's on your mind?";
     try {
       const llm = spine.llm;
-      const t = llm?.tiers?.fast ?? llm?.tiers?.balanced ?? llm;
-      if (!t?.invoke) return res.json({ ok: true, greeting: FALLBACK });
+      if (!llm?.invoke) return res.json({ ok: true, greeting: FALLBACK });
+      const greetSessionId = `greeting-${req.user?.id ?? 'anon'}-${Date.now()}`;
+      spine.costTracker?.setSessionUser?.(greetSessionId, req.user?.id);
 
       const name = (req.user?.display_name || '').trim().split(/\s+/)[0] || null;
 
-      const raw = await t.invoke([
+      const raw = await llm.invoke([
         new SystemMessage(
           'You are Atlas — a sharp, direct assistant that helps business operators automate repetitive work by talking through it naturally.'
         ),
@@ -290,7 +290,7 @@ Rules:
 - Sound confident and specific, not like a chatbot intro
 - Output ONLY the greeting text, nothing else`
         )
-      ]);
+      ], { configurable: { modelTier: 'fast', sessionId: greetSessionId, costContext: 'chat.greeting' } });
 
       const text = (typeof raw === 'string' ? raw : raw?.content ?? '').trim().replace(/^["']|["']$/g, '');
       res.json({ ok: true, greeting: text || FALLBACK });
@@ -313,8 +313,10 @@ Rules:
     }
     try {
       const llm = spine.llm;
-      const t = llm?.tiers?.balanced ?? llm?.tiers?.fast ?? llm;
-      if (!t?.invoke) return res.status(503).json({ error: 'LLM unavailable' });
+      if (!llm?.invoke) return res.status(503).json({ error: 'LLM unavailable' });
+      // Route through ModelPool (not a raw tier) so _trackUsage() fires.
+      const chatSessionId = `chat-${req.user?.id ?? 'anon'}-${Date.now()}`;
+      spine.costTracker?.setSessionUser?.(chatSessionId, req.user?.id);
 
       // Normalize history: assistant messages must be JSON-formatted so the model
       // sees its own prior turns in the correct envelope and continues the pattern.
@@ -409,7 +411,10 @@ Rules:
       } catch { /* non-fatal */ }
 
       const chatUser = { name: req.user.display_name || req.user.email, email: req.user.email };
-      const raw = await withLLMRetry(() => t.invoke([{ role: 'system', content: buildChatSystem(connectorLines, chatUser) + ragBlock }, ...history]));
+      const raw = await withLLMRetry(() => llm.invoke(
+        [{ role: 'system', content: buildChatSystem(connectorLines, chatUser) + ragBlock }, ...history],
+        { configurable: { modelTier: 'balanced', sessionId: chatSessionId, costContext: 'chat' } },
+      ));
       const text = (typeof raw === 'string' ? raw : raw?.content ?? '').trim();
 
       let parsed = null;
@@ -440,8 +445,9 @@ Rules:
     if (!spec || !result) return res.status(400).json({ error: 'spec and result are required' });
     try {
       const llm = spine.llm;
-      const t = llm?.tiers?.fast ?? llm;
-      if (!t?.invoke) return res.status(503).json({ error: 'LLM unavailable' });
+      if (!llm?.invoke) return res.status(503).json({ error: 'LLM unavailable' });
+      const summarySessionId = `test-summary-${req.user?.id ?? 'anon'}-${Date.now()}`;
+      spine.costTracker?.setSessionUser?.(summarySessionId, req.user?.id);
 
       const name = spec.name || 'this workflow';
       const triggerLabel = ((spec.triggers || [])[0]?.label) || ((spec.triggers || [])[0]?.type) || 'trigger';
@@ -460,10 +466,10 @@ Rules:
 
       const SYSTEM = `You are Atlas, an AI workflow assistant. The user just ran a test of their workflow. Write a 2-3 sentence summary of what happened, in plain language a non-technical person would understand. Be specific — say what the workflow actually did (or what broke), not just "the test passed/failed". Don't use quotes around the workflow name. If it passed, be warm and specific. If it failed, be clear about what went wrong.`;
 
-      const raw = await withLLMRetry(() => t.invoke([
-        { role: 'system', content: SYSTEM },
-        { role: 'user', content: `Summarize this test run:\n\n${ctx}` },
-      ]));
+      const raw = await withLLMRetry(() => llm.invoke(
+        [{ role: 'system', content: SYSTEM }, { role: 'user', content: `Summarize this test run:\n\n${ctx}` }],
+        { configurable: { modelTier: 'fast', sessionId: summarySessionId, costContext: 'chat.test-summary' } },
+      ));
       const summary = (typeof raw === 'string' ? raw : raw?.content ?? '').trim();
 
       logEvent('test.summary', { tenant: req.tenant?.id ?? null, completed, chars: summary.length });
@@ -481,10 +487,6 @@ Rules:
   app.post('/api/builder/sessions', requireActiveTenant, async (req, res) => {
     const { intent } = req.body ?? {};
     if (!intent?.trim()) return res.status(400).json({ error: 'intent is required' });
-
-    // Generate the conversational opener in parallel with the converger's first
-    // turn so it costs no extra wall-clock.
-    const introP = introMessage(spine, intent);
 
     // Operator identity lets the converger resolve "me"/"DM me" to a real target.
     let capabilities = { operator: { name: req.user?.display_name ?? null, email: req.user?.email ?? null } };
@@ -568,6 +570,8 @@ Rules:
     const threadId  = `build-${req.tenant.id}-${Date.now()}`;
     // Register user attribution so converger LLM cost records carry tenant_id.
     spine.costTracker?.setSessionUser?.(threadId, req.user?.id);
+    // Start intro message after threadId exists so it shares the same session attribution.
+    const introP = introMessage(spine, intent, threadId);
     const converger = createConverger({
       llm:              spine.llm,
       capabilities,
@@ -714,15 +718,16 @@ Rules:
       const pausedWfs = workflows.filter(w => w.status === 'paused');
       const failedWfs = workflows.filter(w => w.lastRunStatus === 'error');
 
-      // ── LLM tier for fast calls ──────────────────────────────────────────
+      // ── LLM helper for fast home module calls ───────────────────────────
       const llm = spine.llm;
-      const t   = llm?.tiers?.fast ?? llm?.tiers?.balanced ?? llm;
+      const homeSessionId = `home-${req.user?.id ?? 'anon'}-${Date.now()}`;
+      spine.costTracker?.setSessionUser?.(homeSessionId, req.user?.id);
       const llmJson = async (prompt) => {
-        if (!t?.invoke) return null;
-        const raw = await t.invoke([
-          new SystemMessage('You are Atlas. Return only valid JSON — no markdown, no extra text.'),
-          new HumanMessage(prompt),
-        ]).catch(() => null);
+        if (!llm?.invoke) return null;
+        const raw = await llm.invoke(
+          [new SystemMessage('You are Atlas. Return only valid JSON — no markdown, no extra text.'), new HumanMessage(prompt)],
+          { configurable: { modelTier: 'fast', sessionId: homeSessionId, costContext: 'chat.home' } },
+        ).catch(() => null);
         const text = (typeof raw === 'string' ? raw : raw?.content ?? '').trim();
         try {
           const j = text.match(/```(?:json)?\s*([\s\S]*?)```/)?.[1]?.trim() ?? text.match(/\{[\s\S]*\}/)?.[0] ?? text;
@@ -817,8 +822,9 @@ Rules:
     if (!change?.trim()) return res.status(400).json({ error: 'change is required' });
     try {
       const llm = spine.llm;
-      const t = llm?.tiers?.balanced ?? llm?.tiers?.fast ?? llm;
-      if (!t?.invoke) return res.status(503).json({ error: 'LLM unavailable' });
+      if (!llm?.invoke) return res.status(503).json({ error: 'LLM unavailable' });
+      const editSessionId = `edit-change-${req.user?.id ?? 'anon'}-${Date.now()}`;
+      spine.costTracker?.setSessionUser?.(editSessionId, req.user?.id);
 
       const specSummary = JSON.stringify(spec, null, 2);
 
@@ -839,14 +845,14 @@ Rules:
 
       const capCtx = editChangeCapabilityContext(spine.engine?.channelRegistry, spine.engine?.capabilityRegistry, editConnectedSet);
 
-      const raw = await t.invoke([
+      const raw = await llm.invoke([
         new SystemMessage(
           `You are Atlas, a workflow automation assistant. You receive a workflow spec (JSON) and a user's change request and return an updated spec.\n\nWorkflow spec format:\n- triggers[]: array of trigger objects (type, config, label)\n- nodes[]: array of step objects (id, type, label, config). Types: summarize, llm, extract, rewrite, connector-action, deliver\n- edges[]: array of {from, to} connections\n\n${capCtx}\n\nRules:\n- Apply ONLY what the user asked for. Don't restructure unrelated parts.\n- Preserve all existing node ids, edge connections, and config fields not mentioned in the change.\n- For schedule triggers, config.cron is a cron expression (e.g. "0 6 * * *" = 6am daily), config.timezone is a tz name (e.g. "America/Chicago"), config.label is a human label.\n- For llm/summarize nodes, config.instructions is the prompt.\n- For deliver nodes, config.channel MUST be one of the AVAILABLE DELIVERY CHANNEL IDs — use the alias table to map plain-English requests to the right id. NEVER invent a channel id.\n- For connector-action nodes, config.action MUST be one of the AVAILABLE STEP ACTIONS.\n- If the user requests a delivery method or step action that is UNAVAILABLE or not listed, keep the relevant node UNCHANGED and explain specifically what connector or scope is needed to enable it.\n- Return ONLY valid JSON with exactly this shape: {"explanation":"<one sentence describing what you changed>","spec":{...updated spec...}}\n- No markdown fences, no extra text.`
         ),
         new HumanMessage(
           `Current spec:\n${specSummary}\n\nChange request: "${change}"\n\nReturn the updated spec as JSON.`
         ),
-      ]);
+      ], { configurable: { modelTier: 'balanced', sessionId: editSessionId, costContext: 'chat.edit-change' } });
 
       const text = (typeof raw === 'string' ? raw : raw?.content ?? '').trim();
       let parsed = null;
@@ -878,20 +884,21 @@ Rules:
     if (!workflow) return res.status(400).json({ error: 'workflow is required' });
     try {
       const llm = spine.llm;
-      const t = llm?.tiers?.fast ?? llm?.tiers?.balanced ?? llm;
-      if (!t?.invoke) return res.status(503).json({ error: 'LLM unavailable' });
+      if (!llm?.invoke) return res.status(503).json({ error: 'LLM unavailable' });
+      const editIntroSessionId = `edit-intro-${req.user?.id ?? 'anon'}-${Date.now()}`;
+      spine.costTracker?.setSessionUser?.(editIntroSessionId, req.user?.id);
 
       const name      = workflow.name || workflow.user_intent || 'this workflow';
       const trigger   = (workflow.triggers || []).map(tr => tr.label || tr.type).filter(Boolean).join(', ') || 'unknown trigger';
       const steps     = (workflow.nodes || []).map(n => n.label || n.type).filter(Boolean).join(' → ') || 'no steps configured';
       const status    = workflow.status || 'unknown';
 
-      const raw = await t.invoke([
+      const raw = await llm.invoke([
         new SystemMessage('You are Atlas, a warm assistant helping non-technical operators manage their automations. Be concise, specific, and conversational — no lists, no bullet points.'),
         new HumanMessage(
           `You are reviewing a workflow the user wants to edit.\n\nName: "${name}"\nTrigger: ${trigger}\nSteps: ${steps}\nStatus: ${status}\n\nWrite ONE short message (2–3 sentences) that: briefly describes what this workflow does in plain language, then invites the user to tell you what to change, fix, or add. Be specific to THIS workflow — not generic. Do not start with "Sure", "Great", or similar filler.`
         ),
-      ]);
+      ], { configurable: { modelTier: 'fast', sessionId: editIntroSessionId, costContext: 'chat.edit-intro' } });
       const message = (typeof raw === 'string' ? raw : raw?.content ?? '').trim();
       logEvent('edit.intro.ok', { tenant: req.tenant?.id ?? null, workflowId: workflow.id });
       res.json({ message: message || `I'm looking at ${name}. What would you like to change?` });
