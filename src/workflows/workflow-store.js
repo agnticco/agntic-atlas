@@ -173,6 +173,27 @@ export class WorkflowStore {
     this.db.exec(`CREATE INDEX IF NOT EXISTS idx_wf_user ON workflows(user_id);`);
     this.db.exec(`CREATE INDEX IF NOT EXISTS idx_wf_tenant ON workflows(tenant_id);`);
 
+    // Comprehensive LLM cost log — every call across all surfaces (converger,
+    // workflow execution, test runs) with tenant attribution.
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS llm_cost_log (
+        id           TEXT PRIMARY KEY,
+        ts           TEXT NOT NULL,
+        session_id   TEXT,
+        user_id      TEXT,
+        tenant_id    TEXT,
+        tier         TEXT,
+        model        TEXT,
+        context      TEXT,
+        tokens_in    INTEGER NOT NULL DEFAULT 0,
+        tokens_out   INTEGER NOT NULL DEFAULT 0,
+        cost_usd     REAL    NOT NULL DEFAULT 0,
+        web_searches INTEGER NOT NULL DEFAULT 0
+      )
+    `);
+    this.db.exec(`CREATE INDEX IF NOT EXISTS idx_cost_log_tenant ON llm_cost_log(tenant_id, ts)`);
+    this.db.exec(`CREATE INDEX IF NOT EXISTS idx_cost_log_session ON llm_cost_log(session_id)`);
+
     // Runs table additive columns
     const runsCols = new Set(this.db.prepare("PRAGMA table_info(workflow_runs)").all().map(r => r.name));
     if (!runsCols.has('is_test'))      { try { this.db.exec(`ALTER TABLE workflow_runs ADD COLUMN is_test INTEGER NOT NULL DEFAULT 0`); } catch {} }
@@ -666,6 +687,22 @@ export class WorkflowStore {
     }
     vals.push(runId);
     this.db.prepare(`UPDATE workflow_runs SET ${sets.join(', ')} WHERE id = ?`).run(...vals);
+  }
+
+  /**
+   * Persist one LLM call record. Called by the CostTracker write-through store
+   * on every ModelPool._trackUsage() — covers all surfaces: converger, workflow
+   * nodes, web search, etc.
+   */
+  insertCostCall({ id, ts, sessionId, userId, tenantId, tier, model, context, tokensIn, tokensOut, costUsd, webSearches }) {
+    try {
+      this.db.prepare(`
+        INSERT OR IGNORE INTO llm_cost_log
+          (id, ts, session_id, user_id, tenant_id, tier, model, context, tokens_in, tokens_out, cost_usd, web_searches)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(id, ts, sessionId ?? null, userId ?? null, tenantId ?? null, tier ?? null, model ?? null,
+             context ?? null, tokensIn ?? 0, tokensOut ?? 0, costUsd ?? 0, webSearches ?? 0);
+    } catch { /* best-effort — never crash a workflow over a cost log write */ }
   }
 
   /**

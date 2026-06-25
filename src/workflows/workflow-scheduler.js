@@ -253,6 +253,8 @@ export class WorkflowScheduler {
     }
     const startedAt = Date.now();
     const run = this.workflowStore.startRun(workflow.id);
+    // Register user attribution so every LLM cost record carries the tenant.
+    this.costTracker?.setSessionUser(`flow-run-${run.id}`, workflow.user_id ?? null);
     log.info(`[workflow-scheduler] executing flow "${workflow.slug}" (run ${run.id.slice(0, 8)})`);
 
     const stepCount = (workflow.nodes ?? []).length;

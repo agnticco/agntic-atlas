@@ -566,6 +566,8 @@ Rules:
     }
 
     const threadId  = `build-${req.tenant.id}-${Date.now()}`;
+    // Register user attribution so converger LLM cost records carry tenant_id.
+    spine.costTracker?.setSessionUser?.(threadId, req.user?.id);
     const converger = createConverger({
       llm:              spine.llm,
       capabilities,

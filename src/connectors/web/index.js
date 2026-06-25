@@ -28,7 +28,7 @@ const NATIVE_WEB_SEARCH = Object.freeze({
   allowed_callers: ['direct'],
 });
 
-async function runWebSearch(llm, query, { count = 5, depth = 'standard' } = {}) {
+async function runWebSearch(llm, query, { count = 5, depth = 'standard', sessionId, costContext } = {}) {
   if (!llm) throw new Error('web_search: LLM service not injected — pass llm to registerWebCapabilities');
   if (!process.env.ANTHROPIC_API_KEY) throw new Error('web_search requires ANTHROPIC_API_KEY');
 
@@ -50,7 +50,7 @@ async function runWebSearch(llm, query, { count = 5, depth = 'standard' } = {}) 
 
   const response = await llm.invoke(
     [new SystemMessage(system), new HumanMessage(prompt)],
-    { configurable: { modelTier: tier }, tools: [{ ...NATIVE_WEB_SEARCH }] },
+    { configurable: { modelTier: tier, sessionId: sessionId ?? undefined, costContext: costContext ?? 'web_search' }, tools: [{ ...NATIVE_WEB_SEARCH }] },
   );
 
   const serverBlocks = response.additionalKwargs?._serverToolBlocks ?? [];
@@ -112,12 +112,14 @@ export function registerWebCapabilities(registry, { llm } = {}) {
       { key: 'depth',       label: 'Detail depth', type: 'select', options: ['snippets', 'standard', 'deep'], optional: true },
     ],
     isReady: () => !!process.env.ANTHROPIC_API_KEY,
-    handle: async ({ config }) => {
+    handle: async ({ config, sessionId, costContext }) => {
       const query = (config.query ?? '').trim();
       if (!query) throw new Error('web_search: `query` is required');
       return await runWebSearch(llm, query, {
         count: Math.min(Math.max(1, Number(config.max_results) || 5), 10),
         depth: config.depth ?? 'standard',
+        sessionId,
+        costContext,
       });
     },
   });
