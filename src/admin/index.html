@@ -1,0 +1,447 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Atlas Admin</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg:       #0f1117;
+      --surface:  #1a1d27;
+      --border:   #2a2d3a;
+      --text:     #e2e4ec;
+      --muted:    #7a7f94;
+      --accent:   #6b7bff;
+      --green:    #34d399;
+      --red:      #f87171;
+      --yellow:   #fbbf24;
+      --radius:   8px;
+      --sidebar:  240px;
+    }
+
+    body { background: var(--bg); color: var(--text); font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; font-size: 14px; min-height: 100vh; display: flex; }
+
+    /* ── Layout ── */
+    #sidebar {
+      width: var(--sidebar); min-height: 100vh; background: var(--surface);
+      border-right: 1px solid var(--border); padding: 20px 0; flex-shrink: 0;
+      display: flex; flex-direction: column;
+    }
+    #main { flex: 1; padding: 24px 32px; overflow-y: auto; }
+
+    /* ── Sidebar ── */
+    .logo { padding: 0 20px 20px; border-bottom: 1px solid var(--border); margin-bottom: 12px; }
+    .logo h1 { font-size: 16px; font-weight: 700; color: var(--text); }
+    .logo span { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; }
+    nav a {
+      display: block; padding: 8px 20px; color: var(--muted); text-decoration: none;
+      font-size: 13px; border-left: 3px solid transparent; transition: all .15s;
+    }
+    nav a:hover, nav a.active { color: var(--text); background: rgba(107,123,255,.08); border-left-color: var(--accent); }
+    .nav-section { padding: 12px 20px 4px; font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
+
+    /* ── Header ── */
+    .page-header { margin-bottom: 24px; }
+    .page-header h2 { font-size: 20px; font-weight: 600; }
+    .page-header p  { color: var(--muted); margin-top: 4px; font-size: 13px; }
+
+    /* ── Cards ── */
+    .card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 20px; }
+    .card-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 16px; margin-bottom: 24px; }
+    .stat-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 20px; }
+    .stat-label { font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; margin-bottom: 8px; }
+    .stat-value { font-size: 28px; font-weight: 700; line-height: 1; }
+    .stat-sub   { font-size: 12px; color: var(--muted); margin-top: 6px; }
+
+    /* ── Table ── */
+    .table-wrap { overflow-x: auto; }
+    table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    th { text-align: left; padding: 10px 14px; font-size: 11px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); border-bottom: 1px solid var(--border); font-weight: 600; }
+    td { padding: 12px 14px; border-bottom: 1px solid var(--border); color: var(--text); }
+    tr:last-child td { border-bottom: none; }
+    tr:hover td { background: rgba(255,255,255,.02); }
+    .clickable { cursor: pointer; }
+
+    /* ── Badges ── */
+    .badge { display: inline-block; padding: 2px 8px; border-radius: 20px; font-size: 11px; font-weight: 600; }
+    .badge-green  { background: rgba(52,211,153,.15); color: var(--green); }
+    .badge-red    { background: rgba(248,113,113,.15); color: var(--red); }
+    .badge-yellow { background: rgba(251,191,36,.15);  color: var(--yellow); }
+    .badge-blue   { background: rgba(107,123,255,.15); color: var(--accent); }
+
+    /* ── Charts ── */
+    .chart-wrap { height: 120px; display: flex; align-items: flex-end; gap: 4px; padding-top: 12px; }
+    .bar { flex: 1; background: var(--accent); border-radius: 3px 3px 0 0; opacity: .7; transition: opacity .15s; min-height: 2px; }
+    .bar:hover { opacity: 1; }
+    .chart-label { font-size: 10px; color: var(--muted); text-align: center; margin-top: 4px; }
+
+    /* ── Loading / empty states ── */
+    .loading { color: var(--muted); padding: 40px 0; text-align: center; }
+    .empty   { color: var(--muted); font-size: 13px; padding: 20px 14px; text-align: center; }
+
+    /* ── Breadcrumb ── */
+    .breadcrumb { font-size: 13px; color: var(--muted); margin-bottom: 20px; }
+    .breadcrumb a { color: var(--accent); text-decoration: none; }
+    .breadcrumb a:hover { text-decoration: underline; }
+    .breadcrumb span { margin: 0 6px; }
+
+    /* ── Misc ── */
+    .section-title { font-size: 14px; font-weight: 600; margin-bottom: 12px; }
+    .gap { margin-bottom: 24px; }
+    .row { display: flex; gap: 16px; margin-bottom: 24px; }
+    .row > * { flex: 1; }
+    .cost { font-variant-numeric: tabular-nums; }
+    .mono { font-family: 'SF Mono', Consolas, monospace; font-size: 12px; }
+  </style>
+</head>
+<body>
+
+<aside id="sidebar">
+  <div class="logo">
+    <h1>Atlas</h1>
+    <span>Admin Console</span>
+  </div>
+  <nav id="nav">
+    <div class="nav-section">Overview</div>
+    <a href="#" data-view="overview" class="active">Dashboard</a>
+    <a href="#" data-view="usage">Usage &amp; Cost</a>
+    <div class="nav-section">Tenants</div>
+    <div id="tenant-nav"></div>
+  </nav>
+</aside>
+
+<main id="main">
+  <div id="view" class="loading">Loading…</div>
+</main>
+
+<script>
+const API = '';
+let _tenants = [];
+let _activeView = 'overview';
+let _activeTenantId = null;
+
+// ── API ─────────────────────────────────────────────────────────────────────
+
+async function api(path) {
+  const r = await fetch(API + path, { credentials: 'include' });
+  if (r.status === 403) { location.href = '/'; return null; }
+  if (!r.ok) throw new Error(`API ${path} → ${r.status}`);
+  return r.json();
+}
+
+// ── Routing ──────────────────────────────────────────────────────────────────
+
+function navigate(view, tenantId = null) {
+  _activeView = view;
+  _activeTenantId = tenantId;
+  document.querySelectorAll('nav a').forEach(a => {
+    a.classList.toggle('active',
+      a.dataset.view === view && (!tenantId || a.dataset.tenant === tenantId));
+  });
+  render();
+}
+
+document.getElementById('nav').addEventListener('click', e => {
+  const a = e.target.closest('a[data-view]');
+  if (!a) return;
+  e.preventDefault();
+  navigate(a.dataset.view, a.dataset.tenant ?? null);
+});
+
+// ── Render ───────────────────────────────────────────────────────────────────
+
+async function render() {
+  const view = document.getElementById('view');
+  view.innerHTML = '<div class="loading">Loading…</div>';
+  try {
+    if (_activeView === 'overview')       await renderOverview(view);
+    else if (_activeView === 'usage')     await renderUsage(view);
+    else if (_activeView === 'tenant')    await renderTenant(view, _activeTenantId);
+    else if (_activeView === 'tenant-runs')  await renderTenantRuns(view, _activeTenantId);
+    else if (_activeView === 'tenant-cost')  await renderTenantCost(view, _activeTenantId);
+    else view.innerHTML = '<div class="empty">Unknown view</div>';
+  } catch (err) {
+    view.innerHTML = `<div class="loading" style="color:#f87171">Error: ${err.message}</div>`;
+  }
+}
+
+// ── Overview ──────────────────────────────────────────────────────────────────
+
+async function renderOverview(el) {
+  const data = await api('/admin/usage');
+  if (!data) return;
+  const o = data.overall ?? {};
+  el.innerHTML = `
+    <div class="page-header">
+      <h2>Dashboard</h2>
+      <p>System-wide usage across all tenants</p>
+    </div>
+    <div class="card-grid">
+      ${statCard('Total Runs', fmt(o.total_runs), 'scheduled runs (non-test)')}
+      ${statCard('Total Cost', '$' + (o.cost_usd ?? 0).toFixed(4), 'estimated USD')}
+      ${statCard('Tokens In', fmtK(o.tokens_in), 'input tokens')}
+      ${statCard('Tokens Out', fmtK(o.tokens_out), 'output tokens')}
+    </div>
+    <div class="card">
+      <div class="section-title">Per-Tenant Summary</div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr>
+            <th>Tenant</th><th>Runs</th><th>Tokens In</th><th>Tokens Out</th><th>Cost (USD)</th>
+          </tr></thead>
+          <tbody>
+            ${(data.perTenant ?? []).map(t => `
+              <tr class="clickable" onclick="navigate('tenant','${t.tenantId}')">
+                <td>${t.name ?? t.tenantId}</td>
+                <td>${fmt(t.runs)}</td>
+                <td>${fmtK(t.tokensIn)}</td>
+                <td>${fmtK(t.tokensOut)}</td>
+                <td class="cost">$${(t.costUsd ?? 0).toFixed(4)}</td>
+              </tr>`).join('')}
+          </tbody>
+        </table>
+      </div>
+    </div>`;
+}
+
+// ── Usage ─────────────────────────────────────────────────────────────────────
+
+async function renderUsage(el) {
+  const data = await api('/admin/usage');
+  if (!data) return;
+  const daily = data.daily ?? [];
+  const maxCost = Math.max(...daily.map(d => d.cost_usd ?? 0), 0.0001);
+  const grouped = {};
+  daily.forEach(d => {
+    if (!grouped[d.day]) grouped[d.day] = 0;
+    grouped[d.day] += d.cost_usd ?? 0;
+  });
+  const days = Object.keys(grouped).slice(-30);
+
+  el.innerHTML = `
+    <div class="page-header">
+      <h2>Usage &amp; Cost</h2>
+      <p>Last 30 days — scheduled runs only</p>
+    </div>
+    <div class="card gap">
+      <div class="section-title">Daily Cost (USD)</div>
+      <div class="chart-wrap">
+        ${days.map(d => {
+          const h = Math.round((grouped[d] / maxCost) * 100);
+          return `<div title="${d}: $${grouped[d].toFixed(4)}" class="bar" style="height:${Math.max(h,2)}%"></div>`;
+        }).join('')}
+      </div>
+      <div style="display:flex;gap:4px;margin-top:4px">
+        ${days.map((d, i) => i % 5 === 0 ? `<div class="chart-label" style="flex:5">${d.slice(5)}</div>` : '').join('')}
+      </div>
+    </div>
+    <div class="card">
+      <div class="section-title">Daily Breakdown</div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Date</th><th>Runs</th><th>Cost (USD)</th><th>Tokens In</th><th>Tokens Out</th></tr></thead>
+          <tbody>
+            ${[...daily].reverse().slice(0,30).map(d => `
+              <tr>
+                <td class="mono">${d.day}</td>
+                <td>${fmt(d.runs)}</td>
+                <td class="cost">$${(d.cost_usd ?? 0).toFixed(4)}</td>
+                <td>${fmtK(d.tokens_in)}</td>
+                <td>${fmtK(d.tokens_out)}</td>
+              </tr>`).join('')}
+          </tbody>
+        </table>
+      </div>
+    </div>`;
+}
+
+// ── Tenant detail ─────────────────────────────────────────────────────────────
+
+async function renderTenant(el, tenantId) {
+  const data = await api(`/admin/tenants/${tenantId}`);
+  if (!data) return;
+  const t = data.tenant ?? {};
+  const r = data.runs   ?? {};
+  const c = data.cost   ?? {};
+  el.innerHTML = `
+    <div class="breadcrumb"><a href="#" onclick="navigate('overview');return false">Dashboard</a> <span>/</span> ${t.name ?? t.slug}</div>
+    <div class="page-header">
+      <h2>${t.name ?? t.slug}</h2>
+      <p class="mono">${t.id}</p>
+    </div>
+    <div class="card-grid">
+      ${statCard('Total Runs', fmt(r.totalRuns), `${r.succeeded ?? 0} succeeded · ${r.failed ?? 0} failed`)}
+      ${statCard('Test Runs', fmt(r.testRuns), 'excluded from cost')}
+      ${statCard('Total Cost', '$' + (c.costUsd ?? 0).toFixed(4), `${fmt(c.llmCalls)} LLM calls`)}
+      ${statCard('Tokens', fmtK((c.tokensIn ?? 0) + (c.tokensOut ?? 0)), `${fmtK(c.tokensIn)} in · ${fmtK(c.tokensOut)} out`)}
+    </div>
+    <div class="row">
+      <div class="card">
+        <div class="section-title">Actions</div>
+        <nav style="display:flex;gap:8px;flex-wrap:wrap">
+          <a href="#" onclick="navigate('tenant-runs','${tenantId}');return false" style="color:var(--accent);text-decoration:none;font-size:13px">View Runs →</a>
+          <a href="#" onclick="navigate('tenant-cost','${tenantId}');return false" style="color:var(--accent);text-decoration:none;font-size:13px;margin-left:16px">Cost Breakdown →</a>
+        </nav>
+      </div>
+    </div>
+    <div class="card">
+      <div class="section-title">Recent Runs</div>
+      ${renderRunTable(data.recent ?? [])}
+    </div>`;
+}
+
+async function renderTenantRuns(el, tenantId) {
+  const data = await api(`/admin/tenants/${tenantId}/runs`);
+  if (!data) return;
+  el.innerHTML = `
+    <div class="breadcrumb">
+      <a href="#" onclick="navigate('overview');return false">Dashboard</a> <span>/</span>
+      <a href="#" onclick="navigate('tenant','${tenantId}');return false">${tenantId}</a> <span>/</span> Runs
+    </div>
+    <div class="page-header"><h2>Run History</h2></div>
+    <div class="card-grid">
+      ${statCard('Total', fmt(data.totalRuns), 'all runs including tests')}
+      ${statCard('Succeeded', fmt(data.succeeded), '', 'green')}
+      ${statCard('Failed', fmt(data.failed), '', 'red')}
+      ${statCard('Running', fmt(data.running), 'in-progress', 'yellow')}
+    </div>
+    <div class="card">
+      <div class="section-title">Runs per Workflow</div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Workflow</th><th>Total</th><th>Succeeded</th><th>Failed</th><th>Tests</th><th>Last Run</th></tr></thead>
+          <tbody>
+            ${(data.byWorkflow ?? []).map(w => `
+              <tr>
+                <td>${w.name ?? w.slug ?? w.workflow_id}</td>
+                <td>${fmt(w.total)}</td>
+                <td><span class="badge badge-green">${w.succeeded}</span></td>
+                <td>${w.failed > 0 ? `<span class="badge badge-red">${w.failed}</span>` : '—'}</td>
+                <td>${w.test_runs ?? 0}</td>
+                <td class="mono">${fmtDate(w.last_run_at)}</td>
+              </tr>`).join('')}
+          </tbody>
+        </table>
+      </div>
+    </div>`;
+}
+
+async function renderTenantCost(el, tenantId) {
+  const data = await api(`/admin/tenants/${tenantId}/cost`);
+  if (!data) return;
+  const daily = data.daily ?? [];
+  const maxCost = Math.max(...daily.map(d => d.cost_usd ?? 0), 0.0001);
+  el.innerHTML = `
+    <div class="breadcrumb">
+      <a href="#" onclick="navigate('overview');return false">Dashboard</a> <span>/</span>
+      <a href="#" onclick="navigate('tenant','${tenantId}');return false">${tenantId}</a> <span>/</span> Cost
+    </div>
+    <div class="page-header"><h2>Cost Breakdown</h2><p>Scheduled runs only — test runs excluded</p></div>
+    <div class="card-grid">
+      ${statCard('Total Cost', '$' + (data.costUsd ?? 0).toFixed(4), 'estimated USD')}
+      ${statCard('LLM Calls', fmt(data.llmCalls))}
+      ${statCard('Tokens In', fmtK(data.tokensIn))}
+      ${statCard('Tokens Out', fmtK(data.tokensOut))}
+    </div>
+    ${daily.length > 0 ? `
+    <div class="card gap">
+      <div class="section-title">Daily Cost (30 days)</div>
+      <div class="chart-wrap">
+        ${daily.map(d => {
+          const h = Math.round(((d.cost_usd ?? 0) / maxCost) * 100);
+          return `<div title="${d.day}: $${(d.cost_usd ?? 0).toFixed(4)}" class="bar" style="height:${Math.max(h,2)}%"></div>`;
+        }).join('')}
+      </div>
+    </div>` : ''}
+    <div class="card">
+      <div class="section-title">Cost per Workflow</div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Workflow</th><th>Runs</th><th>Tokens In</th><th>Tokens Out</th><th>LLM Calls</th><th>Cost (USD)</th></tr></thead>
+          <tbody>
+            ${(data.byWorkflow ?? []).map(w => `
+              <tr>
+                <td>${w.name ?? w.slug ?? w.workflow_id}</td>
+                <td>${fmt(w.runs)}</td>
+                <td>${fmtK(w.tokens_in)}</td>
+                <td>${fmtK(w.tokens_out)}</td>
+                <td>${fmt(w.llm_calls)}</td>
+                <td class="cost">$${(w.cost_usd ?? 0).toFixed(4)}</td>
+              </tr>`).join('')}
+          </tbody>
+        </table>
+      </div>
+    </div>`;
+}
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+function statCard(label, value, sub = '', color = '') {
+  const cls = color ? `style="color:var(--${color})"` : '';
+  return `<div class="stat-card">
+    <div class="stat-label">${label}</div>
+    <div class="stat-value" ${cls}>${value}</div>
+    ${sub ? `<div class="stat-sub">${sub}</div>` : ''}
+  </div>`;
+}
+
+function renderRunTable(runs) {
+  if (!runs.length) return '<div class="empty">No runs yet</div>';
+  return `<div class="table-wrap"><table>
+    <thead><tr><th>Workflow</th><th>Status</th><th>Started</th><th>Cost</th><th>Type</th></tr></thead>
+    <tbody>
+      ${runs.map(r => `
+        <tr>
+          <td>${r.workflow_name ?? r.slug ?? r.workflow_id}</td>
+          <td>${statusBadge(r.status)}</td>
+          <td class="mono">${fmtDate(r.started_at)}</td>
+          <td class="cost">${r.cost_usd ? '$' + (+r.cost_usd).toFixed(4) : '—'}</td>
+          <td>${r.is_test ? '<span class="badge badge-yellow">test</span>' : '<span class="badge badge-blue">live</span>'}</td>
+        </tr>`).join('')}
+    </tbody>
+  </table></div>`;
+}
+
+function statusBadge(s) {
+  if (s === 'success') return '<span class="badge badge-green">success</span>';
+  if (s === 'error')   return '<span class="badge badge-red">error</span>';
+  if (s === 'running') return '<span class="badge badge-yellow">running</span>';
+  return `<span class="badge">${s ?? '—'}</span>`;
+}
+
+function fmt(n)  { return (n ?? 0).toLocaleString(); }
+function fmtK(n) {
+  n = n ?? 0;
+  if (n >= 1_000_000) return (n / 1_000_000).toFixed(1) + 'M';
+  if (n >= 1_000)     return (n / 1_000).toFixed(1) + 'K';
+  return n.toLocaleString();
+}
+function fmtDate(s) {
+  if (!s) return '—';
+  const d = new Date(s);
+  return d.toLocaleDateString() + ' ' + d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+}
+
+// ── Init ──────────────────────────────────────────────────────────────────────
+
+async function init() {
+  try {
+    const data = await api('/admin/tenants');
+    if (!data) return;
+    _tenants = data.tenants ?? [];
+    const navEl = document.getElementById('tenant-nav');
+    navEl.innerHTML = _tenants.map(t =>
+      `<a href="#" data-view="tenant" data-tenant="${t.id}">${t.name ?? t.slug ?? t.id}</a>`
+    ).join('');
+  } catch (err) {
+    console.error('Failed to load tenants:', err);
+  }
+  await render();
+}
+
+init();
+</script>
+</body>
+</html>

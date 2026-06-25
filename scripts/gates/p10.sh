@@ -17,21 +17,8 @@ fail() { echo "p10 FAIL: $*" >&2; exit 1; }
 ADMIN_ENTRY="src/admin/server.js"
 [ -f "$ADMIN_ENTRY" ] || fail "admin app entry point missing at $ADMIN_ENTRY — build the admin service first"
 
-# ── 2. Per-tenant metrics endpoints ──────────────────────────────────────────
-# Implement once the admin API is wired:
-#   node scripts/checks/p10-admin-metrics.mjs
-#   Assert: /admin/tenants/:id/runs returns run count
-#   Assert: /admin/tenants/:id/cost returns cost breakdown
-echo "p10: metrics endpoint check not yet implemented — gate fails closed" >&2
-echo "    implement: query /admin/tenants/:id/runs and /admin/tenants/:id/cost" >&2
-exit 1
+# ── 2-4. Metrics endpoints + access control + isolation ──────────────────────
+node scripts/checks/p10-admin-metrics.mjs || fail "p10-admin-metrics check failed"
 
-# ── 3. Access control — 403 for non-admin ────────────────────────────────────
-# Assert: a valid non-admin JWT receives 403 on every /admin/* route.
-
-# ── 4. Cross-tenant isolation ────────────────────────────────────────────────
-# Assert: tenant A's admin session cannot read tenant B's metrics.
-# (Adversarial: attempt cross-tenant query; assert empty or 403, never B's data.)
-
-# echo "p10 PASS: admin app live; metrics endpoints return data; non-admin 403; cross-tenant isolation confirmed"
-# exit 0
+echo "p10 PASS: admin app live; metrics endpoints return data; non-admin 403; cross-tenant isolation confirmed"
+exit 0
