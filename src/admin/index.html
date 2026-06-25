@@ -197,6 +197,13 @@ function showApp(user) {
   document.getElementById('current-user').textContent = user.email ?? user.id;
 }
 
+// ── Token storage (localStorage so admin and main app sessions don't collide) ─
+
+const TOKEN_KEY = 'atlas_admin_token';
+function getToken()       { return localStorage.getItem(TOKEN_KEY); }
+function setToken(t)      { localStorage.setItem(TOKEN_KEY, t); }
+function clearToken()     { localStorage.removeItem(TOKEN_KEY); }
+
 document.getElementById('login-form').addEventListener('submit', async (e) => {
   e.preventDefault();
   const btn = document.getElementById('login-btn');
@@ -208,7 +215,6 @@ document.getElementById('login-form').addEventListener('submit', async (e) => {
     const r = await fetch('/auth/login', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      credentials: 'include',
       body: JSON.stringify({
         email: document.getElementById('email').value,
         password: document.getElementById('password').value,
@@ -219,10 +225,14 @@ document.getElementById('login-form').addEventListener('submit', async (e) => {
       errEl.textContent = data.error ?? 'Login failed';
       return;
     }
+    // Store token in localStorage — keeps admin session separate from the
+    // main app's session cookie so both can be active simultaneously.
+    setToken(data.token);
     // Verify the user is actually a platform admin
-    const meR = await fetch('/admin/me', { credentials: 'include' });
+    const meR = await fetch('/admin/me', { headers: { Authorization: `Bearer ${data.token}` } });
     const me = await meR.json();
     if (!me.isAdmin) {
+      clearToken();
       errEl.textContent = 'This account does not have platform admin access.';
       return;
     }
@@ -239,16 +249,22 @@ document.getElementById('login-form').addEventListener('submit', async (e) => {
 
 document.getElementById('logout-btn').addEventListener('click', async (e) => {
   e.preventDefault();
-  try { await fetch('/auth/logout', { method: 'POST', credentials: 'include' }); } catch { /* ignore */ }
+  try {
+    const t = getToken();
+    if (t) await fetch('/auth/logout', { method: 'POST', headers: { Authorization: `Bearer ${t}` } });
+  } catch { /* ignore */ }
+  clearToken();
   showLogin();
   document.getElementById('email').value = '';
   document.getElementById('password').value = '';
 });
 
-// ── API ─────────────────────────────────────────────────────────────────────
+// ── API (Bearer token — never touches the session cookie) ────────────────────
 
 async function api(path) {
-  const r = await fetch(API + path, { credentials: 'include' });
+  const token = getToken();
+  const headers = token ? { Authorization: `Bearer ${token}` } : {};
+  const r = await fetch(API + path, { headers });
   if (r.status === 401 || r.status === 403) { showLogin('Session expired — please sign in again.'); return null; }
   if (!r.ok) throw new Error(`API ${path} → ${r.status}`);
   return r.json();
@@ -566,12 +582,11 @@ async function loadTenants() {
 
 async function init() {
   try {
-    const r = await fetch('/admin/me', { credentials: 'include' });
+    const token = getToken();
+    if (!token) { showLogin(); return; }
+    const r = await fetch('/admin/me', { headers: { Authorization: `Bearer ${token}` } });
     const me = await r.json();
-    if (!me.isAdmin) {
-      showLogin();
-      return;
-    }
+    if (!me.isAdmin) { clearToken(); showLogin(); return; }
     showApp(me.user);
     await loadTenants();
     await render();
