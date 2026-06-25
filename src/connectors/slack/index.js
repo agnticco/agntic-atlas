@@ -289,6 +289,7 @@ export function registerSlackChannel(registry, { fetchImpl = fetch } = {}) {
   registry.register({
     id: 'slack_reply', name: 'Slack Thread Reply', icon: 'slack',
     description: 'Posts a threaded reply under an existing message.',
+    outputFormat: 'mrkdwn',
     configSchema: [
       { key: 'target',    label: 'Channel',          type: 'string',   optional: false },
       { key: 'thread_ts', label: 'Parent message ts', type: 'string',   optional: false },
@@ -790,6 +791,7 @@ export function registerSlackChannel(registry, { fetchImpl = fetch } = {}) {
   registry.register({
     id: 'slack_dm_as_user', name: 'Slack DM as User', icon: 'slack',
     description: 'Send a direct message on behalf of the authorized user. Appears under Direct Messages (not Apps) in the recipient\'s sidebar.',
+    outputFormat: 'mrkdwn',
     configSchema: [
       { key: 'user', label: 'Recipient (ID or email)', type: 'string',   optional: false },
       { key: 'body', label: 'Message',                 type: 'textarea', optional: true },
