@@ -59,8 +59,7 @@ export class TenantStore {
   /** Ensure the reserved platform tenant exists (idempotent). */
   ensurePlatformTenant() { return this._ensureReserved(PLATFORM_TENANT_ID, 'Platform'); }
 
-  /** Ensure the 'default' tenant exists — home for migrated single-user pilot data. */
-  ensureDefaultTenant() { return this._ensureReserved('default', 'Default'); }
+
 
   /**
    * Create a tenant. `id` defaults to the slug (stable, human-readable). Throws
