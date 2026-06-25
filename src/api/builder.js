@@ -24,6 +24,8 @@ import { logEvent, errFields } from '../utils/event-log.js';
 import { channelIdForCapability } from '../connectors/slack/index.js';
 import { webConnectionStatus } from '../connectors/web/index.js';
 import { getGoogleAccessToken } from '../connectors/google/index.js';
+import { getSlackToken } from '../connectors/slack/oauth.js';
+import { getAirtableAccessToken } from '../connectors/airtable/oauth.js';
 
 // Retry an LLM call up to maxRetries times on transient provider errors (500/529/503).
 async function withLLMRetry(fn, maxRetries = 2) {
@@ -668,45 +670,50 @@ Rules:
   });
 
   // ── POST /api/builder/sessions/:threadId/setup ───────────────────────────────
-  // Execute a one-off setup action during a converger session (e.g. create a Drive
-  // folder that a workflow node needs). The client calls this after user confirms a
-  // setup_action proposal, then sends { type:'setup_executed', result } to /respond.
-  // Supported actions:
-  //   google_create_folder  — params: { name, parentId? } → { folderId, name, link }
+  // Execute any registered capability as a one-off setup action during a converger
+  // session. The converger proposes setup_action with a capabilityId from the live
+  // catalog; the client confirms, calls this endpoint, then sends
+  // { type:'setup_executed', result } to /respond.
+  //
+  // Token injection mirrors the workflow run path: Google→googleToken, Slack→token,
+  // Airtable→airtableToken. Any capability in the CapabilityRegistry with a handle
+  // can be used — no hardcoded action list needed.
 
   app.post('/api/builder/sessions/:threadId/setup', requireActiveTenant, async (req, res) => {
-    const { action, params = {} } = req.body ?? {};
+    const { capabilityId, params = {} } = req.body ?? {};
     try {
-      if (action === 'google_create_folder') {
-        const token = await getGoogleAccessToken({
+      if (!capabilityId) return res.status(400).json({ error: 'capabilityId is required' });
+
+      const registry = spine.engine.capabilityRegistry;
+      const handler  = registry.getHandler(capabilityId);
+      if (!handler) return res.status(400).json({ error: `Capability not found: ${capabilityId}` });
+
+      const cap    = registry.get(capabilityId);
+      const config = { ...params };
+
+      // Inject connector credentials the same way the workflow run path does.
+      if (cap.connector === 'google') {
+        const tok = await getGoogleAccessToken({
           oauthTokenStore: spine.auth.oauthTokenStore,
-          cipher:          spine.auth.cipher,
-          tenantId:        req.tenant.id,
-          userId:          req.user.id,
+          cipher: spine.auth.cipher,
+          tenantId: req.tenant.id,
+          userId: req.user.id,
         });
-        if (!token) return res.status(400).json({ error: 'Google is not connected for this account' });
-
-        const metadata = { name: String(params.name || 'New Folder'), mimeType: 'application/vnd.google-apps.folder' };
-        if (params.parentId) metadata.parents = [String(params.parentId)];
-
-        const r = await fetch('https://www.googleapis.com/drive/v3/files', {
-          method:  'POST',
-          headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
-          body:    JSON.stringify(metadata),
-        });
-        if (!r.ok) {
-          const err = await r.json().catch(() => ({}));
-          return res.status(400).json({ error: err?.error?.message ?? `Drive API error ${r.status}` });
-        }
-        const file = await r.json();
-        logEvent('builder.setup.ok', { tenant: req.tenant.id, action, folderId: file.id });
-        return res.json({ result: { folderId: file.id, name: file.name, link: `https://drive.google.com/drive/folders/${file.id}` } });
+        if (tok) config.googleToken = tok;
+      } else if (cap.connector === 'slack') {
+        const grant = getSlackToken({ oauthTokenStore: spine.auth.oauthTokenStore, cipher: spine.auth.cipher, tenantId: req.tenant.id });
+        if (grant?.botToken) config.token = grant.botToken;
+      } else if (cap.connector === 'airtable') {
+        const tok = await getAirtableAccessToken({ oauthTokenStore: spine.auth.oauthTokenStore, cipher: spine.auth.cipher, tenantId: req.tenant.id });
+        if (tok) config.airtableToken = tok;
       }
 
-      return res.status(400).json({ error: `Unknown setup action: ${action}` });
+      const result = await handler({ config, body: null });
+      logEvent('builder.setup.ok', { tenant: req.tenant.id, capabilityId });
+      res.json({ result });
     } catch (err) {
-      logEvent('builder.setup.error', { tenant: req.tenant?.id ?? null, action, ...errFields(err) });
-      return res.status(500).json({ error: err.message ?? String(err) });
+      logEvent('builder.setup.error', { tenant: req.tenant?.id ?? null, capabilityId, ...errFields(err) });
+      res.status(500).json({ error: err.message ?? String(err) });
     }
   });
 
