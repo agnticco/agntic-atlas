@@ -19,6 +19,8 @@ export const llmNodeType = {
       hint: 'Instructions for the LLM. Supports {{prev}}, {{nodeId.output}}, {{date}}, {{time}}. If you omit all templates, the previous step\'s output is auto-appended.' },
     { key: 'system', label: 'System message', type: 'textarea', optional: true, advanced: true, rows: 3,
       hint: 'Optional. Overrides the default "you are a helpful assistant running inside a workflow" framing.' },
+    { key: 'maxTokens', label: 'Max output tokens', type: 'number', optional: true, advanced: true,
+      hint: 'Default 8192. Raise for very long outputs (max varies by model).' },
     { key: 'timeoutMs', label: 'Timeout (ms)', type: 'number', optional: true, advanced: true,
       hint: 'Default 120000 (2 min). Raise for very long generations.' },
   ],
@@ -37,10 +39,13 @@ export const llmNodeType = {
 
     const system = cfg.system ?? 'You are a helpful assistant running inside a workflow. Transform the input as instructed. Be concise. Do not ask clarifying questions — work with what you have.';
     const timeoutMs = cfg.timeoutMs ?? 120_000;
+    const invokeConfig = cfg.maxTokens
+      ? { ...(ctx.costConfig ?? {}), maxTokens: cfg.maxTokens }
+      : (ctx.costConfig ?? undefined);
     let timeoutHandle;
     try {
       const res = await Promise.race([
-        services.llm.invoke([new SystemMessage(system), new HumanMessage(prompt)], ctx.costConfig ?? undefined),
+        services.llm.invoke([new SystemMessage(system), new HumanMessage(prompt)], invokeConfig),
         new Promise((_, reject) => {
           timeoutHandle = setTimeout(
             () => reject(new Error(`LLM call timed out after ${Math.round(timeoutMs/1000)}s`)),
