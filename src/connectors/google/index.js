@@ -288,13 +288,18 @@ export async function gmailGetMessage(gapi, { messageId }) {
   return parseMessage(msg);
 }
 
-/** gmail_send — send an email. Auto-detects HTML body and sets Content-Type accordingly. */
+/** gmail_send — send an email. Auto-detects HTML body and wraps it in a styled shell. */
 export async function gmailSend(gapi, { to, subject, body }) {
   const bodyText = body ?? '';
   const isHtml = /<[a-z][\s\S]*>/i.test(bodyText);
+  // Wrap HTML content in a responsive email shell unless it already has one.
+  // The shell gives every email a consistent professional base (max-width, fonts,
+  // base typography) so the LLM only needs to write the inner content.
+  const finalBody = isHtml && !/^\s*<!DOCTYPE|^\s*<html/i.test(bodyText)
+    ? _wrapEmailHtml(bodyText)
+    : bodyText;
   const contentType = isHtml ? 'text/html; charset=utf-8' : 'text/plain; charset=utf-8';
   // RFC 2047: encode Subject header when it contains non-ASCII (emoji, accents, etc.)
-  // so email clients don't misread the raw UTF-8 bytes as Latin-1 and show garbage.
   const subjectEncoded = /^[\x00-\x7F]*$/.test(subject ?? '')
     ? (subject ?? '')
     : `=?UTF-8?B?${Buffer.from(subject ?? '').toString('base64')}?=`;
@@ -303,13 +308,51 @@ export async function gmailSend(gapi, { to, subject, body }) {
     `Subject: ${subjectEncoded}`,
     `Content-Type: ${contentType}`,
     '',
-    bodyText,
+    finalBody,
   ].join('\r\n');
   const encoded = Buffer.from(raw).toString('base64url');
   const sent = await gapi('POST', '/gmail/v1/users/me/messages/send', {
     body: { raw: encoded },
   });
   return { messageId: sent.id, threadId: sent.threadId };
+}
+
+function _wrapEmailHtml(content) {
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <style>
+    body{margin:0;padding:0;background:#f2f2f2;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif;-webkit-font-smoothing:antialiased}
+    .wrap{max-width:600px;margin:24px auto;background:#ffffff;border-radius:10px;overflow:hidden;box-shadow:0 1px 4px rgba(0,0,0,.08)}
+    .body{padding:36px 44px 40px}
+    h1{color:#0d0d0d;font-size:26px;font-weight:700;margin:0 0 16px;line-height:1.25}
+    h2{color:#0d0d0d;font-size:20px;font-weight:600;margin:28px 0 10px;line-height:1.3}
+    h3{color:#222;font-size:16px;font-weight:600;margin:22px 0 8px}
+    p{color:#333;font-size:15px;line-height:1.7;margin:0 0 16px}
+    a{color:#0055cc;text-decoration:none}
+    a:hover{text-decoration:underline}
+    ul,ol{color:#333;font-size:15px;line-height:1.7;padding-left:22px;margin:0 0 16px}
+    li{margin-bottom:6px}
+    hr{border:none;border-top:1px solid #e8e8e8;margin:28px 0}
+    strong{color:#111;font-weight:600}
+    em{color:#444}
+    code{background:#f5f5f5;color:#c7254e;font-size:13px;padding:2px 6px;border-radius:4px;font-family:'SFMono-Regular',Consolas,monospace}
+    blockquote{border-left:3px solid #ddd;margin:0 0 16px;padding:8px 0 8px 18px;color:#555;font-style:italic}
+    .card{background:#f8f9fa;border-radius:8px;padding:18px 22px;margin:18px 0}
+    .callout{background:#eef4ff;border-left:4px solid #0055cc;border-radius:0 6px 6px 0;padding:14px 18px;margin:18px 0}
+    @media(max-width:640px){.body{padding:24px 22px 28px}.wrap{margin:0;border-radius:0}}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="body">
+${content}
+    </div>
+  </div>
+</body>
+</html>`;
 }
 
 /** gmail_mark_read — remove UNREAD label. */
