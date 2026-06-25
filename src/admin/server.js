@@ -182,7 +182,8 @@ export function mountAdminRoutes(app, { spine, requireAuth, requirePlatformAdmin
         SELECT COUNT(*) AS total_runs
         FROM workflow_runs WHERE is_test = 0
       `).get();
-      const overall = { ...overallCost, total_runs: overallRuns.total_runs ?? 0 };
+      const trackingRow = store.db.prepare(`SELECT MIN(ts) AS since FROM llm_cost_log`).get();
+      const overall = { ...overallCost, total_runs: overallRuns.total_runs ?? 0, tracking_since: trackingRow?.since ?? null };
       const perTenant = allTenants.map(t => ({
         tenantId: t.id,
         name:     t.name ?? t.slug,
