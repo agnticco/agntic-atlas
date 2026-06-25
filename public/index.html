@@ -3171,26 +3171,42 @@ class Component extends DCLogic {
   // The chat agent: append the user's message, send the running history, render
   // Atlas's natural reply. If Atlas judges the user is ready, the reply carries a
   // "Build it" affordance — but building never starts until the user acts on it.
-  sendChat(t) {
+  async sendChat(t) {
     if (!this.state.authToken) { this.setState({ msgs: [{ isAtlas: true, text: "Please sign in first.", hasReason: false }] }); return; }
     const self = this;
     const msgs = [...this.state.msgs, { isOperator: true, text: t }];
     this.setState({ msgs, inputValue: "", thinking: true, mentionOpen: false });
     const history = msgs.map(m =>
       m.isOperator ? { role: "user", content: m.text } : (m.isAtlas ? { role: "assistant", content: m.text } : null)).filter(Boolean);
-    fetch("/api/builder/chat", { method: "POST", headers: this._H(), body: JSON.stringify({ messages: history }) })
-      .then(r => this._readJson(r))
-      .then(r => {
-        if (!r.ok) return self._apiError(r.data.error);
-        const d = r.data;
-        const reply = { isAtlas: true, text: d.reply, hasReason: false };
-        const items = [reply];
-        if (d.readyToBuild && d.buildIntent) {
-          items.push({ isCta: true, text: "", btn: "Build it →", btnBg: "#7fc28a", btnFg: "#06210d", onClick: () => self.startBuild(d.buildIntent) });
+    try {
+      const resp = await fetch("/api/builder/chat", { method: "POST", headers: this._H(), body: JSON.stringify({ messages: history }) });
+      if (!resp.ok) { self._apiError(`Chat error ${resp.status}`); return; }
+      const reader = resp.body.getReader();
+      const dec = new TextDecoder();
+      let buf = "";
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buf += dec.decode(value, { stream: true });
+        let idx;
+        while ((idx = buf.indexOf("\n\n")) !== -1) {
+          const chunk = buf.slice(0, idx);
+          buf = buf.slice(idx + 2);
+          const line = chunk.startsWith("data: ") ? chunk.slice(6) : null;
+          if (!line) continue;
+          let ev; try { ev = JSON.parse(line); } catch { continue; }
+          if (ev.type === "error") { self._apiError(ev.error); return; }
+          if (ev.type === "reply") {
+            const reply = { isAtlas: true, text: ev.reply, hasReason: false };
+            const items = [reply];
+            if (ev.readyToBuild && ev.buildIntent) {
+              items.push({ isCta: true, text: "", btn: "Build it →", btnBg: "#7fc28a", btnFg: "#06210d", onClick: () => self.startBuild(ev.buildIntent) });
+            }
+            self.setState({ msgs: [...self.state.msgs, ...items], thinking: false });
+          }
         }
-        self.setState({ msgs: [...self.state.msgs, ...items], thinking: false });
-      })
-      .catch(e => self._apiError(String(e)));
+      }
+    } catch (e) { self._apiError(String(e)); }
   }
 
   // Transition out of conversation into the structured converger build. Keeps the
