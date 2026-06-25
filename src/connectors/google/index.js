@@ -463,16 +463,44 @@ export async function docsRead(gapi, { documentId }) {
   return { title: doc.title, content: content.trim() };
 }
 
-/** docs_create. */
-export async function docsCreate(gapi, { title, content }) {
-  const doc = await gapi('POST', '/docs/v1/documents', { body: { title } });
-  if (content) {
-    const text = stripHtml(content);
-    await gapi('POST', `/docs/v1/documents/${doc.documentId}:batchUpdate`, {
-      body: { requests: [{ insertText: { location: { index: 1 }, text } }] },
-    });
+/**
+ * docs_create — uploads markdown content to Drive and converts it to a Google Doc.
+ * Uses the Drive multipart upload API (uploadType=multipart) with mimeType=text/markdown,
+ * which Drive auto-converts to a formatted Google Doc (headings, bold, lists rendered).
+ * Takes `token` directly because gapi() only supports JSON bodies.
+ */
+export async function docsCreate(token, { title, content }) {
+  const boundary = 'atlas_docs_upload_boundary';
+  const metadata = JSON.stringify({ name: title, mimeType: 'application/vnd.google-apps.document' });
+  const multipart = [
+    `--${boundary}`,
+    'Content-Type: application/json; charset=UTF-8',
+    '',
+    metadata,
+    `--${boundary}`,
+    'Content-Type: text/markdown',
+    '',
+    content ?? '',
+    `--${boundary}--`,
+  ].join('\r\n');
+
+  const res = await fetch(
+    'https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart',
+    {
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${token}`,
+        'content-type': `multipart/related; boundary=${boundary}`,
+      },
+      body: multipart,
+    }
+  );
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(`docs_create: Drive upload failed: ${err?.error?.message ?? `HTTP ${res.status}`}`);
   }
-  return { documentId: doc.documentId, link: `https://docs.google.com/document/d/${doc.documentId}` };
+  const file = await res.json();
+  return { documentId: file.id, link: `https://docs.google.com/document/d/${file.id}` };
 }
 
 /** tasks_list. */
@@ -651,15 +679,15 @@ export function registerGoogleChannels(capabilityRegistry) {
   capabilityRegistry.register({
     id: 'docs_create', connector: 'google', positions: ['step', 'delivery'],
     name: 'Create Google Doc', icon: 'file-text',
-    description: 'Create a new Google Doc with optional initial content.',
-    outputFormat: 'plain',
+    description: 'Create a new Google Doc from markdown content (headings, bold, lists render properly).',
+    outputFormat: 'markdown',
     configSchema: [
       { key: 'title',   label: 'Title',   type: 'string',   optional: false },
-      { key: 'content', label: 'Content', type: 'textarea', optional: true, hint: 'Initial content; omit to use prior step output' },
+      { key: 'content', label: 'Content', type: 'textarea', optional: true, hint: 'Markdown content; omit to use prior step output' },
     ],
-    requiredScopes: ['https://www.googleapis.com/auth/documents'],
+    requiredScopes: ['https://www.googleapis.com/auth/drive'],
     isReady: ready,
-    handle: makeHandle((gapi, config, body) => docsCreate(gapi, { title: config.title, content: config.content ?? body })),
+    handle: makeHandle((_gapi, config, body) => docsCreate(config.googleToken, { title: config.title, content: config.content ?? body })),
   });
 
   capabilityRegistry.register({
