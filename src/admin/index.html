@@ -227,9 +227,15 @@ function catOf(ctx) {
 }
 function colorOf(cat) { return CAT_COLORS[cat] || MUTED; }
 
-// ── Data loading ───────────────────────────────────────────────────────────────
-async function loadAll() {
-  setState({ loading: true });
+// ── Data loading + auto-refresh ───────────────────────────────────────────────
+let _refreshTimer = null;
+function scheduleRefresh() {
+  clearTimeout(_refreshTimer);
+  _refreshTimer = setTimeout(() => { loadAll(false); }, 30000); // 30s silent refresh
+}
+
+async function loadAll(showLoading = true) {
+  if (showLoading) setState({ loading: true });
   try {
     const usage = await apiGet('/admin/usage');
     if (!usage || !Array.isArray(usage.perTenant)) { setState({ loading: false }); return; }
@@ -255,9 +261,11 @@ async function loadAll() {
     const recent = [].concat(...tenants.map(t => t.recent)).sort((a,b) => a.mins - b.mins).slice(0, 20);
 
     setState({ data: { overall: usage.overall, tenants, pdaily, recent }, loading: false });
+    scheduleRefresh();
   } catch(e) {
     console.error(e);
     setState({ loading: false });
+    scheduleRefresh();
   }
 }
 
@@ -313,9 +321,10 @@ function cats(items) {
   const agg = {};
   items.forEach(c => { const k = c.cat || catOf(c.context); agg[k] = (agg[k] || 0) + (c.cost || 0); });
   const total = Math.max(Object.values(agg).reduce((a,b) => a+b, 0), 0.000001);
-  return CAT_ORDER.filter(o => agg[o] > 0).map(o => ({
+  // Always show all 4 categories, even when $0 — so the user can see what's absent
+  return CAT_ORDER.map(o => ({
     name: CAT_LABELS[o], raw: o, color: CAT_COLORS[o],
-    cost: agg[o], pct: agg[o] / total * 100,
+    cost: agg[o] || 0, pct: (agg[o] || 0) / total * 100,
   }));
 }
 
@@ -333,7 +342,7 @@ function platformContexts(tenants) {
     all[k].tin   += c.tokens_in;
     all[k].tout  += c.tokens_out;
   }));
-  return Object.values(all).sort((a,b) => b.cost - a.cost).slice(0, 14);
+  return Object.values(all).sort((a,b) => b.cost - a.cost);
 }
 
 // ── HTML builders ──────────────────────────────────────────────────────────────
@@ -937,16 +946,26 @@ function renderSidebar() {
 
   // Footer
   const footer = div('sb-footer');
+  const now = new Date().toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
   footer.innerHTML = `
     <div class="sb-email mono">${S.adminEmail || '—'}</div>
-    <div class="sb-role">Platform operator</div>`;
+    <div class="sb-role">Platform operator</div>
+    <div style="font-size:11px;color:var(--dim);margin-bottom:8px">Updated ${now} · auto-refreshes every 30s</div>`;
+  const btnRow = div('');
+  btnRow.style.cssText = 'display:flex;align-items:center;justify-content:space-between';
+  const refresh = div('sb-logout');
+  refresh.textContent = S.loading ? 'Refreshing…' : 'Refresh now ↺';
+  refresh.addEventListener('click', () => { if (!S.loading) loadAll(false); });
   const logout = div('sb-logout');
   logout.textContent = 'Sign out →';
   logout.addEventListener('click', () => {
     clearToken();
+    clearTimeout(_refreshTimer);
     setState({ view: 'login', token: null, adminEmail: null, data: null });
   });
-  footer.appendChild(logout);
+  btnRow.appendChild(refresh);
+  btnRow.appendChild(logout);
+  footer.appendChild(btnRow);
   sb.appendChild(footer);
 
   return sb;
