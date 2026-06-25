@@ -227,45 +227,95 @@ function catOf(ctx) {
 }
 function colorOf(cat) { return CAT_COLORS[cat] || MUTED; }
 
-// ── Data loading + auto-refresh ───────────────────────────────────────────────
+// ── Data loading + non-disruptive auto-refresh ────────────────────────────────
 let _refreshTimer = null;
+let _fetchInFlight = false;
+
 function scheduleRefresh() {
   clearTimeout(_refreshTimer);
-  _refreshTimer = setTimeout(() => { loadAll(false); }, 30000); // 30s silent refresh
+  _refreshTimer = setTimeout(silentRefresh, 5000);
 }
 
+// Silent refresh: fetches new data and patches only #main content in place.
+// The sidebar is NOT re-rendered, and #main scroll position is preserved,
+// so the user's browsing state (scroll, open selects) is undisturbed.
+async function silentRefresh() {
+  if (_fetchInFlight) { scheduleRefresh(); return; }
+  _fetchInFlight = true;
+  try {
+    await fetchAndStore();
+    patchMainContent();
+  } catch(e) {
+    console.error('silent refresh failed', e);
+  } finally {
+    _fetchInFlight = false;
+    scheduleRefresh();
+  }
+}
+
+// Full load: shows loading state and does a complete render (used on first boot
+// and on explicit user-triggered refreshes).
 async function loadAll(showLoading = true) {
   if (showLoading) setState({ loading: true });
+  _fetchInFlight = true;
   try {
-    const usage = await apiGet('/admin/usage');
-    if (!usage || !Array.isArray(usage.perTenant)) { setState({ loading: false }); return; }
-
-    const tenants = [];
-    for (const p of usage.perTenant) {
-      const [cost, runs] = await Promise.all([
-        apiGet('/admin/tenants/' + p.tenantId + '/cost'),
-        apiGet('/admin/tenants/' + p.tenantId + '/runs'),
-      ]);
-      tenants.push(mapTenant(p, cost, runs));
-    }
-
-    const dayMap = {};
-    (usage.daily || []).forEach(d => {
-      const k = d.day;
-      if (!dayMap[k]) dayMap[k] = { day: k, label: fmtDay(k), cost: 0, calls: 0, webs: 0 };
-      dayMap[k].cost  += d.cost_usd  || 0;
-      dayMap[k].calls += d.calls     || 0;
-      dayMap[k].webs  += d.web_searches || 0;
-    });
-    const pdaily = Object.values(dayMap).sort((a,b) => a.day < b.day ? -1 : 1);
-    const recent = [].concat(...tenants.map(t => t.recent)).sort((a,b) => a.mins - b.mins).slice(0, 20);
-
-    setState({ data: { overall: usage.overall, tenants, pdaily, recent }, loading: false });
-    scheduleRefresh();
+    await fetchAndStore();
+    setState({ loading: false }); // triggers full render — fine on first load
   } catch(e) {
     console.error(e);
     setState({ loading: false });
+  } finally {
+    _fetchInFlight = false;
     scheduleRefresh();
+  }
+}
+
+async function fetchAndStore() {
+  const usage = await apiGet('/admin/usage');
+  if (!usage || !Array.isArray(usage.perTenant)) return;
+
+  const tenants = [];
+  for (const p of usage.perTenant) {
+    const [cost, runs] = await Promise.all([
+      apiGet('/admin/tenants/' + p.tenantId + '/cost'),
+      apiGet('/admin/tenants/' + p.tenantId + '/runs'),
+    ]);
+    tenants.push(mapTenant(p, cost, runs));
+  }
+
+  const dayMap = {};
+  (usage.daily || []).forEach(d => {
+    const k = d.day;
+    if (!dayMap[k]) dayMap[k] = { day: k, label: fmtDay(k), cost: 0, calls: 0, webs: 0 };
+    dayMap[k].cost  += d.cost_usd     || 0;
+    dayMap[k].calls += d.calls        || 0;
+    dayMap[k].webs  += d.web_searches || 0;
+  });
+  const pdaily = Object.values(dayMap).sort((a,b) => a.day < b.day ? -1 : 1);
+  const recent = [].concat(...tenants.map(t => t.recent)).sort((a,b) => a.mins - b.mins).slice(0, 20);
+
+  // Write directly to S without calling setState (avoids triggering render())
+  S.data = { overall: usage.overall, tenants, pdaily, recent };
+}
+
+// Patch #main children in place — no sidebar re-render, scroll preserved.
+function patchMainContent() {
+  const main = document.getElementById('main');
+  if (!main) return;
+  const scrollTop = main.scrollTop;
+
+  const content = buildMainContent();
+  if (!content) return;
+
+  // Replace children without touching the element itself (keeps scroll parent intact)
+  while (main.firstChild) main.removeChild(main.firstChild);
+  main.appendChild(content);
+  main.scrollTop = scrollTop;
+
+  // Update last-refreshed timestamp in sidebar without re-rendering it
+  const timeEl = document.getElementById('sb-updated-time');
+  if (timeEl) {
+    timeEl.textContent = 'Updated ' + new Date().toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' }) + ' · live';
   }
 }
 
@@ -950,12 +1000,12 @@ function renderSidebar() {
   footer.innerHTML = `
     <div class="sb-email mono">${S.adminEmail || '—'}</div>
     <div class="sb-role">Platform operator</div>
-    <div style="font-size:11px;color:var(--dim);margin-bottom:8px">Updated ${now} · auto-refreshes every 30s</div>`;
+    <div id="sb-updated-time" style="font-size:11px;color:var(--dim);margin-bottom:8px">Updated ${now} · live</div>`;
   const btnRow = div('');
   btnRow.style.cssText = 'display:flex;align-items:center;justify-content:space-between';
   const refresh = div('sb-logout');
-  refresh.textContent = S.loading ? 'Refreshing…' : 'Refresh now ↺';
-  refresh.addEventListener('click', () => { if (!S.loading) loadAll(false); });
+  refresh.textContent = _fetchInFlight ? 'Refreshing…' : 'Refresh now ↺';
+  refresh.addEventListener('click', () => { if (!_fetchInFlight) silentRefresh(); });
   const logout = div('sb-logout');
   logout.textContent = 'Sign out →';
   logout.addEventListener('click', () => {
@@ -972,6 +1022,18 @@ function renderSidebar() {
 }
 
 // ── Root render ───────────────────────────────────────────────────────────────
+
+function buildMainContent() {
+  const db = S.data;
+  switch (S.view) {
+    case 'dashboard': return renderDashboard(db);
+    case 'usage':     return renderUsage(db);
+    case 'tenants':   return renderTenants(db);
+    case 'tenant':    return renderTenantDetail(S.selectedTenant, db);
+    default:          return null;
+  }
+}
+
 function render() {
   const root = document.getElementById('root');
   root.innerHTML = '';
@@ -986,15 +1048,8 @@ function render() {
 
   const main = h('main', {});
   main.id = 'main';
-
-  const db = S.data;
-  switch (S.view) {
-    case 'dashboard': main.appendChild(renderDashboard(db)); break;
-    case 'usage':     main.appendChild(renderUsage(db));     break;
-    case 'tenants':   main.appendChild(renderTenants(db));   break;
-    case 'tenant':    main.appendChild(renderTenantDetail(S.selectedTenant, db)); break;
-  }
-
+  const content = buildMainContent();
+  if (content) main.appendChild(content);
   root.appendChild(main);
 }
 
