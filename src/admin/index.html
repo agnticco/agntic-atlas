@@ -212,6 +212,7 @@ async function apiPost(path, body) {
 
 // ── Formatters ─────────────────────────────────────────────────────────────────
 function money(n, d=0) { return '$' + Number(n||0).toLocaleString('en-US', { minimumFractionDigits: d, maximumFractionDigits: d }); }
+function moneyAuto(n) { n = n || 0; if (n === 0) return '$0.00'; if (n < 0.005) return '$' + n.toFixed(4); if (n < 1) return '$' + n.toFixed(2); return '$' + Number(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
 function num(n)   { return Number(Math.round(n||0)).toLocaleString('en-US'); }
 function tok(n)   { n = Math.round(n||0); return n >= 1e6 ? (n/1e6).toFixed(1)+'M' : n >= 1e3 ? (n/1e3).toFixed(0)+'K' : ''+n; }
 function ago(m)   { m = Math.round(m); if (m < 1) return 'just now'; if (m < 60) return m+'m ago'; const h = Math.floor(m/60); if (h < 24) return h+'h ago'; return Math.floor(h/24)+'d ago'; }
@@ -443,7 +444,7 @@ function renderCatRows(catItems, dotSize = 9) {
       <div class="cat-row-header">
         <span class="cat-dot" style="width:${dotSize}px;height:${dotSize}px;background:${c.color}"></span>
         <span class="cat-name">${c.name}</span>
-        <span class="cat-cost">${money(c.cost, 0)}</span>
+        <span class="cat-cost">${moneyAuto(c.cost)}</span>
         <span class="cat-pct">${c.pct.toFixed(1)}%</span>
       </div>
       <div class="cat-bar-track">
@@ -623,7 +624,7 @@ function renderDashboard(db) {
   // Stat cards
   const grid = div('card-grid-4');
   renderStatCards([
-    { label: 'Total spend',     dot: ACCENT, value: money(overall.cost_usd, 0),    sub: 'LLM cost · ' + fmtSince(overall.tracking_since) },
+    { label: 'Total spend',     dot: ACCENT, value: moneyAuto(overall.cost_usd),    sub: 'LLM cost · ' + fmtSince(overall.tracking_since) },
     { label: 'LLM calls',       dot: TEAL,   value: num(overall.total_calls),       sub: tok(overall.tokens_in)+' in / '+tok(overall.tokens_out)+' out' },
     { label: 'Web searches',    dot: AMBER,  value: num(overall.web_searches),      sub: 'Anthropic web research' },
     { label: 'Workflow runs',   dot: GREEN,  value: num(overall.total_runs),        sub: 'operational · separate from cost' },
@@ -635,7 +636,7 @@ function renderDashboard(db) {
 
   const donutCard = div('card');
   donutCard.innerHTML = `<div class="section-title">Cost by surface</div><div class="section-sub">Where this window's spend originates</div>`;
-  donutCard.appendChild(renderDonutSection(platCats, money(overall.cost_usd, 0)));
+  donutCard.appendChild(renderDonutSection(platCats, moneyAuto(overall.cost_usd)));
   midRow.appendChild(donutCard);
   midRow.appendChild(renderTrendCard(series, tenants));
   main.appendChild(midRow);
@@ -665,7 +666,7 @@ function renderDashboard(db) {
         <span class="mono" style="font-size:11px;color:var(--dim);width:18px">${String(i+1).padStart(2,'0')}</span>
         <span style="font-size:13px;flex:1">${t.name}</span>
         ${t.isSpike ? '<span class="badge-spike">SPIKE</span>' : ''}
-        <span class="mono" style="font-size:13px">${money(t.costUsd, 0)}</span>
+        <span class="mono" style="font-size:13px">${moneyAuto(t.costUsd)}</span>
       </div>
       <div class="leader-bar-track" style="margin-left:28px">
         <div class="leader-bar-fill" style="background:${t.isSpike ? RED : ACCENT};width:${(t.costUsd/maxCost*100).toFixed(1)}%"></div>
@@ -701,7 +702,7 @@ function renderUsage(db) {
   // Stat cards
   const grid = div('card-grid-4');
   renderStatCards([
-    { label: 'Total spend',  dot: ACCENT, value: money(overall.cost_usd, 0), sub: 'LLM cost · ' + fmtSince(overall.tracking_since) },
+    { label: 'Total spend',  dot: ACCENT, value: moneyAuto(overall.cost_usd), sub: 'LLM cost · ' + fmtSince(overall.tracking_since) },
     { label: 'LLM calls',    dot: TEAL,   value: num(overall.total_calls),   sub: tok(overall.tokens_in)+' in / '+tok(overall.tokens_out)+' out' },
     { label: 'Web searches', dot: AMBER,  value: num(overall.web_searches),  sub: 'Anthropic web research' },
     { label: 'Workflow runs',dot: GREEN,  value: num(overall.total_runs),    sub: 'operational · separate from cost' },
@@ -714,7 +715,7 @@ function renderUsage(db) {
   donutCard.innerHTML = `<div class="section-title">Cost by surface</div><div class="section-sub">Conversation vs. converger vs. workflow execution vs. web search — primary view for spotting token bloat</div>`;
   const donutWrap = div('');
   donutWrap.style.cssText = 'display:flex;gap:40px;align-items:center';
-  donutWrap.appendChild(renderDonut(platCats, money(overall.cost_usd, 0)));
+  donutWrap.appendChild(renderDonut(platCats, moneyAuto(overall.cost_usd)));
   const legend = div('');
   legend.style.cssText = 'flex:1;display:flex;flex-direction:column;gap:18px';
   renderCatRows(platCats, 9).forEach(r => legend.appendChild(r));
@@ -784,7 +785,7 @@ function renderTenants(db) {
         <div class="leader-bar-track" style="flex:1">
           <div class="leader-bar-fill" style="background:${t.isSpike ? RED : ACCENT};width:${(t.costUsd/maxCost*100).toFixed(1)}%"></div>
         </div>
-        <span class="mono" style="font-size:13px;width:62px;text-align:right">${money(t.costUsd, 0)}</span>
+        <span class="mono" style="font-size:13px;width:62px;text-align:right">${moneyAuto(t.costUsd)}</span>
       </div>
       <span class="mono" style="font-size:12.5px;color:var(--muted);text-align:right">${num(t.llmCalls)}</span>
       <span class="mono" style="font-size:12.5px;color:var(--muted);text-align:right">${num(t.webSearches)}</span>
@@ -826,7 +827,7 @@ function renderTenantDetail(tenantId, db) {
   // Stat cards
   const grid = div('card-grid-4');
   renderStatCards([
-    { label: 'Spend',          dot: ACCENT, value: money(t.costUsd, 0),    sub: 'LLM cost · 30-day window' },
+    { label: 'Spend',          dot: ACCENT, value: moneyAuto(t.costUsd),    sub: 'LLM cost · 30-day window' },
     { label: 'LLM calls',      dot: TEAL,   value: num(t.llmCalls),        sub: tok(t.tokensIn)+' in / '+tok(t.tokensOut)+' out' },
     { label: 'Web searches',   dot: AMBER,  value: num(t.webSearches),     sub: 'web research calls' },
     { label: 'Workflow runs',  dot: GREEN,  value: num(t.totalRuns),       sub: 'operational · separate from cost' },
@@ -838,7 +839,7 @@ function renderTenantDetail(tenantId, db) {
 
   const donutCard = div('card');
   donutCard.innerHTML = `<div class="section-title" style="margin-bottom:20px">Cost by surface</div>`;
-  donutCard.appendChild(renderDonutSection(t.categories, money(t.costUsd, 0)));
+  donutCard.appendChild(renderDonutSection(t.categories, moneyAuto(t.costUsd)));
   row1.appendChild(donutCard);
 
   const trendCard = div('card');
