@@ -237,6 +237,7 @@ export function registerAirtableChannels(capabilityRegistry) {
     id: 'airtable_create_record', connector: 'airtable', positions: ['step', 'delivery'],
     name: 'Create Airtable Record', icon: 'table',
     description: 'Create a new record in an Airtable table.',
+    outputFormat: 'plain',
     requiredScopes: ['data.records:write'],
     configSchema: [
       { key: 'baseId',  label: 'Base ID',          type: 'string',   optional: false },
@@ -251,6 +252,7 @@ export function registerAirtableChannels(capabilityRegistry) {
     id: 'airtable_update_record', connector: 'airtable', positions: ['step', 'delivery'],
     name: 'Update Airtable Record', icon: 'table',
     description: 'Update fields on an existing Airtable record.',
+    outputFormat: 'plain',
     requiredScopes: ['data.records:write'],
     configSchema: [
       { key: 'baseId',   label: 'Base ID',          type: 'string',   optional: false },

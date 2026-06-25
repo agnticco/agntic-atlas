@@ -37,7 +37,8 @@ function deliverySummary(capabilities) {
     const fields = (c.configSchema ?? [])
       .filter(f => f.key !== 'body') // body = previous step's output, not set by you
       .map(f => `${f.key}${f.optional ? '?' : ''}`).join(', ');
-    return `    • channel "${c.id}": ${c.description}${fields ? `  config: { channel:"${c.id}", ${fields} }` : ''}`;
+    const fmt = c.outputFormat ? `  [output format: ${c.outputFormat}]` : '';
+    return `    • channel "${c.id}": ${c.description}${fmt}${fields ? `  config: { channel:"${c.id}", ${fields} }` : ''}`;
   }).join('\n');
 }
 
@@ -193,20 +194,26 @@ HOW INPUT ENTERS THE WORKFLOW:
   (e.g. a missing Slack scope) instead of inventing one. Never use a "tool" or "fetch" node.
 - Use connector-action for side-effects too (post then pin, look up a user, create a channel).
 
-OUTPUT FORMATTING — match the format to the delivery channel:
-- Slack (channel or DM): in the summarize/llm/rewrite node's instructions or prompt, include:
-  "Format the output using Slack markdown: use *bold* for section headers, bullet points (•) for lists,
-  keep each section to 2-3 sentences, and separate sections with a blank line."
-- Email (gmail_send): the email executor supports full HTML and wraps the body in a responsive shell.
-  Before proposing the deliver node, ask the user how they want the email formatted — e.g. "How would you
-  like the email laid out? For example: a newsletter with section headers, a plain text summary, a bullet
-  digest, or branded HTML with callout cards." Then add a dedicated llm formatting node immediately before
-  the deliver node whose prompt applies the user's chosen style. That node's prompt should describe the
-  exact HTML structure the user asked for and instruct the LLM not to include <html>/<body> wrappers.
-- Airtable / structured data: include: "Return a concise, factual summary with no decorative formatting.
-  Plain prose only."
-- When the delivery destination is unknown at node-proposal time, default to plain prose and revise the
-  node's instructions when the deliver node is confirmed.
+OUTPUT FORMATTING — the engine passes the previous node's output to the deliver node as-is. It does
+NOT reformat it. The "output format" shown next to each delivery channel above is non-negotiable — you
+MUST instruct the content-generating node (summarize/llm/rewrite) to produce exactly that format:
+
+- output format: mrkdwn (slack, slack_dm) — include in the node's instructions:
+  "Format output as Slack mrkdwn: *bold* for headers, • for list items, blank line between sections.
+  No HTML tags of any kind."
+- output format: html (gmail_send) — add a DEDICATED llm formatting node immediately before the
+  deliver node. Before proposing it, ask the user how they want the email laid out ("newsletter with
+  section headers", "plain text summary", "HTML callout cards", etc.). That node's prompt produces the
+  inner HTML the user chose — instruct it NOT to include <html>/<body> wrappers.
+- output format: plain (docs_create, sheets_append, tasks_create, calendar_create_event,
+  airtable_create_record, airtable_update_record, inbox_deliver, in_app, webhook, and any channel
+  not listed above) — include in the node's instructions: "Plain text only — no HTML tags, no markdown
+  symbols. Use clean prose paragraphs and line breaks." Any markup will appear verbatim as raw
+  characters in the destination.
+
+INFER THE FORMAT EARLY: apply the right format instruction from the FIRST LLM/summarize/rewrite node,
+based on the delivery intent — do not wait until the deliver node is in the draft. "Create a Doc" →
+plain. "Send to Slack" or "DM me" → mrkdwn. "Email me" → html. Default to plain when unknown.
 
 RULES:
 - NEVER propose an action, connector, trigger, or delivery destination that is not listed in

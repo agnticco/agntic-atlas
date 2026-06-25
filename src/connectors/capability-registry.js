@@ -33,6 +33,7 @@ export class CapabilityRegistry {
    * @param {string}   [def.icon]
    * @param {object[]} [def.configSchema]
    * @param {string[]} [def.requiredScopes]
+   * @param {string}   [def.outputFormat]  — 'html' | 'mrkdwn' | 'plain'; format the engine delivers as-is to this channel
    * @param {Function} [def.handle]        — async ({ config, body, lastOutput, title }) => result
    * @param {Function} [def.isReady]       — () => boolean; defaults to always ready
    */
@@ -50,6 +51,7 @@ export class CapabilityRegistry {
       icon:           def.icon           ?? 'plug',
       configSchema:   def.configSchema   ?? [],
       requiredScopes: def.requiredScopes ?? [],
+      outputFormat:   def.outputFormat   ?? 'plain',
       isReady:        def.isReady        ?? (() => true),
       handle:         def.handle         ?? null,
     });
