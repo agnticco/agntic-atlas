@@ -216,6 +216,7 @@ function num(n)   { return Number(Math.round(n||0)).toLocaleString('en-US'); }
 function tok(n)   { n = Math.round(n||0); return n >= 1e6 ? (n/1e6).toFixed(1)+'M' : n >= 1e3 ? (n/1e3).toFixed(0)+'K' : ''+n; }
 function ago(m)   { m = Math.round(m); if (m < 1) return 'just now'; if (m < 60) return m+'m ago'; const h = Math.floor(m/60); if (h < 24) return h+'h ago'; return Math.floor(h/24)+'d ago'; }
 function fmtDay(iso) { try { return new Date(iso).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }); } catch { return iso; } }
+function fmtSince(iso) { if (!iso) return '30-day window'; try { const d = new Date(iso); return 'since ' + d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }); } catch { return '30-day window'; } }
 function relTime(iso) { if (!iso) return '—'; const t = new Date(iso).getTime(); if (isNaN(t)) return '—'; return ago((Date.now() - t) / 60000); }
 function catOf(ctx) {
   ctx = ctx || '';
@@ -622,7 +623,7 @@ function renderDashboard(db) {
   // Stat cards
   const grid = div('card-grid-4');
   renderStatCards([
-    { label: 'Total spend',     dot: ACCENT, value: money(overall.cost_usd, 0),    sub: 'LLM cost · 30-day window' },
+    { label: 'Total spend',     dot: ACCENT, value: money(overall.cost_usd, 0),    sub: 'LLM cost · ' + fmtSince(overall.tracking_since) },
     { label: 'LLM calls',       dot: TEAL,   value: num(overall.total_calls),       sub: tok(overall.tokens_in)+' in / '+tok(overall.tokens_out)+' out' },
     { label: 'Web searches',    dot: AMBER,  value: num(overall.web_searches),      sub: 'Anthropic web research' },
     { label: 'Workflow runs',   dot: GREEN,  value: num(overall.total_runs),        sub: 'operational · separate from cost' },
@@ -695,12 +696,12 @@ function renderUsage(db) {
   const series = S.trendFilter === 'all' ? pdaily : (tenants.find(t => t.id === S.trendFilter) || { daily: [] }).daily;
 
   const main = div('fadein');
-  main.innerHTML = `<div class="page-header"><h2>Usage &amp; Cost</h2><p>Diagnose where LLM spend comes from · all data from llm_cost_log</p></div>`;
+  main.innerHTML = `<div class="page-header"><h2>Usage &amp; Cost</h2><p>Diagnose where LLM spend comes from · all data from llm_cost_log${overall.tracking_since ? ' · <span style="color:var(--muted)">tracking ' + fmtSince(overall.tracking_since) + '</span>' : ''}</p></div>`;
 
   // Stat cards
   const grid = div('card-grid-4');
   renderStatCards([
-    { label: 'Total spend',  dot: ACCENT, value: money(overall.cost_usd, 0), sub: 'LLM cost · 30-day window' },
+    { label: 'Total spend',  dot: ACCENT, value: money(overall.cost_usd, 0), sub: 'LLM cost · ' + fmtSince(overall.tracking_since) },
     { label: 'LLM calls',    dot: TEAL,   value: num(overall.total_calls),   sub: tok(overall.tokens_in)+' in / '+tok(overall.tokens_out)+' out' },
     { label: 'Web searches', dot: AMBER,  value: num(overall.web_searches),  sub: 'Anthropic web research' },
     { label: 'Workflow runs',dot: GREEN,  value: num(overall.total_runs),    sub: 'operational · separate from cost' },
