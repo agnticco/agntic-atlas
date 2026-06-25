@@ -96,6 +96,12 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
         default:  [],
         reducer:  (prev, additions) => [...(prev ?? []), ...(additions ?? [])],
       },
+      // Setup results: resources created before the workflow runs (e.g. Drive folders).
+      // Keyed by stores_as; each value is the action result. Merged, never replaced.
+      setup_results: {
+        default: {},
+        reducer: (prev, next) => ({ ...(prev ?? {}), ...(next ?? {}) }),
+      },
     },
   });
 
@@ -154,6 +160,7 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
       clarifications: state.clarifications,
       draft:          state.draft,
       gap,
+      setupResults:   state.setup_results,
     }));
 
     const proposal = await llmJson(llm, [sysmsg, usermsg], tierCfg('balanced', sessionId));
@@ -172,11 +179,33 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
       };
     }
 
-    // HITL: pause for accept / reject / modify
+    // HITL: pause for accept / reject / modify / setup
     const confirmation = await interrupt({ type: 'proposal', proposal, step: state.step });
 
-    let newDraft = state.draft;
     const logEntry = { step: state.step, type: 'proposal', proposal, confirmation };
+
+    // setup_action: create a resource before the workflow runs. Never applied to draft.
+    if (proposal.component === 'setup_action') {
+      if (confirmation?.type === 'setup_executed') {
+        const key    = proposal.stores_as ?? 'setup_result';
+        const result = confirmation.result ?? {};
+        return {
+          setup_results:   { [key]: result },
+          clarifications:  [{ q: `(setup: ${proposal.action})`, a: JSON.stringify(result) }],
+          confirmationLog: [logEntry],
+          step:            state.step + 1,
+          phase:           'analyzing',
+        };
+      }
+      // skipped or rejected: continue without storing
+      return {
+        confirmationLog: [logEntry],
+        step:            state.step + 1,
+        phase:           'analyzing',
+      };
+    }
+
+    let newDraft = state.draft;
 
     if (confirmation?.type === 'accept') {
       newDraft = applyProposal(state.draft, proposal, confirmation);

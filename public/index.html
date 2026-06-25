@@ -340,11 +340,22 @@
                               </sc-if>
                               <div style="margin-top:15px">
                               <sc-if value="{{ st.actionsVisible }}" hint-placeholder-val="{{ true }}">
-                                <div style="display:flex;align-items:center;gap:9px">
-                                  <button onClick="{{ st.onConfirm }}" style="font-family:inherit;font-size:13.5px;font-weight:600;padding:9px 17px;border-radius:999px;color:#06140c;background:#5fc78a;border:none;cursor:pointer">Confirm</button>
-                                  <button onClick="{{ st.onChange }}" style="font-family:inherit;font-size:13.5px;padding:9px 14px;border-radius:999px;color:rgba(255,255,255,.78);background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.11);cursor:pointer">Change</button>
-                                  <button onClick="{{ st.onReject }}" style="font-family:inherit;font-size:13.5px;padding:9px 5px;color:rgba(255,255,255,.3);background:none;border:none;cursor:pointer">Not this</button>
-                                </div>
+                                <sc-if value="{{ st.isSetup }}" hint-placeholder-val="{{ false }}">
+                                  <div style="display:flex;align-items:center;gap:9px">
+                                    <button onClick="{{ st.onConfirm }}" style="font-family:inherit;font-size:13.5px;font-weight:600;padding:9px 17px;border-radius:999px;color:#06140c;background:#5fc78a;border:none;cursor:pointer">Create it now</button>
+                                    <button onClick="{{ st.onReject }}" style="font-family:inherit;font-size:13.5px;padding:9px 5px;color:rgba(255,255,255,.3);background:none;border:none;cursor:pointer">Skip</button>
+                                  </div>
+                                </sc-if>
+                                <sc-if value="{{ !st.isSetup }}" hint-placeholder-val="{{ true }}">
+                                  <div style="display:flex;align-items:center;gap:9px">
+                                    <button onClick="{{ st.onConfirm }}" style="font-family:inherit;font-size:13.5px;font-weight:600;padding:9px 17px;border-radius:999px;color:#06140c;background:#5fc78a;border:none;cursor:pointer">Confirm</button>
+                                    <button onClick="{{ st.onChange }}" style="font-family:inherit;font-size:13.5px;padding:9px 14px;border-radius:999px;color:rgba(255,255,255,.78);background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.11);cursor:pointer">Change</button>
+                                    <button onClick="{{ st.onReject }}" style="font-family:inherit;font-size:13.5px;padding:9px 5px;color:rgba(255,255,255,.3);background:none;border:none;cursor:pointer">Not this</button>
+                                  </div>
+                                </sc-if>
+                              </sc-if>
+                              <sc-if value="{{ st.setupPending }}" hint-placeholder-val="{{ false }}">
+                                <div style="font-size:13px;color:rgba(255,255,255,.45);padding:4px 0">Creating…</div>
                               </sc-if>
                               <sc-if value="{{ st.changeOpen }}" hint-placeholder-val="{{ false }}">
                                 <div style="margin-top:14px">
@@ -3228,6 +3239,53 @@ class Component extends DCLogic {
     if (iv.type === "proposal") {
       const p = iv.proposal || {};
       if (p.component === "edge") { this.setState({ thinking: true, inputMode: "locked" }); this._send({ type: "accept" }); return; }
+
+      // Setup action: resource creation before the workflow runs. Different confirm flow.
+      if (p.component === "setup_action") {
+        const self = this;
+        const { title, desc } = this._humanStep(p);
+        const sid = "sl_s" + (this._slStepCount = (this._slStepCount || 0) + 1);
+        const updSL = (fn) => self.state.msgs.map(m => m._id === self._slId ? fn(m) : m);
+        const withConn = (steps) => steps.map((s, i) => ({ ...s, downOn: i < steps.length - 1 && s.isConfirmed, downDim: i < steps.length - 1 && !s.isConfirmed }));
+        const step = {
+          id: sid, title, desc, prompt: null, isConfirmed: false, isActive: true,
+          isSetup: true, setupPending: false,
+          actionsVisible: true, changeOpen: false, changeValue: '',
+          flash: false, flashLine: false, downOn: false, downDim: false,
+          onConfirm: () => {
+            // Mark as executing
+            self.setState({ msgs: updSL(sl => ({ ...sl, steps: sl.steps.map(s => s.id !== sid ? s : { ...s, actionsVisible: false, setupPending: true }) })), thinking: true, inputMode: 'locked' });
+            fetch('/api/builder/sessions/' + self.state.threadId + '/setup', {
+              method: 'POST', headers: self._H(),
+              body: JSON.stringify({ action: p.action, params: p.params || {} }),
+            })
+              .then(function(r) { return r.json(); })
+              .then(function(d) {
+                if (d.error) { self.setState({ msgs: updSL(sl => ({ ...sl, steps: sl.steps.map(s => s.id !== sid ? s : { ...s, setupPending: false, actionsVisible: true }) })), thinking: false }); return; }
+                const msgs1 = updSL(sl => ({ ...sl, steps: withConn(sl.steps.map(s => s.id !== sid ? s : { ...s, isConfirmed: true, isActive: false, setupPending: false, flash: true, flashLine: true })) }));
+                self.setState({ msgs: msgs1, thinking: true, inputMode: 'locked' });
+                clearTimeout(self._flashT);
+                self._flashT = setTimeout(() => {
+                  const msgs2 = self.state.msgs.map(m => m._id !== self._slId ? m : { ...m, steps: m.steps.map(s => s.id !== sid ? s : { ...s, flash: false, flashLine: false }) });
+                  self.setState({ msgs: msgs2 });
+                }, 1000);
+                self._send({ type: 'setup_executed', result: d.result });
+              })
+              .catch(function() { self.setState({ msgs: updSL(sl => ({ ...sl, steps: sl.steps.map(s => s.id !== sid ? s : { ...s, setupPending: false, actionsVisible: true }) })), thinking: false }); });
+          },
+          onReject: () => { self._slPendingReplace = true; self.setState({ msgs: [...self.state.msgs, { isOperator: true, text: 'Skip this setup step.' }], thinking: true, inputMode: 'locked' }); self._send({ type: 'reject' }); },
+          onChange: null, onChangeInput: null, onSubmitChange: null, onChangeKey: null, onUndo: null,
+        };
+        if (!self._slId) {
+          const slId = 'sl' + (this._pc = (this._pc || 0) + 1);
+          self._slId = slId;
+          self.setState({ msgs: [...self.state.msgs, { isSignalLine: true, _id: slId, steps: withConn([step]), complete: false }], thinking: false, inputMode: 'locked', phase: 'building' });
+        } else {
+          self.setState({ msgs: updSL(sl => ({ ...sl, steps: withConn([...sl.steps, step]) })), thinking: false, inputMode: 'locked', phase: 'building' });
+        }
+        return;
+      }
+
       const self = this;
       const { title, desc, prompt = null } = this._humanStep(p);
       const sid = "sl_s" + (this._slStepCount = (this._slStepCount || 0) + 1);
@@ -3320,6 +3378,15 @@ class Component extends DCLogic {
   // ── proposal rendering (real converger contract) ──────────────────
   _humanStep(p) {
     const comp = p.component, spec = p.spec || {}, rat = p.rationale || '';
+    if (comp === 'setup_action') {
+      const action = p.action || '';
+      const params = p.params || {};
+      if (action === 'google_create_folder') {
+        const name = params.name || 'folder';
+        return { title: 'Create Drive folder "' + name + '"', desc: rat || 'This folder doesn\'t exist yet — Atlas will create it now so the workflow can use it.' };
+      }
+      return { title: 'Setup: ' + action, desc: rat || 'One-time setup action needed before this workflow can run.' };
+    }
     if (comp === 'name') {
       const nm = typeof spec === 'string' ? spec : (spec.name || 'Workflow');
       return { title: '“' + nm + '”', desc: 'The name you’ll see for this workflow in your list.' };
