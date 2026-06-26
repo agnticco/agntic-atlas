@@ -259,6 +259,29 @@ spec is actually executable, not just structurally similar to the frozen file.
   (or pass `--env-file`).
 
 
+- **`sc-if` / `sc-for` template elements are visible DOM nodes before support.js runs
+  (2026-06-25).** The DC framework compiles them at runtime, but before that they are
+  unknown HTML elements defaulting to `display:inline` — the browser computes inline
+  styles for their children, including fetching `background:url(...)` values containing
+  unresolved template variables (e.g., `url('{{ c.logo }}')` → 404). Fix: a global CSS
+  rule `sc-if, sc-for { display: none; }` added to `<style>` in `public/index.html`
+  prevents child-style computation before the framework runs. **Do not use `<img src="{{...}}">`
+  or `background:url('{{...}}')` inside template elements without this CSS guard.**
+
+- **Chat `parsed:false` when tools are active (2026-06-25).** The chat endpoint
+  (`src/api/builder.js` → `POST /api/builder/chat`) passes connector tools to the LLM
+  whenever a connector is connected. With `tools` in the invocation, Claude sometimes
+  returns natural prose instead of the required JSON envelope, even when the system prompt
+  specifies JSON. Root cause: tool-use mode changes the model's response routing. Fix:
+  when `chatTools.length > 0`, append a short JSON format reminder to the last user
+  message in `msgArray` — the most salient position immediately before the model's turn.
+  This is structural (applies to every tool-equipped turn), not hardcoded to any connector.
+
+- **Slug collision on re-publish (2026-06-25).** `WorkflowStore.create()` now
+  auto-deduplicates slugs: probes `(tenant_id, user_id, slug)` and appends `-2`, `-3`,
+  etc. until a free slot is found before inserting. Prevents `UNIQUE constraint failed`
+  when the same workflow name is published more than once.
+
 - **`server.js` encoding.** In `agntic-prod`, `src/api/server.js` reads as
   `data` to `file` and plain `grep` returns zero matches — it once convinced an
   agent the engine was deleted. **Root cause (verified):** the file is valid

@@ -404,12 +404,25 @@ export class WorkflowStore {
     const now = new Date().toISOString();
     const kind = fields.kind ?? (fields.nodes || fields.triggers ? 'flow' : 'fetch');
 
+    const baseSlug = fields.slug ?? WorkflowStore.slugify(fields.name || fields.userIntent || 'workflow');
+    const userId   = fields.userId ?? null;
+    const tenantId = fields.tenantId ?? 'default';
+    // Ensure slug uniqueness within (tenant_id, user_id): append -N if needed.
+    let slug = baseSlug;
+    for (let n = 2; n <= 99; n++) {
+      const taken = this.db.prepare(
+        'SELECT 1 FROM workflows WHERE tenant_id=? AND user_id=? AND slug=? AND deleted_at IS NULL LIMIT 1'
+      ).get(tenantId, userId, slug);
+      if (!taken) break;
+      slug = `${baseSlug}-${n}`;
+    }
+
     const row = {
       id,
-      slug:            fields.slug ?? WorkflowStore.slugify(fields.name || fields.userIntent || 'workflow'),
+      slug,
       session_id:      fields.sessionId ?? null,
-      user_id:         fields.userId ?? null,
-      tenant_id:       fields.tenantId ?? 'default',
+      user_id:         userId,
+      tenant_id:       tenantId,
       user_intent:     fields.userIntent ?? fields.name ?? '',
       source_id:       fields.sourceId ?? '',
       schedule:        fields.schedule ?? '',

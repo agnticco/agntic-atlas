@@ -53,6 +53,9 @@
   @keyframes newStateIn { from { opacity:0; transform:translateY(-14px) scale(.98); } to { opacity:1; transform:none; } }
   @keyframes newStateOut { from { opacity:1; transform:none; } to { opacity:0; transform:translateY(18px) scale(.97); } }
   @media (prefers-reduced-motion:reduce){*{animation:none!important}}
+  /* Template elements: hide before DC framework processes them so the browser
+     does not fetch url() values from their children's inline styles. */
+  sc-if, sc-for { display: none; }
 </style>
 </helmet>
 
@@ -411,9 +414,14 @@
 
 
             <sc-if value="{{ thinking }}" hint-placeholder-val="{{ false }}">
+              <div style="display:flex;flex-direction:column;align-items:flex-start;gap:8px">
               <div style="position:relative;width:44px;height:44px;color:rgba(255,255,255,.7);flex:none">
                   <div style="position:absolute;inset:-30%;border-radius:50%;background:radial-gradient(circle,rgba(255,255,255,.12) 0%,rgba(255,255,255,0) 65%);animation:irisGlow 3500ms cubic-bezier(.5,0,.2,1) infinite;pointer-events:none;"></div>
                   <svg viewBox="0 0 1080 1080" style="position:relative;width:100%;height:100%;overflow:visible;display:block;filter:drop-shadow(0 0 2px rgba(255,255,255,.5)) drop-shadow(0 0 6px rgba(255,255,255,.25));"><circle cx="540" cy="540" r="318" fill="none" stroke="currentColor" stroke-width="20" stroke-linejoin="round" style="transform-box:view-box;transform-origin:540px 540px;animation:irisRing 3500ms cubic-bezier(.5,0,.2,1) infinite;animation-delay:0ms;"></circle><ellipse cx="540" cy="540" rx="232" ry="318" fill="none" stroke="currentColor" stroke-width="13" stroke-linejoin="round" style="transform-box:view-box;transform-origin:540px 540px;animation:irisRing 3500ms cubic-bezier(.5,0,.2,1) infinite;animation-delay:120ms;"></ellipse><ellipse cx="540" cy="540" rx="112" ry="318" fill="none" stroke="currentColor" stroke-width="13" stroke-linejoin="round" style="transform-box:view-box;transform-origin:540px 540px;animation:irisRing 3500ms cubic-bezier(.5,0,.2,1) infinite;animation-delay:200ms;"></ellipse><ellipse cx="540" cy="540" rx="318" ry="64" fill="none" stroke="currentColor" stroke-width="12" stroke-linejoin="round" style="transform-box:view-box;transform-origin:540px 540px;animation:irisRing 3500ms cubic-bezier(.5,0,.2,1) infinite;animation-delay:80ms;"></ellipse><ellipse cx="540" cy="378" rx="274" ry="55" fill="none" stroke="currentColor" stroke-width="12" stroke-linejoin="round" style="transform-box:view-box;transform-origin:540px 540px;animation:irisRing 3500ms cubic-bezier(.5,0,.2,1) infinite;animation-delay:160ms;"></ellipse><ellipse cx="540" cy="702" rx="274" ry="55" fill="none" stroke="currentColor" stroke-width="12" stroke-linejoin="round" style="transform-box:view-box;transform-origin:540px 540px;animation:irisRing 3500ms cubic-bezier(.5,0,.2,1) infinite;animation-delay:240ms;"></ellipse><line x1="540" y1="208" x2="540" y2="158" stroke="currentColor" stroke-width="9" stroke-linecap="butt" style="transform-box:view-box;transform-origin:540px 540px;animation:irisTick 3500ms cubic-bezier(.5,0,.2,1) infinite;animation-delay:260ms;"></line><line x1="601.8" y1="189.4" x2="606.3" y2="163.8" stroke="currentColor" stroke-width="9" stroke-linecap="butt" style="transform-box:view-box;transform-origin:540px 540px;animation:irisTick 3500ms cubic-bezier(.5,0,.2,1) infinite;animation-delay:269ms;"></line><line x1="661.8" y1="205.5" x2="670.7" y2="181" stroke="currentColor" stroke-width="9" stroke-linecap="butt" style="transform-box:view-box;transform-origin:540px 540px;animation:irisTick 3500ms cubic-bezier(.5,0,.2,1) infinite;animation-delay:278ms;"></line><line x1="718" y1="231.7" x2="731" y2="209.2" stroke="currentColor" stroke-width="9" stroke-linecap="butt" style="transform-box:view-box;transform-origin:540px 540px;animation:irisTick 3500ms cubic-bezier(.5,0,.2,1) infinite;animation-delay:287ms;"></line><line x1="768.8" y1="267.3" x2="785.5" y2="247.4" stroke="currentColor" stroke-width="9" stroke-linecap="butt" style="transform-box:view-box;transform-origin:540px 540px;animation:irisTick 3500ms cubic-bezier(.5,0,.2,1) infinite;animation-delay:296ms;"></line><line x1="812.7" y1="311.2" x2="832.6" y2="294.5" stroke="currentColor" stroke-width="9" stroke-linecap="butt" style="transform-box:view-box;transform-origin:540px 540px;animation:irisTick 3500ms cubic-bezier(.5,0,.2,1) infinite;animation-delay:305ms;"></line><line x1="848.3" y1="362" x2="870.8" y2="349" stroke="currentColor" stroke-width="9" stroke-linecap="butt" style="transform-box:view-box;transform-origin:540px 540px;animation:irisTick 3500ms cubic-bezier(.5,0,.2,1) infinite;animation-delay:314ms;"></line><line x1="874.5" y1="418.2" x2="899" y2="409.3" stroke="currentColor" stroke-width="9" stroke-linecap="butt" style="transform-box:view-box;transform-origin:540px 540px;animation:irisTick 3500ms cubic-bezier(.5,0,.2,1) infinite;animation-delay:323ms;"></line><line x1="890.6" y1="478.2" x2="916.2" y2="473.7" stroke="currentColor" stroke-width="9" stroke-linecap="butt" style="transform-box:view-box;transform-origin:540px 540px;animation:irisTick 3500ms cubic-bezier(.5,0,.2,1) infinite;animation-delay:332ms;"></line><line x1="872" y1="540" x2="922" y2="540" stroke="currentColor" stroke-width="9" stroke-linecap="butt" style="transform-box:view-box;transform-origin:540px 540px;animation:irisTick 3500ms cubic-bezier(.5,0,.2,1) infinite;animation-delay:341ms;"></line><line x1="890.6" y1="601.8" x2="916.2" y2="606.3" stroke="currentColor" stroke-width="9" stroke-linecap="butt" style="transform-box:view-box;transform-origin:540px 540px;animation:irisTick 3500ms cubic-bezier(.5,0,.2,1) infinite;animation-delay:350ms;"></line><line x1="874.5" y1="661.8" x2="899" y2="670.7" stroke="currentColor" stroke-width="9" stroke-linecap="butt" style="transform-box:view-box;transform-origin:540px 540px;animation:irisTick 3500ms cubic-bezier(.5,0,.2,1) infinite;animation-delay:359ms;"></line><line x1="848.3" y1="718" x2="870.8" y2="731" stroke="currentColor" stroke-width="9" stroke-linecap="butt" style="transform-box:view-box;transform-origin:540px 540px;animation:irisTick 3500ms cubic-bezier(.5,0,.2,1) infinite;animation-delay:368ms;"></line><line x1="812.7" y1="768.8" x2="832.6" y2="785.5" stroke="currentColor" stroke-width="9" stroke-linecap="butt" style="transform-box:view-box;transform-origin:540px 540px;animation:irisTick 3500ms cubic-bezier(.5,0,.2,1) infinite;animation-delay:377ms;"></line><line x1="768.8" y1="812.7" x2="785.5" y2="832.6" stroke="currentColor" stroke-width="9" stroke-linecap="butt" style="transform-box:view-box;transform-origin:540px 540px;animation:irisTick 3500ms cubic-bezier(.5,0,.2,1) infinite;animation-delay:386ms;"></line><line x1="718" y1="848.3" x2="731" y2="870.8" stroke="currentColor" stroke-width="9" stroke-linecap="butt" style="transform-box:view-box;transform-origin:540px 540px;animation:irisTick 3500ms cubic-bezier(.5,0,.2,1) infinite;animation-delay:395ms;"></line><line x1="661.8" y1="874.5" x2="670.7" y2="899" stroke="currentColor" stroke-width="9" stroke-linecap="butt" style="transform-box:view-box;transform-origin:540px 540px;animation:irisTick 3500ms cubic-bezier(.5,0,.2,1) infinite;animation-delay:404ms;"></line><line x1="601.8" y1="890.6" x2="606.3" y2="916.2" stroke="currentColor" stroke-width="9" stroke-linecap="butt" style="transform-box:view-box;transform-origin:540px 540px;animation:irisTick 3500ms cubic-bezier(.5,0,.2,1) infinite;animation-delay:413ms;"></line><line x1="540" y1="872" x2="540" y2="922" stroke="currentColor" stroke-width="9" stroke-linecap="butt" style="transform-box:view-box;transform-origin:540px 540px;animation:irisTick 3500ms cubic-bezier(.5,0,.2,1) infinite;animation-delay:422ms;"></line><line x1="478.2" y1="890.6" x2="473.7" y2="916.2" stroke="currentColor" stroke-width="9" stroke-linecap="butt" style="transform-box:view-box;transform-origin:540px 540px;animation:irisTick 3500ms cubic-bezier(.5,0,.2,1) infinite;animation-delay:431ms;"></line><line x1="418.2" y1="874.5" x2="409.3" y2="899" stroke="currentColor" stroke-width="9" stroke-linecap="butt" style="transform-box:view-box;transform-origin:540px 540px;animation:irisTick 3500ms cubic-bezier(.5,0,.2,1) infinite;animation-delay:440ms;"></line><line x1="362" y1="848.3" x2="349" y2="870.8" stroke="currentColor" stroke-width="9" stroke-linecap="butt" style="transform-box:view-box;transform-origin:540px 540px;animation:irisTick 3500ms cubic-bezier(.5,0,.2,1) infinite;animation-delay:449ms;"></line><line x1="311.2" y1="812.7" x2="294.5" y2="832.6" stroke="currentColor" stroke-width="9" stroke-linecap="butt" style="transform-box:view-box;transform-origin:540px 540px;animation:irisTick 3500ms cubic-bezier(.5,0,.2,1) infinite;animation-delay:458ms;"></line><line x1="267.3" y1="768.8" x2="247.4" y2="785.5" stroke="currentColor" stroke-width="9" stroke-linecap="butt" style="transform-box:view-box;transform-origin:540px 540px;animation:irisTick 3500ms cubic-bezier(.5,0,.2,1) infinite;animation-delay:467ms;"></line><line x1="231.7" y1="718" x2="209.2" y2="731" stroke="currentColor" stroke-width="9" stroke-linecap="butt" style="transform-box:view-box;transform-origin:540px 540px;animation:irisTick 3500ms cubic-bezier(.5,0,.2,1) infinite;animation-delay:476ms;"></line><line x1="205.5" y1="661.8" x2="181" y2="670.7" stroke="currentColor" stroke-width="9" stroke-linecap="butt" style="transform-box:view-box;transform-origin:540px 540px;animation:irisTick 3500ms cubic-bezier(.5,0,.2,1) infinite;animation-delay:485ms;"></line><line x1="189.4" y1="601.8" x2="163.8" y2="606.3" stroke="currentColor" stroke-width="9" stroke-linecap="butt" style="transform-box:view-box;transform-origin:540px 540px;animation:irisTick 3500ms cubic-bezier(.5,0,.2,1) infinite;animation-delay:494ms;"></line><line x1="208" y1="540" x2="158" y2="540" stroke="currentColor" stroke-width="9" stroke-linecap="butt" style="transform-box:view-box;transform-origin:540px 540px;animation:irisTick 3500ms cubic-bezier(.5,0,.2,1) infinite;animation-delay:503ms;"></line><line x1="189.4" y1="478.2" x2="163.8" y2="473.7" stroke="currentColor" stroke-width="9" stroke-linecap="butt" style="transform-box:view-box;transform-origin:540px 540px;animation:irisTick 3500ms cubic-bezier(.5,0,.2,1) infinite;animation-delay:512ms;"></line><line x1="205.5" y1="418.2" x2="181" y2="409.3" stroke="currentColor" stroke-width="9" stroke-linecap="butt" style="transform-box:view-box;transform-origin:540px 540px;animation:irisTick 3500ms cubic-bezier(.5,0,.2,1) infinite;animation-delay:521ms;"></line><line x1="231.7" y1="362" x2="209.2" y2="349" stroke="currentColor" stroke-width="9" stroke-linecap="butt" style="transform-box:view-box;transform-origin:540px 540px;animation:irisTick 3500ms cubic-bezier(.5,0,.2,1) infinite;animation-delay:530ms;"></line><line x1="267.3" y1="311.2" x2="247.4" y2="294.5" stroke="currentColor" stroke-width="9" stroke-linecap="butt" style="transform-box:view-box;transform-origin:540px 540px;animation:irisTick 3500ms cubic-bezier(.5,0,.2,1) infinite;animation-delay:539ms;"></line><line x1="311.2" y1="267.3" x2="294.5" y2="247.4" stroke="currentColor" stroke-width="9" stroke-linecap="butt" style="transform-box:view-box;transform-origin:540px 540px;animation:irisTick 3500ms cubic-bezier(.5,0,.2,1) infinite;animation-delay:548ms;"></line><line x1="362" y1="231.7" x2="349" y2="209.2" stroke="currentColor" stroke-width="9" stroke-linecap="butt" style="transform-box:view-box;transform-origin:540px 540px;animation:irisTick 3500ms cubic-bezier(.5,0,.2,1) infinite;animation-delay:557ms;"></line><line x1="418.2" y1="205.5" x2="409.3" y2="181" stroke="currentColor" stroke-width="9" stroke-linecap="butt" style="transform-box:view-box;transform-origin:540px 540px;animation:irisTick 3500ms cubic-bezier(.5,0,.2,1) infinite;animation-delay:566ms;"></line><line x1="478.2" y1="189.4" x2="473.7" y2="163.8" stroke="currentColor" stroke-width="9" stroke-linecap="butt" style="transform-box:view-box;transform-origin:540px 540px;animation:irisTick 3500ms cubic-bezier(.5,0,.2,1) infinite;animation-delay:575ms;"></line></svg>
+              </div>
+              <sc-if value="{{ thinkingLabel }}" hint-placeholder-val="{{ null }}">
+                <div style="font-size:12px;color:rgba(255,255,255,.45);font-style:italic;white-space:nowrap">{{ thinkingLabel }}</div>
+              </sc-if>
               </div>
             </sc-if>
 
@@ -1493,7 +1501,7 @@
           <div style="padding:8px 16px 4px;font-size:10px;font-weight:600;letter-spacing:.16em;text-transform:uppercase;color:rgba(255,255,255,.25)">Connected</div>
           <sc-for list="{{ connectedList }}" as="c" hint-placeholder-count="1">
             <div onClick="{{ c.onAction }}" style="display:flex;align-items:center;gap:10px;padding:9px 16px;cursor:pointer" style-hover="background:rgba(255,255,255,.04)">
-              <img src="{{ c.logo }}" alt="{{ c.name }}" style="flex:none;width:22px;height:22px;object-fit:contain"/>
+              <div style="flex:none;width:22px;height:22px;background:url('{{ c.logo }}') center/contain no-repeat" title="{{ c.name }}"></div>
               <div style="flex:1;min-width:0">
                 <div style="font-size:13px;font-weight:500;color:#fff;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ c.name }}</div>
                 <div style="font-size:11px;color:rgba(255,255,255,.35);margin-top:1px">{{ c.statusText }}</div>
@@ -1504,7 +1512,7 @@
           <div style="padding:10px 16px 4px;margin-top:4px;font-size:10px;font-weight:600;letter-spacing:.16em;text-transform:uppercase;color:rgba(255,255,255,.25)">Inactive</div>
           <sc-for list="{{ availableList }}" as="c" hint-placeholder-count="1">
             <div onClick="{{ c.onAction }}" style="display:flex;align-items:center;gap:10px;padding:9px 16px;cursor:pointer;opacity:.55" style-hover="opacity:1;background:rgba(255,255,255,.04)">
-              <img src="{{ c.logo }}" alt="{{ c.name }}" style="flex:none;width:22px;height:22px;object-fit:contain"/>
+              <div style="flex:none;width:22px;height:22px;background:url('{{ c.logo }}') center/contain no-repeat" title="{{ c.name }}"></div>
               <div style="flex:1;min-width:0">
                 <div style="font-size:13px;font-weight:500;color:rgba(255,255,255,.65);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ c.name }}</div>
                 <div style="font-size:11px;color:rgba(255,255,255,.3);margin-top:1px">{{ c.statusText }}</div>
@@ -1522,7 +1530,7 @@
               <button onClick="{{ connectorModal.onClose }}" style="border:none;background:rgba(255,255,255,.06);cursor:pointer;color:rgba(255,255,255,.5);width:28px;height:28px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:16px" style-hover="background:rgba(255,255,255,.1);color:#fff">×</button>
             </div>
             <div style="display:flex;flex-direction:column;align-items:center;gap:12px;text-align:center">
-              <img src="{{ connectorModal.logo }}" alt="{{ connectorModal.name }}" style="width:64px;height:64px;object-fit:contain"/>
+              <div style="width:64px;height:64px;background:url('{{ connectorModal.logo }}') center/contain no-repeat" title="{{ connectorModal.name }}"></div>
               <div>
                 <div style="font-size:18px;font-weight:600;color:#fff;letter-spacing:-0.02em">{{ connectorModal.name }}</div>
                 <div style="display:inline-flex;align-items:center;gap:6px;margin-top:7px;font-size:12px;font-weight:500;color:{{ connectorModal.statusColor }};background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.1);border-radius:999px;padding:4px 11px">
@@ -2048,7 +2056,7 @@ class Component extends DCLogic {
     return {
       phase: "chat",           // chat | building | proposed | draft | published
       intent: null, threadId: null,
-      msgs: [], inputMode: "chat", inputValue: "", thinking: false,
+      msgs: [], inputMode: "chat", inputValue: "", thinking: false, thinkingLabel: null,
       spec: null,
       testState: "idle",       // idle | running | passed | failed
       runStepIndex: 0,         // which step is currently firing (during running)
@@ -3184,6 +3192,50 @@ class Component extends DCLogic {
       const reader = resp.body.getReader();
       const dec = new TextDecoder();
       let buf = "";
+      const TOOL_LABELS = { web_search: "Searching the web…", web_fetch: "Reading page…", docs_create: "Creating document…", docs_read: "Reading document…", gmail_search: "Searching email…", gmail_send: "Sending email…", slack_post: "Posting to Slack…", airtable_search: "Searching Airtable…", airtable_create: "Creating record…", airtable_update: "Updating record…", calendar_create: "Creating event…", calendar_list: "Checking calendar…", drive_create: "Creating in Drive…", drive_search: "Searching Drive…" };
+
+      // Typewriter queue — characters added here by chunk events,
+      // drained one-at-a-time via setTimeout for a smooth typing feel.
+      // Adaptive delay: slows down when queue is small, speeds up when it
+      // grows large so a long response never lags far behind the stream.
+      let twQueue = "";
+      let twRunning = false;
+      let twMsgIdx = -1;    // index in msgs[] of the streaming Atlas bubble
+      let twDone = null;    // {readyToBuild, buildIntent} stored until queue drains
+
+      const twDelay = () => twQueue.length > 200 ? 3 : twQueue.length > 80 ? 7 : 14;
+
+      const twTick = () => {
+        if (!twQueue) {
+          twRunning = false;
+          if (twDone) {
+            // Finalize: remove isStreaming, optionally add CTA
+            const curMsgs = self.state.msgs;
+            const last = curMsgs[curMsgs.length - 1];
+            let newMsgs = last && last.isStreaming
+              ? [...curMsgs.slice(0, -1), (({ isStreaming, ...rest }) => rest)(last)]
+              : [...curMsgs];
+            if (twDone.readyToBuild && twDone.buildIntent) {
+              newMsgs.push({ isCta: true, text: "", btn: "Build it →", btnBg: "#7fc28a", btnFg: "#06210d", onClick: () => self.startBuild(twDone.buildIntent) });
+            }
+            self.setState({ msgs: newMsgs, thinking: false, thinkingLabel: null });
+            twDone = null;
+          }
+          return;
+        }
+        twRunning = true;
+        const ch = twQueue[0];
+        twQueue = twQueue.slice(1);
+        const curMsgs = self.state.msgs;
+        if (twMsgIdx >= 0 && twMsgIdx < curMsgs.length) {
+          const msg = curMsgs[twMsgIdx];
+          const newMsgs = curMsgs.slice();
+          newMsgs[twMsgIdx] = { ...msg, text: msg.text + ch };
+          self.setState({ msgs: newMsgs });
+        }
+        setTimeout(twTick, twDelay());
+      };
+
       while (true) {
         const { value, done } = await reader.read();
         if (done) break;
@@ -3195,18 +3247,27 @@ class Component extends DCLogic {
           const line = chunk.startsWith("data: ") ? chunk.slice(6) : null;
           if (!line) continue;
           let ev; try { ev = JSON.parse(line); } catch { continue; }
-          if (ev.type === "error") { self._apiError(ev.error); return; }
-          if (ev.type === "reply") {
-            const reply = { isAtlas: true, text: ev.reply, hasReason: false };
-            const items = [reply];
-            if (ev.readyToBuild && ev.buildIntent) {
-              items.push({ isCta: true, text: "", btn: "Build it →", btnBg: "#7fc28a", btnFg: "#06210d", onClick: () => self.startBuild(ev.buildIntent) });
+          if (ev.type === "error") { self.setState({ thinking: false, thinkingLabel: null }); self._apiError(ev.error); return; }
+          if (ev.type === "tool") {
+            self.setState({ thinkingLabel: TOOL_LABELS[ev.name] || ("Using " + ev.name + "…") });
+          }
+          if (ev.type === "chunk") {
+            if (twMsgIdx < 0) {
+              // First chunk: create the streaming bubble and hide the spinner
+              const curMsgs = self.state.msgs;
+              twMsgIdx = curMsgs.length;
+              self.setState({ msgs: [...curMsgs, { isAtlas: true, text: "", hasReason: false, isStreaming: true }], thinking: false, thinkingLabel: null });
             }
-            self.setState({ msgs: [...self.state.msgs, ...items], thinking: false });
+            twQueue += ev.text;
+            if (!twRunning) twTick();
+          }
+          if (ev.type === "done") {
+            twDone = ev; // typewriter will finalize once queue drains
+            if (!twRunning) twTick(); // trigger immediately if nothing queued
           }
         }
       }
-    } catch (e) { self._apiError(String(e)); }
+    } catch (e) { self.setState({ thinking: false, thinkingLabel: null }); self._apiError(String(e)); }
   }
 
   // Transition out of conversation into the structured converger build. Keeps the
@@ -3388,7 +3449,7 @@ class Component extends DCLogic {
           : ((body && body.error && body.error.message) || 'Something went wrong.');
       }
     } catch(e) {}
-    this.setState({ msgs: [...this.state.msgs, { isAtlas: true, text: '⚠ ' + clean + '  You can start over with “+ New workflow”.', hasReason: false }], thinking: false });
+    this.setState({ msgs: [...this.state.msgs, { isAtlas: true, text: '⚠ ' + clean + '  You can start over with “+ New workflow”.', hasReason: false }], thinking: false, thinkingLabel: null });
   }
 
   // ── proposal rendering (real converger contract) ──────────────────

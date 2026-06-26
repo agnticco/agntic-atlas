@@ -266,11 +266,11 @@ export function registerSlackChannel(registry, { fetchImpl = fetch } = {}) {
   // ── post_dm ────────────────────────────────────────────────────────────────
   registry.register({
     id: 'slack_dm', name: 'Slack DM', icon: 'slack',
-    description: 'Sends a direct message to a user (by Slack user ID or email).',
+    description: 'Sends a Slack direct message to any user by email or Slack user ID. Use the logged-in user\'s email when they say "send me", "DM me", or "message me".',
     outputFormat: 'mrkdwn',
     configSchema: [
-      { key: 'user', label: 'User (ID or email)', type: 'string',   optional: false },
-      { key: 'body', label: 'Message',            type: 'textarea', optional: true  },
+      { key: 'user', label: 'User (email or Slack ID)', type: 'string',   optional: false, hint: 'Email address or Slack user ID. Use the logged-in user\'s email for "send me" requests.' },
+      { key: 'body', label: 'Message',                  type: 'textarea', optional: true  },
     ],
     isReady: ready,
     deliver: async ({ config, body, title }) => {
