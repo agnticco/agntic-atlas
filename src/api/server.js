@@ -512,7 +512,30 @@ function buildInboxRag(sharedRag) {
  * Boot every wired subsystem. Returns live handles + close(). Throws on a failed
  * boot — a failed boot must not serve traffic.
  */
+/**
+ * Fail fast on misconfiguration instead of silently degrading. The worst silent
+ * failure is booting in production with no cloud LLM key and falling back to the
+ * local llama model (a known gotcha) — that one throws. Softer issues only warn.
+ */
+function validateBootConfig() {
+  const isProd      = process.env.NODE_ENV === 'production';
+  const hasCloudLLM = !!(process.env.ANTHROPIC_API_KEY?.trim() || process.env.OPENAI_API_KEY?.trim());
+  if (isProd && !hasCloudLLM) {
+    throw new Error('Production boot requires ANTHROPIC_API_KEY or OPENAI_API_KEY — refusing to silently fall back to the local model. Set a cloud key, or unset NODE_ENV=production for local dev.');
+  }
+  if (!hasCloudLLM) {
+    console.warn('[config] No ANTHROPIC_API_KEY/OPENAI_API_KEY set — LLM will use the local model (dev only).');
+  }
+  if (!process.env.OAUTH_REDIRECT_BASE) {
+    console.warn('[config] OAUTH_REDIRECT_BASE is unset — connector OAuth redirects default to localhost; set it for any non-local deployment.');
+  }
+  if (!process.env.NODE_ENV) {
+    console.warn('[config] NODE_ENV is unset — session cookies are not marked Secure and prod hardening is off. Set NODE_ENV=production in deployment.');
+  }
+}
+
 export async function bootSpine() {
+  validateBootConfig();
   ensureDir(WORKFLOWS_DB);
   const workflowStore = new WorkflowStore({ dbPath: WORKFLOWS_DB });
   await workflowStore.init();
@@ -621,6 +644,13 @@ export async function bootSpine() {
       body: JSON.stringify({ channel, text }),
     });
   });
+
+  // Reconcile runs orphaned in 'running' by a prior crash/restart BEFORE the
+  // scheduler starts, so the inbox never shows a perma-running run.
+  try {
+    const reconciled = workflowStore.reconcileStuckRuns();
+    if (reconciled > 0) logEvent('boot.reconcile_stuck_runs', { count: reconciled });
+  } catch (err) { logEvent('boot.reconcile_stuck_runs.error', errFields(err)); }
 
   // Start the background tick loop (email polling + scheduled workflow execution).
   engine.workflowScheduler.start();
@@ -1486,6 +1516,20 @@ export function createApp(spine) {
   mountConsoleRoutes(app, { spine, requireActiveTenant });
   mountAdminRoutes(app, { spine, requireAuth, requirePlatformAdmin, optionalAuth });
 
+  // Global error handler — last middleware. Catches anything a route's try/catch
+  // missed (including synchronous throws in handlers) so an unhandled error
+  // returns a sanitized 500 instead of hanging the socket. The full error goes to
+  // the log only — never leak internals to the client.
+  app.use((err, req, res, _next) => {
+    logEvent('http.unhandled_error', {
+      method: req.method, path: req.path,
+      tenant: req.tenant?.id ?? null, user: req.user?.id ?? null,
+      ...errFields(err),
+    });
+    if (res.headersSent) return; // response already streaming (e.g. SSE) — can't change status
+    res.status(500).json({ error: 'Internal server error' });
+  });
+
   return app;
 }
 
@@ -1508,6 +1552,22 @@ export async function start() {
   };
   process.on('SIGINT', () => shutdown('SIGINT'));
   process.on('SIGTERM', () => shutdown('SIGTERM'));
+
+  // Never die silently. An unhandledRejection is logged but non-fatal — one stray
+  // promise shouldn't take the whole server down. An uncaughtException leaves the
+  // process in an undefined state, so we log, then exit non-zero; a process manager
+  // restarts us and boot reconciliation cleans up any interrupted run.
+  process.on('unhandledRejection', (reason) => {
+    const err = reason instanceof Error ? reason : new Error(String(reason));
+    logEvent('process.unhandledRejection', errFields(err));
+    console.error('unhandledRejection:', reason);
+  });
+  process.on('uncaughtException', (err) => {
+    logEvent('process.uncaughtException', errFields(err));
+    console.error('uncaughtException:', err);
+    try { server.close(() => process.exit(1)); } catch { process.exit(1); }
+    setTimeout(() => process.exit(1), 3000).unref(); // backstop if close hangs
+  });
 
   return { server, spine };
 }

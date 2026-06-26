@@ -632,14 +632,19 @@ export class WorkflowStore {
     const userId = parent?.user_id ?? null;
     const tenantId = parent?.tenant_id ?? 'default';
 
-    this.db.prepare(`
-      INSERT INTO workflow_runs (id, workflow_id, user_id, tenant_id, started_at, status, is_test) VALUES (?, ?, ?, ?, ?, 'running', ?)
-    `).run(id, workflowId, userId, tenantId, now, isTest ? 1 : 0);
+    // Atomic: the run row and the workflow's last_run marker must commit together.
+    // If a crash landed between them, the scheduler could re-fire the workflow
+    // (run inserted but last_run not advanced) — a duplicate-execution hazard.
+    this.db.transaction(() => {
+      this.db.prepare(`
+        INSERT INTO workflow_runs (id, workflow_id, user_id, tenant_id, started_at, status, is_test) VALUES (?, ?, ?, ?, ?, 'running', ?)
+      `).run(id, workflowId, userId, tenantId, now, isTest ? 1 : 0);
 
-    // Update last_run on the workflow only for non-test runs
-    if (!isTest) {
-      this.db.prepare('UPDATE workflows SET last_run = ?, updated_at = ? WHERE id = ?').run(now, now, workflowId);
-    }
+      // Update last_run on the workflow only for non-test runs
+      if (!isTest) {
+        this.db.prepare('UPDATE workflows SET last_run = ?, updated_at = ? WHERE id = ?').run(now, now, workflowId);
+      }
+    })();
 
     return { id, workflow_id: workflowId, user_id: userId, started_at: now, status: 'running', output: null, error: null, is_test: isTest };
   }
@@ -700,6 +705,25 @@ export class WorkflowStore {
     }
     vals.push(runId);
     this.db.prepare(`UPDATE workflow_runs SET ${sets.join(', ')} WHERE id = ?`).run(...vals);
+  }
+
+  /**
+   * Mark runs left in 'running' by a previous process (crash/restart) as errored.
+   * Called once at boot, before the scheduler starts. A run is only ever 'running'
+   * while a process is actively executing it; a clean finish reaches success/error.
+   * Any 'running' row still present at boot is therefore orphaned — left forever
+   * "running" in the inbox otherwise. Returns the number of runs reconciled.
+   */
+  reconcileStuckRuns() {
+    const now = new Date().toISOString();
+    const info = this.db.prepare(
+      `UPDATE workflow_runs
+          SET status = 'error',
+              error = COALESCE(NULLIF(error, ''), 'Interrupted by a server restart'),
+              completed_at = ?
+        WHERE status = 'running'`
+    ).run(now);
+    return info.changes ?? 0;
   }
 
   /**
