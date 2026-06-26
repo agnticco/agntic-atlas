@@ -1909,7 +1909,17 @@ class Component extends DCLogic {
   }
 
   _withParts(item) {
-    if (!item || item.text == null) return item;
+    if (!item) return item;
+    // Reattach action handlers for serializable CTAs. onClick is a function and is
+    // lost when msgs are persisted to localStorage and restored, so the handler is
+    // rebuilt here from durable fields rather than trusted to survive. The btn-text
+    // match also recovers legacy persisted "Build it" CTAs saved before ctaAction
+    // existed (their buildIntent is gone, so startBuild reconstructs it).
+    if (item.isCta && !item.onClick && (item.ctaAction === "build" || /build/i.test(item.btn || ""))) {
+      const self = this, bi = item.buildIntent;
+      item = Object.assign({}, item, { onClick: () => self.startBuild(bi) });
+    }
+    if (item.text == null) return item;
     const parts = this._parseMentions(item.text);
     const result = Object.assign({}, item, { parts });
     if ((result.isAtlas || result.isGreeting) && window.marked) {
@@ -2474,6 +2484,11 @@ class Component extends DCLogic {
   // restore it on sign-in. Published workflows still live server-side; the full
   // server-backed workflow list is P5 (inventory).
   _buildKey(tid, email) { return "atlas_build_v1:" + (tid != null ? tid : (this.state.tenantId || "")) + ":" + (email != null ? email : (this.state.userEmail || "")); }
+  // Per-workflow conversation slot. The single _buildKey slot only holds the LAST
+  // active build, so starting a second workflow overwrites the first's transcript —
+  // then clicking that draft shows an empty conversation. Dual-writing each build
+  // under its workflowId keeps every in-progress draft independently recoverable.
+  _buildKeyWf(wfId) { return "atlas_build_wf_v1:" + (this.state.tenantId || "") + ":" + (this.state.userEmail || "") + ":" + wfId; }
   // Persist "chat"/"building" only when the builder view is active (those phases survive navigation).
   // "proposed"/"draft"/"published" are build-view-only by construction.
   _persistable(s) {
@@ -2487,11 +2502,17 @@ class Component extends DCLogic {
     if (!S.authToken) return; // not signed in yet
     try {
       if (!this._persistable(S)) { localStorage.removeItem(this._buildKey()); this._lastBuildStr = ""; return; }
-      // Strip non-serializable function handlers from signal-line steps so they survive JSON round-trip.
-      // On restore, steps are marked inactive so no dead action buttons appear.
+      // Strip non-serializable function handlers from interactive messages so they
+      // survive the JSON round-trip without leaving dead controls on restore. A
+      // converger session does not survive a reload (threadId is nulled), so its
+      // controls must not render as clickable afterward.
+      //   - signal-line steps: marked inactive (no dead action buttons)
+      //   - clarify chips: dropped (the quick-reply onPick can't fire post-reload;
+      //     the question text remains as a normal message for context)
       const cleanMsgs = (S.msgs || []).map(m => {
-        if (!m.isSignalLine) return m;
-        return { ...m, complete: true, steps: (m.steps || []).map(s => ({ ...s, isActive: false, actionsVisible: false })) };
+        if (m.isSignalLine) return { ...m, complete: true, steps: (m.steps || []).map(s => ({ ...s, isActive: false, actionsVisible: false })) };
+        if (m.isClarify)    return { ...m, chips: [] };
+        return m;
       });
       const F = ["view","phase","intent","threadId","inputMode","spec","testState","runSteps","failIndex","deliveries","runOutput","runError","workflowId"];
       const slice = {}; F.forEach(k => { slice[k] = S[k]; });
@@ -2500,6 +2521,9 @@ class Component extends DCLogic {
       if (str === this._lastBuildStr) return;
       this._lastBuildStr = str;
       localStorage.setItem(this._buildKey(), str);
+      // Also persist under this workflow's own key so a different draft's
+      // conversation survives starting another build (recovered in openConsole).
+      if (S.workflowId) { try { localStorage.setItem(this._buildKeyWf(S.workflowId), str); } catch (e2) { /* quota */ } }
     } catch (e) { /* quota / private mode — non-fatal */ }
   }
   _restoreBuild(tid, email) {
@@ -2509,13 +2533,18 @@ class Component extends DCLogic {
       const slice = JSON.parse(raw);
       if (!this._persistable(slice)) return;
       this._lastBuildStr = raw;
-      // Drop transient flags. For mid-conversation restores, unlock input and reset to chat so
-      // the user can type freely (converger sessions don't survive a page reload).
-      const overrides = { view: 'build', thinking: false, inputValue: "", mentionOpen: false, mentionQuery: "", mentionAt: -1, connectionsOpen: false, accountOpen: false, profileOpen: false, newStateExiting: false };
-      if (slice.inputMode === 'locked') overrides.inputMode = 'chat';
-      if (slice.phase === 'building') { overrides.phase = 'chat'; overrides.threadId = null; }
-      this.setState(Object.assign({}, slice, overrides));
+      this._applyBuildSlice(slice);
     } catch (e) { /* corrupt / unavailable — ignore */ }
+  }
+  // Apply a persisted build slice into state with the right transient overrides.
+  // Shared by boot restore (_restoreBuild) and resuming a draft (openConsole).
+  // Converger sessions don't survive a reload, so a mid-conversation slice is
+  // unlocked and dropped back to chat; threadId is cleared.
+  _applyBuildSlice(slice, extra) {
+    const overrides = Object.assign({ view: 'build', thinking: false, inputValue: "", mentionOpen: false, mentionQuery: "", mentionAt: -1, connectionsOpen: false, accountOpen: false, profileOpen: false, newStateExiting: false }, extra || {});
+    if (slice.inputMode === 'locked') overrides.inputMode = 'chat';
+    if (slice.phase === 'building') { overrides.phase = 'chat'; overrides.threadId = null; }
+    this.setState(Object.assign({}, slice, overrides));
   }
   _clearBuild() { this._lastBuildStr = ""; try { localStorage.removeItem(this._buildKey()); } catch (e) {} }
 
@@ -2781,6 +2810,14 @@ class Component extends DCLogic {
     // Draft with no nodes → resume in builder instead of opening an empty console
     var wf = (this.state.consoleSidebarWfs || []).find(function(w) { return w.id === wfId; });
     if (wf && wf.status === 'draft' && !(wf.nodes && wf.nodes.length)) {
+      // Recover this draft's conversation from its own slot. Without this, the
+      // transcript blanks whenever another build overwrote the single legacy slot.
+      var slice = null;
+      try { var raw = localStorage.getItem(this._buildKeyWf(wf.id)); if (raw) slice = JSON.parse(raw); } catch (e) { slice = null; }
+      if (slice && this._persistable(slice) && ((slice.msgs && slice.msgs.length) || slice.spec)) {
+        this._applyBuildSlice(slice, { workflowId: wf.id, isDraftBuild: true, isEditing: false, editingIntro: null, testState: "idle", runSteps: [], runStepIndex: 0, failIndex: -1, deliveries: [], runOutput: null, runError: "" });
+        return;
+      }
       this.setState({
         view: 'build', connectionsOpen: false, accountOpen: false, profileOpen: false,
         workflowId: wf.id, isDraftBuild: true,
@@ -3216,7 +3253,15 @@ class Component extends DCLogic {
               ? [...curMsgs.slice(0, -1), (({ isStreaming, ...rest }) => rest)(last)]
               : [...curMsgs];
             if (twDone.readyToBuild && twDone.buildIntent) {
-              newMsgs.push({ isCta: true, text: "", btn: "Build it →", btnBg: "#7fc28a", btnFg: "#06210d", onClick: () => self.startBuild(twDone.buildIntent) });
+              // Store the intent as a serializable field (ctaAction + buildIntent),
+              // NOT only as an onClick closure. Two reasons: (1) twDone is nulled
+              // below and a closure over it would throw on click; (2) onClick is a
+              // function and is dropped by JSON.stringify when the conversation is
+              // persisted to localStorage — a restored "Build it" button would have
+              // no handler. _withParts() reattaches onClick from these fields at
+              // render time, so the button works both freshly and after a refresh.
+              const buildIntent = twDone.buildIntent;
+              newMsgs.push({ isCta: true, ctaAction: "build", buildIntent, text: "", btn: "Build it →", btnBg: "#7fc28a", btnFg: "#06210d", onClick: () => self.startBuild(buildIntent) });
             }
             self.setState({ msgs: newMsgs, thinking: false, thinkingLabel: null });
             twDone = null;
@@ -3274,6 +3319,9 @@ class Component extends DCLogic {
   // chat thread; the converger's proposals append below it.
   startBuild(intent) {
     if (this.state.phase !== "chat") return;
+    // Fallback: a restored legacy CTA may have lost its stored intent. Reconstruct
+    // from the conversation so the button is never a dead end.
+    if (!intent || !String(intent).trim()) intent = this._deriveBuildIntent();
     this._slId = null; this._slPendingReplace = false; this._slStepCount = 0;
     const self = this;
     this.setState({
@@ -3285,6 +3333,14 @@ class Component extends DCLogic {
       .then(r => this._readJson(r))
       .then(r => { if (!r.ok) return self._apiError(r.data.error); self.setState({ threadId: r.data.threadId }); self._handleInterrupt(r.data.interrupt); })
       .catch(e => self._apiError(String(e)));
+  }
+
+  // Reconstruct a build intent from the conversation when none was stored
+  // (legacy persisted CTA). Joins the user's own messages — a faithful summary
+  // of what they asked for; the converger refines it through elicitation anyway.
+  _deriveBuildIntent() {
+    const ops = (this.state.msgs || []).filter(m => m.isOperator && m.text).map(m => m.text.trim()).filter(Boolean);
+    return ops.length ? ops.join("\n") : "Build the workflow we just discussed.";
   }
 
   _send(resp) {
