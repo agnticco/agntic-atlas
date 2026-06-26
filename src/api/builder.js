@@ -339,7 +339,9 @@ function makeChatToolExecutor(spine, req, sessionId) {
   };
 }
 
-export function mountBuilderRoutes(app, { spine, requireActiveTenant, requireAuth, readSources }) {
+export function mountBuilderRoutes(app, { spine, requireActiveTenant, requireAuth, readSources, tenantGuard }) {
+  // No-op guard when not supplied (keeps the builder mountable in isolation/tests).
+  const guard = tenantGuard ?? ((_req, _res, next) => next());
 
   // ── GET /api/builder/me ──────────────────────────────────────────────────────
   app.get('/api/builder/me', requireAuth, (req, res) => {
@@ -396,7 +398,7 @@ Rules:
   // Body:    { messages: [{ role:'user'|'assistant', content }] }
   // Returns: SSE stream of events: {type:'tool',name} | {type:'reply',reply,readyToBuild,buildIntent}
   // SSE keeps bytes flowing to Cloudflare Tunnel so long tool-use turns don't 524.
-  app.post('/api/builder/chat', requireActiveTenant, async (req, res) => {
+  app.post('/api/builder/chat', requireActiveTenant, guard, async (req, res) => {
     const { messages } = req.body ?? {};
     if (!Array.isArray(messages) || !messages.length) {
       return res.status(400).json({ error: 'messages[] is required' });

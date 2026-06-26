@@ -73,6 +73,7 @@ import { registerInboxCapability, INBOX_CAPABILITY_IDS } from '../inbox/index.js
 import { registerFilesystemCapabilities, FILESYSTEM_CAPABILITY_IDS } from '../connectors/filesystem.js';
 import { registerWebCapabilities, webConnectionStatus, WEB_CAPABILITY_IDS } from '../connectors/web/index.js';
 import { mountBuilderRoutes } from './builder.js';
+import { createTenantGuard } from './tenant-guard.js';
 import { mountConsoleRoutes } from './console.js';
 import { mountAdminRoutes } from '../admin/server.js';
 import { logEvent, errFields } from '../utils/event-log.js';
@@ -773,6 +774,10 @@ export function createApp(spine) {
     next();
   }];
 
+  // Per-tenant abuse/cost guard for expensive LLM endpoints (Cloudflare is per-IP,
+  // not per-tenant). Applied to /workflows/run here and /api/builder/chat below.
+  const tenantGuard = createTenantGuard({ workflowStore: spine.engine.workflowStore });
+
   // ── First-run setup (creates the platform admin) ──────────────────────────
   app.get('/setup/status', (_req, res) => {
     res.json({ required: spine.auth.userStore.countForTenant(spine.auth.platformTenantId) === 0 });
@@ -1287,7 +1292,7 @@ export function createApp(spine) {
 
   // Run a hand-authored spec through the engine — the "click run" path (no UI yet).
   // Body: { spec } where spec is the proprietary { name, nodes[], edges[], … } shape.
-  app.post('/workflows/run', optionalAuth, async (req, res) => {
+  app.post('/workflows/run', optionalAuth, tenantGuard, async (req, res) => {
     let spec = req.body?.spec;
     if (!spec || !Array.isArray(spec.nodes)) {
       return res.status(400).json({ error: 'body.spec with a nodes[] array is required' });
@@ -1512,7 +1517,7 @@ export function createApp(spine) {
     dispatchAirtableEvent(spine, body).catch((err) => logEvent('airtable.event.error', errFields(err)));
   });
 
-  mountBuilderRoutes(app, { spine, requireActiveTenant, requireAuth, readSources });
+  mountBuilderRoutes(app, { spine, requireActiveTenant, requireAuth, readSources, tenantGuard });
   mountConsoleRoutes(app, { spine, requireActiveTenant });
   mountAdminRoutes(app, { spine, requireAuth, requirePlatformAdmin, optionalAuth });
 
