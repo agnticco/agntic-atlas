@@ -77,8 +77,15 @@ import { createTenantGuard } from './tenant-guard.js';
 import { mountConsoleRoutes } from './console.js';
 import { mountAdminRoutes } from '../admin/server.js';
 import { logEvent, errFields } from '../utils/event-log.js';
+import { boolEnv } from '../utils/env.js';
 
 const PORT = Number(process.env.PORT ?? 3000);
+// Cookies are Secure by default (the app runs behind Cloudflare HTTPS); only a
+// local non-dev http context needs them off. Default: secure unless NODE_ENV is
+// explicitly 'development'. COOKIE_SECURE=0/1 overrides. The old behavior keyed
+// on NODE_ENV==='production', which silently shipped insecure cookies whenever
+// NODE_ENV was unset (the common case here).
+const SECURE_COOKIES = boolEnv('COOKIE_SECURE', process.env.NODE_ENV !== 'development');
 const WORKFLOWS_DB = process.env.WORKFLOWS_DB ?? './memory/workflows/workflows.sqlite';
 const SOURCES_DB   = process.env.SOURCES_DB   ?? './memory/workflows/sources.sqlite';
 // Base directory for per-tenant RAG stores: VECTOR_DIR/<tenantId>/company.sqlite.
@@ -124,7 +131,7 @@ function setSessionCookie(res, token) {
     httpOnly: true,
     sameSite: 'lax',
     path: '/',
-    secure: process.env.NODE_ENV === 'production',
+    secure: SECURE_COOKIES,
     maxAge: 30 * 24 * 60 * 60 * 1000, // 30d, matches the bearer-session TTL
   });
 }
@@ -720,7 +727,39 @@ export async function bootSpine() {
  */
 export function createApp(spine) {
   const app = express();
-  app.use(cors());
+
+  // CORS allowlist (defense-in-depth; Cloudflare fronts the real edge). The SPA is
+  // same-origin so it isn't subject to CORS anyway; this only bounds cross-origin
+  // browser callers. No-Origin requests (curl, server-to-server webhooks, top-level
+  // navigations) are always allowed. Configure CORS_ALLOWED_ORIGINS (comma list);
+  // default derives from OAUTH_REDIRECT_BASE + localhost.
+  const corsOrigins = (process.env.CORS_ALLOWED_ORIGINS || '')
+    .split(',').map((s) => s.trim()).filter(Boolean);
+  if (!corsOrigins.length) {
+    if (process.env.OAUTH_REDIRECT_BASE) {
+      try { corsOrigins.push(new URL(process.env.OAUTH_REDIRECT_BASE).origin); } catch { /* ignore */ }
+    }
+    corsOrigins.push(`http://localhost:${PORT}`, `http://127.0.0.1:${PORT}`);
+  }
+  app.use(cors({
+    origin(origin, cb) {
+      if (!origin) return cb(null, true);                  // non-browser / same-origin nav
+      return cb(null, corsOrigins.includes(origin));        // cross-origin: allowlist only
+    },
+    credentials: true,
+  }));
+
+  // Security headers (defense-in-depth behind Cloudflare). No CSP yet — the SPA
+  // relies on inline scripts/styles, so a meaningful CSP needs a UI refactor first.
+  app.use((_req, res, next) => {
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('X-Frame-Options', 'SAMEORIGIN');
+    res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+    res.setHeader('X-XSS-Protection', '0'); // disable legacy auditor (modern best practice)
+    if (SECURE_COOKIES) res.setHeader('Strict-Transport-Security', 'max-age=15552000; includeSubDomains');
+    next();
+  });
+
   app.use(cookieParser());
   // Capture the raw body so connector webhooks (e.g. Slack Events) can verify
   // request signatures over the exact bytes Slack signed.

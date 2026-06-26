@@ -19,10 +19,11 @@
  */
 
 import { logEvent } from '../utils/event-log.js';
+import { numEnv } from '../utils/env.js';
 
 export function createTenantGuard({ workflowStore }) {
-  const DAILY_USD       = Number(process.env.TENANT_DAILY_USD_LIMIT ?? 25);
-  const MAX_CONCURRENT  = Number(process.env.TENANT_MAX_CONCURRENT ?? 6);
+  const DAILY_USD       = numEnv('TENANT_DAILY_USD_LIMIT', 25);
+  const MAX_CONCURRENT  = numEnv('TENANT_MAX_CONCURRENT', 6);
   const inflight = new Map(); // tenantId -> in-flight count
 
   return function tenantGuard(req, res, next) {
