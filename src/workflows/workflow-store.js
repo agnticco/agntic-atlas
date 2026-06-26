@@ -727,6 +727,18 @@ export class WorkflowStore {
   }
 
   /**
+   * Sum a tenant's recorded LLM cost (USD) since an ISO timestamp. Powers the
+   * per-tenant daily spend guard. Reads llm_cost_log, so it covers every surface
+   * — chat, converger, workflow execution, web search.
+   */
+  tenantSpendSince(tenantId, isoTs) {
+    const row = this.db.prepare(
+      `SELECT COALESCE(SUM(cost_usd), 0) AS spent FROM llm_cost_log WHERE tenant_id = ? AND ts >= ?`
+    ).get(tenantId, isoTs);
+    return row?.spent ?? 0;
+  }
+
+  /**
    * Persist one LLM call record. Called by the CostTracker write-through store
    * on every ModelPool._trackUsage() — covers all surfaces: converger, workflow
    * nodes, web search, etc.
