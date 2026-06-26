@@ -48,6 +48,13 @@ export class ChatModel extends Runnable {
     this.temperature = options.temperature ?? 0.7;
     this.maxTokens   = options.maxTokens   ?? 8192;
     this.verbose     = options.verbose     ?? false;
+    // Resilience: both SDKs retry transient failures (408/409/429/5xx + connection
+    // errors) with exponential backoff and honor Retry-After. Defaults are only 2;
+    // bump to 4 for sustained 429/529 (overloaded) during provider incidents. A
+    // per-request timeout aborts a hung connection so the SDK's own retry can fire.
+    // Env-overridable so ops can tune without a code change.
+    this.maxRetries       = options.maxRetries       ?? Number(process.env.LLM_MAX_RETRIES ?? 4);
+    this.requestTimeoutMs = options.requestTimeoutMs ?? Number(process.env.LLM_TIMEOUT_MS ?? 120000);
 
     this._client = null;
   }
@@ -59,10 +66,10 @@ export class ChatModel extends Runnable {
 
     if (this.provider === 'anthropic') {
       const { default: Anthropic } = await import('@anthropic-ai/sdk');
-      this._client = new Anthropic({ apiKey: this.apiKey });
+      this._client = new Anthropic({ apiKey: this.apiKey, maxRetries: this.maxRetries, timeout: this.requestTimeoutMs });
     } else if (this.provider === 'openai') {
       const { default: OpenAI } = await import('openai');
-      this._client = new OpenAI({ apiKey: this.apiKey });
+      this._client = new OpenAI({ apiKey: this.apiKey, maxRetries: this.maxRetries, timeout: this.requestTimeoutMs });
     } else {
       throw new Error(`Unknown provider: ${this.provider}. Use "openai" or "anthropic".`);
     }
