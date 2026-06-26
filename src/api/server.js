@@ -16,7 +16,7 @@
  * in the phases that need them — grow as needed, do not bulk-port the salvage server.
  */
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync, copyFileSync, readdirSync, rmSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { dirname, resolve, join } from 'node:path';
 import { createHmac, timingSafeEqual } from 'node:crypto';
@@ -77,9 +77,10 @@ import { createTenantGuard } from './tenant-guard.js';
 import { mountConsoleRoutes } from './console.js';
 import { mountAdminRoutes } from '../admin/server.js';
 import { logEvent, errFields } from '../utils/event-log.js';
-import { boolEnv } from '../utils/env.js';
+import { boolEnv, numEnv } from '../utils/env.js';
+import { FileCheckpointer } from '../graph/checkpointer/index.js';
 
-const PORT = Number(process.env.PORT ?? 3000);
+const PORT = numEnv('PORT', 3000);
 // Cookies are Secure by default (the app runs behind Cloudflare HTTPS); only a
 // local non-dev http context needs them off. Default: secure unless NODE_ENV is
 // explicitly 'development'. COOKIE_SECURE=0/1 overrides. The old behavior keyed
@@ -538,12 +539,47 @@ function validateBootConfig() {
     console.warn('[config] OAUTH_REDIRECT_BASE is unset — connector OAuth redirects default to localhost; set it for any non-local deployment.');
   }
   if (!process.env.NODE_ENV) {
-    console.warn('[config] NODE_ENV is unset — session cookies are not marked Secure and prod hardening is off. Set NODE_ENV=production in deployment.');
+    console.warn('[config] NODE_ENV is unset — defaulting to production-safe behavior (Secure cookies on). Set it explicitly: `npm run prod` for deployment, or NODE_ENV=development for local http.');
   }
+}
+
+/**
+ * Snapshot the SQLite databases at boot so a bad deploy/migration is recoverable.
+ * App-side only — off-host/scheduled backups belong in the VPS runbook. Keeps the
+ * last DB_BACKUP_KEEP snapshots under ./memory/backups/<timestamp>/. WAL/SHM
+ * siblings are copied too so a snapshot taken after a crash (uncheckpointed WAL)
+ * stays consistent. Best-effort: never blocks boot.
+ */
+function backupDatabases() {
+  const KEEP = numEnv('DB_BACKUP_KEEP', 7);
+  if (KEEP <= 0) return;
+  const dbs  = [WORKFLOWS_DB, SOURCES_DB, INTERACTIONS_DB, INBOX_DB, AUTH_DB, OAUTH_DB];
+  const root = './memory/backups';
+  const dest = join(root, new Date().toISOString().replace(/[:.]/g, '-'));
+  try {
+    let copied = 0;
+    for (const db of dbs) {
+      for (const suffix of ['', '-wal', '-shm']) {
+        const src = db + suffix;
+        if (!existsSync(src)) continue;
+        if (!copied) mkdirSync(dest, { recursive: true });
+        copyFileSync(src, join(dest, src.split('/').pop()));
+        copied++;
+      }
+    }
+    if (!copied) return;
+    // Prune old snapshots beyond KEEP (ISO-stamp names sort chronologically).
+    const snaps = readdirSync(root).filter((n) => /^\d{4}-\d{2}-\d{2}T/.test(n)).sort();
+    for (const old of snaps.slice(0, Math.max(0, snaps.length - KEEP))) {
+      try { rmSync(join(root, old), { recursive: true, force: true }); } catch { /* ignore */ }
+    }
+    logEvent('boot.db_backup', { dest, files: copied });
+  } catch (err) { logEvent('boot.db_backup.error', errFields(err)); }
 }
 
 export async function bootSpine() {
   validateBootConfig();
+  backupDatabases();
   ensureDir(WORKFLOWS_DB);
   const workflowStore = new WorkflowStore({ dbPath: WORKFLOWS_DB });
   await workflowStore.init();
@@ -660,6 +696,14 @@ export async function bootSpine() {
     if (reconciled > 0) logEvent('boot.reconcile_stuck_runs', { count: reconciled });
   } catch (err) { logEvent('boot.reconcile_stuck_runs.error', errFields(err)); }
 
+  // Sweep abandoned converger checkpoint files (sessions never approved/abandoned),
+  // which otherwise accumulate forever. Default 7-day TTL, env-tunable.
+  try {
+    const ttlMs = numEnv('CONVERGER_TTL_DAYS', 7) * 24 * 60 * 60 * 1000;
+    const swept = await new FileCheckpointer({ dir: './memory/converger' }).sweep(ttlMs);
+    if (swept > 0) logEvent('boot.converger_sweep', { removed: swept });
+  } catch (err) { logEvent('boot.converger_sweep.error', errFields(err)); }
+
   // Start the background tick loop (email polling + scheduled workflow execution).
   engine.workflowScheduler.start();
 
@@ -712,6 +756,10 @@ export async function bootSpine() {
     },
     close() {
       try { engine.workflowScheduler.stop?.(); } catch { /* ignore */ }
+      // Truncate the WAL into the main DB file on clean shutdown so the on-disk
+      // file is self-contained (also what a subsequent backup-on-boot snapshots).
+      // db.close() checkpoints too, but doing it explicitly first is belt-and-suspenders.
+      try { workflowStore.db?.pragma?.('wal_checkpoint(TRUNCATE)'); } catch { /* ignore */ }
       try { workflowStore.close?.(); } catch { /* ignore */ }
       try { rag.close?.(); } catch { /* ignore */ }
       try { ragInbox.close?.(); } catch { /* ignore */ }
@@ -772,9 +820,15 @@ export function createApp(spine) {
   // 'finish' fires. Static asset noise is skipped.
   app.use((req, res, next) => {
     const t0 = Date.now();
+    // Correlation id: one per request, echoed as a header so a client/log line can
+    // be tied back to every server log entry for that request. Honor an inbound
+    // X-Request-Id (e.g. from Cloudflare) when present.
+    req.id = req.headers['x-request-id'] || randomUUID();
+    res.setHeader('X-Request-Id', req.id);
     res.on('finish', () => {
       if (req.path.startsWith('/assets/') || req.path === '/favicon.ico') return;
       logEvent('http', {
+        reqId: req.id,
         method: req.method, path: req.path, status: res.statusCode, ms: Date.now() - t0,
         tenant: req.tenant?.id ?? null, user: req.user?.id ?? null,
       });
@@ -1566,6 +1620,7 @@ export function createApp(spine) {
   // the log only — never leak internals to the client.
   app.use((err, req, res, _next) => {
     logEvent('http.unhandled_error', {
+      reqId: req.id,
       method: req.method, path: req.path,
       tenant: req.tenant?.id ?? null, user: req.user?.id ?? null,
       ...errFields(err),
@@ -1590,9 +1645,24 @@ export async function start() {
     console.log(`atlas spine listening on :${PORT} (engine ok, auth ok, llm ${llmState}, rag ${spine.rag.provider})`);
   });
 
+  let shuttingDown = false;
   const shutdown = (signal) => {
-    console.log(`\n${signal} — shutting down`);
-    server.close(async () => { await spine.disposeModels(); spine.close(); process.exit(0); });
+    if (shuttingDown) return;
+    shuttingDown = true;
+    console.log(`\n${signal} — draining`);
+    // Stop starting new scheduled runs immediately, then stop accepting new
+    // connections and let in-flight requests finish before disposing + exiting.
+    try { spine.engine.workflowScheduler.stop?.(); } catch { /* ignore */ }
+    server.close(async () => {
+      try { await spine.disposeModels(); } catch { /* ignore */ }
+      try { spine.close(); } catch { /* ignore */ }
+      process.exit(0);
+    });
+    // Nudge idle keep-alives so server.close can resolve; active requests still finish.
+    try { server.closeIdleConnections?.(); } catch { /* ignore */ }
+    // Backstop: if connections (e.g. a long SSE stream) don't drain in time, force exit.
+    const graceMs = numEnv('SHUTDOWN_GRACE_MS', 10000);
+    setTimeout(() => { console.error('drain timeout — forcing exit'); process.exit(1); }, graceMs).unref();
   };
   process.on('SIGINT', () => shutdown('SIGINT'));
   process.on('SIGTERM', () => shutdown('SIGTERM'));
