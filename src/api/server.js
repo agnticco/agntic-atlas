@@ -705,7 +705,16 @@ export async function bootSpine() {
   } catch (err) { logEvent('boot.converger_sweep.error', errFields(err)); }
 
   // Start the background tick loop (email polling + scheduled workflow execution).
-  engine.workflowScheduler.start();
+  // Single-owner seam for horizontal scale-out: the scheduler MUST run on exactly
+  // one instance or scheduled workflows double-fire. On the current single-VPS
+  // deployment this is always on; when scaling out, set SCHEDULER_ENABLED=false on
+  // every instance except one. See docs/architecture/scaling.md.
+  if (boolEnv('SCHEDULER_ENABLED', true)) {
+    engine.workflowScheduler.start();
+  } else {
+    logEvent('scheduler.disabled', { reason: 'SCHEDULER_ENABLED=false' });
+    console.warn('[scheduler] disabled (SCHEDULER_ENABLED=false) — scheduled workflows + email polling will not run on this instance.');
+  }
 
   // Per-user inbox — delivery destination + dedicated inbox RAG store.
   // inbox.sqlite is SEPARATE from company.sqlite so inbox artifacts are
