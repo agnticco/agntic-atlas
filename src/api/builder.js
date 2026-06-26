@@ -205,11 +205,6 @@ function buildChatSystem(connectorLines = [], user = null) {
 
   return `You are Atlas, a warm assistant for non-technical business operators. You help people automate repetitive work — but you are also happy to just chat, answer questions, or think an idea through.${userBlock}
 
-OUTPUT FORMAT — you MUST respond with valid JSON every time, no exceptions, no markdown fences:
-{"reply":"<your message to the user>","ready_to_build":false,"build_intent":null}
-
-The "reply" field is your natural conversational response. Everything you want to say goes there. Nothing goes outside the JSON.
-
 BEHAVIOR:
 - Tone: natural, concise, friendly — like a helpful colleague. Match the user's register.
 - Small talk and general questions: answer them normally inside "reply".
@@ -219,8 +214,12 @@ BEHAVIOR:
 - ready_to_build stays false until the user clearly signals they want to build (e.g. "let's do it", "set it up", "yes, build it", "go ahead"). At that point set ready_to_build:true and write build_intent: one clear paragraph covering trigger + steps + destination, folding in everything discussed.
 - If they seem close but haven't confirmed, gently offer ("Want me to set this up?") but keep ready_to_build:false.
 
-DIRECT ACTIONS — you have tools for each connected service. When the user asks you to DO something now (e.g. "send an email to...", "create a folder called...", "search my calendar", "look up that Airtable record"), use the appropriate tool immediately — do not ask them to confirm, just act. After the tool completes, report what happened in your reply field in the normal JSON format. Do NOT use tools speculatively or when the user is just exploring — only when they explicitly ask you to perform an action.
-${connectorBlock}`;
+DIRECT ACTIONS — you have tools for each connected service. When the user asks you to DO something now (e.g. "send an email", "search my calendar", "DM me"), use the appropriate tool immediately — do not ask them to confirm, just act. After the tool completes, report what happened in your reply field in the JSON format below. Do NOT use tools speculatively or when the user is just exploring — only when they explicitly ask you to perform an action.
+${connectorBlock}
+
+OUTPUT FORMAT — every response MUST be valid JSON, no exceptions, no markdown fences:
+{"reply":"<your message to the user>","ready_to_build":false,"build_intent":null}
+Everything you want to say goes in "reply". Nothing goes outside the JSON object.`;
 }
 
 // Tolerant JSON extraction: strip code fences, else grab the first {...} block.
@@ -303,6 +302,33 @@ async function introMessage(spine, intent, sessionId) {
     const text = (typeof res === 'string' ? res : res?.content ?? '').trim();
     return text || null;
   } catch { return null; }
+}
+
+// Execute a batch of tool calls and append ToolMessage results to msgArray.
+// Used by both the clean tool round and the mid-stream text+tool case.
+// Delivery capabilities have body/title in configSchema (the LLM fills them);
+// we pass them as named params so handlers can read from either config or params.
+function makeChatToolExecutor(spine, req) {
+  return async function executeChatTools(toolCalls, msgArray) {
+    await Promise.all(toolCalls.map(async (tc) => {
+      let resultStr;
+      try {
+        const registry = spine.engine?.capabilityRegistry;
+        const handler  = registry?.getHandler(tc.name);
+        if (!handler) throw new Error(`Unknown tool: ${tc.name}`);
+        const cap    = registry.get(tc.name);
+        const config = { ...(tc.args ?? {}) };
+        await injectCapabilityCredentials(cap, config, { auth: spine.auth, tenant: req.tenant, user: req.user });
+        const result = await handler({ config, body: config.body ?? null, title: config.title ?? null });
+        resultStr = JSON.stringify(result ?? {});
+        logEvent('chat.tool.ok', { tenant: req.tenant?.id ?? null, tool: tc.name });
+      } catch (toolErr) {
+        resultStr = JSON.stringify({ error: toolErr.message ?? String(toolErr) });
+        logEvent('chat.tool.error', { tenant: req.tenant?.id ?? null, tool: tc.name, ...errFields(toolErr) });
+      }
+      msgArray.push(new ToolMessage(resultStr, tc.id));
+    }));
+  };
 }
 
 export function mountBuilderRoutes(app, { spine, requireActiveTenant, requireAuth, readSources }) {
@@ -491,6 +517,7 @@ Rules:
 
       const chatUser = { name: req.user.display_name || req.user.email, email: req.user.email };
       const chatTools = buildChatTools(spine.engine?.capabilityRegistry, connectedSet);
+      const executeChatTools = makeChatToolExecutor(spine, req);
       const invokeConfig = {
         configurable: { modelTier: 'balanced', sessionId: chatSessionId, costContext: 'chat' },
         ...(chatTools.length ? { tools: chatTools } : {}),
@@ -505,66 +532,129 @@ Rules:
         { role: 'system', content: buildChatSystem(connectorLines, chatUser) + ragBlock },
         ...history,
       ];
-      const MAX_TOOL_ROUNDS = 3;
-      let raw;
-      for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
-        raw = await withLLMRetry(() => llm.invoke(msgArray, invokeConfig));
-        const toolCalls = raw?.additionalKwargs?.toolCalls;
-        if (!Array.isArray(toolCalls) || !toolCalls.length) break;
-
-        // Append the assistant message preserving the raw Anthropic content array
-        // (required for Anthropic to accept the subsequent tool_result turn).
-        msgArray.push(new AIMessage(raw.content ?? '', raw.additionalKwargs ?? {}));
-
-        // Execute each tool call; emit an SSE event per tool so Cloudflare stays alive.
-        await Promise.all(toolCalls.map(async (tc) => {
-          sseWrite({ type: 'tool', name: tc.name });
-          let resultStr;
-          try {
-            const registry = spine.engine?.capabilityRegistry;
-            const handler  = registry?.getHandler(tc.name);
-            if (!handler) throw new Error(`Unknown tool: ${tc.name}`);
-            const cap    = registry.get(tc.name);
-            const config = { ...(tc.args ?? {}) };
-            await injectCapabilityCredentials(cap, config, { auth: spine.auth, tenant: req.tenant, user: req.user });
-            const result = await handler({ config, body: null });
-            resultStr = JSON.stringify(result ?? {});
-            logEvent('chat.tool.ok', { tenant: req.tenant?.id ?? null, tool: tc.name });
-          } catch (toolErr) {
-            resultStr = JSON.stringify({ error: toolErr.message ?? String(toolErr) });
-            logEvent('chat.tool.error', { tenant: req.tenant?.id ?? null, tool: tc.name, ...errFields(toolErr) });
-          }
-          msgArray.push(new ToolMessage(resultStr, tc.id));
-        }));
-      }
-
-      let text = (typeof raw === 'string' ? raw : raw?.content ?? '').trim();
-
-      // After tool use, the model often responds in plain prose rather than the required
-      // JSON envelope. If we used tools and the result isn't JSON, make one more call
-      // with an explicit reminder so the UI always gets the structured format.
-      const usedTools = msgArray.length > 2 + history.length; // > system + history
-      if (usedTools && text) {
-        let quickParsed = null;
-        try { quickParsed = JSON.parse(extractJsonLoose(text)); } catch { /* not json */ }
-        if (!quickParsed?.reply) {
-          msgArray.push(new AIMessage(text));
-          msgArray.push({ role: 'user', content: 'Summarize what you just did in one or two sentences and respond in the required JSON format: {"reply":"...","ready_to_build":false,"build_intent":null}' });
-          const remind = await withLLMRetry(() => llm.invoke(msgArray, { configurable: { modelTier: 'fast', sessionId: chatSessionId, costContext: 'chat.format' } }));
-          text = (typeof remind === 'string' ? remind : remind?.content ?? text).trim();
+      // When tools are in play Claude can drift from the JSON envelope and reply in prose.
+      // Reinforce the format contract on the last user message — the most salient
+      // position — so the model sees the constraint immediately before its turn.
+      if (chatTools.length && msgArray.length > 1) {
+        const last = msgArray[msgArray.length - 1];
+        if (last?.role === 'user' && typeof last.content === 'string') {
+          msgArray[msgArray.length - 1] = {
+            ...last,
+            content: last.content + '\n\n[Format: whether or not you call a tool, your text response must be exactly: {"reply":"<your message>","ready_to_build":false,"build_intent":null}]',
+          };
         }
       }
+      // Streaming state machine: extracts the "reply" field value from the JSON envelope
+      // character by character as tokens arrive, forwarding only the visible text.
+      // Falls back to raw text if the model omits the envelope (e.g. after tool use).
+      let extractState = 'searching'; // 'searching' | 'streaming' | 'done'
+      let searchBuf = '';
+      let replyBuf  = '';
+      let streamedText = '';
+      let escapeNext = false;
 
-      let parsed = null;
-      try { parsed = JSON.parse(extractJsonLoose(text)); } catch { /* fall through */ }
-      if (parsed && typeof parsed.reply === 'string') {
-        logEvent('chat.reply', { tenant: req.tenant?.id ?? null, turns: messages.length, readyToBuild: !!parsed.ready_to_build });
-        sseWrite({ type: 'reply', reply: parsed.reply, readyToBuild: !!parsed.ready_to_build, buildIntent: (typeof parsed.build_intent === 'string' && parsed.build_intent.trim()) ? parsed.build_intent.trim() : null });
-      } else {
-        // Model didn't return our JSON envelope — treat its text as a plain reply.
-        logEvent('chat.reply', { tenant: req.tenant?.id ?? null, turns: messages.length, parsed: false });
-        sseWrite({ type: 'reply', reply: text || "I'm here — what would you like to work on?", readyToBuild: false, buildIntent: null });
+      const processStreamChar = (ch) => {
+        if (escapeNext) {
+          const MAP = { '"': '"', '\\': '\\', '/': '/', n: '\n', r: '\r', t: '\t', b: '\b', f: '\f' };
+          replyBuf += MAP[ch] ?? ch;
+          escapeNext = false;
+        } else if (ch === '\\') {
+          escapeNext = true;
+        } else if (ch === '"') {
+          extractState = 'done';
+        } else {
+          replyBuf += ch;
+        }
+      };
+
+      const processToken = (t) => {
+        streamedText += t;
+        for (const ch of t) {
+          if (extractState === 'done') break;
+          if (extractState === 'searching') {
+            searchBuf += ch;
+            const m = searchBuf.match(/"reply"\s*:\s*"/);
+            if (m) {
+              extractState = 'streaming';
+              escapeNext = false;
+              const rest = searchBuf.slice(m.index + m[0].length);
+              searchBuf = '';
+              for (const rc of rest) processStreamChar(rc);
+            }
+          } else {
+            processStreamChar(ch);
+          }
+        }
+        if (replyBuf && !closed) { sseWrite({ type: 'chunk', text: replyBuf }); replyBuf = ''; }
+      };
+
+      // Tool-use + streaming loop.
+      // Anthropic tool-use turns yield NO intermediate text chunks — only a single
+      // final AIMessage with toolCalls. Text turns yield many small delta AIMessages.
+      // Peeking at the first gen.next() cleanly distinguishes the two cases.
+      const MAX_TOOL_ROUNDS = 3;
+      for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
+        const gen = llm.stream(msgArray, invokeConfig);
+        const { value: firstChunk, done: firstDone } = await gen.next();
+        if (firstDone) break;
+
+        const firstToolCalls = firstChunk?.additionalKwargs?.toolCalls;
+        if (Array.isArray(firstToolCalls) && firstToolCalls.length) {
+          // ── Tool round ────────────────────────────────────────────────────────
+          // Drain generator (no more chunks after the summary yield in tool rounds).
+          for await (const _ of gen) {} // eslint-disable-line no-unused-vars
+
+          for (const tc of firstToolCalls) sseWrite({ type: 'tool', name: tc.name });
+          msgArray.push(new AIMessage(firstChunk.content ?? '', firstChunk.additionalKwargs ?? {}));
+
+          await executeChatTools(firstToolCalls, msgArray);
+          continue; // next round
+        }
+
+        // ── Final text round: stream reply to the client as tokens arrive ──────
+        // Also catches mixed text-preamble + tool-call responses: if mid-stream tool
+        // calls appear (model said something then decided to use a tool), capture them
+        // and loop rather than dropping them.
+        let midStreamToolCalls = null;
+        processToken(typeof firstChunk.content === 'string' ? firstChunk.content : '');
+        for await (const chunk of gen) {
+          const tc = chunk?.additionalKwargs?.toolCalls;
+          if (Array.isArray(tc) && tc.length) { midStreamToolCalls = tc; break; }
+          processToken(typeof chunk.content === 'string' ? chunk.content : '');
+        }
+
+        if (midStreamToolCalls) {
+          // Model emitted text preamble then tool calls in the same turn.
+          // Discard the preamble (it's not the JSON reply), execute the tools, loop.
+          extractState = 'searching'; searchBuf = ''; replyBuf = ''; streamedText = ''; escapeNext = false;
+          for (const tc of midStreamToolCalls) sseWrite({ type: 'tool', name: tc.name });
+          msgArray.push(new AIMessage('', { toolCalls: midStreamToolCalls }));
+          await executeChatTools(midStreamToolCalls, msgArray);
+          continue;
+        }
+
+        // If the model skipped the JSON envelope, stream the raw text directly.
+        if (extractState === 'searching' && streamedText && !closed) {
+          const CHUNK = 40;
+          for (let i = 0; i < streamedText.length; i += CHUNK) {
+            sseWrite({ type: 'chunk', text: streamedText.slice(i, i + CHUNK) });
+          }
+        }
+
+        let parsedMeta = null;
+        try { parsedMeta = JSON.parse(extractJsonLoose(streamedText)); } catch {}
+        const readyToBuild = parsedMeta ? !!parsedMeta.ready_to_build : false;
+        const buildIntent  = (parsedMeta && typeof parsedMeta.build_intent === 'string' && parsedMeta.build_intent.trim()) ? parsedMeta.build_intent.trim() : null;
+
+        logEvent('chat.reply', { tenant: req.tenant?.id ?? null, turns: messages.length, readyToBuild, parsed: !!parsedMeta?.reply });
+        sseWrite({ type: 'done', readyToBuild, buildIntent });
+        clearInterval(heartbeat);
+        res.end();
+        return;
       }
+
+      // Exhausted tool rounds without a text response (shouldn't happen in practice).
+      sseWrite({ type: 'error', error: 'Max tool rounds reached without a text reply.' });
       clearInterval(heartbeat);
       res.end();
     } catch (err) {
