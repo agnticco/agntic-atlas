@@ -116,7 +116,8 @@ export function mountAdminRoutes(app, { spine, requireAuth, requirePlatformAdmin
     try {
       const tenant = tenants.get(req.params.id);
       if (!tenant) return res.status(404).json({ error: 'Tenant not found' });
-      const totals = _tenantCostMetrics(store.db, tenant.id);
+      const totals     = _tenantCostMetrics(store.db, tenant.id);
+      const projection = _tenantSpendProjection(store.db, tenant.id);
       // Break down by context label (converger / web_search / workflow:slug:nodeId / etc.)
       const byContext = store.db.prepare(`
         SELECT context,
@@ -157,7 +158,20 @@ export function mountAdminRoutes(app, { spine, requireAuth, requirePlatformAdmin
         GROUP BY r.workflow_id
         ORDER BY last_run_at DESC
       `).all(tenant.id);
-      res.json({ tenantId: tenant.id, ...totals, byContext, daily, byWorkflow });
+      // Activity feed: every individual LLM call for this tenant, newest first.
+      // One row per call — each tagged by its context (the UI derives the kind:
+      // Conversation / Converger / Workflow execution / Web search). Capped at
+      // ACTIVITY_LIMIT; `activityTotal` lets the UI show how many are hidden.
+      const ACTIVITY_LIMIT = 250;
+      const activity = store.db.prepare(`
+        SELECT ts, context, tier, model, tokens_in, tokens_out, cost_usd, web_searches, session_id
+        FROM llm_cost_log
+        WHERE tenant_id = ?
+        ORDER BY ts DESC
+        LIMIT ?
+      `).all(tenant.id, ACTIVITY_LIMIT);
+      const activityTotal = totals.llmCalls;
+      res.json({ tenantId: tenant.id, ...totals, ...projection, byContext, daily, byWorkflow, activity, activityTotal });
     } catch (err) {
       logEvent('admin.tenant.cost.error', errFields(err));
       res.status(500).json({ error: err.message });
@@ -183,11 +197,24 @@ export function mountAdminRoutes(app, { spine, requireAuth, requirePlatformAdmin
         FROM workflow_runs WHERE is_test = 0
       `).get();
       const trackingRow = store.db.prepare(`SELECT MIN(ts) AS since FROM llm_cost_log`).get();
-      const overall = { ...overallCost, total_runs: overallRuns.total_runs ?? 0, tracking_since: trackingRow?.since ?? null };
+      // Platform-wide trailing-30d spend + projected monthly run-rate.
+      const overallWin = store.db.prepare(`
+        SELECT SUM(cost_usd) AS cost_30d,
+               julianday('now') - julianday(MIN(ts)) AS span_days
+        FROM llm_cost_log WHERE ts >= date('now', '-30 days')
+      `).get();
+      const overallProjection = _projectMonthly(overallWin?.cost_30d, overallWin?.span_days);
+      const overall = {
+        ...overallCost,
+        total_runs:     overallRuns.total_runs ?? 0,
+        tracking_since: trackingRow?.since ?? null,
+        ...overallProjection,
+      };
       const perTenant = allTenants.map(t => ({
         tenantId: t.id,
         name:     t.name ?? t.slug,
         ...(_tenantCostMetrics(store.db, t.id)),
+        ...(_tenantSpendProjection(store.db, t.id)),
       }));
       const daily = store.db.prepare(`
         SELECT date(ts)   AS day,
@@ -248,6 +275,31 @@ function _tenantCostMetrics(db, tenantId) {
     costUsd:     +(row.cost_usd   ?? 0).toFixed(6),
     webSearches: row.web_searches ?? 0,
   };
+}
+
+// Project a monthly run-rate from a trailing-window spend and the span of days
+// observed within it. A tenant active the full 30 days projects ≈ its actual
+// 30-day spend; one active fewer days projects its observed rate forward to 30.
+// daysObserved is returned so the UI can label the projection honestly.
+function _projectMonthly(cost30dRaw, spanDaysRaw) {
+  const cost30dUsd = +(cost30dRaw ?? 0);
+  const span = Math.min(30, Math.max(1, spanDaysRaw ?? 0));
+  const estMonthlyUsd = cost30dUsd > 0 ? cost30dUsd * (30 / span) : 0;
+  return {
+    cost30dUsd:    +cost30dUsd.toFixed(6),
+    estMonthlyUsd: +estMonthlyUsd.toFixed(2),
+    daysObserved:  +span.toFixed(1),
+  };
+}
+
+function _tenantSpendProjection(db, tenantId) {
+  const win = db.prepare(`
+    SELECT SUM(cost_usd) AS cost_30d,
+           julianday('now') - julianday(MIN(ts)) AS span_days
+    FROM llm_cost_log
+    WHERE tenant_id = ? AND ts >= date('now', '-30 days')
+  `).get(tenantId);
+  return _projectMonthly(win?.cost_30d, win?.span_days);
 }
 
 function _tenantRecentRuns(db, tenantId, limit = 10) {

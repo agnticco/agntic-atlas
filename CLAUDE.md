@@ -277,6 +277,23 @@ spec is actually executable, not just structurally similar to the frozen file.
   message in `msgArray` — the most salient position immediately before the model's turn.
   This is structural (applies to every tool-equipped turn), not hardcoded to any connector.
 
+- **LLM-backed capabilities must receive `sessionId` for cost attribution (2026-06-26).**
+  The CostTracker resolves `tenant_id` from `user_id`, and `user_id` from the
+  session→user map (`setSessionUser`). Any capability that makes its own LLM call
+  (today: `web_search` → native Anthropic `web_search_20260209`) must be handed the
+  caller's `sessionId` so its cost record resolves to a tenant. The engine path does
+  this (`node-types/connector-action.js` passes `sessionId`/`costContext` from
+  `costConfig`); the **chat** path (`builder.js` `makeChatToolExecutor`) originally did
+  not, so every chat-invoked web search logged with `session='unknown'`,
+  `tenant_id=NULL` — orphaned from per-tenant cost aggregates (37% of platform spend at
+  the time). Fix: `makeChatToolExecutor(spine, req, chatSessionId)` threads `sessionId`
+  into `handler({ ..., sessionId })`; `costContext` is left undefined so each capability
+  self-labels (web_search → `'web_search'`, keeping the cost-by-surface view honest).
+  **Rule: any new surface that invokes an LLM-backed capability outside the engine must
+  thread `sessionId`.** Per-tenant aggregates (lifetime / est. monthly / activity) read
+  `llm_cost_log` with no context/test filter, so they include everything *that is
+  attributed* — attribution is the only thing that can drop a call from a tenant's totals.
+
 - **Slug collision on re-publish (2026-06-25).** `WorkflowStore.create()` now
   auto-deduplicates slugs: probes `(tenant_id, user_id, slug)` and appends `-2`, `-3`,
   etc. until a free slot is found before inserting. Prevents `UNIQUE constraint failed`
