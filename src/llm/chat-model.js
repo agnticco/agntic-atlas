@@ -10,6 +10,7 @@
 import { Runnable } from '../core/runnable.js';
 import { AIMessage, HumanMessage, SystemMessage, ToolMessage } from '../core/message.js';
 import { log } from '../utils/logger.js';
+import { numEnv } from '../utils/env.js';
 
 /**
  * Cap on `pause_turn` continuations within a single ChatModel call. Anthropic
@@ -53,8 +54,8 @@ export class ChatModel extends Runnable {
     // bump to 4 for sustained 429/529 (overloaded) during provider incidents. A
     // per-request timeout aborts a hung connection so the SDK's own retry can fire.
     // Env-overridable so ops can tune without a code change.
-    this.maxRetries       = options.maxRetries       ?? Number(process.env.LLM_MAX_RETRIES ?? 4);
-    this.requestTimeoutMs = options.requestTimeoutMs ?? Number(process.env.LLM_TIMEOUT_MS ?? 120000);
+    this.maxRetries       = options.maxRetries       ?? numEnv('LLM_MAX_RETRIES', 4);
+    this.requestTimeoutMs = options.requestTimeoutMs ?? numEnv('LLM_TIMEOUT_MS', 120000);
 
     this._client = null;
   }

@@ -22,6 +22,7 @@
 // each type's executor lives in its own module.
 
 import { withTimeout } from '../utils/with-timeout.js';
+import { numEnv } from '../utils/env.js';
 
 export class FlowTester {
   /**
@@ -140,7 +141,7 @@ export class FlowTester {
         // run forever. Generous default so slow-but-progressing LLM/web_search calls
         // aren't cut; a node's own configured timeout (e.g. llm) fires first, with
         // 30s headroom under this backstop. Env-tunable via NODE_RUN_TIMEOUT_MS.
-        const backstopMs   = Number(process.env.NODE_RUN_TIMEOUT_MS ?? 180_000);
+        const backstopMs   = numEnv('NODE_RUN_TIMEOUT_MS', 180_000);
         const nodeTimeout  = Math.max(backstopMs, Number(node.config?.timeoutMs ?? 0) + 30_000);
         const output = await withTimeout(
           this._runNode(node, { outputs, lastOutput, costConfig: nodeCostConfig, ancestorOutputs }),

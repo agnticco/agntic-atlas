@@ -8,7 +8,8 @@
     "node": ">=22"
   },
   "scripts": {
-    "start": "node --env-file-if-exists=.env src/api/server.js"
+    "start": "node --env-file-if-exists=.env src/api/server.js",
+    "prod": "NODE_ENV=production node --env-file-if-exists=.env src/api/server.js"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.78.0",
