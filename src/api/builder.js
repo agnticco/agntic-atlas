@@ -308,7 +308,15 @@ async function introMessage(spine, intent, sessionId) {
 // Used by both the clean tool round and the mid-stream text+tool case.
 // Delivery capabilities have body/title in configSchema (the LLM fills them);
 // we pass them as named params so handlers can read from either config or params.
-function makeChatToolExecutor(spine, req) {
+//
+// sessionId is threaded into every handler so LLM-backed capabilities (e.g.
+// web_search, which makes its own Anthropic call) attribute their cost to this
+// tenant via the CostTracker's session→user map. Without it, those sub-calls
+// log with session='unknown' and tenant_id=NULL — orphaned from per-tenant
+// aggregates. Mirrors the engine's connector-action contract (sessionId +
+// costContext). costContext is left to each capability's own default so it
+// self-labels (web_search → 'web_search', keeping the cost-by-surface view honest).
+function makeChatToolExecutor(spine, req, sessionId) {
   return async function executeChatTools(toolCalls, msgArray) {
     await Promise.all(toolCalls.map(async (tc) => {
       let resultStr;
@@ -319,7 +327,7 @@ function makeChatToolExecutor(spine, req) {
         const cap    = registry.get(tc.name);
         const config = { ...(tc.args ?? {}) };
         await injectCapabilityCredentials(cap, config, { auth: spine.auth, tenant: req.tenant, user: req.user });
-        const result = await handler({ config, body: config.body ?? null, title: config.title ?? null });
+        const result = await handler({ config, body: config.body ?? null, title: config.title ?? null, sessionId });
         resultStr = JSON.stringify(result ?? {});
         logEvent('chat.tool.ok', { tenant: req.tenant?.id ?? null, tool: tc.name });
       } catch (toolErr) {
@@ -517,7 +525,7 @@ Rules:
 
       const chatUser = { name: req.user.display_name || req.user.email, email: req.user.email };
       const chatTools = buildChatTools(spine.engine?.capabilityRegistry, connectedSet);
-      const executeChatTools = makeChatToolExecutor(spine, req);
+      const executeChatTools = makeChatToolExecutor(spine, req, chatSessionId);
       const invokeConfig = {
         configurable: { modelTier: 'balanced', sessionId: chatSessionId, costContext: 'chat' },
         ...(chatTools.length ? { tools: chatTools } : {}),

@@ -228,6 +228,14 @@ function catOf(ctx) {
   return 'Conversation';
 }
 function colorOf(cat) { return CAT_COLORS[cat] || MUTED; }
+// Honest label for the monthly projection's basis: a tenant active the full
+// window is projected from its actual 30-day spend; a newer one from fewer days.
+function projBasis(t) {
+  const d = t.daysObserved || 0;
+  if (!t.estMonthlyUsd) return 'no recent activity';
+  if (d >= 29.5) return 'projected · last 30 days';
+  return 'projected · ' + (d < 1.5 ? '~1 day' : '~' + Math.round(d) + ' days') + ' of activity';
+}
 
 // ── Data loading + non-disruptive auto-refresh ────────────────────────────────
 let _refreshTimer = null;
@@ -334,6 +342,14 @@ function mapTenant(p, cost, runs) {
     cost: d.cost_usd || 0, calls: d.calls || 0, webs: d.web_searches || 0,
   }));
 
+  // Activity feed — one entry per LLM call, tagged by kind (catOf the context).
+  const activity = ((cost && cost.activity) || []).map(a => ({
+    ts: a.ts, when: relTime(a.ts), context: a.context || '(untagged)',
+    cat: catOf(a.context), model: a.model || a.tier || '—',
+    tokensIn: a.tokens_in || 0, tokensOut: a.tokens_out || 0,
+    webSearches: a.web_searches || 0, cost: a.cost_usd || 0,
+  }));
+
   const rs = runs ? {
     succeeded: runs.succeeded || 0, failed: runs.failed || 0,
     running: runs.running || 0,     test_runs: runs.test_runs || 0,
@@ -365,6 +381,11 @@ function mapTenant(p, cost, runs) {
     costUsd: p.costUsd || 0, llmCalls: p.llmCalls || 0,
     tokensIn: p.tokensIn || 0, tokensOut: p.tokensOut || 0,
     webSearches: p.webSearches || 0,
+    // costUsd is lifetime (no time filter on llm_cost_log). cost30dUsd is the
+    // trailing-30d actual; estMonthlyUsd projects the monthly run-rate.
+    cost30dUsd: p.cost30dUsd || 0, estMonthlyUsd: p.estMonthlyUsd || 0,
+    daysObserved: p.daysObserved || 0,
+    activity, activityTotal: (cost && cost.activityTotal) || activity.length,
     totalRuns, runStatus: rs, daily, byContext, categories, workflows, recent, isSpike: false,
   };
 }
@@ -430,7 +451,7 @@ function renderDonut(catItems, centerStr) {
     <div class="donut-ring" style="background:${grad}"></div>
     <div class="donut-hole">
       <div class="donut-hole-val">${centerStr}</div>
-      <div class="donut-hole-lbl">30-day cost</div>
+      <div class="donut-hole-lbl">all-time cost</div>
     </div>`;
   return wrap;
 }
@@ -619,15 +640,15 @@ function renderDashboard(db) {
   const main = div('fadein');
 
   // Header
-  main.innerHTML = `<div class="page-header"><h2>Platform overview</h2><p>LLM cost &amp; usage across all tenants · trailing 30 days</p></div>`;
+  main.innerHTML = `<div class="page-header"><h2>Platform overview</h2><p>LLM cost &amp; usage across all tenants · lifetime totals, 30-day trend</p></div>`;
 
   // Stat cards
   const grid = div('card-grid-4');
   renderStatCards([
-    { label: 'Total spend',     dot: ACCENT, value: moneyAuto(overall.cost_usd),    sub: 'LLM cost · ' + fmtSince(overall.tracking_since) },
-    { label: 'LLM calls',       dot: TEAL,   value: num(overall.total_calls),       sub: tok(overall.tokens_in)+' in / '+tok(overall.tokens_out)+' out' },
-    { label: 'Web searches',    dot: AMBER,  value: num(overall.web_searches),      sub: 'Anthropic web research' },
-    { label: 'Workflow runs',   dot: GREEN,  value: num(overall.total_runs),        sub: 'operational · separate from cost' },
+    { label: 'Total spend',     dot: ACCENT, value: moneyAuto(overall.cost_usd),       sub: 'all-time LLM cost · ' + fmtSince(overall.tracking_since) },
+    { label: 'Est. monthly',    dot: TEAL,   value: moneyAuto(overall.estMonthlyUsd),  sub: 'projected platform run-rate' },
+    { label: 'Web searches',    dot: AMBER,  value: num(overall.web_searches),         sub: 'Anthropic web research' },
+    { label: 'Workflow runs',   dot: GREEN,  value: num(overall.total_runs),           sub: 'operational · separate from cost' },
   ]).forEach(c => grid.appendChild(c));
   main.appendChild(grid);
 
@@ -635,7 +656,7 @@ function renderDashboard(db) {
   const midRow = div('row-2 row-2-narrow');
 
   const donutCard = div('card');
-  donutCard.innerHTML = `<div class="section-title">Cost by surface</div><div class="section-sub">Where this window's spend originates</div>`;
+  donutCard.innerHTML = `<div class="section-title">Cost by surface</div><div class="section-sub">Where all-time spend originates</div>`;
   donutCard.appendChild(renderDonutSection(platCats, moneyAuto(overall.cost_usd)));
   midRow.appendChild(donutCard);
   midRow.appendChild(renderTrendCard(series, tenants));
@@ -761,13 +782,13 @@ function renderTenants(db) {
   const maxCost = sorted[0]?.costUsd || 1;
 
   const main = div('fadein');
-  main.innerHTML = `<div class="page-header"><h2>Tenants</h2><p>${sorted.length} active tenants · ranked by LLM spend · click to drill in</p></div>`;
+  main.innerHTML = `<div class="page-header"><h2>Tenants</h2><p>${sorted.length} active tenants · ranked by lifetime LLM spend · est. monthly = projected run-rate · click to drill in</p></div>`;
 
   const card = div('card');
-  const cols = '30px 2.2fr 1.5fr 1fr 1fr 1fr';
+  const cols = '30px 2fr 1.6fr 1fr 1fr 0.9fr';
   const hdr = div('tbl-header');
   hdr.style.gridTemplateColumns = cols;
-  hdr.innerHTML = `<span>#</span><span>Tenant</span><span>Spend</span><span style="text-align:right">LLM calls</span><span style="text-align:right">Web search</span><span style="text-align:right">Fail rate</span>`;
+  hdr.innerHTML = `<span>#</span><span>Tenant</span><span>Lifetime spend</span><span style="text-align:right">Est. monthly</span><span style="text-align:right">LLM calls</span><span style="text-align:right">Fail rate</span>`;
   card.appendChild(hdr);
 
   sorted.forEach((t, i) => {
@@ -787,8 +808,8 @@ function renderTenants(db) {
         </div>
         <span class="mono" style="font-size:13px;width:62px;text-align:right">${moneyAuto(t.costUsd)}</span>
       </div>
+      <span class="mono" style="font-size:12.5px;text-align:right" title="${projBasis(t)}">${moneyAuto(t.estMonthlyUsd)}</span>
       <span class="mono" style="font-size:12.5px;color:var(--muted);text-align:right">${num(t.llmCalls)}</span>
-      <span class="mono" style="font-size:12.5px;color:var(--muted);text-align:right">${num(t.webSearches)}</span>
       <span class="mono" style="font-size:12.5px;text-align:right;color:${failRate > 8 ? RED : MUTED}">${failRate.toFixed(1)}%</span>`;
     card.appendChild(row);
   });
@@ -824,13 +845,13 @@ function renderTenantDetail(tenantId, db) {
     ${t.isSpike ? '<span style="font-size:10px;color:var(--red);background:rgba(240,97,109,.13);padding:3px 9px;border-radius:6px;font-weight:700;letter-spacing:.04em">COST SPIKE DETECTED</span>' : ''}`;
   main.appendChild(heading);
 
-  // Stat cards
+  // Stat cards — cost-focused headline; lifetime + projected monthly run-rate.
   const grid = div('card-grid-4');
   renderStatCards([
-    { label: 'Spend',          dot: ACCENT, value: moneyAuto(t.costUsd),    sub: 'LLM cost · 30-day window' },
-    { label: 'LLM calls',      dot: TEAL,   value: num(t.llmCalls),        sub: tok(t.tokensIn)+' in / '+tok(t.tokensOut)+' out' },
-    { label: 'Web searches',   dot: AMBER,  value: num(t.webSearches),     sub: 'web research calls' },
-    { label: 'Workflow runs',  dot: GREEN,  value: num(t.totalRuns),       sub: 'operational · separate from cost' },
+    { label: 'Lifetime spend',     dot: ACCENT, value: moneyAuto(t.costUsd),       sub: 'all-time LLM cost' },
+    { label: 'Est. monthly spend', dot: TEAL,   value: moneyAuto(t.estMonthlyUsd), sub: projBasis(t) },
+    { label: 'LLM calls',          dot: AMBER,  value: num(t.llmCalls),            sub: tok(t.tokensIn)+' in / '+tok(t.tokensOut)+' out' },
+    { label: 'Workflow runs',      dot: GREEN,  value: num(t.totalRuns),           sub: 'operational · separate from cost' },
   ]).forEach(c => grid.appendChild(c));
   main.appendChild(grid);
 
@@ -955,6 +976,40 @@ function renderTenantDetail(tenantId, db) {
     ctxCard.appendChild(div('empty', 'No cost data yet — LLM calls will appear here once traffic flows through'));
   }
   main.appendChild(ctxCard);
+
+  // ── Activity log — every individual call, newest first, tagged by kind ──────
+  const actCard = div('card');
+  actCard.style.marginTop = '16px';
+  const shown = t.activity.length, totalCalls = t.activityTotal || shown;
+  const moreNote = totalCalls > shown
+    ? ` <span style="color:var(--dim);font-weight:400;font-size:12px">· showing latest ${num(shown)} of ${num(totalCalls)}</span>`
+    : ` <span style="color:var(--dim);font-weight:400;font-size:12px">· ${num(shown)} call${shown === 1 ? '' : 's'}</span>`;
+  actCard.innerHTML = `<div class="section-title" style="margin-bottom:4px">Activity log${moreNote}</div><div class="section-sub" style="margin-bottom:14px">Every LLM call — conversation, converger, workflow execution, web search, dashboard</div>`;
+  const actCols = '0.9fr 1.3fr 2.4fr 1fr 1.2fr 0.9fr';
+  const actHdr = div('ctx-tbl-header');
+  actHdr.style.gridTemplateColumns = actCols;
+  actHdr.innerHTML = `<span>When</span><span>Kind</span><span>Context</span><span style="text-align:right">Model</span><span style="text-align:right">Tokens (in/out)</span><span style="text-align:right">Cost</span>`;
+  actCard.appendChild(actHdr);
+
+  if (t.activity.length) {
+    t.activity.forEach(a => {
+      const row = div('ctx-tbl-row');
+      row.style.gridTemplateColumns = actCols;
+      const webTag = a.webSearches ? ` <span style="color:${AMBER};font-size:10px">+${a.webSearches}🔍</span>` : '';
+      const model = String(a.model).replace(/^claude-/, '').replace(/-\d{8}$/, '');
+      row.innerHTML = `
+        <span class="mono" style="font-size:11px;color:var(--dim)" title="${a.ts}">${a.when}</span>
+        <span style="display:flex;align-items:center;gap:7px;font-size:12px;color:var(--muted)"><span class="ctx-dot" style="background:${colorOf(a.cat)}"></span>${a.cat}</span>
+        <span class="ctx-label"><span>${a.context}</span></span>
+        <span class="mono" style="font-size:11px;color:var(--muted);text-align:right">${model}</span>
+        <span class="mono" style="font-size:11.5px;color:var(--muted);text-align:right">${tok(a.tokensIn)} / ${tok(a.tokensOut)}${webTag}</span>
+        <span class="mono" style="font-size:11.5px;text-align:right">${moneyAuto(a.cost)}</span>`;
+      actCard.appendChild(row);
+    });
+  } else {
+    actCard.appendChild(div('empty', 'No calls recorded yet for this tenant'));
+  }
+  main.appendChild(actCard);
 
   return main;
 }
