@@ -69,6 +69,30 @@ export class FileCheckpointer extends BaseCheckpointer {
       if (err.code !== 'ENOENT') throw err;
     }
   }
+
+  /**
+   * Delete checkpoint files not modified within maxAgeMs — abandoned sessions
+   * (the user closed the tab mid-build and never approved/abandoned) otherwise
+   * accumulate forever. Explicit clear() handles clean completion; this sweeps
+   * the rest. Safe to call at boot. Returns the number of files removed.
+   */
+  async sweep(maxAgeMs) {
+    if (!maxAgeMs || maxAgeMs <= 0) return 0;
+    let names;
+    try { names = await fs.readdir(this._dir); }
+    catch (err) { if (err.code === 'ENOENT') return 0; throw err; }
+    const cutoff = Date.now() - maxAgeMs;
+    let removed = 0;
+    for (const name of names) {
+      if (!name.endsWith('.jsonl')) continue;
+      const fp = path.join(this._dir, name);
+      try {
+        const st = await fs.stat(fp);
+        if (st.mtimeMs < cutoff) { await fs.unlink(fp); removed++; }
+      } catch { /* ignore individual file races/errors */ }
+    }
+    return removed;
+  }
 }
 
 export default FileCheckpointer;
