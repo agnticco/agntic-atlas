@@ -3365,6 +3365,18 @@ class Component extends DCLogic {
           }
         }
       }
+      // Stream ended with no terminal done/error event (tunnel drop, server
+      // restart, truncated body). Without this the UI hangs in "thinking"
+      // forever — spinner spins, input stays disabled, user must reload.
+      if (self._chatGen === gen && !twDone) {
+        const cur = self.state.msgs;
+        const last = cur[cur.length - 1];
+        const cleaned = last && last.isStreaming
+          ? [...cur.slice(0, -1), (({ isStreaming, ...rest }) => rest)(last)]
+          : cur;
+        self.setState({ msgs: cleaned, thinking: false, thinkingLabel: null });
+        if (twMsgIdx < 0) self._apiError("The connection dropped before Atlas replied. Please try again.");
+      }
     } catch (e) {
       if (ac.signal.aborted || self._chatGen !== gen) return; // deliberate abort, not an error
       self.setState({ thinking: false, thinkingLabel: null }); self._apiError(String(e));
