@@ -3163,17 +3163,22 @@ class Component extends DCLogic {
     const wfId = this.state.consoleWfId;
     if (!wfId) return;
     const url = "/api/console/workflows/" + wfId + "/sop" + (format === "pdf" ? "?format=pdf" : "");
+    let filename = "workflow-sop." + (format === "pdf" ? "pdf" : "md");
     fetch(url, { headers: { "Authorization": "Bearer " + this.state.authToken } })
       .then(function(r) {
         // Guard: without an r.ok check a 404/500 JSON error body downloads as a
         // corrupt .pdf/.md with no on-screen error.
         if (!r.ok) throw new Error("Export failed (" + r.status + ")");
+        // Use the server's per-workflow filename so exports don't all collide.
+        const cd = r.headers.get("content-disposition") || "";
+        const m = cd.match(/filename="?([^"]+)"?/);
+        if (m) filename = m[1];
         return r.blob();
       })
       .then(function(blob) {
         const href = URL.createObjectURL(blob);
         const a = document.createElement("a"); a.href = href;
-        a.download = "workflow-sop." + (format === "pdf" ? "pdf" : "md");
+        a.download = filename;
         document.body.appendChild(a); a.click(); document.body.removeChild(a);
         URL.revokeObjectURL(href);
       })
@@ -3579,7 +3584,12 @@ class Component extends DCLogic {
           : ((body && body.error && body.error.message) || 'Something went wrong.');
       }
     } catch(e) {}
-    this.setState({ msgs: [...this.state.msgs, { isAtlas: true, text: '⚠ ' + clean + '  You can start over with “+ New workflow”.', hasReason: false }], thinking: false, thinkingLabel: null });
+    // Finalize any half-streamed bubble (strip isStreaming) before appending the
+    // error, so a blinking-cursor bubble isn't left dangling beside the ⚠ message.
+    const cur = this.state.msgs;
+    const last = cur[cur.length - 1];
+    const base = (last && last.isStreaming) ? [...cur.slice(0, -1), (({ isStreaming, ...rest }) => rest)(last)] : cur;
+    this.setState({ msgs: [...base, { isAtlas: true, text: '⚠ ' + clean + '  You can start over with “+ New workflow”.', hasReason: false }], thinking: false, thinkingLabel: null });
   }
 
   // ── proposal rendering (real converger contract) ──────────────────
@@ -4640,8 +4650,8 @@ class Component extends DCLogic {
       consoleDrawerOpen: !!S.consoleDrawerRun,
       onCloseDrawer: () => this.closeDrawer(),
       consoleDrawer: S.consoleDrawerRun ? {
-        statusLabel: S.consoleDrawerRun.status === "success" ? "Completed" : "Failed",
-        statusColor: S.consoleDrawerRun.status === "success" ? "#9fd6a8" : "#f0a896",
+        statusLabel: S.consoleDrawerRun.status === "success" ? "Completed" : S.consoleDrawerRun.status === "error" ? "Failed" : S.consoleDrawerRun.status === "running" ? "Running" : this._titleCase(S.consoleDrawerRun.status || "unknown"),
+        statusColor: S.consoleDrawerRun.status === "success" ? "#9fd6a8" : S.consoleDrawerRun.status === "error" ? "#f0a896" : "#f0bf6b",
         startedAt: new Date(S.consoleDrawerRun.started_at).toLocaleString(),
         duration: this._runDuration(S.consoleDrawerRun),
         error: S.consoleDrawerRun.error || "",
