@@ -2103,6 +2103,7 @@ class Component extends DCLogic {
   // keep auth + connections + panel prefs across a reset
   reset() {
     this._clearBuild();
+    this._abortChat();
     if (this._testInterval) { clearInterval(this._testInterval); this._testInterval = null; }
     const tid = this.state.threadId;
     if (tid) { fetch('/api/builder/sessions/' + tid, { method: 'DELETE', headers: this._H() }).catch(function(e) {}); }
@@ -2808,6 +2809,7 @@ class Component extends DCLogic {
   }
   openConsole(wfId) {
     this._stopConsolePoll(); // tear down any poll from a previously-open console
+    this._abortChat();       // cancel any in-flight builder chat stream
     // Draft with no nodes → resume in builder instead of opening an empty console
     var wf = (this.state.consoleSidebarWfs || []).find(function(w) { return w.id === wfId; });
     if (wf && wf.status === 'draft' && !(wf.nodes && wf.nodes.length)) {
@@ -3254,15 +3256,26 @@ class Component extends DCLogic {
   // The chat agent: append the user's message, send the running history, render
   // Atlas's natural reply. If Atlas judges the user is ready, the reply carries a
   // "Build it" affordance — but building never starts until the user acts on it.
+  // Abort any in-flight chat stream and invalidate its callbacks. Called when
+  // the conversation is replaced (new workflow / start over / opening another
+  // workflow) so a streaming reply + "Build it" CTA can't leak into it.
+  _abortChat() {
+    this._chatGen = (this._chatGen || 0) + 1;
+    if (this._chatAbort) { try { this._chatAbort.abort(); } catch (e) {} this._chatAbort = null; }
+  }
   async sendChat(t) {
     if (!this.state.authToken) { this.setState({ msgs: [{ isAtlas: true, text: "Please sign in first.", hasReason: false }] }); return; }
     const self = this;
+    const gen = (this._chatGen = (this._chatGen || 0) + 1); // this turn's generation
+    const ac = new AbortController();
+    this._chatAbort = ac;
     const msgs = [...this.state.msgs, { isOperator: true, text: t }];
     this.setState({ msgs, inputValue: "", thinking: true, mentionOpen: false });
     const history = msgs.map(m =>
       m.isOperator ? { role: "user", content: m.text } : (m.isAtlas ? { role: "assistant", content: m.text } : null)).filter(Boolean);
     try {
-      const resp = await fetch("/api/builder/chat", { method: "POST", headers: this._H(), body: JSON.stringify({ messages: history }) });
+      const resp = await fetch("/api/builder/chat", { method: "POST", headers: this._H(), body: JSON.stringify({ messages: history }), signal: ac.signal });
+      if (self._chatGen !== gen) return; // superseded while awaiting the response
       if (!resp.ok) { self._apiError(`Chat error ${resp.status}`); return; }
       const reader = resp.body.getReader();
       const dec = new TextDecoder();
@@ -3281,6 +3294,7 @@ class Component extends DCLogic {
       const twDelay = () => twQueue.length > 200 ? 3 : twQueue.length > 80 ? 7 : 14;
 
       const twTick = () => {
+        if (self._chatGen !== gen) return; // conversation replaced — stop typing into it
         if (!twQueue) {
           twRunning = false;
           if (twDone) {
@@ -3321,6 +3335,7 @@ class Component extends DCLogic {
 
       while (true) {
         const { value, done } = await reader.read();
+        if (self._chatGen !== gen) return; // superseded mid-stream — discard the rest
         if (done) break;
         buf += dec.decode(value, { stream: true });
         let idx;
@@ -3350,7 +3365,10 @@ class Component extends DCLogic {
           }
         }
       }
-    } catch (e) { self.setState({ thinking: false, thinkingLabel: null }); self._apiError(String(e)); }
+    } catch (e) {
+      if (ac.signal.aborted || self._chatGen !== gen) return; // deliberate abort, not an error
+      self.setState({ thinking: false, thinkingLabel: null }); self._apiError(String(e));
+    }
   }
 
   // Transition out of conversation into the structured converger build. Keeps the
