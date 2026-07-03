@@ -2128,18 +2128,25 @@ class Component extends DCLogic {
   }
 
   newWorkflow() {
-    var self = this;
     this.reset();
     this.setState({ view: 'build', phase: 'new' });
-    fetch('/api/builder/draft', { method: 'POST', headers: this._H() })
+    // Draft is created lazily on the first message (see _ensureDraft, called from
+    // _submitNewState) — clicking "+ New workflow" and backing out no longer
+    // leaves an empty phantom "New workflow" draft in the sidebar.
+  }
+  // Create the backing draft row if this build doesn't have one yet. Idempotent.
+  // The in-progress conversation is already persisted to the primary build slot
+  // (_buildKey) regardless of workflowId, so deferring creation loses nothing.
+  _ensureDraft() {
+    if (this.state.workflowId) return Promise.resolve(this.state.workflowId);
+    const self = this;
+    return fetch('/api/builder/draft', { method: 'POST', headers: this._H() })
       .then(function(r) { return r.ok ? r.json() : null; })
       .then(function(d) {
-        if (d && d.workflowId) {
-          self.setState({ workflowId: d.workflowId, isDraftBuild: true });
-          self._loadWorkflows();
-        }
+        if (d && d.workflowId) { self.setState({ workflowId: d.workflowId, isDraftBuild: true }); self._loadWorkflows(); return d.workflowId; }
+        return null;
       })
-      .catch(function() {});
+      .catch(function() { return null; });
   }
 
   _submitNewState(text) {
@@ -2148,6 +2155,7 @@ class Component extends DCLogic {
     if (!t) return;
     const self = this;
     this._clearChatInput();
+    this._ensureDraft(); // user committed by sending — now create the draft row
     this.setState({ newStateExiting: true, mentionOpen: false, slashOpen: false });
     setTimeout(function() {
       self.setState({ phase: 'chat', newStateExiting: false });

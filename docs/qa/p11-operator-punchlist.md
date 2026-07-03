@@ -63,6 +63,18 @@ Confirmed against the live DB (`memory/workflows/workflows.sqlite`, 25 workflows
 - **Q03 (live SOP):** ran `generateSopMarkdown` on `Gmail → Airtable Interaction Log & Slack Summary` (nodes: summarize, **connector-action**, deliver). The connector-action step rendered `**Type:** connector-action` (raw slug), used the bare node label as its only description, and surfaced **no config** — while the sibling `deliver` step got "Sends the processed output to Slack #social · Channel · Target". Uninformative for the customer SOP.
 - **Q05 / Q12 (data):** 0 runs currently in `status='running'` — defect is code-real but not live-observable right now.
 
+## Behavioral findings — left-sidebar workflow store (from real usage, 2026-07-03)
+
+User report: the sidebar "felt glitchy, like workflows weren't saved after leaving the page." Investigated against live code + DB + event log.
+
+| ID | Sev | Summary | Evidence | Status |
+|----|-----|---------|----------|--------|
+| Q22 | MAJOR | **Eager phantom drafts** — `newWorkflow()` POSTed `/api/builder/draft` the instant "+ New workflow" was clicked, persisting an empty "New workflow" draft before the user typed anything; abandoning it (or clicking "+" repeatedly) litters the sidebar permanently | `public/index.html` `newWorkflow` (eager POST); live DB has 1 empty `nodes:"[]"` draft | **FIXED** — draft now created lazily via `_ensureDraft()` on the first message (`_submitNewState`); "+ New" + back-out leaves no phantom. The current build is still reload-recoverable via the primary `_buildKey` slot (not workflowId-keyed). |
+| Q23 | MAJOR | **Draft content is localStorage-only until publish** — a built-but-unpublished workflow's conversation/spec never persists server-side; it survives reload in the same browser (primary `_buildKey` slot) but is **gone on another device / after clearing storage**, which reads as "my workflow wasn't saved" | `public/index.html` `_saveBuild`/`_buildKeyWf` (localStorage only); server draft row has empty `nodes` until the publish PUT | **OPEN — needs decision.** Options: (a) autosave draft spec server-side as you build; (b) keep local but make it explicit ("Draft — not yet saved to your account"). Not a one-liner. |
+| Q24 | MINOR | Possible **delete double-fire** — event log shows DELETE on one workflow id logging `404` then `200` (same id), hinting at two delete requests racing | `memory/logs/atlas-events.log`; `softDeleteWorkflow` optimistic path | NEEDS-REPRO — low priority; the optimistic UI already removes the row, so user impact is cosmetic. |
+
+**Ruled out** (investigated, not the bug): localStorage key instability — `userEmail`/`tenantId` are set atomically with `authToken` in `_applyAuth` and `_saveBuild` bails until then, so save/restore keys always match; published workflows reliably reload on boot (`_loadWorkflows`). The "not saved" symptom is Q22 (phantom clutter) + Q23 (local-only drafts), not lost published data.
+
 ## Remediation status (2026-07-03)
 
 **Fixed & committed (11):** Q01, Q02, Q03, Q04, Q05, Q06, Q07, Q09, Q12, Q16, Q17.
