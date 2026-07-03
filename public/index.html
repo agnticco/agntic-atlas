@@ -1498,6 +1498,7 @@
           <sc-if value="{{ hasConnectFlash }}" hint-placeholder-val="{{ false }}">
             <div style="margin:8px 12px;border-radius:10px;padding:10px 12px;font-size:12.5px;border:1px solid {{ connectFlashBorder }};background:{{ connectFlashBg }};color:rgba(255,255,255,.9)">{{ connectFlashText }}</div>
           </sc-if>
+          <sc-if value="{{ hasConnected }}" hint-placeholder-val="{{ false }}">
           <div style="padding:8px 16px 4px;font-size:10px;font-weight:600;letter-spacing:.16em;text-transform:uppercase;color:rgba(255,255,255,.25)">Connected</div>
           <sc-for list="{{ connectedList }}" as="c" hint-placeholder-count="1">
             <div onClick="{{ c.onAction }}" style="display:flex;align-items:center;gap:10px;padding:9px 16px;cursor:pointer" style-hover="background:rgba(255,255,255,.04)">
@@ -1509,7 +1510,8 @@
               <span style="flex:none;width:7px;height:7px;border-radius:50%;background:#7fc28a;box-shadow:0 0 6px rgba(127,194,138,.7)"></span>
             </div>
           </sc-for>
-          <div style="padding:10px 16px 4px;margin-top:4px;font-size:10px;font-weight:600;letter-spacing:.16em;text-transform:uppercase;color:rgba(255,255,255,.25)">Inactive</div>
+          </sc-if>
+          <div style="padding:10px 16px 4px;margin-top:4px;font-size:10px;font-weight:600;letter-spacing:.16em;text-transform:uppercase;color:rgba(255,255,255,.25)">{{ inactiveHeader }}</div>
           <sc-for list="{{ availableList }}" as="c" hint-placeholder-count="1">
             <div onClick="{{ c.onAction }}" style="display:flex;align-items:center;gap:10px;padding:9px 16px;cursor:pointer;opacity:.55" style-hover="opacity:1;background:rgba(255,255,255,.04)">
               <div style="flex:none;width:22px;height:22px;background:url('{{ c.logo }}') center/contain no-repeat" title="{{ c.name }}"></div>
@@ -4448,6 +4450,10 @@ class Component extends DCLogic {
       inboxSelected: S.inboxSelected ? { ...S.inboxSelected, timeLabel: this._relativeTime(S.inboxSelected.created_at) } : null,
       onToggleProfile: () => this.toggleProfile(), onSignOut: () => this.signOut(),
       connectedList: S.connected.map(c => ({ ...c, connected: true, statusText: c.meta || "Connected", onAction: (e) => { const r = e.currentTarget.getBoundingClientRect(); this.setState({ connectorModal: { ...c, connected: true }, _mtx: r.left + r.width/2, _mty: r.top + r.height/2 }); } })),
+      hasConnected: (S.connected || []).length > 0,
+      // On a fresh tenant with nothing connected, "Inactive" reads oddly as the
+      // only header — show "Connectors" instead (Q19).
+      inactiveHeader: (S.connected || []).length > 0 ? "Inactive" : "Connectors",
       availableList: S.available.map(c => ({ ...c, connected: false, statusText: c.meta || "Not connected", onAction: (e) => { const r = e.currentTarget.getBoundingClientRect(); this.setState({ connectorModal: { ...c, connected: false }, _mtx: r.left + r.width/2, _mty: r.top + r.height/2 }); } })),
       stopProp: (e) => e.stopPropagation(),
       connectorModalOpen: !!(S.connectorModal || S.connectorModalClosing),
