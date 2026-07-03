@@ -3323,7 +3323,7 @@ class Component extends DCLogic {
             let newMsgs = last && last.isStreaming
               ? [...curMsgs.slice(0, -1), (({ isStreaming, ...rest }) => rest)(last)]
               : [...curMsgs];
-            if (twDone.readyToBuild && twDone.buildIntent) {
+            if (twDone.readyToBuild) {
               // Store the intent as a serializable field (ctaAction + buildIntent),
               // NOT only as an onClick closure. Two reasons: (1) twDone is nulled
               // below and a closure over it would throw on click; (2) onClick is a
@@ -3331,7 +3331,10 @@ class Component extends DCLogic {
               // persisted to localStorage — a restored "Build it" button would have
               // no handler. _withParts() reattaches onClick from these fields at
               // render time, so the button works both freshly and after a refresh.
-              const buildIntent = twDone.buildIntent;
+              // buildIntent may be null (LLM omitted it) — startBuild() derives it
+              // from the conversation via _deriveBuildIntent, so the CTA is never a
+              // dead end. Gate on readyToBuild alone (Q10).
+              const buildIntent = twDone.buildIntent || null;
               newMsgs.push({ isCta: true, ctaAction: "build", buildIntent, text: "", btn: "Build it →", btnBg: "#7fc28a", btnFg: "#06210d", onClick: () => self.startBuild(buildIntent) });
             }
             self.setState({ msgs: newMsgs, thinking: false, thinkingLabel: null });
