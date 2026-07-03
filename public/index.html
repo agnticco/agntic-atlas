@@ -3938,8 +3938,30 @@ class Component extends DCLogic {
     if (ty === "extract") { const f = Array.isArray(c.fields) ? c.fields.map(x => (x && (x.name || x.key)) || x).join(", ") : ""; return f ? ("Pulls out: " + this._clip(f, 110)) : "Extracts structured fields from the content."; }
     if (ty === "rewrite") return this._clip(c.instructions, 130) || ("Rewrites the content" + (c.tone ? (" in a " + c.tone + " tone.") : "."));
     if (ty === "deliver") return this._deliveryDetail(c);
-    if (ty === "connector-action") return "Runs the “" + (c.action || "connector") + "” action.";
+    if (ty === "connector-action") {
+      const a = this._connectorAction(n);
+      const who = a.connector ? ("the " + a.connector) : "a connected";
+      const verb = a.capability || a.action || "connector action";
+      const d = c.query ? (' Searches for: "' + this._clip(c.query, 90) + '".') : (c.target ? (" Target: " + c.target + ".") : "");
+      return "Runs " + who + " “" + verb + "” action." + d;
+    }
     return this._clip(JSON.stringify(c), 110);
+  }
+  // connector-action: derive connector + capability from config.action —
+  // mirrors sop-generator.js so the DAG, SOP tab and exported SOP all agree.
+  _connectorAction(n) {
+    const action = (n && n.config && n.config.action) || "";
+    const map = [["airtable_","Airtable"],["web_","Web"],["slack_","Slack"],["gmail_","Gmail"],["drive_","Google Drive"],["docs_","Google Docs"],["sheets_","Google Sheets"],["calendar_","Google Calendar"],["filesystem_","Filesystem"]];
+    const e = map.find(p => action.indexOf(p[0]) === 0);
+    const connector = e ? e[1] : null;
+    const capability = (e ? action.slice(e[0].length) : action).replace(/_/g, " ").trim();
+    return { action, connector, capability };
+  }
+  _connectorActionLabel(n) {
+    const a = this._connectorAction(n);
+    const cap = a.capability ? a.capability.replace(/\b\w/g, c => c.toUpperCase()) : "";
+    if (a.connector && cap) return a.connector + " — " + cap;
+    return a.connector || a.action || "Action";
   }
   _deliveryDetail(c) {
     if (c.channel === "slack_dm") return "Sends the result as a Slack direct message" + (c.user ? (" to " + c.user) : "") + ".";
@@ -4505,7 +4527,9 @@ class Component extends DCLogic {
         if (trg) items.push({ glyph: trg.type === "email" ? "✉" : "⏱", typeLabel: (trg.type || "trigger").toUpperCase(), label: trg.label || (trg.type === "email" ? "Email trigger" : "Schedule"), showArrow: false });
         (wf.nodes || []).forEach((n, i) => {
           const tl = { summarize: "SUMMARIZE", llm: "LLM", extract: "EXTRACT", rewrite: "REWRITE", deliver: "DELIVER" };
-          items.push({ glyph: n.type === "summarize" ? "Σ" : n.type === "deliver" ? "#" : "λ", typeLabel: tl[n.type] || n.type.toUpperCase(), label: n.label || this._titleCase(n.type), showArrow: true });
+          const isCA = n.type === "connector-action";
+          const typeLabel = isCA ? this._connectorActionLabel(n).toUpperCase() : (tl[n.type] || n.type.toUpperCase());
+          items.push({ glyph: n.type === "summarize" ? "Σ" : n.type === "deliver" ? "#" : "λ", typeLabel, label: n.label || (isCA ? this._connectorActionLabel(n) : this._titleCase(n.type)), showArrow: true });
         });
         return items;
       })(),
@@ -4553,10 +4577,22 @@ class Component extends DCLogic {
         }
         nodes.forEach((n, i) => {
           const cfg = n.config || {}, up = deps[n.id] || [];
+          const isCA = n.type === "connector-action";
           const pairs = [];
           for (const k of ["length","style","format","channel","target","title"]) { if (cfg[k]) pairs.push({ k: this._titleCase(k), v: String(cfg[k]) }); }
           if (cfg.instructions) pairs.push({ k: "Instructions", v: String(cfg.instructions).slice(0, 90) + (cfg.instructions.length > 90 ? "…" : "") });
-          items.push({ isTrigger: false, glyph: n.type === "summarize" ? "Σ" : n.type === "deliver" ? "#" : "λ", tag: "STEP " + (i + 1), connector: tl(n.type), title: n.label || tl(n.type), desc: this._nodeDetail(n), configPairs: pairs, deps: up.join(", "), hasDeps: up.length > 0, showLine: i < nodes.length - 1 });
+          if (isCA) {
+            if (cfg.action) pairs.push({ k: "Action", v: String(cfg.action) });
+            if (cfg.baseId) pairs.push({ k: "Airtable base", v: String(cfg.baseId) });
+            if (cfg.tableId) pairs.push({ k: "Airtable table", v: String(cfg.tableId) });
+            if (cfg.query) pairs.push({ k: "Query", v: this._clip(cfg.query, 100) });
+            if (cfg.filterByFormula) pairs.push({ k: "Filter", v: String(cfg.filterByFormula) });
+            if (cfg.fields && typeof cfg.fields === "object") pairs.push({ k: "Writes fields", v: Object.keys(cfg.fields).join(", ") });
+            const mx = cfg.max_results != null ? cfg.max_results : (cfg.maxResults != null ? cfg.maxResults : cfg.maxRecords);
+            if (mx != null) pairs.push({ k: "Max results", v: String(mx) });
+          }
+          const connLabel = isCA ? this._connectorActionLabel(n) : tl(n.type);
+          items.push({ isTrigger: false, glyph: n.type === "summarize" ? "Σ" : n.type === "deliver" ? "#" : "λ", tag: "STEP " + (i + 1), connector: connLabel, title: n.label || connLabel, desc: this._nodeDetail(n), configPairs: pairs, deps: up.join(", "), hasDeps: up.length > 0, showLine: i < nodes.length - 1 });
         });
         return items;
       })(),

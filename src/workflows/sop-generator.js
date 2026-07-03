@@ -27,6 +27,47 @@ function typeLabel(type) {
   return TYPE_LABELS[type] ?? type;
 }
 
+function clip(s, n) {
+  s = String(s);
+  return s.length > n ? s.slice(0, n) + '…' : s;
+}
+
+// Connector-action nodes carry their capability in config.action (e.g.
+// `airtable_create_record`, `web_search`, `drive_list_files`). Derive the
+// connector + a human capability phrase generically from the action prefix —
+// no per-workflow special-casing.
+const CONNECTOR_BY_PREFIX = [
+  ['airtable_',   'Airtable'],
+  ['web_',        'Web'],
+  ['slack_',      'Slack'],
+  ['gmail_',      'Gmail'],
+  ['drive_',      'Google Drive'],
+  ['docs_',       'Google Docs'],
+  ['sheets_',     'Google Sheets'],
+  ['calendar_',   'Google Calendar'],
+  ['filesystem_', 'Filesystem'],
+];
+
+function connectorAction(node) {
+  const action = node.config?.action ?? '';
+  const entry = CONNECTOR_BY_PREFIX.find(([p]) => action.startsWith(p));
+  const connector = entry ? entry[1] : null;
+  const capability = (entry ? action.slice(entry[0].length) : action).replace(/_/g, ' ').trim();
+  return { action, connector, capability };
+}
+
+// Friendly "Type:" label for a step. Connector-action steps become
+// "Airtable — Create Record" instead of the raw `connector-action` slug.
+function stepTypeLabel(node) {
+  if (node.type === 'connector-action') {
+    const { connector, capability, action } = connectorAction(node);
+    const cap = capability ? capability.replace(/\b\w/g, c => c.toUpperCase()) : '';
+    if (connector && cap) return `${connector} — ${cap}`;
+    return connector || action || 'Connector action';
+  }
+  return typeLabel(node.type);
+}
+
 function triggerDescription(trigger) {
   if (trigger.type === 'email') {
     const filter = trigger.filter ? ` matching \`${trigger.filter}\`` : '';
@@ -73,6 +114,15 @@ function nodeDescription(node) {
       const target = cfg.target ? ` ${cfg.target}` : '';
       return `Sends the processed output to ${ch}${target}.`;
     }
+    case 'connector-action': {
+      const { action, connector, capability } = connectorAction(node);
+      const who = connector ? `the ${connector}` : 'a connected';
+      const verb = capability || action || 'connector action';
+      let detail = '';
+      if (cfg.query)       detail = ` Query: "${clip(cfg.query, 100)}".`;
+      else if (cfg.target) detail = ` Target: ${cfg.target}.`;
+      return `Runs ${who} “${verb}” action.${detail}`;
+    }
     default:
       return node.label ?? `Executes a \`${node.type}\` step.`;
   }
@@ -81,6 +131,22 @@ function nodeDescription(node) {
 function nodeConfig(node) {
   const cfg = node.config ?? {};
   const lines = [];
+  if (node.type === 'connector-action') {
+    const { action } = connectorAction(node);
+    if (action)              lines.push(`- **Action:** \`${action}\``);
+    if (cfg.baseId)          lines.push(`- **Airtable base:** \`${cfg.baseId}\``);
+    if (cfg.tableId)         lines.push(`- **Airtable table:** \`${cfg.tableId}\``);
+    if (cfg.query)           lines.push(`- **Query:** ${clip(cfg.query, 160)}`);
+    if (cfg.filterByFormula) lines.push(`- **Filter:** \`${cfg.filterByFormula}\``);
+    if (cfg.channel)         lines.push(`- **Channel:** ${CHANNEL_LABELS[cfg.channel] ?? cfg.channel}`);
+    if (cfg.target)          lines.push(`- **Target:** ${cfg.target}`);
+    if (cfg.fields && typeof cfg.fields === 'object')
+      lines.push(`- **Writes fields:** ${Object.keys(cfg.fields).map(k => `\`${k}\``).join(', ')}`);
+    const max = cfg.max_results ?? cfg.maxResults ?? cfg.maxRecords;
+    if (max != null)         lines.push(`- **Max results:** ${max}`);
+    if (cfg.depth)           lines.push(`- **Depth:** ${cfg.depth}`);
+    return lines.join('\n');
+  }
   if (cfg.length)       lines.push(`- **Length:** ${cfg.length}`);
   if (cfg.style)        lines.push(`- **Style:** ${cfg.style}`);
   if (cfg.format)       lines.push(`- **Format:** ${cfg.format}`);
@@ -157,9 +223,9 @@ export function generateSopMarkdown(wf) {
         ? `  *(depends on: ${upstreams.map(d => `\`${d}\``).join(', ')})*`
         : '';
 
-      lines.push(`### Step ${i + 1} — ${node.label || typeLabel(node.type)}`);
+      lines.push(`### Step ${i + 1} — ${node.label || stepTypeLabel(node)}`);
       lines.push('');
-      lines.push(`**Type:** ${typeLabel(node.type)}${depStr}`);
+      lines.push(`**Type:** ${stepTypeLabel(node)}${depStr}`);
       lines.push('');
       lines.push(nodeDescription(node));
       const cfg = nodeConfig(node);
@@ -185,7 +251,7 @@ export function generateSopMarkdown(wf) {
       if (visited.has(nodeId)) return;
       visited.add(nodeId);
       const n = nodeMap[nodeId];
-      const label = n ? (n.label || typeLabel(n.type)) : nodeId;
+      const label = n ? (n.label || stepTypeLabel(n)) : nodeId;
       lines.push(`${prefix}→ **${label}** (\`${nodeId}\`)`);
       for (const e of edges.filter(e2 => e2.from === nodeId)) {
         walk(e.to, prefix + '  ');
