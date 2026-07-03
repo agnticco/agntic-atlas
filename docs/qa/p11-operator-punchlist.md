@@ -63,8 +63,32 @@ Confirmed against the live DB (`memory/workflows/workflows.sqlite`, 25 workflows
 - **Q03 (live SOP):** ran `generateSopMarkdown` on `Gmail → Airtable Interaction Log & Slack Summary` (nodes: summarize, **connector-action**, deliver). The connector-action step rendered `**Type:** connector-action` (raw slug), used the bare node label as its only description, and surfaced **no config** — while the sibling `deliver` step got "Sends the processed output to Slack #social · Channel · Target". Uninformative for the customer SOP.
 - **Q05 / Q12 (data):** 0 runs currently in `status='running'` — defect is code-real but not live-observable right now.
 
-## Still to do
+## Remediation status (2026-07-03)
 
-- **Phase 2 live drive-through** — boot fresh server (done), register a tenant, and repro the NEEDS-REPRO items (Q09, Q11, Q14) plus confirm the top MAJORs (Q01 no-polling, Q02 conflicting ROI, Q03 SOP connector-action) in a real browser; catch any purely-visual/UX defects the code audit can't see.
-- **Admin app** (`src/admin/index.html`) — not yet audited this pass.
-- **Triage → fix** — group fixes; each fix verified against a restarted process (never a stale one).
+**Fixed & committed (11):** Q01, Q02, Q03, Q04, Q05, Q06, Q07, Q09, Q12, Q16, Q17.
+Each verified to the ceiling possible headlessly — `node --check` on the x-dc
+script / changed modules, served-by-live-server confirmation, and data-layer /
+real-generator proof where applicable. Server restarted after every backend
+change; the running process is current (frontend is static-served from disk).
+
+**Open:**
+- **Q08 (MAJOR) — DEFERRED:** missing ROI-report UI; needs a design-first
+  decision (dedicated report view vs lightweight Home summary). Not a bug patch.
+- **Q11 (MAJOR?, NEEDS-REPRO):** double-Enter double-submit — needs a real
+  browser to confirm the timing window; a synchronous in-flight flag on
+  `submitInput`/`sendChat` would close it if confirmed.
+- **Q14 (MINOR/MAJOR, NEEDS-REPRO):** connector "Connected" = grant-row-exists,
+  not token-valid — needs a revoked-token repro; fix would add a validity probe
+  or lazy refresh check to the status endpoints.
+- **Minors/polish not yet done:** Q10 (CTA on `ready_to_build` alone — safe,
+  small), Q13 ("0 Runs" above a test-run list — small product call), Q15 (slash
+  filename spaces — backend regex), Q18 (alert vs in-chat error), Q19 (empty
+  Connected section), Q20 (Filesystem not in flyout — product call), Q21 (>40-run
+  pagination — product call).
+
+**Verification gap:** no headless browser driver this session, so the frontend
+fixes are code-verified (syntax + served + logic) but not yet *behaviorally*
+driven in a browser. Recommend a click-through of localhost:3000 (or wiring a
+Chrome driver) to confirm Q01/Q04/Q05/Q06 UX.
+
+**Not yet audited:** the admin app (`src/admin/index.html`).
