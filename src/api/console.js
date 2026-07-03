@@ -16,6 +16,7 @@
 import { promises as fs } from 'node:fs';
 import { logEvent, errFields } from '../utils/event-log.js';
 import { generateSopMarkdown } from '../workflows/sop-generator.js';
+import { timeSavedMinutesForRun } from '../workflows/time-saved.js';
 
 export function mountConsoleRoutes(app, { spine, requireActiveTenant }) {
   const store = spine.engine.workflowStore;
@@ -177,8 +178,8 @@ export function mountConsoleRoutes(app, { spine, requireActiveTenant }) {
       let ytdTimeSavedS = 0;
       for (let i = 0; i < runs.length; i++) {
         if (runs[i].started_at < yearStart) continue;
-        const durationS = runTimesMs[i] / 1000;
-        ytdTimeSavedS += Math.max(0, baselineDurationS - durationS);
+        // Unified model: measured when a baseline exists, else flat estimate.
+        ytdTimeSavedS += timeSavedMinutesForRun(runs[i], baselineDurationS) * 60;
       }
 
       const lastRunMs = runTimesMs[0] ?? null;
@@ -289,13 +290,9 @@ export function mountConsoleRoutes(app, { spine, requireActiveTenant }) {
         let wfSavedMinutes = 0;
 
         for (const r of runs) {
-          if (r.time_saved_minutes != null) {
-            wfSavedMinutes += r.time_saved_minutes;
-          } else if (baselineS > 0) {
-            // Backfill for runs recorded before P9 (no time_saved_minutes column yet)
-            const durationS = (new Date(r.completed_at) - new Date(r.started_at)) / 1000;
-            wfSavedMinutes += Math.max(0, (baselineS - durationS) / 60);
-          }
+          // Unified model (time-saved.js): persisted measured value, else
+          // measured baseline−actual, else flat estimate.
+          wfSavedMinutes += timeSavedMinutesForRun(r, baselineS);
         }
 
         totalTimeSavedMinutes += wfSavedMinutes;

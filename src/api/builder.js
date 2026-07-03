@@ -26,6 +26,7 @@ import { webConnectionStatus } from '../connectors/web/index.js';
 import { getGoogleAccessToken } from '../connectors/google/index.js';
 import { getSlackToken } from '../connectors/slack/oauth.js';
 import { getAirtableAccessToken } from '../connectors/airtable/oauth.js';
+import { sumTimeSavedMinutes } from '../workflows/time-saved.js';
 
 // Retry an LLM call up to maxRetries times on transient provider errors (500/529/503).
 async function withLLMRetry(fn, maxRetries = 2) {
@@ -963,7 +964,9 @@ Rules:
 
       // Build enriched workflow objects once — shared across modules.
       const workflows = wfs.map(wf => {
-        const runs = store.getRuns(wf.id, 20, { userId, tenantId }) || [];
+        // 500 (not 20) so run counts and time-saved aren't undercounted for
+        // high-volume workflows; matches the ROI report's window.
+        const runs = store.getRuns(wf.id, 500, { userId, tenantId }) || [];
         const ok   = runs.filter(r => r.status === 'success').length;
         const fail = runs.filter(r => r.status === 'error').length;
         const last = runs[0] ?? null;
@@ -975,6 +978,9 @@ Rules:
           triggerType: trg?.type || 'manual',
           schedule: trg?.schedule || trg?.cron || null,
           runCount: runs.length, successCount: ok, failCount: fail,
+          // Unified time-saved: real successful runs only, measured-or-estimated
+          // per run (see time-saved.js). Home total === ROI total === sum(Profile).
+          savedMinutes: sumTimeSavedMinutes(runs, wf.baseline_duration_s ?? 0),
           lastRunAt: last?.started_at ?? null,
           lastRunStatus: last?.status ?? null,
           lastError: last?.error ?? null,
@@ -1032,7 +1038,9 @@ Rules:
 
       // ── Assemble module payloads ──────────────────────────────────────────
       const successRate = totalRuns > 0 ? Math.round((totalOk / totalRuns) * 100) : null;
-      const timeSavedMins = totalRuns * 3; // 3 min saved per automated run
+      // Unified, honest estimate: sum of per-run saved minutes across real
+      // successful runs (test + failed runs no longer inflate it).
+      const timeSavedMins = Math.round(workflows.reduce((s, w) => s + w.savedMinutes, 0));
 
       const modules = {
         ai_greeting: greetingData ?? {
