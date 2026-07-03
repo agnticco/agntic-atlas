@@ -3164,14 +3164,20 @@ class Component extends DCLogic {
     if (!wfId) return;
     const url = "/api/console/workflows/" + wfId + "/sop" + (format === "pdf" ? "?format=pdf" : "");
     fetch(url, { headers: { "Authorization": "Bearer " + this.state.authToken } })
-      .then(r => r.blob())
+      .then(function(r) {
+        // Guard: without an r.ok check a 404/500 JSON error body downloads as a
+        // corrupt .pdf/.md with no on-screen error.
+        if (!r.ok) throw new Error("Export failed (" + r.status + ")");
+        return r.blob();
+      })
       .then(function(blob) {
         const href = URL.createObjectURL(blob);
         const a = document.createElement("a"); a.href = href;
         a.download = "workflow-sop." + (format === "pdf" ? "pdf" : "md");
         document.body.appendChild(a); a.click(); document.body.removeChild(a);
         URL.revokeObjectURL(href);
-      }).catch(() => {});
+      })
+      .catch(function(e) { alert("Couldn't export the SOP — " + (e && e.message ? e.message : "please try again.")); });
   }
   _relTime(s) {
     if (!s) return "—";
