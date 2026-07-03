@@ -3749,6 +3749,9 @@ class Component extends DCLogic {
     this._saveWorkflow(this.state.spec);
   }
   _saveWorkflow(spec, confirmationLog) {
+    if (this._saving) return; // in-flight guard: a double-click (phase stays
+    // "draft" until the POST resolves) would otherwise persist the workflow twice
+    this._saving = true;
     const self = this;
     const S = this.state;
     const testRun = (S.testState === "passed" || S.testState === "failed") ? {
@@ -3776,7 +3779,8 @@ class Component extends DCLogic {
       .catch(function(e) {
         self.setState({ thinking: false, phase: "draft" });
         alert("Could not save workflow: " + String(e));
-      });
+      })
+      .finally(function() { self._saving = false; });
   }
 
   // ── panels ────────────────────────────────────────────────────────
