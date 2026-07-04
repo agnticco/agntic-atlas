@@ -4286,9 +4286,23 @@ class Component extends DCLogic {
       const o = steps[i] && steps[i].output;
       if (looksDelivery(o)) continue;
       const t = this._asText(o);
-      if (t && !/^\s*[\{\[]/.test(t)) return this._clip(t, 600);
+      if (t && !/^\s*[\{\[]/.test(t)) return this._clip(this._htmlToText(t), 600);
     }
     return "";
+  }
+  // R6/C3: previews were showing raw ```html source. Strip code fences and reduce
+  // HTML to clean, readable text (safe — no innerHTML, so no XSS / layout break).
+  _htmlToText(s) {
+    let t = String(s || "");
+    t = t.replace(/^\s*```(?:html|markdown|md)?\s*\n?/i, "").replace(/\n?```\s*$/i, "");
+    if (/<[a-z][\s\S]*>/i.test(t)) {
+      t = t.replace(/<\s*(br|\/p|\/div|\/h[1-6]|\/li|\/tr|\/table)\s*\/?\s*>/gi, "\n")
+           .replace(/<\s*li[^>]*>/gi, "• ")
+           .replace(/<[^>]+>/g, "")
+           .replace(/&nbsp;/gi, " ").replace(/&amp;/gi, "&").replace(/&lt;/gi, "<").replace(/&gt;/gi, ">").replace(/&#0?39;|&apos;/gi, "'").replace(/&quot;/gi, '"')
+           .replace(/\n[ \t]+/g, "\n").replace(/[ \t]{2,}/g, " ").replace(/\n{3,}/g, "\n\n").trim();
+    }
+    return t;
   }
   _asText(v) {
     if (v == null) return "";
@@ -4822,7 +4836,7 @@ class Component extends DCLogic {
         const expanded = S.profileExpandedOutputs || {};
         const PREVIEW = 240;
         return p.recentOutputs.map(o => {
-          const text = String(o.output || "");
+          const text = this._htmlToText(String(o.output || "")); // R6/C3: readable, not raw HTML source
           const isExpanded = !!expanded[o.id];
           return {
             startedAt: this._relTime(o.startedAt),
