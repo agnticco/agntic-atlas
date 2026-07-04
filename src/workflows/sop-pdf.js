@@ -8,13 +8,17 @@
 
 import PDFDocument from 'pdfkit';
 
+// Light theme: dark text on the PDF's default white page. The previous scheme
+// drew white text (#FFFFFF) but never painted a dark background, so the whole
+// SOP exported blank (invisible white-on-white). Dark-on-white is also correct
+// for a printable/shareable document.
 const COLORS = {
-  bg:       '#0A0A0A',
-  white:    '#FFFFFF',
-  dim:      '#8A8A8A',
-  accent:   '#9fd6a8',
-  rule:     '#2A2A2A',
-  codeBg:   '#161618',
+  bg:       '#FFFFFF',
+  white:    '#1A1A1A', // body/heading text (dark)
+  dim:      '#6A6A6A', // labels
+  accent:   '#2E7D32', // section headings — dark green, readable on white
+  rule:     '#DDDDDD',
+  codeBg:   '#F2F2F2',
 };
 
 const FONT = {

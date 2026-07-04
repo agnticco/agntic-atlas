@@ -40,7 +40,10 @@ CREATE INDEX IF NOT EXISTS idx_users_email  ON users(email);
 export const PLATFORM_TENANT_ID = 'platform';
 
 /** Default homepage modules shown when a user has no saved preference. */
-export const DEFAULT_HOMEPAGE_MODULES = ['ai_greeting'];
+// time_saved is on by default so the ROI report (the customer-facing value
+// proof) is discoverable out-of-the-box — it's otherwise reachable ONLY via the
+// Home time-saved card's "View ROI report" link (B1).
+export const DEFAULT_HOMEPAGE_MODULES = ['ai_greeting', 'time_saved'];
 
 /** Fail-closed guard: a tenant-scoped op must never run without a tenant. */
 function requireTenant(tenantId, where) {
