@@ -2672,6 +2672,25 @@ class Component extends DCLogic {
       // conversation survives starting another build (recovered in openConsole).
       if (S.workflowId) { try { localStorage.setItem(this._buildKeyWf(S.workflowId), str); } catch (e2) { /* quota */ } }
     } catch (e) { /* quota / private mode — non-fatal */ }
+    this._persistDraftServer(); // Q23: also autosave the spec server-side
+  }
+  // Q23: debounced server-side draft autosave so an unpublished build isn't lost
+  // across devices / cleared storage. Only touches draft rows (backend guards on
+  // status==='draft'); persists just the spec, no validation, no version bump.
+  _persistDraftServer() {
+    const S = this.state;
+    if (!S.authToken || !S.workflowId || !S.isDraftBuild) return;
+    const spec = S.spec;
+    if (!spec || !Array.isArray(spec.nodes) || !spec.nodes.length) return; // nothing built yet
+    const payload = { name: spec.name, description: spec.description, nodes: spec.nodes, edges: spec.edges, triggers: spec.triggers };
+    const str = JSON.stringify(payload);
+    if (str === this._lastDraftStr) return; // unchanged since last save
+    this._lastDraftStr = str;
+    const wfId = S.workflowId, self = this;
+    clearTimeout(this._draftSaveTimer);
+    this._draftSaveTimer = setTimeout(function() {
+      fetch('/api/builder/workflows/' + wfId + '/draft', { method: 'PUT', headers: self._H(), body: JSON.stringify({ spec: payload }) }).catch(function() {});
+    }, 1200);
   }
   _restoreBuild(tid, email) {
     try {
@@ -2956,15 +2975,30 @@ class Component extends DCLogic {
   openConsole(wfId) {
     this._stopConsolePoll(); // tear down any poll from a previously-open console
     this._abortChat();       // cancel any in-flight builder chat stream
-    // Draft with no nodes → resume in builder instead of opening an empty console
+    // A draft always resumes in the BUILDER, never the console (it isn't a live,
+    // runnable workflow). Q23: recover the conversation from localStorage (same
+    // browser); if absent but the spec was autosaved server-side, hydrate that
+    // (cross-device); otherwise a fresh chat for an empty draft.
     var wf = (this.state.consoleSidebarWfs || []).find(function(w) { return w.id === wfId; });
-    if (wf && wf.status === 'draft' && !(wf.nodes && wf.nodes.length)) {
-      // Recover this draft's conversation from its own slot. Without this, the
-      // transcript blanks whenever another build overwrote the single legacy slot.
+    if (wf && wf.status === 'draft') {
       var slice = null;
       try { var raw = localStorage.getItem(this._buildKeyWf(wf.id)); if (raw) slice = JSON.parse(raw); } catch (e) { slice = null; }
       if (slice && this._persistable(slice) && ((slice.msgs && slice.msgs.length) || slice.spec)) {
         this._applyBuildSlice(slice, { workflowId: wf.id, isDraftBuild: true, isEditing: false, editingIntro: null, testState: "idle", runSteps: [], runStepIndex: 0, failIndex: -1, deliveries: [], runOutput: null, runError: "" });
+        return;
+      }
+      if (wf.nodes && wf.nodes.length) {
+        // Cross-device: no local conversation, but the draft spec is on the server.
+        var spec = { name: wf.name, description: wf.description, triggers: wf.triggers || [], nodes: wf.nodes || [], edges: wf.edges || [], errorHandling: wf.error_handling || {} };
+        this.setState({
+          view: 'build', connectionsOpen: false, accountOpen: false, profileOpen: false,
+          workflowId: wf.id, isDraftBuild: true, phase: "proposed", spec,
+          intent: wf.user_intent || wf.name || null, threadId: null, inputMode: "change",
+          msgs: [{ isAtlas: true, text: "Here's your saved draft — review it and publish when you're ready, or tell me what to change.", hasReason: false }],
+          inputValue: "", thinking: false, testState: "idle",
+          runSteps: [], runStepIndex: 0, failIndex: -1, deliveries: [], runOutput: null, runError: "",
+          isEditing: false, editingIntro: null,
+        });
         return;
       }
       this.setState({
