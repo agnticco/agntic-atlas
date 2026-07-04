@@ -75,6 +75,18 @@ User report: the sidebar "felt glitchy, like workflows weren't saved after leavi
 
 **Ruled out** (investigated, not the bug): localStorage key instability — `userEmail`/`tenantId` are set atomically with `authToken` in `_applyAuth` and `_saveBuild` bails until then, so save/restore keys always match; published workflows reliably reload on boot (`_loadWorkflows`). The "not saved" symptom is Q22 (phantom clutter) + Q23 (local-only drafts), not lost published data.
 
+## Scheduler — CRITICAL (from user report: live workflow silent ~7 days, 2026-07-03)
+
+| ID | Sev | Summary | Evidence | Status |
+|----|-----|---------|----------|--------|
+| Q25 | **BLOCKER** | `_isFlowDue` read cron from `t.config?.cron`, but stored triggers put it directly on the trigger (`{type:'schedule',cron:'0 5 * * *'}`) → schedule invisible, workflow **never due**, no output for days | `src/workflows/workflow-store.js` `_isFlowDue` | **FIXED** — read `t.cron ?? t.config?.cron` (+ time). Verified getDue() 0→recognizes schedules. |
+| Q26 | **BLOCKER** | `getDue()` had no `deleted_at IS NULL` filter → 8 soft-deleted workflows still scheduled; fixing Q25 alone would fire ~5 deleted workflows into Slack/email | `workflow-store.js` `getDue` | **FIXED** — added `deleted_at IS NULL`. Verified getDue()=1 (only the live workflow). |
+| Q28 | MAJOR | Missed runs (scheduler down at 5am) would silently auto-fire hours late; owner wants notify + choose (run/edit/defer) | owner decision 2026-07-03 | **FIXED (detection)** — grace window (`SCHEDULE_GRACE_HOURS`, default 2h); `_flowScheduleState`→due/overdue/null; `getOverdue()`. Verified overdue not auto-fired on restart. **UI notification pending.** |
+| Q27 | MINOR | `_isFlowDue` uses server-local time, ignores trigger `timezone` — fires at server-local hour | `workflow-store.js` | OPEN — harmless now (server TZ = Central = trigger TZ); real when multi-TZ / non-Central host. |
+| — | — | Scheduler *was* started (server.js:713, default on) but the 7-day server was stale (booted pre-wiring). Restarted; now logs `[scheduler] started — tick 60s`. | — | RESOLVED (restart + observability). |
+
+**Root-cause of the 7-day silence:** stale server (never ticked) **and** Q25 (never due even if ticking). Both fixed; scheduler now live and will fire on-time. 1 workflow ("AI Morning Briefing") is currently **overdue** — awaiting the owner-notification UI so you can run/defer it.
+
 ## Remediation status (2026-07-03)
 
 **Fixed & committed (11):** Q01, Q02, Q03, Q04, Q05, Q06, Q07, Q09, Q12, Q16, Q17.
