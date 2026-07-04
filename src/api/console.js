@@ -107,10 +107,14 @@ export function mountConsoleRoutes(app, { spine, requireActiveTenant }) {
       const wf = store.get(req.params.id, { userId: req.user.id });
       if (!wf || wf.tenant_id !== req.tenant.id) return res.status(404).json({ error: 'Not found' });
 
+      // Test runs are real executions (end-to-end, produce output), so they count
+      // as runs here — this keeps the metrics band consistent with the run-history
+      // list, which shows them with a TEST badge (Q13). Time-saved/ROI still
+      // excludes test runs (that measures real-work value, not executions).
       const runs = store.getRuns(req.params.id, 200, {
         userId:   req.user.id,
         tenantId: req.tenant.id,
-      }).filter(r => !r.is_test);
+      });
 
       const total   = runs.length;
       const success = runs.filter(r => r.status === 'success').length;
