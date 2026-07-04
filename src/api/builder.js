@@ -46,16 +46,29 @@ function cleanLLMError(err) {
   const raw = String(err?.message ?? err);
   const m = raw.match(/^(\d+)\s*(\{[\s\S]+\})/);
   if (m) {
+    const status = Number(m[1]);
     try {
       const body = JSON.parse(m[2]);
       const type = body?.error?.type;
-      if (type === 'api_error' || type === 'overloaded_error') {
+      // Transient service issues → tell the operator to retry.
+      if (type === 'api_error' || type === 'overloaded_error' || type === 'rate_limit_error'
+          || status >= 500 || status === 429) {
         return 'The AI service is temporarily unavailable. Please try again in a moment.';
       }
-      if (body?.error?.message) return body.error.message;
+      // Context-length is the one 400 an operator can actually act on.
+      const msg = String(body?.error?.message || '');
+      if (/prompt is too long|maximum.*token|context.*length/i.test(msg)) {
+        return 'This conversation got too long for the AI to process. Start a fresh workflow or shorten your request.';
+      }
+      // Everything else — 400 invalid_request_error (incl. tool_use/tool_result
+      // mismatches), auth/permission faults — is an internal error, not operator-
+      // actionable. Never surface raw SDK text (R17); the caller logs the real
+      // error server-side (logEvent 'chat.error').
+      return 'Something went wrong handling that message. Please try again.';
     } catch { /* fall through */ }
   }
-  return err?.message ?? raw;
+  // Non-SDK errors (network, our own throws): generic message, no raw leak.
+  return 'Something went wrong handling that message. Please try again.';
 }
 
 // Project connector scope-aware availability onto the channel catalog, so the
@@ -626,20 +639,27 @@ Rules:
         // Also catches mixed text-preamble + tool-call responses: if mid-stream tool
         // calls appear (model said something then decided to use a tool), capture them
         // and loop rather than dropping them.
-        let midStreamToolCalls = null;
+        let midStreamToolCalls = null, midStreamChunk = null;
         processToken(typeof firstChunk.content === 'string' ? firstChunk.content : '');
         for await (const chunk of gen) {
           const tc = chunk?.additionalKwargs?.toolCalls;
-          if (Array.isArray(tc) && tc.length) { midStreamToolCalls = tc; break; }
+          if (Array.isArray(tc) && tc.length) { midStreamToolCalls = tc; midStreamChunk = chunk; break; }
           processToken(typeof chunk.content === 'string' ? chunk.content : '');
         }
 
         if (midStreamToolCalls) {
           // Model emitted text preamble then tool calls in the same turn.
-          // Discard the preamble (it's not the JSON reply), execute the tools, loop.
+          // Discard the preamble from the *client* stream (it's not the JSON reply),
+          // but re-submit the assistant turn with its FULL additionalKwargs — crucially
+          // `_anthropicContent`, which holds the original tool_use blocks. Pushing a bare
+          // { toolCalls } (missing _anthropicContent) made _prepareAnthropicMessages fall
+          // back to empty content, so the resent assistant turn had no tool_use blocks
+          // while executeChatTools still appended tool_result blocks referencing their
+          // ids — Anthropic then 400s ("tool_use ids without tool_result blocks") and the
+          // raw error leaked to the operator (R17). Mirror the clean-round path (above).
           extractState = 'searching'; searchBuf = ''; replyBuf = ''; streamedText = ''; escapeNext = false;
           for (const tc of midStreamToolCalls) sseWrite({ type: 'tool', name: tc.name });
-          msgArray.push(new AIMessage('', { toolCalls: midStreamToolCalls }));
+          msgArray.push(new AIMessage(midStreamChunk?.content ?? '', midStreamChunk?.additionalKwargs ?? { toolCalls: midStreamToolCalls }));
           await executeChatTools(midStreamToolCalls, msgArray);
           continue;
         }
