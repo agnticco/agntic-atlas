@@ -2668,7 +2668,12 @@ class Component extends DCLogic {
         if (m.isClarify)    return { ...m, chips: [] };
         return m;
       });
-      const F = ["view","phase","intent","threadId","inputMode","spec","testState","runSteps","failIndex","deliveries","runOutput","runError","workflowId"];
+      // NOTE: threadId is deliberately NOT persisted. Converger sessions are
+      // in-memory server-side and never survive a reload/restart, so a restored
+      // threadId points at a dead session ("session not found"). Omitting it means
+      // a restored draft routes change requests through the spec-based edit-change
+      // path (which works from the spec alone) instead of a dead converger session.
+      const F = ["view","phase","intent","inputMode","spec","testState","runSteps","failIndex","deliveries","runOutput","runError","workflowId"];
       const slice = {}; F.forEach(k => { slice[k] = S[k]; });
       slice.msgs = cleanMsgs;
       const str = JSON.stringify(slice);
@@ -2714,9 +2719,13 @@ class Component extends DCLogic {
   // Converger sessions don't survive a reload, so a mid-conversation slice is
   // unlocked and dropped back to chat; threadId is cleared.
   _applyBuildSlice(slice, extra) {
-    const overrides = Object.assign({ view: 'build', thinking: false, inputValue: "", mentionOpen: false, mentionQuery: "", mentionAt: -1, connectionsOpen: false, accountOpen: false, profileOpen: false, newStateExiting: false }, extra || {});
+    // threadId is ALWAYS cleared: converger sessions are in-memory server-side and
+    // never survive a reload/restart, so any restored threadId is dead. With it null,
+    // change requests route to the spec-based edit-change path instead of a dead
+    // session ("session not found"). Applies to every restored phase, not just building.
+    const overrides = Object.assign({ view: 'build', thinking: false, inputValue: "", threadId: null, mentionOpen: false, mentionQuery: "", mentionAt: -1, connectionsOpen: false, accountOpen: false, profileOpen: false, newStateExiting: false }, extra || {});
     if (slice.inputMode === 'locked') overrides.inputMode = 'chat';
-    if (slice.phase === 'building') { overrides.phase = 'chat'; overrides.threadId = null; }
+    if (slice.phase === 'building') { overrides.phase = 'chat'; }
     this.setState(Object.assign({}, slice, overrides));
   }
   _clearBuild() { this._lastBuildStr = ""; try { localStorage.removeItem(this._buildKey()); } catch (e) {} }
@@ -3386,6 +3395,9 @@ class Component extends DCLogic {
   _runDuration(r) {
     if (!r || !r.started_at || !r.completed_at) return r && r.status === "running" ? "running…" : "—";
     const d = new Date(r.completed_at) - new Date(r.started_at);
+    // Pre-R8 test runs stamped started_at≈completed_at (~1ms) — bogus timing, not a
+    // real sub-second run. Show "—" instead of a misleading "1ms" (S7-4).
+    if (r.is_test && d < 100 && Array.isArray(r.steps) && r.steps.length > 0) return "—";
     if (d < 1000)  return d + "ms";
     if (d < 60000) return (d / 1000).toFixed(1) + "s";
     return (d / 60000).toFixed(1) + "min";
@@ -3440,7 +3452,19 @@ class Component extends DCLogic {
     if (!t) return;
     this._clearChatInput();
     // Conversational phase: talk to the chat agent, don't build yet.
-    if (S.phase === "chat") { this.sendChat(t); return; }
+    if (S.phase === "chat") {
+      // A restored / dead-session draft can land in phase "chat" while already holding
+      // a complete spec. Free-text there must EDIT the existing spec (edit-change path),
+      // not fall into generic chat — which would wrongly refuse ("I can't edit an
+      // already-running workflow"). Route it to the spec-based editor (S7-10/S7-12).
+      if (!S.threadId && S.spec && Array.isArray(S.spec.nodes) && S.spec.nodes.length) {
+        this.setState({ msgs: [...S.msgs, { isOperator: true, text: t }], inputValue: "", thinking: true, phase: "building", testState: "idle", runStepIndex: 0, runSteps: [], failIndex: -1 });
+        this._applyEditChange(t);
+        return;
+      }
+      this.sendChat(t);
+      return;
+    }
     if (S.inputMode === "clarify") {
       this.setState({ msgs: [...S.msgs, { isOperator: true, text: t }], inputValue: "", thinking: true, inputMode: "locked" });
       this._send({ type: "clarification", answer: t });
@@ -3799,6 +3823,16 @@ class Component extends DCLogic {
     if (comp === 'name') {
       const nm = typeof spec === 'string' ? spec : (spec.name || 'Workflow');
       return { title: '“' + nm + '”', desc: 'The name you’ll see for this workflow in your list.' };
+    }
+    if (comp === 'remove_node') {
+      const rid = (spec && spec.id) || spec;
+      const sp = this.state.spec;
+      const node = sp && sp.nodes && sp.nodes.find(n => n.id === rid);
+      const nm = (node && node.label) || rid || 'this step';
+      return { title: 'Remove “' + nm + '”', desc: rat || 'Removes this step and reconnects the steps around it.' };
+    }
+    if (comp === 'remove_edge') {
+      return { title: 'Remove a connection', desc: rat || 'Removes a link between two steps.' };
     }
     if (comp === 'trigger') {
       const t = spec;
@@ -4275,6 +4309,28 @@ class Component extends DCLogic {
     if (ch === "slack" || ch.charAt(0) === "#" || /^slack:/.test(ch) || c.target) return { glyph: "#", header: this._slackChannel().replace(/^#/, "") };
     return { glyph: "→", header: (ch || "Destination") };
   }
+  // Method-aware glyph for a deliver node in a DAG (S7-3) — never a Slack "#" on email etc.
+  _deliverGlyph(n) {
+    const ch = (n && n.config && n.config.channel) || "";
+    if (ch === "gmail_send" || ch === "email" || ch === "slack_dm") return "✉";
+    if (ch === "in_app" || ch === "inbox_deliver") return "⬤";
+    if (ch === "docs_create") return "▤";
+    if (ch === "sheets_append" || ch.indexOf("airtable_") === 0) return "▦";
+    if (ch === "calendar_create_event") return "◷";
+    if (ch === "tasks_create") return "☑";
+    if (ch === "slack" || ch.charAt(0) === "#" || (n && n.config && n.config.target)) return "#";
+    return "→";
+  }
+  // S7-6: draft workflows carry a placeholder name ("New workflow") until named,
+  // so multiple abandoned drafts look identical. Fall back to the user's original
+  // intent so each is distinguishable and meaningful in the sidebar.
+  _wfDisplayName(wf) {
+    const nm = String((wf && wf.name) || "").trim();
+    const generic = !nm || nm === "New workflow" || nm === "Untitled workflow" || nm === "Untitled";
+    if (!generic) return nm;
+    const intent = String((wf && wf.user_intent) || "").trim();
+    return intent ? this._clip(intent, 42) : (nm || "Untitled draft");
+  }
   _hashName(s) { s = String(s || "").replace(/^#/, "").trim(); return s ? ("#" + s) : ""; }
   _humanCron(cron) {
     const p = String(cron || "").trim().split(/\s+/); if (p.length < 5) return "";
@@ -4455,7 +4511,7 @@ class Component extends DCLogic {
             ? () => this.setState({ view: 'build', connectionsOpen: false, accountOpen: false, profileOpen: false })
             : () => this.openConsole(wf.id);
           const isRenaming = S.renamingWfId === wf.id;
-          return { name: wf.name || wf.user_intent || "Untitled", dot, glow, radius, bg: "transparent", border: "transparent", nameColor: isHighlighted ? "#fff" : "rgba(255,255,255,.5)", itemClass: isHighlighted ? "" : "wf-item-inactive", onClick, onDelete: (e) => { e.stopPropagation(); this.softDeleteWorkflow(wf.id); }, isRenaming, renameValue: isRenaming ? S.renamingValue : "", onEditClick: (e) => { e.stopPropagation(); this.startRename(wf.id, wf.name || wf.user_intent || "Untitled"); }, onRenameInput: (e) => this.setState({ renamingValue: e.target.value }), onRenameKeydown: (e) => { if (e.key === "Enter") { e.preventDefault(); this.commitRename(wf.id); } if (e.key === "Escape") { e.preventDefault(); this.cancelRename(); } }, onRenameBlur: () => this.commitRename(wf.id), onRenameInputClick: (e) => e.stopPropagation(), showRun: isPublished && !isRunning, onRun: (e) => { e.stopPropagation(); this.runWorkflowFromSidebar(wf.id); } };
+          return { name: this._wfDisplayName(wf), dot, glow, radius, bg: "transparent", border: "transparent", nameColor: isHighlighted ? "#fff" : "rgba(255,255,255,.5)", itemClass: isHighlighted ? "" : "wf-item-inactive", onClick, onDelete: (e) => { e.stopPropagation(); this.softDeleteWorkflow(wf.id); }, isRenaming, renameValue: isRenaming ? S.renamingValue : "", onEditClick: (e) => { e.stopPropagation(); this.startRename(wf.id, this._wfDisplayName(wf)); }, onRenameInput: (e) => this.setState({ renamingValue: e.target.value }), onRenameKeydown: (e) => { if (e.key === "Enter") { e.preventDefault(); this.commitRename(wf.id); } if (e.key === "Escape") { e.preventDefault(); this.cancelRename(); } }, onRenameBlur: () => this.commitRename(wf.id), onRenameInputClick: (e) => e.stopPropagation(), showRun: isPublished && !isRunning, onRun: (e) => { e.stopPropagation(); this.runWorkflowFromSidebar(wf.id); } };
         });
         // Show in-progress build entry when builder is the active view OR when a session with content exists
         // (so navigating to home/console/inbox doesn't lose the entry while a build is in flight)
@@ -4611,7 +4667,7 @@ class Component extends DCLogic {
       onBuilderRenameInput: (e) => this.setState({ renamingValue: e.target.value }),
       onBuilderRenameKeydown: (e) => { if (e.key === 'Enter') { e.preventDefault(); this.commitRename(S.workflowId); } if (e.key === 'Escape') { e.preventDefault(); this.cancelRename(); } },
       onBuilderRenameBlur: () => { if (S.workflowId) this.commitRename(S.workflowId); },
-      testStatusLabel: published ? "Live" : (S.phase === "chat" ? "Not started" : (!testUnlocked ? "Incomplete" : (TS === "running" ? "Testing…" : (TS === "passed" ? "All steps passed" : (TS === "failed" ? "Break found" : "Ready to test"))))),
+      testStatusLabel: published ? "Live" : (S.phase === "chat" ? "Not started" : (!testUnlocked ? ((S.spec && S.spec.nodes && S.spec.nodes.length) ? ("Building · " + S.spec.nodes.length + " step" + (S.spec.nodes.length === 1 ? "" : "s")) : "Incomplete") : (TS === "running" ? "Testing…" : (TS === "passed" ? "All steps passed" : (TS === "failed" ? "Break found" : "Ready to test"))))),
       testStatusColor: (TS === "passed" || published) ? "#9fd6a8" : (TS === "failed" ? "#f0a896" : (TS === "running" ? "#f3cd86" : "rgba(255,255,255,.45)")),
       testStatusGlow: (TS === "passed" || published) ? "rgba(127,194,138,.55)" : (TS === "failed" ? "rgba(232,116,97,.5)" : (TS === "running" ? "rgba(240,191,107,.5)" : "rgba(255,255,255,0)")),
       testCaption: S.phase === "chat" ? "Your workflow takes shape here once you're ready to build — just say the word in the chat."
@@ -4895,7 +4951,7 @@ class Component extends DCLogic {
           const tl = { summarize: "SUMMARIZE", llm: "LLM", extract: "EXTRACT", rewrite: "REWRITE", deliver: "DELIVER" };
           const isCA = n.type === "connector-action";
           const typeLabel = isCA ? this._connectorActionLabel(n).toUpperCase() : (tl[n.type] || n.type.toUpperCase());
-          items.push({ glyph: n.type === "summarize" ? "Σ" : n.type === "deliver" ? "#" : "λ", typeLabel, label: n.label || (isCA ? this._connectorActionLabel(n) : this._titleCase(n.type)), showArrow: true });
+          items.push({ glyph: n.type === "summarize" ? "Σ" : n.type === "deliver" ? this._deliverGlyph(n) : "λ", typeLabel, label: n.label || (isCA ? this._connectorActionLabel(n) : this._titleCase(n.type)), showArrow: true });
         });
         return items;
       })(),
@@ -4945,8 +5001,19 @@ class Component extends DCLogic {
           const cfg = n.config || {}, up = deps[n.id] || [];
           const isCA = n.type === "connector-action";
           const pairs = [];
-          for (const k of ["length","style","format","channel","target","title"]) { if (cfg[k]) pairs.push({ k: this._titleCase(k), v: String(cfg[k]) }); }
-          if (cfg.instructions) pairs.push({ k: "Instructions", v: String(cfg.instructions).slice(0, 90) + (cfg.instructions.length > 90 ? "…" : "") });
+          if (n.type === "deliver") {
+            // S7-5: method-aware — never render raw "Channel: gmail_send" in a customer SOP.
+            const DL = { gmail_send:"Email", email:"Email", slack:"Slack", slack_dm:"Slack direct message", in_app:"Atlas inbox", inbox_deliver:"Atlas inbox", webhook:"Webhook", docs_create:"Google Doc", sheets_append:"Google Sheet", calendar_create_event:"Google Calendar event", tasks_create:"Google Task", airtable_create_record:"Airtable record", airtable_update_record:"Airtable record" };
+            const ch = cfg.channel || "";
+            if (ch) pairs.push({ k: "Delivery", v: DL[ch] || ch });
+            if (cfg.to) pairs.push({ k: "To", v: String(cfg.to) });
+            else if (cfg.user) pairs.push({ k: "To", v: String(cfg.user) });
+            else if (cfg.target) pairs.push({ k: "Channel", v: String(cfg.target) });
+            if (cfg.title) pairs.push({ k: "Title", v: String(cfg.title) });
+          } else {
+            for (const k of ["length","style","format","channel","target","title"]) { if (cfg[k]) pairs.push({ k: this._titleCase(k), v: String(cfg[k]) }); }
+            if (cfg.instructions) pairs.push({ k: "Instructions", v: String(cfg.instructions).slice(0, 90) + (cfg.instructions.length > 90 ? "…" : "") });
+          }
           if (isCA) {
             if (cfg.action) pairs.push({ k: "Action", v: String(cfg.action) });
             if (cfg.baseId) pairs.push({ k: "Airtable base", v: String(cfg.baseId) });
@@ -4958,7 +5025,7 @@ class Component extends DCLogic {
             if (mx != null) pairs.push({ k: "Max results", v: String(mx) });
           }
           const connLabel = isCA ? this._connectorActionLabel(n) : tl(n.type);
-          items.push({ isTrigger: false, glyph: n.type === "summarize" ? "Σ" : n.type === "deliver" ? "#" : "λ", tag: "STEP " + (i + 1), connector: connLabel, title: n.label || connLabel, desc: this._nodeDetail(n), configPairs: pairs, deps: up.join(", "), hasDeps: up.length > 0, showLine: i < nodes.length - 1 });
+          items.push({ isTrigger: false, glyph: n.type === "summarize" ? "Σ" : n.type === "deliver" ? this._deliverGlyph(n) : "λ", tag: "STEP " + (i + 1), connector: connLabel, title: n.label || connLabel, desc: this._nodeDetail(n), configPairs: pairs, deps: up.join(", "), hasDeps: up.length > 0, showLine: i < nodes.length - 1 });
         });
         return items;
       })(),

@@ -388,6 +388,31 @@ export class WorkflowValidator {
         refRe.lastIndex = 0;
       }
     }
+
+    // S7-9: flag templates that use UNSUPPORTED syntax (field paths, array
+    // indexing, wildcards). The engine resolves ONLY {{prev}}, {{<id>.output}} and
+    // date tokens; anything else (e.g. {{node.results[*].id}}) is passed through
+    // literally and fails at runtime. Catch it at build time instead.
+    const anyRe = /\{\{\s*([^}]+?)\s*\}\}/g;
+    const okRe  = /^[a-z0-9_-]+(\.output)?$/i;
+    for (const node of nodes) {
+      const strings = this._collectStrings(node.config);
+      for (const s of strings) {
+        let m;
+        while ((m = anyRe.exec(s)) !== null) {
+          const inner = m[1].trim();
+          if (STATIC_VARS.has(inner.toLowerCase())) continue;
+          if (okRe.test(inner)) continue; // {{id}} / {{id.output}} — validated above
+          issues.push({
+            severity: 'error', code: 'BAD_TEMPLATE_REF',
+            message: `"${node.label || node.id}" uses an unsupported reference {{${inner}}}. The engine only resolves {{prev}} and {{<stepId>.output}} — field paths, array indexing (e.g. [*], [0]) and dotted sub-fields are not supported and break at runtime.`,
+            nodeId: node.id, field: null,
+            hint: `Pass the previous step's full output ({{prev}} or {{<stepId>.output}}) to the next step instead of extracting a sub-field.`,
+          });
+        }
+        anyRe.lastIndex = 0;
+      }
+    }
   }
 
   _collectStrings(value, out = []) {
