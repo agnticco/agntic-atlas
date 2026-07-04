@@ -532,7 +532,7 @@
                       </sc-if>
                       <sc-if value="{{ s.showOutput }}" hint-placeholder-val="{{ false }}">
                         <div style="margin-top:12px;border-radius:11px;border:1px solid rgba(127,194,138,.22);background:rgba(0,0,0,.3);padding:13px">
-                          <div style="display:flex;align-items:center;gap:7px;margin-bottom:10px;font-size:12px;border-bottom:1px solid rgba(255,255,255,.07);padding-bottom:9px"><span style="color:#7fc28a;font-size:14px">#</span><span style="font-weight:600;color:#fff">{{ slackChannel }}</span><span style="margin-left:auto;font-size:9.5px;font-weight:500;letter-spacing:.1em;text-transform:uppercase;color:#6B6B6B">Test output</span></div>
+                          <div style="display:flex;align-items:center;gap:7px;margin-bottom:10px;font-size:12px;border-bottom:1px solid rgba(255,255,255,.07);padding-bottom:9px"><span style="color:#7fc28a;font-size:14px">{{ deliveryGlyph }}</span><span style="font-weight:600;color:#fff">{{ deliveryHeader }}</span><span style="margin-left:auto;font-size:9.5px;font-weight:500;letter-spacing:.1em;text-transform:uppercase;color:#6B6B6B">Test output</span></div>
                           <div style="display:flex;gap:9px;align-items:flex-start">
                             <div style="flex:none;width:26px;height:26px;border-radius:7px;background:#101012;border:1px solid rgba(255,255,255,.12);display:flex;align-items:center;justify-content:center"><img src="assets/atlas-globe-white.svg" alt="" style="width:15px;height:15px"/></div>
                             <div style="min-width:0;flex:1"><div style="font-size:12.5px;color:#fff;font-weight:600;display:flex;align-items:center;gap:6px">Atlas <span style="font-size:8.5px;font-weight:500;color:rgba(255,255,255,.5);background:rgba(255,255,255,.08);padding:1px 5px;border-radius:4px">APP</span></div><div style="font-size:12.5px;color:rgba(255,255,255,.85);line-height:1.45;margin-top:3px">{{ summaryText }}</div></div>
@@ -1208,8 +1208,8 @@
           <sc-if value="{{ profileNeedsBaseline }}" hint-placeholder-val="{{ false }}">
           <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;padding:48px 0;gap:14px;text-align:center">
             <div style="width:44px;height:44px;border-radius:12px;border:1px solid rgba(255,255,255,.12);background:rgba(255,255,255,.04);display:flex;align-items:center;justify-content:center;font-size:20px;opacity:.55">⏱</div>
-            <div style="font-size:15px;color:rgba(255,255,255,.55)">Set a baseline to track time saved</div>
-            <div style="font-size:13px;color:rgba(255,255,255,.3);max-width:38ch;line-height:1.5">Time how long this task takes to do manually. Every run below the baseline counts as time saved.</div>
+            <div style="font-size:15px;color:rgba(255,255,255,.55)">Set a baseline for accurate time-saved numbers</div>
+            <div style="font-size:13px;color:rgba(255,255,255,.3);max-width:38ch;line-height:1.5">The figure above is a rough estimate. Time how long this task takes manually, and every run below that baseline counts as measured time saved.</div>
             <button onClick="{{ onOpenBaselinePanel }}" style="border:1px solid rgba(255,255,255,.18);background:rgba(255,255,255,.06);color:rgba(255,255,255,.85);font-family:inherit;font-size:13px;font-weight:500;padding:9px 20px;border-radius:8px;cursor:pointer;margin-top:4px">Set baseline</button>
           </div>
           </sc-if>
@@ -1339,7 +1339,7 @@
               <!-- Page heading -->
               <div style="display:flex;align-items:flex-end;justify-content:space-between;margin-bottom:8px">
                 <div>
-                  <div style="font-family:'Instrument Serif',serif;font-size:38px;letter-spacing:-0.02em;color:#fff;line-height:1.1">Filesystem</div>
+                  <div style="font-family:'Instrument Serif',serif;font-size:38px;letter-spacing:-0.02em;color:#fff;line-height:1.1">Files</div>
                   <div style="font-size:14px;color:rgba(255,255,255,.35);margin-top:6px;letter-spacing:-0.005em;max-width:480px;line-height:1.55">Grant Atlas access to local folders. Indexed content is searchable by the agent; connected folders can be used as sources in workflows.</div>
                 </div>
                 <button onClick="{{ onCloseKnowledge }}" style="border:1px solid rgba(255,255,255,.1);background:none;cursor:pointer;color:rgba(255,255,255,.45);font-family:inherit;font-size:13px;padding:7px 16px;border-radius:99px;letter-spacing:-.01em;flex:none;margin-left:24px" style-hover="border-color:rgba(255,255,255,.22);color:rgba(255,255,255,.85)">Back</button>
@@ -2943,6 +2943,9 @@ class Component extends DCLogic {
   }
   softDeleteWorkflow(wfId) {
     const self = this;
+    // R9: drop this workflow's persisted builder draft so deleted workflows don't
+    // leave orphaned atlas_build_wf_v1:* keys in localStorage forever.
+    try { localStorage.removeItem(this._buildKeyWf(wfId)); } catch (e) {}
     const wasOpenConsole = this.state.view === 'console' && this.state.consoleWfId === wfId;
     // Optimistic: remove from sidebar and home list immediately before the round-trip.
     const newSidebarWfs = (self.state.consoleSidebarWfs || []).filter(function(w) { return w.id !== wfId; });
@@ -3865,23 +3868,27 @@ class Component extends DCLogic {
     const stepCount = this._pipeline().length || 1;
 
     if (this._testInterval) { clearInterval(this._testInterval); this._testInterval = null; }
-    this.setState({ testState: "running", runStepIndex: 0, runSteps: [], failIndex: -1, runError: "" });
+    this._testStartMs = Date.now();
+    this.setState({ testState: "running", runStepIndex: 0, runSteps: [], failIndex: -1, runError: "", runElapsed: 0 });
 
     // Pending result from the backend (arrives before animation finishes)
     let pendingResult = null;
     let currentIdx = 0;
 
+    // R5/R21: the engine can take 40s–3.5min, far longer than a fixed step animation.
+    // Previously the animation raced to show EVERY step ✓ in a few seconds and then sat
+    // idle — all steps checked, state still "Testing…", button disabled — which reads as
+    // a hang. Now: advance the "firing" pointer but HOLD on the last step (never mark it
+    // done) until the engine actually returns, and surface an elapsed timer so long runs
+    // visibly progress instead of looking frozen.
     this._testInterval = setInterval(function() {
-      currentIdx++;
-      if (currentIdx >= stepCount) {
-        // Animation reached the last step — clear timer
+      const elapsed = Math.round((Date.now() - self._testStartMs) / 1000);
+      if (currentIdx < stepCount - 1) currentIdx++;
+      self.setState({ runStepIndex: currentIdx, runElapsed: elapsed });
+      if (pendingResult) {
         clearInterval(self._testInterval);
         self._testInterval = null;
-        self.setState({ runStepIndex: currentIdx });
-        // If backend already replied, apply it now
-        if (pendingResult) self._applyTestResult(pendingResult.r, pendingResult.d);
-      } else {
-        self.setState({ runStepIndex: currentIdx });
+        self._applyTestResult(pendingResult.r, pendingResult.d);
       }
     }, 750);
 
@@ -3915,9 +3922,12 @@ class Component extends DCLogic {
     const issues = d.issues || [];
     const passed = r.ok && d.completed && issues.length === 0;
     const self = this;
+    // R8: capture the real wall-clock test duration so the persisted test run
+    // records true timing, not the ~1ms gap between back-to-back DB writes.
+    const runDurationMs = this._testStartMs ? (Date.now() - this._testStartMs) : null;
 
     if (passed) {
-      this.setState({ testState: "passed", runSteps: d.steps || [], deliveries: d.deliveries || [], runOutput: d.output });
+      this.setState({ testState: "passed", runSteps: d.steps || [], deliveries: d.deliveries || [], runOutput: d.output, runDurationMs: runDurationMs });
     } else {
       const steps = d.steps || [];
       let failIndex = steps.length;
@@ -3928,7 +3938,7 @@ class Component extends DCLogic {
         failIndex = idx >= 0 ? idx : 0;
         runError = "A step returned no usable data — it would deliver an error message, not real content";
       }
-      this.setState({ testState: "failed", runSteps: steps, failIndex: failIndex, runError: runError });
+      this.setState({ testState: "failed", runSteps: steps, failIndex: failIndex, runError: runError, runDurationMs: runDurationMs });
       if (this.state.workflowId) {
         fetch('/api/builder/workflows/' + this.state.workflowId + '/status', { method: 'PATCH', headers: this._H(), body: JSON.stringify({ status: 'error' }) })
           .then(() => this._loadWorkflows()).catch(function() {});
@@ -3987,6 +3997,7 @@ class Component extends DCLogic {
       steps: S.runSteps || [],
       output: S.runOutput || null,
       error: S.testState === "failed" ? S.runError : null,
+      durationMs: S.runDurationMs || null, // R8: real wall-clock so the persisted run isn't "1ms"
     } : null;
     const isUpdate = !!S.workflowId;
     const body = { spec: spec || S.spec, intent: S.intent, testRun };
@@ -4450,8 +4461,10 @@ class Component extends DCLogic {
         const hasActiveBuild = (S.msgs && S.msgs.length > 0) || !!S.spec;
         if (builderIsActive || hasActiveBuild) {
           const alreadyInList = S.workflowId && (S.consoleSidebarWfs || []).some(w => w.id === S.workflowId);
-          if (!alreadyInList) {
-            const label = S.phase === "chat" ? "New workflow" : wfName;
+          const label = S.phase === "chat" ? "New workflow" : wfName;
+          // E2: while searching, only surface the in-progress draft if its label matches the query
+          const matchesSearch = !search || (label || "").toLowerCase().includes(search);
+          if (!alreadyInList && matchesSearch) {
             const wfIdForDel = S.workflowId;
             const onDelBuilder = (e) => { e.stopPropagation(); if (wfIdForDel) { this.softDeleteWorkflow(wfIdForDel); } else { this.reset(); } };
             list.unshift({ name: label, dot: "#f3cd86", glow: "drop-shadow(0 0 5px rgba(240,191,107,.7))", radius: "border-radius:50%", bg: "transparent", border: "transparent", nameColor: "#fff", itemClass: "", onClick: () => this.setState({ view: 'build', connectionsOpen: false, accountOpen: false, profileOpen: false }), onDelete: onDelBuilder, showRun: false, onRun: null });
@@ -4512,7 +4525,7 @@ class Component extends DCLogic {
           }, this),
           onTutorialNext: () => this.tutorialNext(),
           onTutorialPrev: () => this.tutorialPrev(),
-          onTutorialClose: () => this.setState({ tutorialOpen: false }),
+          onTutorialClose: () => { try { localStorage.setItem('atlas_tutorial_done', '1'); } catch (e) {} this.setState({ tutorialOpen: false }); }, // A2: skipping persists — show the welcome once, don't re-nag every reload
           onTutorialNeverChange: (e) => {
             try { if (e.target.checked) localStorage.setItem('atlas_tutorial_done', '1'); else localStorage.removeItem('atlas_tutorial_done'); } catch(ex) {}
           },
@@ -4598,7 +4611,7 @@ class Component extends DCLogic {
       testCaption: S.phase === "chat" ? "Your workflow takes shape here once you're ready to build — just say the word in the chat."
         : !testUnlocked ? "Finish building the workflow in the conversation, then test it end-to-end here before it goes live."
         : (TS === "idle" ? "Run the workflow once against the real engine to catch breaks before publishing."
-        : (TS === "running" ? "Running each step in order…"
+        : (TS === "running" ? ("Running against the real engine — this can take a few minutes for web search or multi-source steps." + (S.runElapsed ? "  ·  " + S.runElapsed + "s elapsed" : ""))
         : (TS === "passed" ? "Every step ran cleanly — no breaks." : "One step failed — review the break below."))),
       testSteps, slackChannel: this._slackChannel(), deliveryTarget: this._deliveryMeta().header, summaryText: this._summaryText(),
       showVerdict: verdict.show, verdictText: verdict.text, verdictIcon: verdict.icon, verdictColor: verdict.color,
