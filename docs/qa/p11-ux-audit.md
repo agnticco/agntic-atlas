@@ -25,6 +25,18 @@ Status legend: `OPEN` (found, not yet addressed) · `FIXED` · `WONTFIX`.
 | R6/C3 | Previews render readable text, not raw ```html source | `f28d85e` | live — Profile outputs clean |
 | SOP | Exported SOP PDF was blank (white text on default white page); switched to dark-on-white light theme | `4bbd11e` | live — user-confirmed PDF renders |
 
+## Group (b) — behavior fixes (branch `p11-hardening-fixes-b`)
+
+Riskier/behavioral items, done with explicit sign-off.
+
+| ID | Fix | Commit | Verified |
+|----|-----|--------|----------|
+| R17 | Chat tool_use/tool_result mismatch: mid-stream text-then-tool turns now preserve `_anthropicContent` (was the leaked-400 root cause); `cleanLLMError` no longer surfaces raw SDK text | `16cdb86` | root cause traced to `builder.js:642`; syntax-clean; server restarted |
+| R14 | Test verdict means *valid output* not just "ran": backend `/workflows/run` flags `ERROR:`-sentinel step outputs as `issues[]`+`clean`; frontend treats completed-with-issues as a break at the offending node and blocks publish | `4bd8ffe` | unit-verified 3 cases (clean→pass, ERROR→fail@node, throw→fail); live |
+| R1/R2 | Chat asserts it builds workflows itself (identity clause) + "build it" is the ready_to_build signal, not a tool call | `4c8b9b3` | prompt fix — needs live chat round to confirm |
+| R18 | Already largely addressed — converger receives real base/table/field names at session bootstrap (`builder.js:769`). Remaining gap is only a reusable helper/endpoint. | — | not a bug; noted |
+| R23 | Airtable trigger dead (webhook never created on publish). OAuth ≠ event delivery; needs `POST /bases/{id}/webhooks` on publish. **Held** — creates external subscription, unverifiable locally without tunnel + real base. | — | pending decision |
+
 ## Fix priority index (P11 hardening worklist)
 
 All findings below are **captured for P11 product-hardening fixes** — no features were built.
