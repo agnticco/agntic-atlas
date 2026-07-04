@@ -2668,7 +2668,12 @@ class Component extends DCLogic {
         if (m.isClarify)    return { ...m, chips: [] };
         return m;
       });
-      const F = ["view","phase","intent","threadId","inputMode","spec","testState","runSteps","failIndex","deliveries","runOutput","runError","workflowId"];
+      // NOTE: threadId is deliberately NOT persisted. Converger sessions are
+      // in-memory server-side and never survive a reload/restart, so a restored
+      // threadId points at a dead session ("session not found"). Omitting it means
+      // a restored draft routes change requests through the spec-based edit-change
+      // path (which works from the spec alone) instead of a dead converger session.
+      const F = ["view","phase","intent","inputMode","spec","testState","runSteps","failIndex","deliveries","runOutput","runError","workflowId"];
       const slice = {}; F.forEach(k => { slice[k] = S[k]; });
       slice.msgs = cleanMsgs;
       const str = JSON.stringify(slice);
@@ -2714,9 +2719,13 @@ class Component extends DCLogic {
   // Converger sessions don't survive a reload, so a mid-conversation slice is
   // unlocked and dropped back to chat; threadId is cleared.
   _applyBuildSlice(slice, extra) {
-    const overrides = Object.assign({ view: 'build', thinking: false, inputValue: "", mentionOpen: false, mentionQuery: "", mentionAt: -1, connectionsOpen: false, accountOpen: false, profileOpen: false, newStateExiting: false }, extra || {});
+    // threadId is ALWAYS cleared: converger sessions are in-memory server-side and
+    // never survive a reload/restart, so any restored threadId is dead. With it null,
+    // change requests route to the spec-based edit-change path instead of a dead
+    // session ("session not found"). Applies to every restored phase, not just building.
+    const overrides = Object.assign({ view: 'build', thinking: false, inputValue: "", threadId: null, mentionOpen: false, mentionQuery: "", mentionAt: -1, connectionsOpen: false, accountOpen: false, profileOpen: false, newStateExiting: false }, extra || {});
     if (slice.inputMode === 'locked') overrides.inputMode = 'chat';
-    if (slice.phase === 'building') { overrides.phase = 'chat'; overrides.threadId = null; }
+    if (slice.phase === 'building') { overrides.phase = 'chat'; }
     this.setState(Object.assign({}, slice, overrides));
   }
   _clearBuild() { this._lastBuildStr = ""; try { localStorage.removeItem(this._buildKey()); } catch (e) {} }
