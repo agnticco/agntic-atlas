@@ -11,6 +11,15 @@ undiscoverable features, confusing/contradictory states, and jargon.
 
 Status legend: `OPEN` (found, not yet addressed) · `FIXED` · `WONTFIX`.
 
+## Fixed so far (branch `p11-hardening-fixes`)
+
+| ID | Fix | Commit | Verified |
+|----|-----|--------|----------|
+| A1 | Onboarding test-run copy made honest (a test is a real run) | `5a4997f` | served |
+| C1 | Delivery labels method-aware (SOP tab/export, review pane, cards, dashboard) | `5a4997f` | live — SOP reads "Emails the result to …" |
+| R22 | `drive_create_folder` added to the googleToken injector set | `6c7c866` | live — now creates a folder |
+| D1 | Two-step confirm + dependency warning before Disconnect | `4fe1d4e` | live — first click arms + warns, stays connected |
+
 ## Fix priority index (P11 hardening worklist)
 
 All findings below are **captured for P11 product-hardening fixes** — no features were built.
