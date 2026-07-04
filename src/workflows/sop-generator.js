@@ -110,9 +110,23 @@ function nodeDescription(node) {
         ? `Rewrites the upstream content: "${cfg.instructions}"`
         : 'Rewrites the upstream content using the language model.';
     case 'deliver': {
-      const ch = CHANNEL_LABELS[cfg.channel] ?? cfg.channel ?? 'the configured channel';
-      const target = cfg.target ? ` ${cfg.target}` : '';
-      return `Sends the processed output to ${ch}${target}.`;
+      // Method-aware — don't render every delivery as a generic "channel".
+      const chan = cfg.channel ?? '';
+      if (chan === 'gmail_send' || chan === 'email') return `Emails the result to ${cfg.to ?? 'the configured address'}.`;
+      if (chan === 'slack_dm')             return `Sends the result as a Slack direct message${cfg.user ? ` to ${cfg.user}` : ''}.`;
+      if (chan === 'in_app' || chan === 'inbox_deliver') return 'Delivers the result to the Atlas inbox.';
+      if (chan === 'webhook')              return 'Sends the result to a web address.';
+      if (chan === 'airtable_create_record') return 'Creates a new Airtable record.';
+      if (chan === 'airtable_update_record') return 'Updates an Airtable record.';
+      if (chan === 'docs_create')          return 'Saves the result as a Google Doc.';
+      if (chan === 'sheets_append')        return 'Appends the result to a Google Sheet.';
+      if (chan === 'calendar_create_event') return 'Creates a Google Calendar event.';
+      if (chan === 'tasks_create')         return 'Creates a Google Task.';
+      if (chan === 'slack' || chan.charAt(0) === '#' || /^slack:/.test(chan) || cfg.target) {
+        const t = cfg.target ?? cfg.channel; return `Posts the result to ${t} in Slack.`;
+      }
+      const ch = CHANNEL_LABELS[chan] ?? chan ?? 'the configured destination';
+      return `Delivers the result to ${ch}.`;
     }
     case 'connector-action': {
       const { action, connector, capability } = connectorAction(node);

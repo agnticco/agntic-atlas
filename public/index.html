@@ -925,7 +925,7 @@
               <div style="font-size:12.5px;color:#9fd6a8;font-weight:500;letter-spacing:.04em">Workflow is live</div>
             </div>
             <div style="font-family:'Instrument Serif',serif;font-size:38px;letter-spacing:-0.01em;color:#fff;line-height:1.05">{{ workflowTitle }}</div>
-            <div style="display:flex;align-items:center;gap:8px;margin-top:12px;font-size:13.5px;color:#9fd6a8"><span style="width:8px;height:8px;border-radius:50%;background:#7fc28a;box-shadow:0 0 8px rgba(127,194,138,.6);animation:flowPulse 1.8s infinite"></span>Running automatically · delivering to {{ slackChannel }}</div>
+            <div style="display:flex;align-items:center;gap:8px;margin-top:12px;font-size:13.5px;color:#9fd6a8"><span style="width:8px;height:8px;border-radius:50%;background:#7fc28a;box-shadow:0 0 8px rgba(127,194,138,.6);animation:flowPulse 1.8s infinite"></span>Running automatically · delivering to {{ deliveryTarget }}</div>
             <p style="font-size:15px;color:rgba(255,255,255,.55);margin:16px 0 0;max-width:60ch;line-height:1.55">Atlas is watching for trigger events and will run this automatically. Track run history, health, and per-run output from the dashboard.</p>
             <div style="margin-top:20px">
               <button onClick="{{ onViewDashboard }}" style="border:1px solid rgba(255,255,255,.15);background:rgba(255,255,255,.07);backdrop-filter:blur(20px);-webkit-backdrop-filter:blur(20px);color:#fff;font-family:inherit;font-size:14px;font-weight:500;padding:13px 26px;border-radius:999px;cursor:pointer;display:inline-flex;align-items:center;gap:8px;box-shadow:inset 0 1px 0 rgba(255,255,255,.1),0 4px 20px rgba(0,0,0,.25);transition:background .2s ease,border-color .2s ease,box-shadow .2s ease,transform .2s ease" style-hover="background:rgba(255,255,255,.13);border-color:rgba(255,255,255,.28);box-shadow:inset 0 1px 0 rgba(255,255,255,.18),0 8px 32px rgba(0,0,0,.35);transform:translateY(-1px)">View live dashboard <span style="font-size:16px;line-height:1;opacity:.7">→</span></button>
@@ -1792,8 +1792,8 @@ const TUTORIAL_SLIDES = [
   },
   {
     title: 'Test before going live',
-    body: 'Once your draft is complete, the right panel lets you run a full test. Atlas fires each step in order so you can see exactly what will happen — before anything is published or delivered.',
-    tip: 'Test runs are sandboxed — nothing is sent to real channels or inboxes during a test.',
+    body: 'Once your draft is complete, the right panel runs a full test — Atlas fires every step in order against the live engine, exactly as it will run once scheduled.',
+    tip: 'Heads up: a test is a real run — it actually sends emails, posts messages, and writes records. Point the delivery at yourself or a test channel first if you want to preview safely.',
   },
   {
     title: 'Your workflow console',
@@ -3804,7 +3804,19 @@ class Component extends DCLogic {
     if (ty === 'llm') { const pr = cfg.prompt || cfg.instructions || ''; return { title: label || 'AI step', desc: rat || 'Runs an AI prompt on the incoming content.', prompt: pr || null }; }
     if (ty === 'extract') { const f = Array.isArray(cfg.fields) ? cfg.fields.map(x => (x && (x.name || x.key)) || x).filter(Boolean).join(', ') : ''; return { title: label || 'Extract', desc: rat || (f ? 'Pulls out: ' + f + '.' : 'Extracts structured data from the content.') }; }
     if (ty === 'rewrite') return { title: label || 'Rewrite', desc: rat || ('Rewrites the content' + (cfg.tone ? ' in a ' + cfg.tone + ' tone.' : '.')) };
-    if (ty === 'deliver') { const ch = cfg.channel || cfg.target || '', prov = cfg.provider || 'Slack'; return { title: label || ('Post to ' + prov), desc: rat || ('Posts the finished content to ' + (ch ? ch + ' on ' : '') + prov + '.') }; }
+    if (ty === 'deliver') {
+      const ch = cfg.channel || '';
+      let dt, dd;
+      if (ch === 'gmail_send' || ch === 'email') { dt = 'Send email'; dd = 'Emails the finished content to ' + (cfg.to || 'the configured address') + '.'; }
+      else if (ch === 'slack_dm') { dt = 'Send Slack DM'; dd = 'Sends the content as a Slack direct message' + (cfg.user ? ' to ' + cfg.user : '') + '.'; }
+      else if (ch === 'in_app' || ch === 'inbox_deliver') { dt = 'Deliver to inbox'; dd = 'Delivers the content to the Atlas inbox.'; }
+      else if (ch === 'airtable_create_record') { dt = 'Create Airtable record'; dd = 'Creates a new Airtable record.'; }
+      else if (ch === 'airtable_update_record') { dt = 'Update Airtable record'; dd = 'Updates an Airtable record.'; }
+      else if (ch === 'docs_create') { dt = 'Save Google Doc'; dd = 'Saves the content as a Google Doc.'; }
+      else if (ch === 'slack' || ch.charAt(0) === '#' || /^slack:/.test(ch) || cfg.target) { dt = 'Post to Slack'; dd = 'Posts the finished content to ' + (cfg.target || cfg.channel) + ' in Slack.'; }
+      else { dt = 'Deliver'; dd = 'Delivers the content to ' + (ch || 'the configured destination') + '.'; }
+      return { title: label || dt, desc: rat || dd };
+    }
     return { title: label || this._titleCase(ty || 'Step'), desc: rat || 'Processes the content and passes it to the next step.' };
   }
 
@@ -4197,10 +4209,35 @@ class Component extends DCLogic {
     return a.connector || a.action || "Action";
   }
   _deliveryDetail(c) {
-    if (c.channel === "slack_dm") return "Sends the result as a Slack direct message" + (c.user ? (" to " + c.user) : "") + ".";
-    if (c.channel === "in_app") return "Delivers the result to your in-app inbox.";
-    if (c.channel === "webhook") return "Sends the result to a web address.";
-    return "Posts the result to " + this._slackChannel() + " in Slack.";
+    const ch = c.channel || "";
+    if (ch === "slack_dm") return "Sends the result as a Slack direct message" + (c.user ? (" to " + c.user) : "") + ".";
+    if (ch === "in_app" || ch === "inbox_deliver") return "Delivers the result to your Atlas inbox.";
+    if (ch === "webhook") return "Sends the result to a web address.";
+    if (ch === "gmail_send") return "Emails the result to " + (c.to || "the configured address") + ".";
+    if (ch === "airtable_create_record") return "Creates a new Airtable record.";
+    if (ch === "airtable_update_record") return "Updates an Airtable record.";
+    if (ch === "docs_create") return "Saves the result as a Google Doc.";
+    if (ch === "sheets_append") return "Appends the result to a Google Sheet.";
+    if (ch === "calendar_create_event") return "Creates a Google Calendar event.";
+    if (ch === "tasks_create") return "Creates a Google Task.";
+    if (ch === "slack" || ch.charAt(0) === "#" || /^slack:/.test(ch) || c.target) return "Posts the result to " + this._slackChannel() + " in Slack.";
+    return "Delivers the result to " + (ch || "the configured destination") + ".";
+  }
+  // Classify the delivery for the "what your team sees" preview (glyph + header),
+  // method-aware so an email delivery isn't rendered as a Slack channel post.
+  _deliveryMeta() {
+    const sp = this.state.spec;
+    const d = sp && sp.nodes && sp.nodes.find(n => n.type === "deliver");
+    const c = (d && d.config) || {}; const ch = c.channel || "";
+    if (ch === "gmail_send")           return { glyph: "✉", header: (c.to || "Email") };
+    if (ch === "slack_dm")             return { glyph: "✉", header: "Direct message" };
+    if (ch === "in_app" || ch === "inbox_deliver") return { glyph: "⬤", header: "Atlas Inbox" };
+    if (ch === "airtable_create_record" || ch === "airtable_update_record") return { glyph: "▦", header: "Airtable" };
+    if (ch === "docs_create")          return { glyph: "▤", header: "Google Doc" };
+    if (ch === "sheets_append")        return { glyph: "▦", header: "Google Sheet" };
+    if (ch === "calendar_create_event")return { glyph: "◷", header: "Calendar" };
+    if (ch === "slack" || ch.charAt(0) === "#" || /^slack:/.test(ch) || c.target) return { glyph: "#", header: this._slackChannel().replace(/^#/, "") };
+    return { glyph: "→", header: (ch || "Destination") };
   }
   _hashName(s) { s = String(s || "").replace(/^#/, "").trim(); return s ? ("#" + s) : ""; }
   _humanCron(cron) {
@@ -4518,7 +4555,7 @@ class Component extends DCLogic {
         : (TS === "idle" ? "Run the workflow once against the real engine to catch breaks before publishing."
         : (TS === "running" ? "Running each step in order…"
         : (TS === "passed" ? "Every step ran cleanly — no breaks." : "One step failed — review the break below."))),
-      testSteps, slackChannel: this._slackChannel(), summaryText: this._summaryText(),
+      testSteps, slackChannel: this._slackChannel(), deliveryTarget: this._deliveryMeta().header, summaryText: this._summaryText(),
       showVerdict: verdict.show, verdictText: verdict.text, verdictIcon: verdict.icon, verdictColor: verdict.color,
       verdictBorder: verdict.border, verdictBg: verdict.bg, verdictIconBg: verdict.iconBg,
       isPublished: published,
@@ -4923,8 +4960,8 @@ class Component extends DCLogic {
       teamHasMessage: !!this._deliveredMessage(),
       teamMsgColor: this._deliveredMessage() ? "rgba(255,255,255,.88)" : "rgba(255,255,255,.4)",
       deliveryIsChannel: this._deliveryIsChannel(),
-      deliveryGlyph: this._deliveryIsChannel() ? "#" : "✉",
-      deliveryHeader: this._deliveryIsChannel() ? this._slackChannel().replace(/^#/, "") : "Direct message",
+      deliveryGlyph: this._deliveryMeta().glyph,
+      deliveryHeader: this._deliveryMeta().header,
       onTitleInput: (e) => this.onTitleInput(e),
       onKeepBuilding: () => this.keepBuilding(), onApprove: () => this.approveDraft(),
       onViewDashboard: () => { const id = this.state.workflowId; if (id) this.openConsole(id); },
