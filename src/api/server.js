@@ -1486,7 +1486,18 @@ export function createApp(spine) {
         return null;
       };
       const deliveries = steps.map((s) => coerce(s.output)).filter((o) => o && o.delivered);
-      res.json({ runId, completed, output, deliveries, steps, cost: runCost });
+      // R14: a step can "complete" (not throw) yet emit the ERROR sentinel that
+      // prompts.js instructs LLM nodes to return when required upstream data is
+      // missing ("ERROR: required data not found — do not compose content."). That
+      // string is otherwise treated as valid output and delivered verbatim, while
+      // the verdict reads "safe to publish". Surface these as issues so the test
+      // verdict can mean "produced valid output", not merely "ran without throwing".
+      const issues = steps
+        .map((s) => ({ nodeId: s.nodeId, text: typeof s.output === 'string' ? s.output : '' }))
+        .filter((s) => /^\s*ERROR:/i.test(s.text))
+        .map((s) => ({ nodeId: s.nodeId, message: s.text.trim().replace(/\s+/g, ' ').slice(0, 300) }));
+      const clean = completed && issues.length === 0;
+      res.json({ runId, completed, clean, issues, output, deliveries, steps, cost: runCost });
     } catch (err) {
       logEvent('run.error', { tenant: tenantId, ms: Date.now() - t0, ...errFields(err) });
       res.status(500).json({ error: `run failed: ${err.message ?? String(err)}` });
