@@ -1554,7 +1554,7 @@
             <div style="display:flex;align-items:center;gap:10px;padding:10px 16px">
               <div style="flex:1;min-width:0">
                 <div style="font-size:13px;color:rgba(255,255,255,.65);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ d.name }}</div>
-                <div style="font-size:11px;color:rgba(255,255,255,.25);margin-top:2px">{{ d.daysLeft }} left</div>
+                <div style="font-size:11px;color:rgba(255,255,255,.25);margin-top:2px">{{ d.daysLeft }}</div>
               </div>
               <button onClick="{{ d.onRestore }}" style="flex:none;border:1px solid rgba(255,255,255,.12);background:rgba(255,255,255,.05);cursor:pointer;color:rgba(255,255,255,.6);font-family:inherit;font-size:12px;font-weight:500;padding:5px 12px;border-radius:7px;transition:background .15s,color .15s" style-hover="background:rgba(255,255,255,.1);color:#fff">Recover</button>
             </div>
@@ -4496,7 +4496,11 @@ class Component extends DCLogic {
       deletedWorkflows: (S.deletedWorkflows || []).map(wf => {
         const cutoffMs = 30 * 24 * 60 * 60 * 1000;
         const daysLeft = Math.max(0, Math.ceil((new Date(wf.deleted_at).getTime() + cutoffMs - Date.now()) / 86400000));
-        return { name: wf.name || wf.user_intent || 'Untitled', daysLeft: daysLeft + 'd', onRestore: () => this.restoreWorkflow(wf.id) };
+        // E1: same-named drafts (all "Untitled") were indistinguishable — stamp the
+        // deletion date so a user can tell them apart.
+        const delDate = wf.deleted_at ? new Date(wf.deleted_at) : null;
+        const delLabel = delDate ? ('Deleted ' + delDate.toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) + ' · ') : '';
+        return { name: wf.name || wf.user_intent || 'Untitled draft', daysLeft: delLabel + daysLeft + 'd left', onRestore: () => this.restoreWorkflow(wf.id) };
       }),
 
       // tutorial
