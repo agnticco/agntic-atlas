@@ -977,7 +977,21 @@ export class WorkflowStore {
    *   cron field "* /N * * *" (step syntax)       — every N minutes (sub-daily)
    *   cron field "0 * /N * * *" (step syntax)     — every N hours (sub-daily)
    */
-  _isFlowDue(workflow) {
+  _isFlowDue(workflow) { return this._flowScheduleState(workflow) === 'due'; }
+  /**
+   * Overdue = a daily/weekly run whose scheduled time passed beyond the grace
+   * window (SCHEDULE_GRACE_HOURS, default 2h) without having run today. The
+   * scheduler never auto-fires these — the owner is notified to run now, edit,
+   * or defer to the next scheduled trigger. Prevents a scheduler that was down
+   * at 5am from dumping a stale run at 7pm.
+   */
+  getOverdue() {
+    const rows = this.db.prepare("SELECT * FROM workflows WHERE status = 'active' AND deleted_at IS NULL ORDER BY created_at DESC").all().map(r => this._parse(r));
+    return rows.filter(w => w.kind === 'flow' && this._flowScheduleState(w) === 'overdue');
+  }
+  /** Schedule state for a flow: 'due' (fire now) | 'overdue' (missed) | null. */
+  _flowScheduleState(workflow) {
+    const GRACE_MS = (Number(process.env.SCHEDULE_GRACE_HOURS) > 0 ? Number(process.env.SCHEDULE_GRACE_HOURS) : 2) * 3_600_000;
     const triggers = workflow.triggers ?? [];
     for (const t of triggers) {
       if (t?.type !== 'schedule') continue;
@@ -1001,8 +1015,8 @@ export class WorkflowStore {
           if (everyMinMatch && hField === '*') {
             const intervalMs = parseInt(everyMinMatch[1], 10) * 60_000;
             if (!isNaN(intervalMs) && intervalMs > 0) {
-              if (!workflow.last_run) return true;
-              return (Date.now() - new Date(workflow.last_run).getTime()) >= intervalMs;
+              if (!workflow.last_run) return 'due';
+              return (Date.now() - new Date(workflow.last_run).getTime()) >= intervalMs ? 'due' : null;
             }
           }
 
@@ -1011,8 +1025,8 @@ export class WorkflowStore {
           if (everyHrMatch && mField === '0') {
             const intervalMs = parseInt(everyHrMatch[1], 10) * 3_600_000;
             if (!isNaN(intervalMs) && intervalMs > 0) {
-              if (!workflow.last_run) return true;
-              return (Date.now() - new Date(workflow.last_run).getTime()) >= intervalMs;
+              if (!workflow.last_run) return 'due';
+              return (Date.now() - new Date(workflow.last_run).getTime()) >= intervalMs ? 'due' : null;
             }
           }
         }
@@ -1048,11 +1062,13 @@ export class WorkflowStore {
         const lastRunDate = new Date(workflow.last_run);
         if (lastRunDate.toDateString() === now.toDateString()) continue;
       }
-      if (now.getHours() > hh || (now.getHours() === hh && now.getMinutes() >= mm)) {
-        return true;
-      }
+      const scheduled = new Date(now); scheduled.setHours(hh, mm, 0, 0);
+      const delta = now.getTime() - scheduled.getTime();
+      if (delta < 0) continue;              // before today's scheduled time
+      if (delta <= GRACE_MS) return 'due';  // within the grace window → fire
+      return 'overdue';                     // missed the window → owner-notified, not auto-fired
     }
-    return false;
+    return null;
   }
 
   /**
