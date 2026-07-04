@@ -1070,6 +1070,14 @@ Rules:
         failure_alerts: failedWfs.length
           ? { summary: alertData?.summary || `${failedWfs.length} workflow${failedWfs.length !== 1 ? 's' : ''} failed on the last run.`, workflows: failedWfs.map(w => ({ id: w.id, name: w.name })) }
           : null,
+        // Scheduled workflows that missed their run beyond the grace window while
+        // the scheduler was offline — surfaced so the owner can run now / defer.
+        overdue: (() => {
+          const od = (store.getOverdue?.() ?? [])
+            .filter(w => w.tenant_id === tenantId && w.user_id === userId)
+            .map(w => ({ id: w.id, name: w.name || w.user_intent || 'Untitled', schedule: (w.triggers?.[0]?.label) || (w.triggers?.[0]?.cron) || 'scheduled' }));
+          return od.length ? { workflows: od } : null;
+        })(),
         time_saved: {
           minutes: timeSavedMins,
           display: timeSavedMins >= 60
@@ -1318,6 +1326,33 @@ Rules:
       res.json({ ok: true, workflowId: wf.id });
     } catch (err) {
       logEvent('builder.draft.error', { tenant: req.tenant?.id ?? null, ...errFields(err) });
+      res.status(500).json({ ok: false, error: err.message ?? String(err) });
+    }
+  });
+
+  // ── PUT /api/builder/workflows/:id/draft ─────────────────────────────────────
+  // Autosave an in-progress draft spec server-side (Q23) so unpublished work is
+  // recoverable across devices — NOT validated and NOT activated (status stays
+  // 'draft'). Only touches draft rows so it can never clobber a live workflow.
+  app.put('/api/builder/workflows/:id/draft', requireActiveTenant, (req, res) => {
+    try {
+      const { spec } = req.body ?? {};
+      const store = spine.engine.workflowStore;
+      const existing = store.get(req.params.id, { userId: req.user.id });
+      if (!existing || existing.tenant_id !== req.tenant.id) return res.status(404).json({ ok: false, error: 'Not found' });
+      if (existing.status !== 'draft') return res.status(409).json({ ok: false, error: 'Not a draft' });
+      const patch = {};
+      if (spec && typeof spec === 'object') {
+        if (typeof spec.name === 'string' && spec.name) patch.name = spec.name;
+        if (typeof spec.description === 'string')       patch.description = spec.description;
+        if (Array.isArray(spec.nodes))                  patch.nodes = spec.nodes;
+        if (Array.isArray(spec.edges))                  patch.edges = spec.edges;
+        if (Array.isArray(spec.triggers))               patch.triggers = spec.triggers;
+      }
+      if (Object.keys(patch).length) store.update(req.params.id, patch, { userId: req.user.id, snapshot: false });
+      res.json({ ok: true });
+    } catch (err) {
+      logEvent('builder.draft.save.error', { tenant: req.tenant?.id ?? null, workflowId: req.params.id, ...errFields(err) });
       res.status(500).json({ ok: false, error: err.message ?? String(err) });
     }
   });

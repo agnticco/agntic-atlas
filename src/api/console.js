@@ -163,6 +163,23 @@ export function mountConsoleRoutes(app, { spine, requireActiveTenant }) {
     }
   });
 
+  // ── Defer an overdue run ──────────────────────────────────────────────────
+  // Mark a missed scheduled run as handled WITHOUT executing it — sets last_run
+  // to now so _flowScheduleState no longer reports it overdue; it fires next at
+  // its normal scheduled time. (Owner chose "defer to next scheduled trigger.")
+  app.post('/api/console/workflows/:id/defer', requireActiveTenant, (req, res) => {
+    try {
+      const wf = store.get(req.params.id, { userId: req.user.id });
+      if (!wf || wf.tenant_id !== req.tenant.id) return res.status(404).json({ error: 'Not found' });
+      store.update(req.params.id, { lastRun: new Date().toISOString() }, { userId: req.user.id, snapshot: false });
+      logEvent('console.workflow.defer', { workflowId: req.params.id, tenant: req.tenant.id });
+      res.json({ ok: true });
+    } catch (err) {
+      logEvent('console.workflow.defer.error', errFields(err));
+      res.status(500).json({ ok: false, error: err.message ?? String(err) });
+    }
+  });
+
   // ── Profile (P9) ─────────────────────────────────────────────────────────
 
   app.get('/api/console/workflows/:id/profile', requireActiveTenant, (req, res) => {
