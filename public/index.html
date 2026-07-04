@@ -3909,14 +3909,26 @@ class Component extends DCLogic {
 
   _applyTestResult(r, d) {
     const spec = this.state.spec;
-    const passed = r.ok && d.completed;
+    // R14: "completed" only means no step threw. A step can complete yet emit the
+    // ERROR sentinel (required upstream data missing) and deliver it as content —
+    // the backend flags those in d.issues. A run with issues is NOT safe to publish.
+    const issues = d.issues || [];
+    const passed = r.ok && d.completed && issues.length === 0;
     const self = this;
 
     if (passed) {
       this.setState({ testState: "passed", runSteps: d.steps || [], deliveries: d.deliveries || [], runOutput: d.output });
     } else {
       const steps = d.steps || [];
-      this.setState({ testState: "failed", runSteps: steps, failIndex: steps.length, runError: (d.error && (d.error.message || d.error)) || "A step failed" });
+      let failIndex = steps.length;
+      let runError = (d.error && (d.error.message || d.error)) || "A step failed";
+      if (d.completed && issues.length) {
+        const bad = issues[0].nodeId;
+        const idx = steps.findIndex(function (s) { return s.nodeId === bad; });
+        failIndex = idx >= 0 ? idx : 0;
+        runError = "A step returned no usable data — it would deliver an error message, not real content";
+      }
+      this.setState({ testState: "failed", runSteps: steps, failIndex: failIndex, runError: runError });
       if (this.state.workflowId) {
         fetch('/api/builder/workflows/' + this.state.workflowId + '/status', { method: 'PATCH', headers: this._H(), body: JSON.stringify({ status: 'error' }) })
           .then(() => this._loadWorkflows()).catch(function() {});
