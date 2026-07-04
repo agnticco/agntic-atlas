@@ -711,6 +711,12 @@ export async function bootSpine() {
   // every instance except one. See docs/architecture/scaling.md.
   if (boolEnv('SCHEDULER_ENABLED', true)) {
     engine.workflowScheduler.start();
+    // Observable proof the tick loop is live (the scheduler's own log.info is
+    // silent in this environment). Also record overdue workflows at boot.
+    let overdueCount = 0;
+    try { overdueCount = (engine.workflowStore.getOverdue?.() ?? []).length; } catch { /* ignore */ }
+    logEvent('scheduler.started', { tickMs: engine.workflowScheduler.tickInterval, overdue: overdueCount });
+    console.log(`[scheduler] started — tick every ${engine.workflowScheduler.tickInterval / 1000}s; ${overdueCount} workflow(s) overdue at boot`);
   } else {
     logEvent('scheduler.disabled', { reason: 'SCHEDULER_ENABLED=false' });
     console.warn('[scheduler] disabled (SCHEDULER_ENABLED=false) — scheduled workflows + email polling will not run on this instance.');
