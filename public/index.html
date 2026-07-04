@@ -3800,6 +3800,16 @@ class Component extends DCLogic {
       const nm = typeof spec === 'string' ? spec : (spec.name || 'Workflow');
       return { title: '“' + nm + '”', desc: 'The name you’ll see for this workflow in your list.' };
     }
+    if (comp === 'remove_node') {
+      const rid = (spec && spec.id) || spec;
+      const sp = this.state.spec;
+      const node = sp && sp.nodes && sp.nodes.find(n => n.id === rid);
+      const nm = (node && node.label) || rid || 'this step';
+      return { title: 'Remove “' + nm + '”', desc: rat || 'Removes this step and reconnects the steps around it.' };
+    }
+    if (comp === 'remove_edge') {
+      return { title: 'Remove a connection', desc: rat || 'Removes a link between two steps.' };
+    }
     if (comp === 'trigger') {
       const t = spec;
       if (t.type === 'schedule' || t.cron) {
@@ -4274,6 +4284,18 @@ class Component extends DCLogic {
     if (ch === "calendar_create_event")return { glyph: "◷", header: "Calendar" };
     if (ch === "slack" || ch.charAt(0) === "#" || /^slack:/.test(ch) || c.target) return { glyph: "#", header: this._slackChannel().replace(/^#/, "") };
     return { glyph: "→", header: (ch || "Destination") };
+  }
+  // Method-aware glyph for a deliver node in a DAG (S7-3) — never a Slack "#" on email etc.
+  _deliverGlyph(n) {
+    const ch = (n && n.config && n.config.channel) || "";
+    if (ch === "gmail_send" || ch === "email" || ch === "slack_dm") return "✉";
+    if (ch === "in_app" || ch === "inbox_deliver") return "⬤";
+    if (ch === "docs_create") return "▤";
+    if (ch === "sheets_append" || ch.indexOf("airtable_") === 0) return "▦";
+    if (ch === "calendar_create_event") return "◷";
+    if (ch === "tasks_create") return "☑";
+    if (ch === "slack" || ch.charAt(0) === "#" || (n && n.config && n.config.target)) return "#";
+    return "→";
   }
   _hashName(s) { s = String(s || "").replace(/^#/, "").trim(); return s ? ("#" + s) : ""; }
   _humanCron(cron) {
@@ -4895,7 +4917,7 @@ class Component extends DCLogic {
           const tl = { summarize: "SUMMARIZE", llm: "LLM", extract: "EXTRACT", rewrite: "REWRITE", deliver: "DELIVER" };
           const isCA = n.type === "connector-action";
           const typeLabel = isCA ? this._connectorActionLabel(n).toUpperCase() : (tl[n.type] || n.type.toUpperCase());
-          items.push({ glyph: n.type === "summarize" ? "Σ" : n.type === "deliver" ? "#" : "λ", typeLabel, label: n.label || (isCA ? this._connectorActionLabel(n) : this._titleCase(n.type)), showArrow: true });
+          items.push({ glyph: n.type === "summarize" ? "Σ" : n.type === "deliver" ? this._deliverGlyph(n) : "λ", typeLabel, label: n.label || (isCA ? this._connectorActionLabel(n) : this._titleCase(n.type)), showArrow: true });
         });
         return items;
       })(),
@@ -4945,8 +4967,19 @@ class Component extends DCLogic {
           const cfg = n.config || {}, up = deps[n.id] || [];
           const isCA = n.type === "connector-action";
           const pairs = [];
-          for (const k of ["length","style","format","channel","target","title"]) { if (cfg[k]) pairs.push({ k: this._titleCase(k), v: String(cfg[k]) }); }
-          if (cfg.instructions) pairs.push({ k: "Instructions", v: String(cfg.instructions).slice(0, 90) + (cfg.instructions.length > 90 ? "…" : "") });
+          if (n.type === "deliver") {
+            // S7-5: method-aware — never render raw "Channel: gmail_send" in a customer SOP.
+            const DL = { gmail_send:"Email", email:"Email", slack:"Slack", slack_dm:"Slack direct message", in_app:"Atlas inbox", inbox_deliver:"Atlas inbox", webhook:"Webhook", docs_create:"Google Doc", sheets_append:"Google Sheet", calendar_create_event:"Google Calendar event", tasks_create:"Google Task", airtable_create_record:"Airtable record", airtable_update_record:"Airtable record" };
+            const ch = cfg.channel || "";
+            if (ch) pairs.push({ k: "Delivery", v: DL[ch] || ch });
+            if (cfg.to) pairs.push({ k: "To", v: String(cfg.to) });
+            else if (cfg.user) pairs.push({ k: "To", v: String(cfg.user) });
+            else if (cfg.target) pairs.push({ k: "Channel", v: String(cfg.target) });
+            if (cfg.title) pairs.push({ k: "Title", v: String(cfg.title) });
+          } else {
+            for (const k of ["length","style","format","channel","target","title"]) { if (cfg[k]) pairs.push({ k: this._titleCase(k), v: String(cfg[k]) }); }
+            if (cfg.instructions) pairs.push({ k: "Instructions", v: String(cfg.instructions).slice(0, 90) + (cfg.instructions.length > 90 ? "…" : "") });
+          }
           if (isCA) {
             if (cfg.action) pairs.push({ k: "Action", v: String(cfg.action) });
             if (cfg.baseId) pairs.push({ k: "Airtable base", v: String(cfg.baseId) });
@@ -4958,7 +4991,7 @@ class Component extends DCLogic {
             if (mx != null) pairs.push({ k: "Max results", v: String(mx) });
           }
           const connLabel = isCA ? this._connectorActionLabel(n) : tl(n.type);
-          items.push({ isTrigger: false, glyph: n.type === "summarize" ? "Σ" : n.type === "deliver" ? "#" : "λ", tag: "STEP " + (i + 1), connector: connLabel, title: n.label || connLabel, desc: this._nodeDetail(n), configPairs: pairs, deps: up.join(", "), hasDeps: up.length > 0, showLine: i < nodes.length - 1 });
+          items.push({ isTrigger: false, glyph: n.type === "summarize" ? "Σ" : n.type === "deliver" ? this._deliverGlyph(n) : "λ", tag: "STEP " + (i + 1), connector: connLabel, title: n.label || connLabel, desc: this._nodeDetail(n), configPairs: pairs, deps: up.join(", "), hasDeps: up.length > 0, showLine: i < nodes.length - 1 });
         });
         return items;
       })(),

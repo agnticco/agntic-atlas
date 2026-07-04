@@ -23,6 +23,18 @@ const CHANNEL_LABELS = {
   in_app: 'In-app',
 };
 
+// Human label for a delivery method, so the SOP config never shows a raw action
+// id like "Channel: gmail_send" on a customer-facing document (S7-5).
+const DELIVERY_METHOD_LABELS = {
+  gmail_send: 'Email', email: 'Email',
+  slack: 'Slack', slack_dm: 'Slack direct message',
+  in_app: 'Atlas inbox', inbox_deliver: 'Atlas inbox',
+  webhook: 'Webhook',
+  docs_create: 'Google Doc', sheets_append: 'Google Sheet',
+  calendar_create_event: 'Google Calendar event', tasks_create: 'Google Task',
+  airtable_create_record: 'Airtable record', airtable_update_record: 'Airtable record',
+};
+
 function typeLabel(type) {
   return TYPE_LABELS[type] ?? type;
 }
@@ -159,6 +171,17 @@ function nodeConfig(node) {
     const max = cfg.max_results ?? cfg.maxResults ?? cfg.maxRecords;
     if (max != null)         lines.push(`- **Max results:** ${max}`);
     if (cfg.depth)           lines.push(`- **Depth:** ${cfg.depth}`);
+    return lines.join('\n');
+  }
+  // Deliver nodes: render a clean method + destination, never "Channel: gmail_send" (S7-5).
+  if (node.type === 'deliver') {
+    const chan = cfg.channel ?? '';
+    const method = DELIVERY_METHOD_LABELS[chan] ?? CHANNEL_LABELS[chan];
+    if (method)          lines.push(`- **Delivery:** ${method}`);
+    if (cfg.to)          lines.push(`- **To:** ${cfg.to}`);
+    else if (cfg.user)   lines.push(`- **To:** ${cfg.user}`);
+    else if (cfg.target) lines.push(`- **Channel:** ${cfg.target}`);
+    if (cfg.title)       lines.push(`- **Title:** ${cfg.title}`);
     return lines.join('\n');
   }
   if (cfg.length)       lines.push(`- **Length:** ${cfg.length}`);
