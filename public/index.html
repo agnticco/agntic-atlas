@@ -780,6 +780,26 @@
                   </div>
                 </sc-if>
 
+                <!-- MODULE: Overdue schedules (always shown when present) -->
+                <sc-if value="{{ hmHasOverdue }}" hint-placeholder-val="{{ false }}">
+                  <div style="margin-bottom:28px;border:1px solid rgba(240,191,107,.3);background:rgba(240,191,107,.06);border-radius:16px;padding:18px 22px">
+                    <div style="font-size:11px;font-weight:500;letter-spacing:.16em;text-transform:uppercase;color:#f0bf6b;margin-bottom:8px">Overdue — missed scheduled run</div>
+                    <div style="font-size:14px;color:rgba(255,255,255,.65);line-height:1.55;margin-bottom:14px">{{ hmOverdueSummary }}</div>
+                    <div style="display:flex;flex-direction:column;gap:8px">
+                      <sc-for list="{{ hmOverdueWfs }}" as="ow" hint-placeholder-count="1">
+                        <div style="display:flex;align-items:center;gap:12px;padding:10px 14px;border:1px solid rgba(240,191,107,.2);background:rgba(240,191,107,.05);border-radius:12px">
+                          <div onClick="{{ ow.onOpen }}" style="flex:1;min-width:0;cursor:pointer">
+                            <div style="font-size:14px;font-weight:500;color:rgba(255,255,255,.9);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ ow.name }}</div>
+                            <div style="font-size:12px;color:rgba(255,255,255,.4);margin-top:1px">{{ ow.schedule }}</div>
+                          </div>
+                          <div onClick="{{ ow.onRun }}" style="flex:none;font-size:12.5px;font-weight:500;color:#9fd6a8;border:1px solid rgba(127,194,138,.35);background:rgba(127,194,138,.1);border-radius:8px;padding:6px 12px;cursor:pointer">Run now</div>
+                          <div onClick="{{ ow.onDefer }}" style="flex:none;font-size:12.5px;font-weight:500;color:rgba(255,255,255,.55);border:1px solid rgba(255,255,255,.15);background:rgba(255,255,255,.04);border-radius:8px;padding:6px 12px;cursor:pointer">Defer</div>
+                        </div>
+                      </sc-for>
+                    </div>
+                  </div>
+                </sc-if>
+
                 <!-- MODULE: Failure Alerts -->
                 <sc-if value="{{ hmFailureAlerts }}" hint-placeholder-val="{{ false }}">
                   <sc-if value="{{ hmHasFail }}" hint-placeholder-val="{{ false }}">
@@ -2408,6 +2428,31 @@ class Component extends DCLogic {
     const hr = Math.floor(min / 60);
     if (hr < 24) return hr + 'h ago';
     return Math.floor(hr / 24) + 'd ago';
+  }
+  // Overdue-workflow owner actions (Home banner). Optimistically drop the row,
+  // hit the endpoint, then reload home to reconcile.
+  _dropOverdue(wfId) {
+    const hd = this.state.homeData;
+    if (hd?.modules?.overdue?.workflows) {
+      const nw = hd.modules.overdue.workflows.filter(w => w.id !== wfId);
+      this.setState({ homeData: { ...hd, modules: { ...hd.modules, overdue: nw.length ? { workflows: nw } : null } } });
+    }
+  }
+  runOverdue(wfId) {
+    const self = this;
+    this._dropOverdue(wfId);
+    fetch('/api/console/workflows/' + wfId + '/run', { method: 'POST', headers: this._H() })
+      .then(function(r) { return r.ok ? r.json() : null; })
+      .then(function() { self._loadHomeData(); self._loadWorkflows(); })
+      .catch(function() { self._loadHomeData(); });
+  }
+  deferOverdue(wfId) {
+    const self = this;
+    this._dropOverdue(wfId);
+    fetch('/api/console/workflows/' + wfId + '/defer', { method: 'POST', headers: this._H() })
+      .then(function(r) { return r.ok ? r.json() : null; })
+      .then(function() { self._loadHomeData(); })
+      .catch(function() { self._loadHomeData(); });
   }
   _loadHomeData() {
     const self = this;
@@ -4786,6 +4831,19 @@ class Component extends DCLogic {
       hmFailSummary: S.homeData?.modules?.failure_alerts?.summary || '',
       hmFailWfs:    (S.homeData?.modules?.failure_alerts?.workflows || []).map(w => ({
         name: w.name, onClick: () => this.openConsole(w.id),
+      })),
+      hmHasOverdue: !!(S.homeData?.modules?.overdue?.workflows?.length),
+      hmOverdueSummary: (() => {
+        const n = S.homeData?.modules?.overdue?.workflows?.length || 0;
+        return n === 1
+          ? "1 scheduled workflow missed its run (the scheduler was offline past its grace window). Run it now, or defer to its next scheduled time."
+          : n + " scheduled workflows missed their runs. Run them now, or defer to their next scheduled time.";
+      })(),
+      hmOverdueWfs: (S.homeData?.modules?.overdue?.workflows || []).map(w => ({
+        name: w.name, schedule: w.schedule,
+        onOpen: () => this.openConsole(w.id),
+        onRun: () => this.runOverdue(w.id),
+        onDefer: () => this.deferOverdue(w.id),
       })),
       hmTimeSavedDisplay: S.homeData?.modules?.time_saved?.display || '—',
       hmTip:       S.homeData?.modules?.ai_tip?.tip || '',
