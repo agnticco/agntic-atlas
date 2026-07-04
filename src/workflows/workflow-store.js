@@ -507,7 +507,7 @@ export class WorkflowStore {
    * to that user. Pass `userId: undefined` (the default) for internal callers
    * that don't enforce ownership (e.g. scheduler completion writes).
    */
-  update(id, fields, { message = null, author = 'user', userId = undefined } = {}) {
+  update(id, fields, { message = null, author = 'user', userId = undefined, snapshot = true } = {}) {
     const current = this.get(id, userId !== undefined ? { userId } : {});
     if (!current) return null;
 
@@ -537,8 +537,10 @@ export class WorkflowStore {
 
     if (sets.length === 0) return current;
 
+    // Draft autosave passes snapshot:false — persist the in-progress spec without
+    // bumping the version or writing a version snapshot on every keystroke-debounce.
     let newVersion = current.version;
-    if (definitionChanged) {
+    if (definitionChanged && snapshot) {
       newVersion = (current.version ?? 1) + 1;
       sets.push('version = ?');
       vals.push(newVersion);
@@ -550,7 +552,7 @@ export class WorkflowStore {
 
     this.db.prepare(`UPDATE workflows SET ${sets.join(', ')} WHERE id = ?`).run(...vals);
 
-    if (definitionChanged) {
+    if (definitionChanged && snapshot) {
       this._snapshotVersion(id, newVersion, message ?? 'Updated workflow', author);
     }
     return this.get(id);
@@ -608,8 +610,10 @@ export class WorkflowStore {
    * only intended caller — it runs workflows regardless of who owns them.
    */
   getDue() {
-    // Internal scheduler call — pull every active workflow, no user filter
-    const rows = this.db.prepare("SELECT * FROM workflows WHERE status = 'active' ORDER BY created_at DESC").all().map(r => this._parse(r));
+    // Internal scheduler call — pull every active workflow, no user filter.
+    // MUST exclude soft-deleted rows (deleted_at) — otherwise a workflow the user
+    // deleted keeps firing on its schedule and delivering output (Q26).
+    const rows = this.db.prepare("SELECT * FROM workflows WHERE status = 'active' AND deleted_at IS NULL ORDER BY created_at DESC").all().map(r => this._parse(r));
     return rows.filter(w => {
       if (w.kind === 'fetch') return this._isDue(w);
       if (w.kind === 'flow')  return this._isFlowDue(w);
@@ -977,8 +981,13 @@ export class WorkflowStore {
     const triggers = workflow.triggers ?? [];
     for (const t of triggers) {
       if (t?.type !== 'schedule') continue;
-      const cron = t.config?.cron;
-      const time = t.config?.time;
+      // Trigger shape is inconsistent across the codebase: the converger/builder
+      // (and the stored specs) put cron/time DIRECTLY on the trigger, while
+      // workflow-service.js nests them under `config`. Read both, or a
+      // direct-shaped schedule trigger is silently never due (Q25 — the cause of
+      // "my scheduled workflow never fired").
+      const cron = t.cron ?? t.config?.cron;
+      const time = t.time ?? t.config?.time;
 
       // ── Sub-daily: interval-based patterns ──────────────────────────────────
       // These use elapsed time since last_run rather than "once per calendar day."
