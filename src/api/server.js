@@ -163,10 +163,13 @@ const isAirtableNode = (n) =>
   (n?.type === 'deliver' && AIRTABLE_ACTION_IDS.has(n?.config?.channel)) ||
   (n?.type === 'connector-action' && AIRTABLE_ACTION_IDS.has(n?.config?.action));
 
+// NOTE: keep in sync with the Google capability catalog (registerGoogleChannels).
+// A capability missing here gets no googleToken injected → "no access token" at
+// run time even though it's connected (this is how drive_create_folder broke, R22).
 const GOOGLE_ACTION_IDS = new Set([
   'gmail_search', 'gmail_get_message', 'gmail_send', 'gmail_mark_read',
   'calendar_list_events', 'calendar_create_event',
-  'drive_list_files', 'sheets_read', 'sheets_append',
+  'drive_list_files', 'drive_create_folder', 'sheets_read', 'sheets_append',
   'docs_read', 'docs_create', 'tasks_list', 'tasks_create',
 ]);
 const isGoogleNode = (n) =>
