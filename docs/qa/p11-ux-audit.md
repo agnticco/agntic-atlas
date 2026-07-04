@@ -384,3 +384,22 @@ is in good shape. The gating risk is the **converger↔engine contract**: it can
 can't run (S7-9) and the self-repair loop can't actually fix them (S7-10). Both point at the same
 converger node-management/reference-resolution weakness (R19 family). That pair should be the
 pre-release priority — a non-technical user who builds a common workflow can hit a break with no way out.
+
+### Session 7 fixes (branch `p11-hardening-fixes-d`, 2026-07-04)
+
+All S7 findings fixed + verified. The two HIGH items were verified **end-to-end in Chrome**.
+
+| ID | Fix | Verified |
+|----|-----|----------|
+| S7-9 | Converger: forbid array-splat/field-path refs + per-item "fetch each" loops (engine has no iteration); validator flags unsupported `{{…[*]…}}` as BAD_TEMPLATE_REF at build time. | unit + live (rebuilt digest runs clean) |
+| S7-10 | Self-repair removal now works: `applyProposal` gets `remove_node` (rewires the chain) + `remove_edge`; converger prompt gains the remove vocabulary; edit-change path instructed to delete + a server guard drops dangling edges. | **live — asked to remove the fetch step → node deleted, chain rewired (5→4 steps), test PASSED** |
+| S7-12 | Restored/dead-session drafts: stop persisting `threadId`, always null it on restore, and route free-text edits (no live session + complete spec) to the spec-based edit-change path instead of a dead converger session / generic chat. | live (surfaced + fixed during S7-10 verify) |
+| S7-2 | Slow external steps (connector-action/fetch/web) get a 300s timeout backstop (was 180s). | code |
+| S7-3/S7-5 | Method-aware deliver glyph in DAGs + SOP shows "Delivery: Email / To: …" not "Channel: gmail_send". | live (TEST OUTPUT shows "⬤ Atlas Inbox") |
+| S7-6 | Sidebar shows a draft's original intent instead of identical "New workflow" placeholders. | code |
+| S7-7 | Name proposal must match the confirmed trigger cadence (no "Daily" for weekday-only). | code |
+| S7-8 | Test panel shows "Building · N steps" during a build, not a flat "Incomplete". | **live** |
+| S7-4 | Run history shows "—" for pre-R8 bogus ~1ms test rows. | code |
+| S7-11 | Not a bug — Knowledge nav works (earlier no-op was a click during an active build). F1 "Files" header confirmed live. | live |
+
+**P3 converger gate re-verified green** after the prompt/spec-assembler/validator changes.

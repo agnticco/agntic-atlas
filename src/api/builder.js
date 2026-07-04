@@ -1155,7 +1155,7 @@ Rules:
 
       const raw = await llm.invoke([
         new SystemMessage(
-          `You are Atlas, a workflow automation assistant. You receive a workflow spec (JSON) and a user's change request and return an updated spec.\n\nWorkflow spec format:\n- triggers[]: array of trigger objects (type, config, label)\n- nodes[]: array of step objects (id, type, label, config). Types: summarize, llm, extract, rewrite, connector-action, deliver\n- edges[]: array of {from, to} connections\n\n${capCtx}\n\nRules:\n- Apply ONLY what the user asked for. Don't restructure unrelated parts.\n- Preserve all existing node ids, edge connections, and config fields not mentioned in the change.\n- For schedule triggers, config.cron is a cron expression (e.g. "0 6 * * *" = 6am daily), config.timezone is a tz name (e.g. "America/Chicago"), config.label is a human label.\n- For llm/summarize nodes, config.instructions is the prompt.\n- For deliver nodes, config.channel MUST be one of the AVAILABLE DELIVERY CHANNEL IDs — use the alias table to map plain-English requests to the right id. NEVER invent a channel id.\n- For connector-action nodes, config.action MUST be one of the AVAILABLE STEP ACTIONS.\n- If the user requests a delivery method or step action that is UNAVAILABLE or not listed, keep the relevant node UNCHANGED and explain specifically what connector or scope is needed to enable it.\n- Return ONLY valid JSON with exactly this shape: {"explanation":"<one sentence describing what you changed>","spec":{...updated spec...}}\n- No markdown fences, no extra text.`
+          `You are Atlas, a workflow automation assistant. You receive a workflow spec (JSON) and a user's change request and return an updated spec.\n\nWorkflow spec format:\n- triggers[]: array of trigger objects (type, config, label)\n- nodes[]: array of step objects (id, type, label, config). Types: summarize, llm, extract, rewrite, connector-action, deliver\n- edges[]: array of {from, to} connections\n\n${capCtx}\n\nRules:\n- Apply ONLY what the user asked for. Don't restructure unrelated parts.\n- Preserve all existing node ids, edge connections, and config fields not mentioned in the change.\n- To REMOVE a step: actually DELETE its object from nodes[] AND delete every edge that references its id. If it was in the middle of the chain, add an edge from its upstream node to its downstream node so the chain stays connected (e.g. removing "fetch" from search→fetch→summarize leaves search→summarize). Do NOT leave the node in place.\n- Data references between steps: the engine resolves ONLY {{prev}} and {{nodeId.output}}. NEVER use array indexing, wildcards, or field paths like {{node.results[*].id}} or {{node.field.sub}} — they are passed through literally and break at runtime. A connector-action runs once and cannot loop over a list; never add a step to "fetch each item".\n- For schedule triggers, config.cron is a cron expression (e.g. "0 6 * * *" = 6am daily), config.timezone is a tz name (e.g. "America/Chicago"), config.label is a human label.\n- For llm/summarize nodes, config.instructions is the prompt.\n- For deliver nodes, config.channel MUST be one of the AVAILABLE DELIVERY CHANNEL IDs — use the alias table to map plain-English requests to the right id. NEVER invent a channel id.\n- For connector-action nodes, config.action MUST be one of the AVAILABLE STEP ACTIONS.\n- If the user requests a delivery method or step action that is UNAVAILABLE or not listed, keep the relevant node UNCHANGED and explain specifically what connector or scope is needed to enable it.\n- Return ONLY valid JSON with exactly this shape: {"explanation":"<one sentence describing what you changed>","spec":{...updated spec...}}\n- No markdown fences, no extra text.`
         ),
         new HumanMessage(
           `Current spec:\n${specSummary}\n\nChange request: "${change}"\n\nReturn the updated spec as JSON.`
@@ -1173,6 +1173,14 @@ Rules:
 
       if (!parsed.spec?.nodes) {
         return res.status(500).json({ ok: false, error: 'LLM did not return a valid spec.' });
+      }
+
+      // S7-10: structural safety net — if the model "removed" a step but left an
+      // edge pointing at the now-missing node, drop those dangling edges so the
+      // result is a runnable chain rather than a spec that fails on the next run.
+      const ids = new Set((parsed.spec.nodes || []).map(n => n.id));
+      if (Array.isArray(parsed.spec.edges)) {
+        parsed.spec.edges = parsed.spec.edges.filter(e => e && ids.has(e.from) && ids.has(e.to));
       }
 
       logEvent('edit.change.ok', { tenant: req.tenant?.id ?? null });

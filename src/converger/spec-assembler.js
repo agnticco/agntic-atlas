@@ -47,6 +47,25 @@ export function applyProposal(draft, proposal, confirmation = { type: 'accept' }
     case 'description':
       d.description = typeof spec === 'string' ? spec : spec.description;
       break;
+    case 'remove_node': {
+      // S7-10: actually excise a node when the user asks to remove/replace a step.
+      // Rewire around it so the chain isn't severed:
+      //   search → [fetch] → summarize   becomes   search → summarize.
+      const rid = (spec && spec.id) || spec;
+      const ups   = d.edges.filter(e => e.to === rid).map(e => e.from);
+      const downs = d.edges.filter(e => e.from === rid).map(e => e.to);
+      d.nodes = d.nodes.filter(n => n.id !== rid);
+      d.edges = d.edges.filter(e => e.from !== rid && e.to !== rid);
+      for (const u of ups) for (const dn of downs) {
+        if (u !== dn && !d.edges.some(e => e.from === u && e.to === dn)) d.edges.push({ from: u, to: dn });
+      }
+      break;
+    }
+    case 'remove_edge': {
+      const from = spec && spec.from, to = spec && spec.to;
+      d.edges = d.edges.filter(e => !(e.from === from && e.to === to));
+      break;
+    }
     default:
       break;
   }

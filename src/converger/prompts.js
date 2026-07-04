@@ -194,6 +194,20 @@ HOW INPUT ENTERS THE WORKFLOW:
   (e.g. a missing Slack scope) instead of inventing one. Never use a "tool" or "fetch" node.
 - Use connector-action for side-effects too (post then pin, look up a user, create a channel).
 
+HOW DATA PASSES BETWEEN STEPS (hard engine limits — violating these makes the workflow FAIL at runtime):
+- Every step automatically receives the FULL output of the previous step as its input. To reference an
+  earlier step explicitly, the ONLY forms the engine resolves are {{prev}} and {{<nodeId>.output}}.
+  There is NO field-path, array-index, or wildcard support: {{node.results[0].id}},
+  {{node.results[*].id}}, {{node.items[*].x}}, {{node.field.sub}} are passed through LITERALLY and
+  break the step (e.g. a connector gets the raw "{{…[*]…}}" string → "Invalid id value"). NEVER emit
+  any {{…}} that contains '.', '[', ']' or '*' other than the exact form {{nodeId.output}}.
+- A connector-action runs EXACTLY ONCE and CANNOT loop or map over a list — the engine has no per-item
+  iteration. So NEVER add a step that "fetches the full content of each result" / "gets each item" /
+  "enriches every row". When a search or list action returns multiple items, pass its whole output
+  straight to the next summarize/llm node, which reads the entire list at once. If a search already
+  returns usable fields (sender, subject, snippet, etc.), do NOT add a second connector-action to
+  fetch each row — that pattern is unrunnable. Prefer the FEWEST steps that satisfy the intent.
+
 OUTPUT FORMATTING — the engine passes the previous node's output to the deliver node as-is. It does
 NOT reformat it. The "output format" shown next to each delivery channel above is non-negotiable — you
 MUST instruct the content-generating node (summarize/llm/rewrite) to produce exactly that format:
@@ -278,7 +292,19 @@ Node:
 Edge (IMPORTANT: "from" and "to" must be node IDs from the NODES list — never "trigger" or any other keyword):
 {"component":"edge","spec":{"from":"<nodeId>","to":"<nodeId>"},"rationale":"<one sentence>"}
 
-Name:
+Remove a step (use this when the user asks to remove/delete/drop a step, OR when replacing a broken
+step — emit remove_node for the offending node's id; the engine automatically rewires the chain around
+it, e.g. search → [removed] → summarize becomes search → summarize). To REPLACE a step, first
+remove_node the old one, then propose the new node + its edges. Never "replace" by re-proposing a
+DIFFERENT node while leaving the broken one in place:
+{"component":"remove_node","spec":{"id":"<nodeId to remove>"},"rationale":"<one sentence>"}
+
+Remove an edge:
+{"component":"remove_edge","spec":{"from":"<nodeId>","to":"<nodeId>"},"rationale":"<one sentence>"}
+
+Name (must accurately reflect the CONFIRMED trigger cadence and scope — do NOT call a weekday-only
+schedule "Daily", a weekly one "Daily", etc.; match what the trigger actually does, e.g. "Weekday
+Morning Email Digest" for a Mon–Fri 9am schedule):
 {"component":"name","spec":"<workflow name>","rationale":"<one sentence>"}
 
 Clarification (only when genuinely ambiguous — ask ONE focused question):
