@@ -172,7 +172,7 @@ AVAILABLE NODE TYPES (only these — every one is runnable by the engine today):
 - rewrite: Rewrite/transform text (config: instructions, tone)
 - connector-action: Call a connector capability MID-workflow to GET or DO something, then pass the result to the next step (config: { action:"<id>", ...params }). Use this ONLY when the workflow genuinely needs to reach into a connector mid-flow — e.g. pull a Slack channel's history, look up a user, create/invite to a channel. Do NOT use it to "fetch" the data a trigger already delivers, and never for the final delivery (use deliver). If no connector action is needed, skip it entirely. Available actions:
 ${stepSummary(capabilities)}
-- deliver: Send the final result to a destination. ALWAYS the LAST step. Choose config.channel from the destinations below and set ONLY its routing fields — the message body is filled automatically from the previous step's output, so never put the content in config.
+- deliver: Send the final result to a destination. Choose config.channel from the destinations below and set ONLY its routing fields — the message body is filled automatically from the previous step's output, so never put the content in config. MULTIPLE DESTINATIONS: if the user asks to send the result to more than one place (e.g. "email me AND save a Google Doc", "post to Slack and email the team"), add ONE deliver node PER destination, each with its own edge from the final content node (fan-out) — the engine runs them all. Never silently drop a requested destination. Deliver nodes are always terminal (nothing runs after them).
   AVAILABLE DELIVERY DESTINATIONS (these are the only ones connected/runnable right now — never invent one):
 ${deliverySummary(capabilities)}
   Guidance: a "#channel" goes to channel "slack" with target. A DM / "send it to me" / "message <person>" goes to channel "slack_dm" with user = their email or @handle. If the user wants a Slack channel but hasn't named one, ask which channel.
@@ -201,10 +201,13 @@ MUST instruct the content-generating node (summarize/llm/rewrite) to produce exa
 - output format: mrkdwn (slack, slack_dm) — include in the node's instructions:
   "Format output as Slack mrkdwn: *bold* for headers, • for list items, blank line between sections.
   No HTML tags of any kind."
-- output format: html (gmail_send) — add a DEDICATED llm formatting node immediately before the
-  deliver node. Before proposing it, ask the user how they want the email laid out ("newsletter with
-  section headers", "plain text summary", "HTML callout cards", etc.). That node's prompt produces the
-  inner HTML the user chose — instruct it NOT to include <html>/<body> wrappers.
+- output format: html (gmail_send) — fold the HTML formatting into the instructions of the LAST
+  content-producing LLM/summarize/rewrite node that feeds the deliver step, exactly like the other
+  formats: "Format the output as clean inner HTML for an email body — <h2>/<h3> headers, <p>
+  paragraphs, <ul>/<li> lists. Do NOT include <html>/<body> wrappers." Only add a SEPARATE dedicated
+  formatting node when there is NO LLM/summarize/rewrite node feeding the deliver step (e.g. a pure
+  connector-action → email pipeline). NEVER stack a formatting node after a node that already
+  produces email-ready HTML — that is a redundant, costly extra LLM call.
 - output format: markdown (docs_create) — include in the node's instructions:
   "Format output as standard Markdown: # for headings, **bold**, - for list items, blank line between
   sections. No HTML tags." Drive converts the markdown to a formatted Google Doc automatically.
