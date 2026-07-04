@@ -16,6 +16,7 @@
 import { promises as fs } from 'node:fs';
 import { logEvent, errFields } from '../utils/event-log.js';
 import { generateSopMarkdown } from '../workflows/sop-generator.js';
+import { generateRoiMarkdown } from '../workflows/roi-report.js';
 import { timeSavedMinutesForRun } from '../workflows/time-saved.js';
 
 export function mountConsoleRoutes(app, { spine, requireActiveTenant }) {
@@ -297,46 +298,64 @@ export function mountConsoleRoutes(app, { spine, requireActiveTenant }) {
 
   // ── All-up ROI summary (P9) ───────────────────────────────────────────────
 
+  // Shared ROI computation — used by the JSON endpoint and the export (Q08).
+  const computeRoi = (userId, tenantId) => {
+    const workflows = store.list({ userId, tenantId });
+    let totalTimeSavedMinutes = 0;
+    let totalRuns = 0;
+    const byWorkflow = [];
+    for (const wf of workflows) {
+      const runs = store.getRuns(wf.id, 500, { userId, tenantId })
+        .filter(r => !r.is_test && r.status === 'success' && r.started_at && r.completed_at);
+      const baselineS = wf.baseline_duration_s ?? 0;
+      let wfSavedMinutes = 0;
+      for (const r of runs) wfSavedMinutes += timeSavedMinutesForRun(r, baselineS); // unified model
+      totalTimeSavedMinutes += wfSavedMinutes;
+      totalRuns += runs.length;
+      byWorkflow.push({
+        id: wf.id,
+        name: wf.name || wf.user_intent || 'Untitled',
+        runs: runs.length,
+        baselineDurationS: baselineS,
+        timeSavedMinutes: Math.round(wfSavedMinutes * 10) / 10,
+      });
+    }
+    return {
+      totalTimeSavedMinutes: Math.round(totalTimeSavedMinutes * 10) / 10,
+      totalRuns,
+      byWorkflow,
+      generatedAt: new Date().toISOString(),
+    };
+  };
+
   app.get('/api/console/roi', requireActiveTenant, (req, res) => {
     try {
-      const workflows = store.list({ userId: req.user.id, tenantId: req.tenant.id });
-      let totalTimeSavedMinutes = 0;
-      let totalRuns = 0;
-      const byWorkflow = [];
-
-      for (const wf of workflows) {
-        const runs = store.getRuns(wf.id, 500, { userId: req.user.id, tenantId: req.tenant.id })
-          .filter(r => !r.is_test && r.status === 'success' && r.started_at && r.completed_at);
-        const baselineS = wf.baseline_duration_s ?? 0;
-        let wfSavedMinutes = 0;
-
-        for (const r of runs) {
-          // Unified model (time-saved.js): persisted measured value, else
-          // measured baseline−actual, else flat estimate.
-          wfSavedMinutes += timeSavedMinutesForRun(r, baselineS);
-        }
-
-        totalTimeSavedMinutes += wfSavedMinutes;
-        totalRuns += runs.length;
-        byWorkflow.push({
-          id: wf.id,
-          name: wf.name || wf.user_intent || 'Untitled',
-          runs: runs.length,
-          baselineDurationS: baselineS,
-          timeSavedMinutes: Math.round(wfSavedMinutes * 10) / 10,
-        });
-      }
-
-      res.json({
-        roi: {
-          totalTimeSavedMinutes: Math.round(totalTimeSavedMinutes * 10) / 10,
-          totalRuns,
-          byWorkflow,
-          generatedAt: new Date().toISOString(),
-        },
-      });
+      res.json({ roi: computeRoi(req.user.id, req.tenant.id) });
     } catch (err) {
       logEvent('console.roi.error', errFields(err));
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Customer-facing ROI report export (Markdown / PDF), reusing the SOP PDF pipe.
+  app.get('/api/console/roi/export', requireActiveTenant, async (req, res) => {
+    try {
+      const roi = computeRoi(req.user.id, req.tenant.id);
+      const tenantName = req.tenant.name || req.tenant.id || 'Your workspace';
+      const markdown = generateRoiMarkdown(roi, { tenantName });
+      const stamp = (roi.generatedAt || '').slice(0, 10);
+      if (req.query.format === 'pdf') {
+        const { generateSopPdf } = await import('../workflows/sop-pdf.js');
+        const pdf = await generateSopPdf(markdown, `ROI Report — ${tenantName}`);
+        res.setHeader('Content-Type', 'application/pdf');
+        res.setHeader('Content-Disposition', `attachment; filename="roi-report-${stamp}.pdf"`);
+        return res.send(pdf);
+      }
+      res.setHeader('Content-Type', 'text/markdown; charset=utf-8');
+      res.setHeader('Content-Disposition', `attachment; filename="roi-report-${stamp}.md"`);
+      res.send(markdown);
+    } catch (err) {
+      logEvent('console.roi.export.error', errFields(err));
       res.status(500).json({ error: err.message });
     }
   });
