@@ -35,7 +35,35 @@ Riskier/behavioral items, done with explicit sign-off.
 | R14 | Test verdict means *valid output* not just "ran": backend `/workflows/run` flags `ERROR:`-sentinel step outputs as `issues[]`+`clean`; frontend treats completed-with-issues as a break at the offending node and blocks publish | `4bd8ffe` | unit-verified 3 cases (clean→pass, ERROR→fail@node, throw→fail); live |
 | R1/R2 | Chat asserts it builds workflows itself (identity clause) + "build it" is the ready_to_build signal, not a tool call | `4c8b9b3` | prompt fix — needs live chat round to confirm |
 | R18 | Already largely addressed — converger receives real base/table/field names at session bootstrap (`builder.js:769`). Remaining gap is only a reusable helper/endpoint. | — | not a bug; noted |
-| R23 | Airtable trigger dead (webhook never created on publish). OAuth ≠ event delivery; needs `POST /bases/{id}/webhooks` on publish. **Held** — creates external subscription, unverifiable locally without tunnel + real base. | — | pending decision |
+| R23 | Airtable trigger dead. **Held — REQUIRED BEFORE DISTRIBUTION** (see below). | — | held |
+
+### R23 — Airtable trigger (pre-distribution blocker)
+
+**Held on 2026-07-04** per decision: fine for now, but this must land before Atlas is
+distributed to customers who rely on Airtable triggers. Any Airtable `airtable_record_changed`
+workflow published today silently never fires.
+
+Why OAuth isn't enough: OAuth authorizes Atlas to *read/write* a base; it does **not** make
+Airtable *push* events. Airtable only sends record-change events to an explicit webhook
+subscription created via its Webhooks API. That subscription is per **base**, created with the
+tenant's own token — so webhook objects are per (tenant, base), but the mechanism is one generic
+code path. The multi-tenant plumbing already exists: workspace-level install (`wsinstall:<tenantId>`),
+routing table `_webhookMap` keyed by `tenantId` (`airtable/index.js:55–79`), per-webhook HMAC.
+
+**Two wiring jobs, not one:**
+1. **Create on publish** — call `createAirtableWebhook` (helper exists, `airtable/index.js:157`;
+   REST endpoint exists, `server.js:1613`) from the publish path (`builder.js` POST
+   `/api/builder/workflows`, ~1384) when the spec contains an `airtable_record_changed` trigger,
+   extracting baseId/tableId from the trigger config. Gate on a public `OAUTH_REDIRECT_BASE` +
+   connected token; failures log, never block publish.
+2. **Refresh before expiry** — Airtable webhooks expire (~7 days; `createAirtableWebhook` returns
+   `expirationTime`, `airtable/index.js:171`). `refreshAirtableWebhook` (`:178`) exists but has
+   **zero callers**. Needs a periodic job (scheduler 60s tick is a natural home) to refresh each
+   live webhook before `expirationTime`, or re-create it if lapsed. Without this, even a correctly
+   created webhook goes silently dead after a week.
+
+**Verification requires** the public tunnel (`dev.agntic.co`) reachable by Airtable + a real
+connected base with a trigger workflow — cannot be proven on localhost.
 
 ## Fix priority index (P11 hardening worklist)
 
