@@ -3452,7 +3452,19 @@ class Component extends DCLogic {
     if (!t) return;
     this._clearChatInput();
     // Conversational phase: talk to the chat agent, don't build yet.
-    if (S.phase === "chat") { this.sendChat(t); return; }
+    if (S.phase === "chat") {
+      // A restored / dead-session draft can land in phase "chat" while already holding
+      // a complete spec. Free-text there must EDIT the existing spec (edit-change path),
+      // not fall into generic chat — which would wrongly refuse ("I can't edit an
+      // already-running workflow"). Route it to the spec-based editor (S7-10/S7-12).
+      if (!S.threadId && S.spec && Array.isArray(S.spec.nodes) && S.spec.nodes.length) {
+        this.setState({ msgs: [...S.msgs, { isOperator: true, text: t }], inputValue: "", thinking: true, phase: "building", testState: "idle", runStepIndex: 0, runSteps: [], failIndex: -1 });
+        this._applyEditChange(t);
+        return;
+      }
+      this.sendChat(t);
+      return;
+    }
     if (S.inputMode === "clarify") {
       this.setState({ msgs: [...S.msgs, { isOperator: true, text: t }], inputValue: "", thinking: true, inputMode: "locked" });
       this._send({ type: "clarification", answer: t });
