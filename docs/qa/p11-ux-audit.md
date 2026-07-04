@@ -344,3 +344,43 @@ drafts deleted).
   *unintended real send* (worst — a broken safety promise); UX-C1 ships a wrong SOP to
   a customer; UX-D1 lets a misclick silently break live automations. Recommend those first.
 - Not audited this pass: the standalone **admin app** (`src/admin/index.html`).
+
+## Session 7 — release-confidence drive-through (2026-07-04)
+
+Live Chrome drive as a non-technical operator, on the post-group-c build. Focus: does the core
+flow actually work end-to-end, and where would a real user get stuck. New ids `S7-*`.
+
+**HIGH — the two findings that most affect release confidence:**
+
+| ID | Sev | Summary |
+|----|-----|---------|
+| S7-9 | **HIGH** | Converger builds an **unrunnable array-splat reference**. On "summarize my unread emails" it added a "Fetch Full Email Contents" connector-action referencing `{{search_unread_emails.results[*].id}}`. The engine doesn't resolve `[*]` splat, so the literal string hit the Gmail API → "Invalid id value" → whole workflow fails on first run. Common shape (search → fetch-each-item → process). The converger also *over-added* the fetch step; a simpler search→summarize→deliver would have run. |
+| S7-10 | **HIGH / blocker** | **Self-repair "remove the step" does not remove the node.** After S7-9 I asked chat to "remove that step and summarize directly from the search results." Chat agreed, proposed a replacement, I confirmed, panel returned to "Ready to test" — but the DAG still showed the fetch step, and re-test hit the **identical** break. The natural recovery path from a broken build is a dead end for a non-technical user. Root: applyProposal adds nodes/edges but replace/remove doesn't delete the old node (same node-management weakness as R19). |
+
+**MODERATE / MINOR:**
+
+| ID | Sev | Summary |
+|----|-----|---------|
+| S7-2 | MODERATE | `web_search`/connector-action **times out at 180s** → run fails, workflow flips to "error" (seen live on AI Morning Briefing). Web-search workflows are a headline use case; needs longer/configurable timeout, partial-result fallback, or retry. |
+| S7-5 | MINOR | SOP still shows **"Channel: gmail_send"** (raw action id) + "#" glyph on an email deliver, even though the sentence ("Emails the result to …") is correct (C1). Technical leakage in a customer-facing doc. |
+| S7-3 | MINOR | Console **DAG deliver-node uses "#" glyph** for email delivery (C1/R4 family; detail text is right). |
+| S7-6 | MINOR | Ephemeral **"New workflow"/"Untitled" drafts accumulate** in the sidebar (3+), never cleaned up. |
+| S7-7 | MINOR | **R15 live repro**: auto-name "Daily Unread Email Digest" while the trigger is **weekdays-only**. |
+| S7-8 | NOTE | Test panel stays **"Incomplete" the entire build** until the final name is confirmed; no positive progress signal during a ~6-step build (a "4 of 5 confirmed" indicator would reassure). |
+| S7-1 | NOTE | A restored mid-build draft shows chat copy "ready to test" while the panel (correctly) shows "Incomplete" briefly — copy over-claims vs the gate. |
+| S7-4 | POLISH | Pre-R8 TEST runs still show bogus "1ms · 3 steps" in run history (old rows; not a regression). |
+| S7-11 | MINOR | Clicking sidebar **"Knowledge" during an active build did nothing** (Connections opened fine from the same state) — possible click-target/nav-suppression issue. |
+
+**WORKED WELL (release positives):**
+- **R14 verdict integrity is solid** — the broken run showed "Break found", marked the failing step, kept downstream "Queued", and gave a genuinely clear non-technical explanation. It did NOT false-pass. This is exactly right.
+- **R1/R2 build flow** reproduced cleanly; confirm-each-step with plain-language rationales is strong.
+- **Self-repair diagnosis** (the words) was accurate and reassuring — the gap is only that it doesn't actually mutate the spec (S7-10).
+- **Console + SOP** are professional; error messages are descriptive ("timed out after 180s", "Invalid id value").
+- **A3 holding** — reload restored the broken draft with no stale ⚠ error bubble.
+- **F1** — Knowledge header reads "Files".
+
+**Release read:** the surrounding product (build UX, verdict honesty, console, SOP, error messaging)
+is in good shape. The gating risk is the **converger↔engine contract**: it can emit specs the engine
+can't run (S7-9) and the self-repair loop can't actually fix them (S7-10). Both point at the same
+converger node-management/reference-resolution weakness (R19 family). That pair should be the
+pre-release priority — a non-technical user who builds a common workflow can hit a break with no way out.
