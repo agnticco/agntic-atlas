@@ -399,6 +399,7 @@ export async function calendarListEvents(gapi, { maxResults = 10, timeMin, calen
 
 /** calendar_create_event. */
 export async function calendarCreateEvent(gapi, { title, start, end, description = '', attendees = '', calendarId = 'primary' }) {
+  if (!String(title ?? '').trim() || !start) throw new Error('calendar_create_event: needs a title and a start time.');
   const event = {
     summary: title, description,
     start: { dateTime: start, timeZone: 'UTC' },
@@ -444,6 +445,8 @@ export async function sheetsRead(gapi, { spreadsheetId, range = 'Sheet1' }) {
 /** sheets_append — append rows. */
 export async function sheetsAppend(gapi, { spreadsheetId, range = 'Sheet1', values }) {
   const rows = typeof values === 'string' ? JSON.parse(values) : values;
+  if (!spreadsheetId) throw new Error('sheets_append: spreadsheetId is required.');
+  if (!Array.isArray(rows) || rows.length === 0) throw new Error('sheets_append: needs values to append.');
   const data = await gapi('POST',
     `/sheets/v4/spreadsheets/${spreadsheetId}/values/${encodeURIComponent(range)}:append`,
     { body: { values: rows }, params: { valueInputOption: 'USER_ENTERED', insertDataOption: 'INSERT_ROWS' } }
@@ -470,6 +473,13 @@ export async function docsRead(gapi, { documentId }) {
  * Takes `token` directly because gapi() only supports JSON bodies.
  */
 export async function docsCreate(token, { title, content }) {
+  // R13: don't create an empty "Untitled" doc when config/input is missing. Also
+  // reject the empty-input sentinels a step passes when there's no upstream data.
+  const c = String(content ?? '').trim();
+  const emptyContent = c === '' || c === '{}' || c === '[object Object]' || c === 'null' || c === 'undefined';
+  if (emptyContent && !String(title ?? '').trim()) {
+    throw new Error('docs_create: needs a title or content — refusing to create an empty document.');
+  }
   const boundary = 'atlas_docs_upload_boundary';
   const metadata = JSON.stringify({ name: title, mimeType: 'application/vnd.google-apps.document' });
   const multipart = [
@@ -513,6 +523,7 @@ export async function tasksList(gapi, { tasklistId = '@default', showCompleted =
 
 /** tasks_create. */
 export async function tasksCreate(gapi, { title, notes, due, tasklistId = '@default' }) {
+  if (!String(title ?? '').trim()) throw new Error('tasks_create: needs a title.');
   const task = { title };
   if (notes) task.notes = notes;
   if (due)   task.due = due;
@@ -634,6 +645,7 @@ export function registerGoogleChannels(capabilityRegistry) {
     requiredScopes: ['https://www.googleapis.com/auth/drive'],
     isReady: ready,
     handle: makeHandle(async (gapi, config) => {
+      if (!String(config.name ?? '').trim()) throw new Error('drive_create_folder: needs a folder name.');
       const metadata = { name: config.name, mimeType: 'application/vnd.google-apps.folder' };
       if (config.parentId) metadata.parents = [config.parentId];
       const file = await gapi('POST', '/drive/v3/files', { body: metadata });

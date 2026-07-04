@@ -127,12 +127,22 @@ export async function airtableSearchRecords(api, opts = {}) {
 
 export async function airtableCreateRecord(api, { baseId, tableId, fields } = {}) {
   const parsed = typeof fields === 'string' ? JSON.parse(fields) : (fields ?? {});
+  // R13: don't create an empty record when config/input is missing.
+  if (!baseId || !tableId) throw new Error('airtable_create_record: baseId and tableId are required.');
+  if (!parsed || typeof parsed !== 'object' || Object.keys(parsed).length === 0) {
+    throw new Error('airtable_create_record: needs fields — refusing to create an empty record.');
+  }
   const data = await api('POST', `/${baseId}/${encodeURIComponent(tableId)}`, { body: { fields: parsed } });
   return { id: data.id, fields: data.fields };
 }
 
 export async function airtableUpdateRecord(api, { baseId, tableId, recordId, fields } = {}) {
   const parsed = typeof fields === 'string' ? JSON.parse(fields) : (fields ?? {});
+  // R13: an update needs a target record + at least one field to change.
+  if (!baseId || !tableId || !recordId) throw new Error('airtable_update_record: baseId, tableId and recordId are required.');
+  if (!parsed || typeof parsed !== 'object' || Object.keys(parsed).length === 0) {
+    throw new Error('airtable_update_record: needs fields to update.');
+  }
   const data = await api('PATCH', `/${baseId}/${encodeURIComponent(tableId)}/${recordId}`, { body: { fields: parsed } });
   return { id: data.id, fields: data.fields };
 }
