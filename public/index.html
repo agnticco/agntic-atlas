@@ -1623,7 +1623,10 @@
               <div style="font-size:13.5px;color:rgba(255,255,255,.7);line-height:1.55">{{ connectorModal.detail }}</div>
             </div>
             <sc-if value="{{ connectorModal.connected }}" hint-placeholder-val="{{ false }}">
-              <button onClick="{{ connectorModal.onDisconnect }}" style="width:100%;border:1px solid rgba(232,116,97,.35);background:rgba(232,116,97,.07);color:#f0a896;font-family:inherit;font-size:14px;font-weight:500;padding:12px;border-radius:12px;cursor:pointer" style-hover="background:rgba(232,116,97,.14);border-color:rgba(232,116,97,.55)">Disconnect</button>
+              <sc-if value="{{ connectorModal.disconnectArmed }}" hint-placeholder-val="{{ false }}">
+                <div style="margin-bottom:10px;font-size:12.5px;line-height:1.5;color:#f0a896;background:rgba(232,116,97,.08);border:1px solid rgba(232,116,97,.28);border-radius:10px;padding:10px 12px">⚠ Disconnecting {{ connectorModal.name }} will stop every workflow that uses it — those runs will fail until you reconnect. Click again to confirm.</div>
+              </sc-if>
+              <button onClick="{{ connectorModal.onDisconnect }}" style="width:100%;border:1px solid rgba(232,116,97,.35);background:rgba(232,116,97,.07);color:#f0a896;font-family:inherit;font-size:14px;font-weight:500;padding:12px;border-radius:12px;cursor:pointer" style-hover="background:rgba(232,116,97,.14);border-color:rgba(232,116,97,.55)">{{ connectorModal.disconnectLabel }}</button>
             </sc-if>
             <sc-if value="{{ !connectorModal.connected }}" hint-placeholder-val="{{ false }}">
               <sc-if value="{{ connectorModal.isComingSoon }}" hint-placeholder-val="{{ false }}">
@@ -4692,10 +4695,11 @@ class Component extends DCLogic {
       connectorModal: (function() {
         const m = S.connectorModal;
         const closeAnim = () => {
-          this.setState({ connectorModalClosing: true });
+          this.setState({ connectorModalClosing: true, _disconnectArm: null });
           setTimeout(() => this.setState({ connectorModal: null, connectorModalClosing: false }), 290);
         };
-        if (!m) return { name:"", logo:"", connected:false, statusLabel:"", statusColor:"", statusDot:"", statusGlow:"", detail:"", detailLabel:"", isComingSoon:false, onConnect:()=>{}, onDisconnect:()=>{}, onClose:()=>{} };
+        if (!m) return { name:"", logo:"", connected:false, statusLabel:"", statusColor:"", statusDot:"", statusGlow:"", detail:"", detailLabel:"", isComingSoon:false, disconnectArmed:false, disconnectLabel:"Disconnect", onConnect:()=>{}, onDisconnect:()=>{}, onClose:()=>{} };
+        const armed = S._disconnectArm === m.provider;
         const isComingSoon = !m.provider || (!m.connected && m.isApiKey);
         const isApiKey = !!m.isApiKey;
         return {
@@ -4708,8 +4712,14 @@ class Component extends DCLogic {
           detailLabel: m.connected && !m.isApiKey && m.provider !== "web" ? "Account" : "About",
           isComingSoon,
           isApiKey,
+          disconnectArmed: armed,
+          disconnectLabel: armed ? ("Yes, disconnect " + m.name) : "Disconnect",
           onConnect:    () => { closeAnim(); setTimeout(() => this.connectProvider(m.provider), 290); },
-          onDisconnect: () => { closeAnim(); setTimeout(() => this.disconnectProvider(m.provider, m.name), 290); },
+          // Two-step confirm: first click arms + shows the dependency warning; second click disconnects.
+          onDisconnect: () => {
+            if (this.state._disconnectArm === m.provider) { this.setState({ _disconnectArm: null }); closeAnim(); setTimeout(() => this.disconnectProvider(m.provider, m.name), 290); }
+            else { this.setState({ _disconnectArm: m.provider }); }
+          },
           onClose:      closeAnim,
         };
       }.bind(this))(),
