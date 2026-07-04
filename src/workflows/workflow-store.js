@@ -629,9 +629,13 @@ export class WorkflowStore {
    * the parent workflow has user_id IS NULL (orphan / pre-multi-user row),
    * the run's user_id is also NULL — invisible to every user.
    */
-  startRun(workflowId, { isTest = false } = {}) {
+  startRun(workflowId, { isTest = false, startedAt = null } = {}) {
     const id  = randomUUID();
     const now = new Date().toISOString();
+    // A retroactively-logged run (e.g. the builder's completed test) can pass its
+    // real start time so the persisted duration reflects the actual run, not the
+    // ~1ms gap between the back-to-back startRun→completeRun writes (R8).
+    const started = startedAt || now;
     const parent = this.db.prepare('SELECT user_id, tenant_id FROM workflows WHERE id = ?').get(workflowId);
     const userId = parent?.user_id ?? null;
     const tenantId = parent?.tenant_id ?? 'default';
@@ -642,7 +646,7 @@ export class WorkflowStore {
     this.db.transaction(() => {
       this.db.prepare(`
         INSERT INTO workflow_runs (id, workflow_id, user_id, tenant_id, started_at, status, is_test) VALUES (?, ?, ?, ?, ?, 'running', ?)
-      `).run(id, workflowId, userId, tenantId, now, isTest ? 1 : 0);
+      `).run(id, workflowId, userId, tenantId, started, isTest ? 1 : 0);
 
       // Update last_run on the workflow only for non-test runs
       if (!isTest) {
@@ -650,7 +654,7 @@ export class WorkflowStore {
       }
     })();
 
-    return { id, workflow_id: workflowId, user_id: userId, started_at: now, status: 'running', output: null, error: null, is_test: isTest };
+    return { id, workflow_id: workflowId, user_id: userId, started_at: started, status: 'running', output: null, error: null, is_test: isTest };
   }
 
   /** Append a step record to an in-progress run. */

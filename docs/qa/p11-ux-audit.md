@@ -65,6 +65,43 @@ routing table `_webhookMap` keyed by `tenantId` (`airtable/index.js:55–79`), p
 **Verification requires** the public tunnel (`dev.agntic.co`) reachable by Airtable + a real
 connected base with a trigger workflow — cannot be proven on localhost.
 
+## Group (c) — remaining UX/reliability sweep (branch `p11-hardening-fixes-c`)
+
+The rest of the open findings, done as one branch. Line numbers re-grounded live before each fix.
+
+| ID | Fix | Commit | Verified |
+|----|-----|--------|----------|
+| R4 | Test-output header method-aware (was hardcoded Slack `#`+channel on email deliveries) | `3f4b045` | syntax-clean; uses existing `_deliveryMeta` |
+| R6 | Already fixed by R6/C3 — `_summaryText`→`_deliveredMessage`→`_htmlToText` | — | verified in code |
+| F1 | Knowledge header "Filesystem" → "Files" | `3f4b045` | live (static) |
+| A2 | Skipping the welcome persists (`atlas_tutorial_done` on close) — shows once | `3f4b045` | live |
+| E2 | Sidebar search hides the ephemeral draft for non-matching queries | `3f4b045` | live |
+| C2 | Profile baseline empty-state reworded — no longer contradicts the estimated Time-Saved figure | `3f4b045` | live |
+| R9 | Deleting a workflow removes its `atlas_build_wf_v1:*` localStorage draft | `3f4b045` | live |
+| R5/R21 | Test run holds last step "firing" until engine returns + elapsed timer (no more all-✓-yet-hung) | `3f4b045` | logic verified |
+| R8 | Real test-run duration persisted (frontend measures wall-clock; `startRun` accepts `startedAt`; builder backdates) | `3f4b045`,`50e4fd6` | logic verified |
+| B2 | Daily Tip prompt constrained to facts; told a paused workflow consumes nothing | `50e4fd6` | prompt fix |
+| R3 | HTML email formatting folds into the last content node — no redundant back-to-back LLM node | `dc16d78` | prompt fix |
+| A3 | Transient ⚠ error bubbles no longer persisted into the draft (isError flag, dropped on save) | `0af4e0b`… | live |
+| E1 | Deleted drafts distinguished by deletion date | `0af4e0b` | live |
+| G1 | Verified already-safe — inbox empty states are mutually exclusive on `inboxSearch`; no double render possible | — | verified in code |
+
+**Residuals (grounded, deliberately not fixed here):**
+- **R10** — the ledger's step-level premise ("`airtable_list_records` returns empty-success on 429")
+  is a **non-bug**: `makeAirtableApi`/`makeGoogleApi` **throw** on 429, so in-workflow steps fail
+  loudly (`step_failed`). The real silent-on-throttle is the **trigger layer** — Gmail poll
+  (`server.js:648-653`) swallows errors to `[]`; Airtable webhook dispatch (`server.js:330-338`)
+  drops payloads with no cursor replay. Deeper reliability work, and the Airtable half overlaps the
+  held **R23** (triggers don't fire at all yet). Deferred with R23.
+- **R19** — prompt now instructs deliver fan-out (one node per destination), but the **gap-scorer**
+  (`gap-scorer.js:26,36`) marks the spec complete after the *first* delivery node, so the loop can
+  route to ratify before a second destination is proposed. The robust fix is a converger-loop change
+  that needs adversary testing (protected Phase-3 loop) — flagged, not batched.
+- **R15** — manual rename correctly syncs `draftName`+`spec.name`; the drift is in the converger's
+  name-application during *build*. Can't pin from the frontend — needs live repro.
+- **E1 (partial)** — the a11y-tree absence + first-click-feedback of the deleted flyout are
+  framework-timing issues needing live repro; the label distinctiveness is fixed.
+
 ## Fix priority index (P11 hardening worklist)
 
 All findings below are **captured for P11 product-hardening fixes** — no features were built.
