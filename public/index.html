@@ -2661,7 +2661,9 @@ class Component extends DCLogic {
       //   - signal-line steps: marked inactive (no dead action buttons)
       //   - clarify chips: dropped (the quick-reply onPick can't fire post-reload;
       //     the question text remains as a normal message for context)
-      const cleanMsgs = (S.msgs || []).map(m => {
+      const cleanMsgs = (S.msgs || []).filter(m => !m.isError).map(m => {
+        // A3: transient ⚠ error bubbles are live-only — don't persist them, or a
+        // returning user is greeted by a stale "connection dropped" from a past attempt.
         if (m.isSignalLine) return { ...m, complete: true, steps: (m.steps || []).map(s => ({ ...s, isActive: false, actionsVisible: false })) };
         if (m.isClarify)    return { ...m, chips: [] };
         return m;
@@ -3780,7 +3782,7 @@ class Component extends DCLogic {
     const cur = this.state.msgs;
     const last = cur[cur.length - 1];
     const base = (last && last.isStreaming) ? [...cur.slice(0, -1), (({ isStreaming, ...rest }) => rest)(last)] : cur;
-    this.setState({ msgs: [...base, { isAtlas: true, text: '⚠ ' + clean + '  You can start over with “+ New workflow”.', hasReason: false }], thinking: false, thinkingLabel: null });
+    this.setState({ msgs: [...base, { isAtlas: true, text: '⚠ ' + clean + '  You can start over with “+ New workflow”.', hasReason: false, isError: true }], thinking: false, thinkingLabel: null });
   }
 
   // ── proposal rendering (real converger contract) ──────────────────
