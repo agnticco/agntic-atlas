@@ -758,9 +758,10 @@
 
                 <!-- MODULE: Time Saved -->
                 <sc-if value="{{ hmTimeSaved }}" hint-placeholder-val="{{ false }}">
-                  <div style="margin-bottom:28px;border:1px solid rgba(255,220,100,.15);background:rgba(255,220,100,.03);border-radius:16px;padding:20px 24px;display:flex;align-items:baseline;gap:14px">
+                  <div onClick="{{ onOpenRoi }}" style="margin-bottom:28px;border:1px solid rgba(255,220,100,.15);background:rgba(255,220,100,.03);border-radius:16px;padding:20px 24px;display:flex;align-items:baseline;gap:14px;cursor:pointer;transition:background .12s" style-hover="background:rgba(255,220,100,.06)">
                     <div style="font-family:'Instrument Serif',serif;font-style:italic;font-size:48px;letter-spacing:-0.02em;color:#f0c97a;line-height:1">{{ hmTimeSavedDisplay }}</div>
                     <div style="font-size:14px;color:rgba(255,255,255,.4)">estimated time saved by your automations</div>
+                    <div style="margin-left:auto;align-self:center;font-size:13px;font-weight:500;color:#f0c97a;white-space:nowrap">View ROI report →</div>
                   </div>
                 </sc-if>
 
@@ -951,6 +952,62 @@
 
 
       <!-- ░ MODE: CONSOLE (P5 — inventory + live run monitoring + SOP view) ░ -->
+      <!-- ROI REPORT (Q08) -->
+      <sc-if value="{{ modeRoi }}" hint-placeholder-val="{{ false }}">
+      <div style="flex:1;min-width:0;background:#0A0A0A;display:flex;flex-direction:column;position:relative;overflow:hidden">
+        <div style="flex:none;padding:20px 32px 0">
+          <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:24px">
+            <div style="min-width:0">
+              <div onClick="{{ onCloseRoi }}" style="font-size:13px;color:rgba(255,255,255,.4);cursor:pointer;margin-bottom:10px" style-hover="color:rgba(255,255,255,.7)">← Back</div>
+              <div style="font-size:28px;font-weight:500;letter-spacing:-0.025em;color:#fff;line-height:1.1">ROI Report</div>
+              <div style="font-size:13px;color:rgba(255,255,255,.4);margin-top:8px">{{ roiTenantName }} · generated {{ roiGenerated }}</div>
+            </div>
+            <div style="flex:none;display:flex;gap:8px">
+              <div onClick="{{ onRoiExportMd }}" style="font-size:12.5px;font-weight:500;color:rgba(255,255,255,.7);border:1px solid rgba(255,255,255,.15);background:rgba(255,255,255,.04);border-radius:999px;padding:8px 16px;cursor:pointer" style-hover="background:rgba(255,255,255,.08)">Export Markdown</div>
+              <div onClick="{{ onRoiExportPdf }}" style="font-size:12.5px;font-weight:500;color:#0a0a0a;background:#fff;border-radius:999px;padding:8px 16px;cursor:pointer">Export PDF</div>
+            </div>
+          </div>
+        </div>
+        <div style="flex:1;overflow-y:auto;padding:28px 32px 40px">
+          <div style="display:flex;gap:16px;flex-wrap:wrap;margin-bottom:28px">
+            <div style="flex:1;min-width:150px;border:1px solid rgba(255,220,100,.15);background:rgba(255,220,100,.03);border-radius:16px;padding:20px 24px">
+              <div style="font-family:'Instrument Serif',serif;font-style:italic;font-size:44px;color:#f0c97a;line-height:1">{{ roiTotalSaved }}</div>
+              <div style="font-size:13px;color:rgba(255,255,255,.4);margin-top:6px">total time saved</div>
+            </div>
+            <div style="flex:1;min-width:150px;border:1px solid rgba(255,255,255,.08);background:rgba(255,255,255,.02);border-radius:16px;padding:20px 24px">
+              <div style="font-size:40px;font-weight:500;color:#fff;line-height:1">{{ roiTotalRuns }}</div>
+              <div style="font-size:13px;color:rgba(255,255,255,.4);margin-top:6px">automated runs</div>
+            </div>
+            <div style="flex:1;min-width:150px;border:1px solid rgba(255,255,255,.08);background:rgba(255,255,255,.02);border-radius:16px;padding:20px 24px">
+              <div style="font-size:40px;font-weight:500;color:#fff;line-height:1">{{ roiWfCount }}</div>
+              <div style="font-size:13px;color:rgba(255,255,255,.4);margin-top:6px">workflows tracked</div>
+            </div>
+          </div>
+          <sc-if value="{{ roiHasRows }}" hint-placeholder-val="{{ false }}">
+            <div style="border:1px solid rgba(255,255,255,.07);border-radius:14px;overflow:hidden">
+              <div style="display:flex;align-items:center;gap:12px;padding:12px 20px;border-bottom:1px solid rgba(255,255,255,.06);font-size:11px;font-weight:600;letter-spacing:.1em;text-transform:uppercase;color:rgba(255,255,255,.3)">
+                <div style="flex:1">Workflow</div>
+                <div style="flex:none;width:60px;text-align:right">Runs</div>
+                <div style="flex:none;width:100px;text-align:right">Time saved</div>
+                <div style="flex:none;width:84px;text-align:right">Basis</div>
+              </div>
+              <sc-for list="{{ roiWorkflows }}" as="rw" hint-placeholder-count="3">
+                <div onClick="{{ rw.onClick }}" style="display:flex;align-items:center;gap:12px;padding:14px 20px;border-bottom:1px solid rgba(255,255,255,.04);cursor:pointer" style-hover="background:rgba(255,255,255,.03)">
+                  <div style="flex:1;min-width:0;font-size:14px;color:rgba(255,255,255,.85);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ rw.name }}</div>
+                  <div style="flex:none;width:60px;text-align:right;font-size:13px;color:rgba(255,255,255,.55)">{{ rw.runs }}</div>
+                  <div style="flex:none;width:100px;text-align:right;font-size:13px;color:#f0c97a">{{ rw.saved }}</div>
+                  <div style="flex:none;width:84px;text-align:right;font-size:11.5px;color:rgba(255,255,255,.4)">{{ rw.basis }}</div>
+                </div>
+              </sc-for>
+            </div>
+          </sc-if>
+          <sc-if value="{{ roiEmpty }}" hint-placeholder-val="{{ false }}">
+            <div style="text-align:center;padding:60px 20px;color:rgba(255,255,255,.4);font-size:14px">No completed runs yet — your ROI report will populate as your automations run.</div>
+          </sc-if>
+        </div>
+      </div>
+      </sc-if>
+
       <sc-if value="{{ modeConsole }}" hint-placeholder-val="{{ false }}">
       <div style="flex:1;min-width:0;background:#0A0A0A;display:flex;flex-direction:column;position:relative;overflow:hidden">
 
@@ -2428,6 +2485,40 @@ class Component extends DCLogic {
     const hr = Math.floor(min / 60);
     if (hr < 24) return hr + 'h ago';
     return Math.floor(hr / 24) + 'd ago';
+  }
+  _fmtMins(m) {
+    m = Math.round(m || 0);
+    if (m < 60) return m + " min";
+    const hrs = m / 60;
+    return (hrs < 10 ? hrs.toFixed(1) : String(Math.round(hrs))) + " hrs";
+  }
+  // ROI report (Q08) — tenant-wide all-up ROI, reached from the Home time-saved card.
+  openRoi() {
+    const self = this;
+    this.setState({ view: 'roi', connectionsOpen: false, accountOpen: false, profileOpen: false });
+    fetch('/api/console/roi', { headers: this._H() })
+      .then(function(r) { return r.ok ? r.json() : null; })
+      .then(function(d) { if (d && d.roi) self.setState({ roiData: d.roi }); })
+      .catch(function() {});
+  }
+  downloadRoi(format) {
+    const url = '/api/console/roi/export' + (format === 'pdf' ? '?format=pdf' : '');
+    let filename = 'roi-report.' + (format === 'pdf' ? 'pdf' : 'md');
+    fetch(url, { headers: { 'Authorization': 'Bearer ' + this.state.authToken } })
+      .then(function(r) {
+        if (!r.ok) throw new Error('Export failed (' + r.status + ')');
+        const cd = r.headers.get('content-disposition') || '';
+        const m = cd.match(/filename="?([^"]+)"?/);
+        if (m) filename = m[1];
+        return r.blob();
+      })
+      .then(function(blob) {
+        const href = URL.createObjectURL(blob);
+        const a = document.createElement('a'); a.href = href; a.download = filename;
+        document.body.appendChild(a); a.click(); document.body.removeChild(a);
+        URL.revokeObjectURL(href);
+      })
+      .catch(function(e) { alert("Couldn't export the ROI report — " + (e && e.message ? e.message : 'please try again.')); });
   }
   // Overdue-workflow owner actions (Home banner). Optimistically drop the row,
   // hit the endpoint, then reload home to reconcile.
@@ -4440,6 +4531,27 @@ class Component extends DCLogic {
       modeAccount: S.accountOpen,
       modeConsole: S.view === 'console',
       modeKnowledge: S.view === 'knowledge',
+      modeRoi: S.view === 'roi',
+      onOpenRoi: () => this.openRoi(),
+      onCloseRoi: () => this.setState({ view: 'home' }),
+      onRoiExportMd: () => this.downloadRoi('md'),
+      onRoiExportPdf: () => this.downloadRoi('pdf'),
+      roiTenantName: S.tenantName || S.roiData?.tenantName || 'Your workspace',
+      roiGenerated: (S.roiData?.generatedAt || '').slice(0, 10) || '—',
+      roiTotalSaved: this._fmtMins(S.roiData?.totalTimeSavedMinutes || 0),
+      roiTotalRuns: String(S.roiData?.totalRuns ?? 0),
+      roiWfCount: String((S.roiData?.byWorkflow || []).length),
+      roiHasRows: (S.roiData?.byWorkflow || []).length > 0,
+      roiEmpty: (S.roiData?.byWorkflow || []).length === 0,
+      roiWorkflows: [...(S.roiData?.byWorkflow || [])]
+        .sort((a, b) => (b.timeSavedMinutes || 0) - (a.timeSavedMinutes || 0))
+        .map(w => ({
+          name: w.name,
+          runs: String(w.runs ?? 0),
+          saved: this._fmtMins(w.timeSavedMinutes || 0),
+          basis: (w.baselineDurationS ?? 0) > 0 ? 'Measured' : 'Estimated',
+          onClick: () => this.openConsole(w.id),
+        })),
       modeInbox: S.view === 'inbox',
       inboxUnread: S.inboxUnread,
       connectionsOpen: S.connectionsOpen, profileOpen: S.profileOpen,
