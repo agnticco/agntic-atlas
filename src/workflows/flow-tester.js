@@ -142,7 +142,12 @@ export class FlowTester {
         // aren't cut; a node's own configured timeout (e.g. llm) fires first, with
         // 30s headroom under this backstop. Env-tunable via NODE_RUN_TIMEOUT_MS.
         const backstopMs   = numEnv('NODE_RUN_TIMEOUT_MS', 180_000);
-        const nodeTimeout  = Math.max(backstopMs, Number(node.config?.timeoutMs ?? 0) + 30_000);
+        // Slow external steps (web search, multi-page fetch, connector HTTP) need
+        // more headroom than in-process transforms — a real web_search + synthesis
+        // can exceed 180s and shouldn't fail the run (S7-2). Give them at least 300s.
+        const isSlowExternal = node.type === 'connector-action' || node.type === 'fetch' || node.type === 'search-web';
+        const effectiveBackstop = isSlowExternal ? Math.max(backstopMs, 300_000) : backstopMs;
+        const nodeTimeout  = Math.max(effectiveBackstop, Number(node.config?.timeoutMs ?? 0) + 30_000);
         const output = await withTimeout(
           this._runNode(node, { outputs, lastOutput, costConfig: nodeCostConfig, ancestorOutputs }),
           nodeTimeout,

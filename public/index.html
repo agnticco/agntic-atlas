@@ -3386,6 +3386,9 @@ class Component extends DCLogic {
   _runDuration(r) {
     if (!r || !r.started_at || !r.completed_at) return r && r.status === "running" ? "running…" : "—";
     const d = new Date(r.completed_at) - new Date(r.started_at);
+    // Pre-R8 test runs stamped started_at≈completed_at (~1ms) — bogus timing, not a
+    // real sub-second run. Show "—" instead of a misleading "1ms" (S7-4).
+    if (r.is_test && d < 100 && Array.isArray(r.steps) && r.steps.length > 0) return "—";
     if (d < 1000)  return d + "ms";
     if (d < 60000) return (d / 1000).toFixed(1) + "s";
     return (d / 60000).toFixed(1) + "min";
@@ -4297,6 +4300,16 @@ class Component extends DCLogic {
     if (ch === "slack" || ch.charAt(0) === "#" || (n && n.config && n.config.target)) return "#";
     return "→";
   }
+  // S7-6: draft workflows carry a placeholder name ("New workflow") until named,
+  // so multiple abandoned drafts look identical. Fall back to the user's original
+  // intent so each is distinguishable and meaningful in the sidebar.
+  _wfDisplayName(wf) {
+    const nm = String((wf && wf.name) || "").trim();
+    const generic = !nm || nm === "New workflow" || nm === "Untitled workflow" || nm === "Untitled";
+    if (!generic) return nm;
+    const intent = String((wf && wf.user_intent) || "").trim();
+    return intent ? this._clip(intent, 42) : (nm || "Untitled draft");
+  }
   _hashName(s) { s = String(s || "").replace(/^#/, "").trim(); return s ? ("#" + s) : ""; }
   _humanCron(cron) {
     const p = String(cron || "").trim().split(/\s+/); if (p.length < 5) return "";
@@ -4477,7 +4490,7 @@ class Component extends DCLogic {
             ? () => this.setState({ view: 'build', connectionsOpen: false, accountOpen: false, profileOpen: false })
             : () => this.openConsole(wf.id);
           const isRenaming = S.renamingWfId === wf.id;
-          return { name: wf.name || wf.user_intent || "Untitled", dot, glow, radius, bg: "transparent", border: "transparent", nameColor: isHighlighted ? "#fff" : "rgba(255,255,255,.5)", itemClass: isHighlighted ? "" : "wf-item-inactive", onClick, onDelete: (e) => { e.stopPropagation(); this.softDeleteWorkflow(wf.id); }, isRenaming, renameValue: isRenaming ? S.renamingValue : "", onEditClick: (e) => { e.stopPropagation(); this.startRename(wf.id, wf.name || wf.user_intent || "Untitled"); }, onRenameInput: (e) => this.setState({ renamingValue: e.target.value }), onRenameKeydown: (e) => { if (e.key === "Enter") { e.preventDefault(); this.commitRename(wf.id); } if (e.key === "Escape") { e.preventDefault(); this.cancelRename(); } }, onRenameBlur: () => this.commitRename(wf.id), onRenameInputClick: (e) => e.stopPropagation(), showRun: isPublished && !isRunning, onRun: (e) => { e.stopPropagation(); this.runWorkflowFromSidebar(wf.id); } };
+          return { name: this._wfDisplayName(wf), dot, glow, radius, bg: "transparent", border: "transparent", nameColor: isHighlighted ? "#fff" : "rgba(255,255,255,.5)", itemClass: isHighlighted ? "" : "wf-item-inactive", onClick, onDelete: (e) => { e.stopPropagation(); this.softDeleteWorkflow(wf.id); }, isRenaming, renameValue: isRenaming ? S.renamingValue : "", onEditClick: (e) => { e.stopPropagation(); this.startRename(wf.id, this._wfDisplayName(wf)); }, onRenameInput: (e) => this.setState({ renamingValue: e.target.value }), onRenameKeydown: (e) => { if (e.key === "Enter") { e.preventDefault(); this.commitRename(wf.id); } if (e.key === "Escape") { e.preventDefault(); this.cancelRename(); } }, onRenameBlur: () => this.commitRename(wf.id), onRenameInputClick: (e) => e.stopPropagation(), showRun: isPublished && !isRunning, onRun: (e) => { e.stopPropagation(); this.runWorkflowFromSidebar(wf.id); } };
         });
         // Show in-progress build entry when builder is the active view OR when a session with content exists
         // (so navigating to home/console/inbox doesn't lose the entry while a build is in flight)
@@ -4633,7 +4646,7 @@ class Component extends DCLogic {
       onBuilderRenameInput: (e) => this.setState({ renamingValue: e.target.value }),
       onBuilderRenameKeydown: (e) => { if (e.key === 'Enter') { e.preventDefault(); this.commitRename(S.workflowId); } if (e.key === 'Escape') { e.preventDefault(); this.cancelRename(); } },
       onBuilderRenameBlur: () => { if (S.workflowId) this.commitRename(S.workflowId); },
-      testStatusLabel: published ? "Live" : (S.phase === "chat" ? "Not started" : (!testUnlocked ? "Incomplete" : (TS === "running" ? "Testing…" : (TS === "passed" ? "All steps passed" : (TS === "failed" ? "Break found" : "Ready to test"))))),
+      testStatusLabel: published ? "Live" : (S.phase === "chat" ? "Not started" : (!testUnlocked ? ((S.spec && S.spec.nodes && S.spec.nodes.length) ? ("Building · " + S.spec.nodes.length + " step" + (S.spec.nodes.length === 1 ? "" : "s")) : "Incomplete") : (TS === "running" ? "Testing…" : (TS === "passed" ? "All steps passed" : (TS === "failed" ? "Break found" : "Ready to test"))))),
       testStatusColor: (TS === "passed" || published) ? "#9fd6a8" : (TS === "failed" ? "#f0a896" : (TS === "running" ? "#f3cd86" : "rgba(255,255,255,.45)")),
       testStatusGlow: (TS === "passed" || published) ? "rgba(127,194,138,.55)" : (TS === "failed" ? "rgba(232,116,97,.5)" : (TS === "running" ? "rgba(240,191,107,.5)" : "rgba(255,255,255,0)")),
       testCaption: S.phase === "chat" ? "Your workflow takes shape here once you're ready to build — just say the word in the chat."
