@@ -1045,7 +1045,7 @@ Rules:
         ),
         // ai_tip
         workflows.length
-          ? llmJson(`User ${userName} has these workflows:\n${wfLines}\n\nReturn JSON with one actionable tip to improve their automation setup:\n{"tip":"<1-2 sentence specific, actionable suggestion>"}`)
+          ? llmJson(`User ${userName} has these workflows:\n${wfLines}\n\nReturn JSON with one actionable tip to improve their automation setup:\n{"tip":"<1-2 sentence specific, actionable suggestion>"}\n\nRULES: base the tip ONLY on facts visible in the list above (names, status, trigger, run and failure counts). Do NOT invent claims about resource usage, cost, or system load — a paused workflow does not run and consumes nothing. If nothing clearly needs improving, give a genuinely useful optimization or next-step idea grounded in what they have.`)
           : Promise.resolve(null),
         // failure_alerts
         failedWfs.length
@@ -1407,7 +1407,11 @@ Rules:
     if (testRun && (testRun.status === 'success' || testRun.status === 'error')) {
       try {
         const store = spine.engine.workflowStore;
-        const run = store.startRun(result.workflow.id, { isTest: true });
+        // R8: backdate the run's start by the real test duration the builder measured,
+        // so run history shows the true elapsed time instead of the ~1ms write gap.
+        const durMs = Number(testRun.durationMs) > 0 ? Number(testRun.durationMs) : 0;
+        const startedAt = durMs ? new Date(Date.now() - durMs).toISOString() : null;
+        const run = store.startRun(result.workflow.id, { isTest: true, startedAt });
         for (const step of (testRun.steps || [])) store.appendStep(run.id, step);
         if (testRun.status === 'success') {
           store.completeRun(run.id, testRun.output ?? null, testRun.cost ?? null);
