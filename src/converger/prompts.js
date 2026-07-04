@@ -302,7 +302,9 @@ DIFFERENT node while leaving the broken one in place:
 Remove an edge:
 {"component":"remove_edge","spec":{"from":"<nodeId>","to":"<nodeId>"},"rationale":"<one sentence>"}
 
-Name:
+Name (must accurately reflect the CONFIRMED trigger cadence and scope — do NOT call a weekday-only
+schedule "Daily", a weekly one "Daily", etc.; match what the trigger actually does, e.g. "Weekday
+Morning Email Digest" for a Mon–Fri 9am schedule):
 {"component":"name","spec":"<workflow name>","rationale":"<one sentence>"}
 
 Clarification (only when genuinely ambiguous — ask ONE focused question):
