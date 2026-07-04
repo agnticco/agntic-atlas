@@ -2211,6 +2211,7 @@ class Component extends DCLogic {
 
   newWorkflow() {
     this.reset();
+    this._newIntentRestored = false; // allow R16 restore for this fresh new-state entry
     this.setState({ view: 'build', phase: 'new' });
     // Draft is created lazily on the first message (see _ensureDraft, called from
     // _submitNewState) — clicking "+ New workflow" and backing out no longer
@@ -2237,6 +2238,7 @@ class Component extends DCLogic {
     if (!t) return;
     const self = this;
     this._clearChatInput();
+    try { localStorage.removeItem(this._newIntentKey()); } catch (e) {} // R16: sent — clear the saved draft intent
     this._ensureDraft(); // user committed by sending — now create the draft row
     this.setState({ newStateExiting: true, mentionOpen: false, slashOpen: false });
     setTimeout(function() {
@@ -4108,12 +4110,18 @@ class Component extends DCLogic {
       if (ctx) this._applyTypingPreview(ctx);
       else this._clearTypingPreview();
     }
+    // R16: persist an in-progress "new workflow" intent so navigating away (or a
+    // reload) before sending doesn't silently discard what the user typed.
+    if (this.state.phase === 'new') {
+      try { if (value) localStorage.setItem(this._newIntentKey(), value); else localStorage.removeItem(this._newIntentKey()); } catch (e) {}
+    }
     this.setState({
       inputValue: value,
       mentionOpen: !!ctx && !sCtx, mentionQuery: ctx ? ctx.query : "", mentionAt: ctx ? ctx.at : -1,
       slashOpen: !!sCtx, slashQuery: sCtx ? sCtx.query : "", slashAt: sCtx ? sCtx.at : -1, _slashIdx: 0,
     });
   }
+  _newIntentKey() { return "atlas_new_intent:" + (this.state.tenantId || "") + ":" + (this.state.userEmail || ""); }
   pickMention(item) {
     const S = this.state;
     if (S.mentionAt < 0) { this.setState({ mentionOpen: false, _pickerIdx: 0 }); return; }
@@ -4487,7 +4495,15 @@ class Component extends DCLogic {
 
       // conversation
       thread: this.buildThread(), thinking: S.thinking, scrollRef: (el) => { this.el = el; },
-      chatInputRef: (el) => { this._chatInputEl = el; },
+      chatInputRef: (el) => {
+        this._chatInputEl = el;
+        // R16: restore a typed-but-unsent new-workflow intent on mount (once).
+        if (el && this.state.phase === 'new' && !this._newIntentRestored) {
+          this._newIntentRestored = true;
+          let saved = ''; try { saved = localStorage.getItem(this._newIntentKey()) || ''; } catch (e) {}
+          if (saved && !el.textContent) { el.textContent = saved; this.setState({ inputValue: saved }); }
+        }
+      },
       chatInputEditable: inputEnabled ? 'true' : 'false',
       chatFolderIndexing: !!S.chatFolderIndexing,
       onChatAttachFiles: () => {
