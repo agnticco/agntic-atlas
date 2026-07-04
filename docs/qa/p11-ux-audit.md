@@ -19,6 +19,10 @@ Status legend: `OPEN` (found, not yet addressed) · `FIXED` · `WONTFIX`.
 | C1 | Delivery labels method-aware (SOP tab/export, review pane, cards, dashboard) | `5a4997f` | live — SOP reads "Emails the result to …" |
 | R22 | `drive_create_folder` added to the googleToken injector set | `6c7c866` | live — now creates a folder |
 | D1 | Two-step confirm + dependency warning before Disconnect | `4fe1d4e` | live — first click arms + warns, stays connected |
+| R16 | Persist + restore typed-but-unsent new-workflow input | `88571d7` | live — survives nav + reload |
+| R13 | Config validation on all writes (no empty-junk artifacts) | `80769f8` | live — empty rejects, valid works |
+| B1 | `time_saved` home module on by default → ROI report discoverable | `c104b4e` | live — card + "View ROI report" show |
+| R6/C3 | Previews render readable text, not raw ```html source | `f28d85e` | live — Profile outputs clean |
 
 ## Fix priority index (P11 hardening worklist)
 
