@@ -4784,6 +4784,9 @@ class Component extends DCLogic {
       },
       knowledgeFolders: (S.knowledgeSources || []).map(src => ({
         ...src,
+        // Uploaded folders carry a friendly `name`; show that instead of the raw
+        // app-managed absolute path. Absolute-folder sources (no name) keep their path.
+        path: src.name || src.path,
         isExpanded: !!(S.knowledgeTreeExpanded || {})[src.path],
         onToggle: () => this.toggleKnowledgeFolder(src.path),
         onRemove: () => this.removeKnowledgeSource(src.path),
