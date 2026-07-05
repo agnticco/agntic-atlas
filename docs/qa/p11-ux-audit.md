@@ -471,3 +471,10 @@ operator actually experiences.
 
 **Full Slack loop now works at the layer that matters:** Atlas creates a missing channel (S8-3/S8-4),
 adds the operator (S8-6), a workflow posts to it (S8-7), and the operator sees it in their own Slack.
+
+### Session 8d — inbox delivery fix + verification (branch `p11-hardening-fixes-g`, 2026-07-04)
+
+| ID | Fix | Verified (operator-visible layer) |
+|----|-----|----|
+| S8-1 | `injectInboxContext` normalizes legacy `in_app`/`inbox` deliver nodes to the real `inbox_deliver` capability (+injects tenant/user), so deliveries actually write to the inbox store instead of hitting the no-op handler. Applies on every run path; fixes existing + new workflows. | **live — a run delivering to `in_app` took inbox 0→1; message "S8-1 Inbox Test" appears in the Inbox UI** |
+| S8-2 (G1) | Inbox double-empty-state: DC `sc-if` didn't honor compound conditions, so "No results found" + "No messages yet" rendered alongside real messages. Replaced with precomputed one-of-N plain booleans. | **live — empty-states no longer in DOM when a message exists; inbox shows just the message** |
