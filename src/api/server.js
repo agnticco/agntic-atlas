@@ -234,10 +234,15 @@ async function injectTenantTokens(obj, tenantId, deps) {
 // every run path (REST, scheduler, event dispatch).
 function injectInboxContext(spec, tenantId, userId, extras = {}) {
   if (!tenantId || !userId || !(spec?.nodes?.length)) return spec;
-  const isInbox = (n) => n?.type === 'deliver' && n?.config?.channel === 'inbox_deliver';
+  // Legacy 'in_app'/'inbox' were routed to a NO-OP channel handler that returned
+  // {delivered:true} but never wrote to the inbox store, so those deliveries silently
+  // vanished — the /inbox UI (which reads the store) stayed empty (S8-1). Treat them as
+  // the real inbox_deliver capability: normalize the channel + inject tenant/user so the
+  // message actually lands in the operator's inbox. Fixes existing AND new workflows.
+  const isInbox = (n) => n?.type === 'deliver' && ['inbox_deliver', 'in_app', 'inbox'].includes(n?.config?.channel);
   if (!spec.nodes.some(isInbox)) return spec;
   const nodes = spec.nodes.map((n) => isInbox(n)
-    ? { ...n, config: { ...n.config, _tenantId: tenantId, _userId: userId, ...extras } }
+    ? { ...n, config: { ...n.config, channel: 'inbox_deliver', subject: n.config.subject ?? n.config.title, _tenantId: tenantId, _userId: userId, ...extras } }
     : n);
   return { ...spec, nodes };
 }
