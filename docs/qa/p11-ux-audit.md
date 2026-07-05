@@ -445,3 +445,19 @@ and isn't offered proactively (S8-3).
 Net: the one-off setup-action capability now works end-to-end — converger detects a missing
 channel/folder, proposes creating it, and "Create it now" actually creates it. Test channels created
 during verification: `#atlas-standup`, `#atlas-fix-verify` (Slack artifacts; archive when convenient).
+
+### Session 8c — Slack reality check (looked at the actual Slack workspace, 2026-07-04)
+
+The user checked their real Slack and nothing Atlas did was visible. Investigated directly in the
+Agntic workspace (T0B3RTT3Z5X, the same workspace Atlas is OAuth-connected to).
+
+| ID | Sev | Finding |
+|----|-----|---------|
+| S8-6 | **HIGH — value-breaking** | **Atlas-created Slack channels are invisible to the operator.** Navigating to the created channel by id confirmed it IS real ("@Atlas created this channel today… Atlas APP joined #atlas-fix-verify"), but Slack shows a **"Join Channel"** button — the human user (Charles) was never added. `slack_create_channel` (conversations.create) only joins the BOT; it does not invite the connecting user, so the channel never appears in their sidebar. Combined with S8-4/S8-3 this means: Atlas says "Done! #atlas-standup is live," the channel really is created, and the operator sees nothing. Fix: after creating a channel, invite the workspace owner / connecting user (conversations.invite — the `slack_invite` capability already exists) so it shows up for them. |
+| S8-7 | note | **No Atlas workflow ever actually posted to Slack.** Every Slack *post* attempted in these sessions failed pre-creation (channel_not_found) or the workflow was never run, so there are zero Atlas messages in the workspace. The only successful Slack operations were channel *creations* (invisible per S8-6). Net operator-visible Slack output so far: nothing. |
+
+**Verification-methodology correction:** my earlier "verified live" for the Slack setup action was true at
+the API/data layer (conversations.create returned a real channel id, conversations.list showed it) but
+NOT at the operator-visible layer. The channel exists; the user can't see it. Verify user-visible
+outcomes, not just successful API responses — the whole product thesis is about what the non-technical
+operator actually experiences.
