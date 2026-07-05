@@ -511,3 +511,19 @@ uploaded docs while helping you design a workflow (verified live). The **run-tim
 needs either (a) auto-injecting the company-knowledge RAG into workflow LLM nodes, or (b) a
 `search_knowledge` step the converger can add, or (c) a real absolute-folder connect in the desktop
 shell. Test artifacts: `~/Downloads/atlas-knowledge-test/`, two Knowledge sources named `atlas-knowledge-test`.
+
+### Session 8e fix — Knowledge IS the workflow filesystem (branch `p11-hardening-fixes-i`)
+
+Per the design intent (browsers can't hand a path, so Knowledge is the internal filesystem):
+uploaded docs are now persisted to an app-managed absolute dir and registered as an absolute-path
+source — so workflows read them via `filesystem_read`/`filesystem_list`, and the converger can build
+such workflows itself.
+
+| ID | Fix | Verified |
+|----|-----|----------|
+| S8-9 | `/rag/ingest-files` persists raw files to `KNOWLEDGE_DIR/<tenant>/<folder>/` + registers the absolute path; converger gets each folder's `{name, path, files}`; UI shows the friendly name; disconnect deletes app-managed files only. | **live end-to-end**: (1) browser upload → files on disk at the app path; (2) a workflow `filesystem_read` on an uploaded file returned its content and the LLM produced `BRAVO-LARKSPUR-7731` + sign-off; (3) the **converger**, from a plain intent, built trigger → `filesystem_read(/…/kb-fs-verify/company-brand-voice.md)` → llm → deliver. P3 gate green. |
+
+**Net:** the earlier "chat-yes / workflow-no" gap is closed. Uploading a folder of `.md` files now
+adds value to BOTH build-time (chat RAG) and run-time (workflow filesystem_read) — the power-user
+scenario works via the UI. Test artifacts: `~/Downloads/atlas-knowledge-test/`, and Knowledge sources
+`atlas-knowledge-test` (2, from the earlier investigation) + `kb-fs-verify`.

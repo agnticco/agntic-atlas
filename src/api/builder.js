@@ -823,14 +823,19 @@ Rules:
         .list({ position: 'trigger' })
         .map(t => ({ ...t, available: t.available && (!t.connector || connectedIds.has(t.connector)) }));
 
-      // Filesystem: two distinct source types — absolute-path sources are accessible
-      // via filesystem_read in workflows; browser-upload sources are in RAG (Knowledge)
-      // but not accessible via filesystem_read (no stable server path).
+      // Filesystem: any source with an absolute path is readable via filesystem_read /
+      // filesystem_list in workflows — this now includes browser-uploaded Knowledge
+      // folders, which are persisted to an app-managed path (S8-9). Expose each folder's
+      // absolute path + file names so the converger can propose a valid filesystem_read.
       const allSources = readSources?.(req.tenant.id) ?? [];
       const fsSources    = allSources.filter(s => s.path?.startsWith('/'));
       const uploadSources = allSources.filter(s => !s.path?.startsWith('/'));
-      capabilities.filesystem      = fsSources.map(s => s.path.split('/').pop());
-      capabilities.knowledgeUploads = uploadSources.map(s => s.path);
+      capabilities.filesystem = fsSources.map(s => ({
+        name:  s.name || s.path.split('/').pop(),
+        path:  s.path,
+        files: Array.isArray(s.fileNames) ? s.fileNames.slice(0, 40) : [],
+      }));
+      capabilities.knowledgeUploads = uploadSources.map(s => s.name || s.path);
     } catch { /* non-fatal — converger still works with empty capabilities */ }
 
     // Query RAG for knowledge relevant to this intent so the converger's LLM
