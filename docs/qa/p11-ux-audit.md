@@ -434,3 +434,14 @@ Slack **mrkdwn** formatting → deliver), the name correctly reads "Weekday" (S7
 `channel_not_found` honestly with a clear human explanation, and the setup-action proposal UI ("Create
 it now" / "Skip") renders well. The gap is purely that the create-channel action **400s on execute** (S8-4)
 and isn't offered proactively (S8-3).
+
+### Session 8b fixes (branch `p11-hardening-fixes-e`, 2026-07-04)
+
+| ID | Fix | Verified |
+|----|-----|----------|
+| S8-4 | Setup endpoint resolves capability-id variants (raw → Slack `channelIdForCapability` bridge → connector-prefixed → registry suffix match) + prompt reinforced to copy the exact id. | **live — POST /setup with `create_channel` now returns 200 and creates a real channel (resolved to `slack_create_channel`, id C0BF3GQJZ29)** |
+| S8-3 | Session bootstrap fetches the tenant's existing Slack channels (`conversations.list`) into `capabilities.slackChannels`; converger prompt lists them and requires a `slack_create_channel` setup action before delivering to a channel not in the list. (Also fixed the fetch: `getSlackToken` returns `{botToken}`, nullable → `grant?.botToken ?? SLACK_BOT_TOKEN`.) | **live — building to a non-existent channel now makes the converger flag it and propose `slack_create_channel` {name, is_private} proactively** |
+
+Net: the one-off setup-action capability now works end-to-end — converger detects a missing
+channel/folder, proposes creating it, and "Create it now" actually creates it. Test channels created
+during verification: `#atlas-standup`, `#atlas-fix-verify` (Slack artifacts; archive when convenient).

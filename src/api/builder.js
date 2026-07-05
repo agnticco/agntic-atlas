@@ -793,6 +793,23 @@ Rules:
           }
         } catch { /* non-fatal */ }
       }
+      // Existing Slack channels, so the converger can tell whether a named target
+      // already exists — and proactively propose a create_channel setup action for
+      // one that doesn't (S8-3) instead of silently building a workflow that 404s.
+      if (slack) {
+        try {
+          // getSlackToken returns { botToken, scopes } (or null); fall back to the
+          // env bot token (dev escape hatch) so the fetch works however Slack is wired.
+          const grant = getSlackToken({ oauthTokenStore: spine.auth.oauthTokenStore, cipher: spine.auth.tokenCipher, tenantId: req.tenant.id });
+          const botToken = grant?.botToken ?? process.env.SLACK_BOT_TOKEN;
+          if (botToken) {
+            const apiBase = process.env.SLACK_API_URL ?? 'https://slack.com/api';
+            const r = await fetch(`${apiBase}/conversations.list?exclude_archived=true&limit=200&types=public_channel,private_channel`, { headers: { authorization: `Bearer ${botToken}` } });
+            const d = await r.json();
+            if (d?.ok) capabilities.slackChannels = (d.channels ?? []).map(c => c.name).filter(Boolean);
+          }
+        } catch { /* non-fatal */ }
+      }
       // Scope-aware, position-tagged catalog: only what this tenant can actually run.
       capabilities.channels   = annotateChannelCatalog(spine.engine.channelRegistry.getAll(), { slack, google, airtable });
       // Narrow triggers to connected connectors only.
@@ -943,14 +960,29 @@ Rules:
       if (!capabilityId) return res.status(400).json({ error: 'capabilityId is required' });
 
       const registry = spine.engine.capabilityRegistry;
-      const handler  = registry.getHandler(capabilityId);
+      // Tolerant id resolution (S8-4): the converger sometimes proposes a capability's
+      // MANIFEST id (e.g. "create_channel") while the registry holds the executable
+      // CHANNEL id ("slack_create_channel"), or drops the connector prefix. Try the raw
+      // id first, then the Slack namespace bridge, then connector-prefixed variants, then
+      // a suffix match against the live registry — so "Create it now" actually runs.
+      const candidates = [];
+      const pushCand = (id) => { if (id && !candidates.includes(id)) candidates.push(id); };
+      pushCand(capabilityId);
+      pushCand(channelIdForCapability(capabilityId));           // slack manifest → channel id
+      for (const p of ['slack', 'google', 'airtable']) pushCand(`${p}_${capabilityId}`);
+      let resolvedId = candidates.find(id => registry.getHandler(id));
+      if (!resolvedId) {
+        const match = (registry.list() ?? []).find(c => c.id === capabilityId || c.id.endsWith(`_${capabilityId}`));
+        if (match && registry.getHandler(match.id)) resolvedId = match.id;
+      }
+      const handler = resolvedId ? registry.getHandler(resolvedId) : null;
       if (!handler) return res.status(400).json({ error: `Capability not found: ${capabilityId}` });
 
-      const cap    = registry.get(capabilityId);
+      const cap    = registry.get(resolvedId);
       const config = await injectCapabilityCredentials(cap, { ...params }, { auth: spine.auth, tenant: req.tenant, user: req.user });
 
       const result = await handler({ config, body: null });
-      logEvent('builder.setup.ok', { tenant: req.tenant.id, capabilityId });
+      logEvent('builder.setup.ok', { tenant: req.tenant.id, capabilityId, resolvedId });
       res.json({ result });
     } catch (err) {
       logEvent('builder.setup.error', { tenant: req.tenant?.id ?? null, capabilityId, ...errFields(err) });
