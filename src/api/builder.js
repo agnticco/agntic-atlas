@@ -793,6 +793,23 @@ Rules:
           }
         } catch { /* non-fatal */ }
       }
+      // Existing Slack channels, so the converger can tell whether a named target
+      // already exists — and proactively propose a create_channel setup action for
+      // one that doesn't (S8-3) instead of silently building a workflow that 404s.
+      if (slack) {
+        try {
+          // getSlackToken returns { botToken, scopes } (or null); fall back to the
+          // env bot token (dev escape hatch) so the fetch works however Slack is wired.
+          const grant = getSlackToken({ oauthTokenStore: spine.auth.oauthTokenStore, cipher: spine.auth.tokenCipher, tenantId: req.tenant.id });
+          const botToken = grant?.botToken ?? process.env.SLACK_BOT_TOKEN;
+          if (botToken) {
+            const apiBase = process.env.SLACK_API_URL ?? 'https://slack.com/api';
+            const r = await fetch(`${apiBase}/conversations.list?exclude_archived=true&limit=200&types=public_channel,private_channel`, { headers: { authorization: `Bearer ${botToken}` } });
+            const d = await r.json();
+            if (d?.ok) capabilities.slackChannels = (d.channels ?? []).map(c => c.name).filter(Boolean);
+          }
+        } catch { /* non-fatal */ }
+      }
       // Scope-aware, position-tagged catalog: only what this tenant can actually run.
       capabilities.channels   = annotateChannelCatalog(spine.engine.channelRegistry.getAll(), { slack, google, airtable });
       // Narrow triggers to connected connectors only.
