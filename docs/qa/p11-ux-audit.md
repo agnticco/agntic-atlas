@@ -461,3 +461,13 @@ the API/data layer (conversations.create returned a real channel id, conversatio
 NOT at the operator-visible layer. The channel exists; the user can't see it. Verify user-visible
 outcomes, not just successful API responses — the whole product thesis is about what the non-technical
 operator actually experiences.
+
+### Session 8c fix + end-to-end verification (branch `p11-hardening-fixes-f`, 2026-07-04)
+
+| ID | Fix | Verified (operator-visible layer, real Slack) |
+|----|-----|----|
+| S8-6 | `slack_create_channel` now invites the operator (lookup by email via `config._operatorEmail` from `injectCapabilityCredentials` → `conversations.invite`). | **live — created `#atlas-e2e-verify`; Slack shows "Atlas joined… Also, charles joined", channel appears in the operator's sidebar (no Join button)** |
+| S8-7 | (was: no Atlas post ever landed) — with S8-6 the operator is in the channel, so posts are visible. | **live — a workflow run (llm → deliver slack) posted "✅ End-to-end test from Atlas…" and it is visible in the channel** |
+
+**Full Slack loop now works at the layer that matters:** Atlas creates a missing channel (S8-3/S8-4),
+adds the operator (S8-6), a workflow posts to it (S8-7), and the operator sees it in their own Slack.
