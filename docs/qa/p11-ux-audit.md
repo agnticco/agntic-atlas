@@ -403,3 +403,16 @@ All S7 findings fixed + verified. The two HIGH items were verified **end-to-end 
 | S7-11 | Not a bug — Knowledge nav works (earlier no-op was a click during an active build). F1 "Files" header confirmed live. | live |
 
 **P3 converger gate re-verified green** after the prompt/spec-assembler/validator changes.
+
+## Session 8 — operator "day-to-day use" + value read (2026-07-04)
+
+Ran the full loop as a real operator: built "Daily Unread Email Digest", tested, recovered from a
+break, **published it live**, ran it for real, and went looking for the payoff in the Inbox.
+
+| ID | Sev | Finding |
+|----|-----|---------|
+| S8-1 | **HIGH — value-breaking** | **Atlas Inbox delivery is a silent no-op.** The converger emitted `deliver.channel:"in_app"`, whose handler (`channel-handlers.js:~33`, "Nothing extra needs to happen here") returns `{delivered:true}` but NEVER writes to `inboxStore`. The `/inbox` UI reads only `inboxStore` → `inbox_messages` has **0 rows** after a passing TEST run AND a passing real "Run now". Runs report 100% success and the test panel shows the digest (rendered from run output, not the store), so it *looks* delivered — but the operator's Inbox is permanently empty. The REAL inbox capability `inbox_deliver` (`src/inbox/index.js`) writes to the store correctly, but the converger picked the no-op `in_app` instead (both are offered — `prompts.js:33` documents `inbox_deliver`, `:229` also lists `in_app`). Fix: converger must emit `inbox_deliver` for the Atlas Inbox (drop/deprecate `in_app`), and/or map `in_app`→`inbox_deliver` at the delivery layer so already-published workflows work. This is the zero-setup default delivery a non-technical operator naturally picks — so the headline "build an automation by talking" loop currently ends in nothing arriving. |
+| S8-2 | MINOR | **G1 double-empty-state reproduces LIVE** (my group-c "verified safe" static read was wrong — should have tested live). Empty Inbox shows "No results found / RESULT" AND "No messages yet / MESSAGES" simultaneously. |
+
+**Value note:** external deliveries (Slack post, Gmail send) were verified working in earlier sessions;
+it's specifically the in-app Inbox channel that's broken (S8-1).
