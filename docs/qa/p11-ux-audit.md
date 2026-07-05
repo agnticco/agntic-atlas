@@ -484,3 +484,30 @@ adds the operator (S8-6), a workflow posts to it (S8-7), and the operator sees i
 | ID | Fix | Verified |
 |----|-----|----|
 | S8-8 | Inbox entries didn't collapse on re-click (openInboxMessage always selected) — user felt forced to Delete to dismiss. Now toggles open/closed + a down-chevron affordance on the expanded header. | **live — open → content+Delete show; click again → collapses to the row** |
+
+### Session 8e — Knowledge folder access verification (2026-07-04)
+
+Connected a Downloads folder of `.md` files (distinctive canaries: `BRAVO-LARKSPUR-7731`, a required
+sign-off phrase, `NIGHTHAWK`, Marbury `$4,200`) and verified what the agent can actually reach.
+
+**Two ingestion paths, two very different reach:**
+
+| Path | How | Build-time CHAT | Running WORKFLOW steps |
+|------|-----|-----------------|------------------------|
+| Browser "Connect folder"/"Upload" | webkitdirectory → `/rag/ingest-files` (source:`upload`) | ✅ **verified** — chat answered `BRAVO-LARKSPUR-7731` + exact sign-off (canary only in the file) | ❌ **verified NO access** — LLM step replied "I don't have access to your company's brand voice guidelines" |
+| Server-side absolute folder | `/rag/index-folder` (absolute path) | ✅ RAG (same as above) | ✅ **verified** — a workflow `filesystem_read` returned the file; the LLM step extracted `BRAVO-LARKSPUR-7731` + sign-off |
+
+**Root of the workflow gap:** the engine LLM node never injects RAG; there is NO company-knowledge
+search capability for workflows (`search_inbox` searches a *separate* inbox store); and
+`filesystem_read` explicitly skips upload-only entries (`filesystem.js:20`). So a browser-uploaded
+folder is reachable by the chat but unreachable by any workflow step.
+
+| ID | Sev | Finding |
+|----|-----|---------|
+| S8-9 | MODERATE | **Misleading Knowledge copy + capability gap.** The Files view says "connected folders can be used as sources in workflows," but a browser-**uploaded** folder canNOT be used by workflow steps (no RAG-in-LLM, no knowledge-search capability, filesystem_read skips uploads). Only an **absolute-path** folder (server-side `/rag/index-folder`) is workflow-readable via `filesystem_read` — and there is no browser UI to add one (browsers can't expose absolute paths). Net: the "attach a folder of .md that a workflow step uses" power-user scenario works technically (proven) but is NOT reachable through the UI, and the copy overpromises. |
+
+**Value verdict:** the capability clearly **adds value to workflow BUILDING** — the agent reads your
+uploaded docs while helping you design a workflow (verified live). The **run-time** power-user scenario
+needs either (a) auto-injecting the company-knowledge RAG into workflow LLM nodes, or (b) a
+`search_knowledge` step the converger can add, or (c) a real absolute-folder connect in the desktop
+shell. Test artifacts: `~/Downloads/atlas-knowledge-test/`, two Knowledge sources named `atlas-knowledge-test`.
