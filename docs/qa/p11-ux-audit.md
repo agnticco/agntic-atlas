@@ -478,3 +478,9 @@ adds the operator (S8-6), a workflow posts to it (S8-7), and the operator sees i
 |----|-----|----|
 | S8-1 | `injectInboxContext` normalizes legacy `in_app`/`inbox` deliver nodes to the real `inbox_deliver` capability (+injects tenant/user), so deliveries actually write to the inbox store instead of hitting the no-op handler. Applies on every run path; fixes existing + new workflows. | **live — a run delivering to `in_app` took inbox 0→1; message "S8-1 Inbox Test" appears in the Inbox UI** |
 | S8-2 (G1) | Inbox double-empty-state: DC `sc-if` didn't honor compound conditions, so "No results found" + "No messages yet" rendered alongside real messages. Replaced with precomputed one-of-N plain booleans. | **live — empty-states no longer in DOM when a message exists; inbox shows just the message** |
+
+### S8-8 — inbox entry toggle (2026-07-04)
+
+| ID | Fix | Verified |
+|----|-----|----|
+| S8-8 | Inbox entries didn't collapse on re-click (openInboxMessage always selected) — user felt forced to Delete to dismiss. Now toggles open/closed + a down-chevron affordance on the expanded header. | **live — open → content+Delete show; click again → collapses to the row** |
