@@ -943,14 +943,29 @@ Rules:
       if (!capabilityId) return res.status(400).json({ error: 'capabilityId is required' });
 
       const registry = spine.engine.capabilityRegistry;
-      const handler  = registry.getHandler(capabilityId);
+      // Tolerant id resolution (S8-4): the converger sometimes proposes a capability's
+      // MANIFEST id (e.g. "create_channel") while the registry holds the executable
+      // CHANNEL id ("slack_create_channel"), or drops the connector prefix. Try the raw
+      // id first, then the Slack namespace bridge, then connector-prefixed variants, then
+      // a suffix match against the live registry — so "Create it now" actually runs.
+      const candidates = [];
+      const pushCand = (id) => { if (id && !candidates.includes(id)) candidates.push(id); };
+      pushCand(capabilityId);
+      pushCand(channelIdForCapability(capabilityId));           // slack manifest → channel id
+      for (const p of ['slack', 'google', 'airtable']) pushCand(`${p}_${capabilityId}`);
+      let resolvedId = candidates.find(id => registry.getHandler(id));
+      if (!resolvedId) {
+        const match = (registry.list() ?? []).find(c => c.id === capabilityId || c.id.endsWith(`_${capabilityId}`));
+        if (match && registry.getHandler(match.id)) resolvedId = match.id;
+      }
+      const handler = resolvedId ? registry.getHandler(resolvedId) : null;
       if (!handler) return res.status(400).json({ error: `Capability not found: ${capabilityId}` });
 
-      const cap    = registry.get(capabilityId);
+      const cap    = registry.get(resolvedId);
       const config = await injectCapabilityCredentials(cap, { ...params }, { auth: spine.auth, tenant: req.tenant, user: req.user });
 
       const result = await handler({ config, body: null });
-      logEvent('builder.setup.ok', { tenant: req.tenant.id, capabilityId });
+      logEvent('builder.setup.ok', { tenant: req.tenant.id, capabilityId, resolvedId });
       res.json({ result });
     } catch (err) {
       logEvent('builder.setup.error', { tenant: req.tenant?.id ?? null, capabilityId, ...errFields(err) });
