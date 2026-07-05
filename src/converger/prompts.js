@@ -102,7 +102,14 @@ function knowledgeContextBlock(capabilities) {
   const ctx = capabilities?.knowledgeContext;
   if (!ctx?.length) return '';
   const chunks = ctx.map(c => `[${c.label}]\n${c.content}`).join('\n\n---\n\n');
-  return `\nKNOWLEDGE BASE CONTENT (relevant excerpts from this tenant's knowledge base — use these to inform proposals, e.g. correct field names, document structure, or domain terms):\n${chunks}\n`;
+  // These excerpts are a SNAPSHOT taken now. When the same document is ALSO listed as a
+  // CONNECTED FILESYSTEM FOLDER above, baking the excerpt into a prompt freezes it — future
+  // edits to the file won't reach the running workflow. Steer toward a live read in that case.
+  const hasFolders = (capabilities?.filesystem ?? []).length > 0;
+  const liveNote = hasFolders
+    ? `\nSTATIC vs LIVE — IMPORTANT: The excerpts below are a point-in-time snapshot. If the workflow's job is to APPLY or FOLLOW the CONTENTS of a specific named document at run time (a playbook, template, price list, script, policy, guidelines) AND that document appears as a CONNECTED FILESYSTEM FOLDER above, prefer a "filesystem_read" step that re-reads the file on every run, then feed its output into the summarize/llm/extract step via {{<readNodeId>.output}} — do NOT hard-code the document's contents into a prompt. A run-time read stays correct when the operator edits the file; a baked-in copy silently goes stale. Only bake excerpts directly into a prompt for STATIC background facts (correct field names, domain terms, structure) that the workflow references but does not re-apply wholesale.`
+    : '';
+  return `${liveNote}\nKNOWLEDGE BASE CONTENT (relevant excerpts from this tenant's knowledge base — use these to inform proposals, e.g. correct field names, document structure, or domain terms):\n${chunks}\n`;
 }
 
 function operatorSummary(capabilities) {
@@ -272,8 +279,14 @@ RULES:
     files. Do NOT fire a "no folder connected" clarification for a Google Drive intent.
   • Local server files (folders connected via Knowledge → server path): use filesystem_read or
     filesystem_list, available only when a CONNECTED FILESYSTEM FOLDER is listed above.
-  • Uploaded Knowledge content (RAG-indexed): no special node — the AI retrieves it through
-    context in summarize/llm/extract steps. Do NOT ask for a folder.
+  • Uploaded Knowledge content: browser-uploaded docs are persisted to an app-managed path, so
+    they appear BOTH as a CONNECTED FILESYSTEM FOLDER (readable live via filesystem_read) AND as
+    RAG excerpts in context. Choose by how the doc is used: if the workflow must APPLY/FOLLOW the
+    doc's CONTENTS at run time (playbook, template, script, policy), add a filesystem_read step so
+    edits stay live (see STATIC vs LIVE above); if you only need a static fact from it (a field
+    name, a term), reference the RAG excerpt in a summarize/llm/extract step — no folder needed.
+    Only when a Knowledge item is RAG-indexed but has NO connected folder is filesystem_read
+    unavailable — reference it through context instead.
   • Email ATTACHMENTS: the email trigger delivers email text and metadata only — attachment
     content is NOT available via any node in this build. If the intent relies on attachment
     content, clarify: "The email trigger delivers email text only, not attachment content. Would
