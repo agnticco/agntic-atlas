@@ -375,7 +375,19 @@ export function registerSlackChannel(registry, { fetchImpl = fetch } = {}) {
       const api = makeApi(config);
       if (!config.name) throw new Error('slack_create_channel: name is required');
       const d = await api('conversations.create', { name: config.name, is_private: !!config.is_private });
-      return { delivered: true, channel: 'slack_create_channel', channelId: d.channel?.id, name: d.channel?.name };
+      const channelId = d.channel?.id;
+      // S8-6: conversations.create only joins the bot, so the channel is invisible to
+      // the operator. Invite them (by email) so it shows up in their sidebar and they
+      // can see anything the workflow posts. Non-fatal — the channel exists either way.
+      let invited = false;
+      if (channelId && config._operatorEmail) {
+        try {
+          const u = await api.get('users.lookupByEmail', { email: config._operatorEmail });
+          const userId = u.user?.id;
+          if (userId) { await api('conversations.invite', { channel: channelId, users: userId }); invited = true; }
+        } catch { /* invite is best-effort; channel is still created */ }
+      }
+      return { delivered: true, channel: 'slack_create_channel', channelId, name: d.channel?.name, invitedOperator: invited };
     },
   });
 
