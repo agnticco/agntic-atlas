@@ -1465,28 +1465,28 @@
                 </sc-if>
               </div>
 
-              <!-- Search results -->
-              <sc-if value="{{ inboxSearch && inboxSearchResults !== null }}">
-                <sc-if value="{{ inboxSearchLoading }}">
-                  <div style="text-align:center;padding:40px;color:rgba(255,255,255,.3);font-size:14px">Searching…</div>
-                </sc-if>
-                <sc-if value="{{ !inboxSearchLoading && !inboxSearchResults.length }}">
-                  <div style="text-align:center;padding:40px;color:rgba(255,255,255,.3);font-size:14px">No results found</div>
-                </sc-if>
-                <sc-if value="{{ !inboxSearchLoading && inboxSearchResults.length > 0 }}">
-                  <div style="font-size:11px;font-weight:500;letter-spacing:.2em;text-transform:uppercase;color:rgba(255,255,255,.28);margin-bottom:12px">{{ inboxSearchResults.length }} result{{ inboxSearchResults.length === 1 ? '' : 's' }}</div>
-                  <sc-for list="{{ inboxSearchResults }}" as="hit">
-                    <div style="border:1px solid rgba(255,255,255,.07);border-radius:14px;padding:16px 20px;margin-bottom:8px">
-                      <sc-if value="{{ hit.subject }}"><div style="font-size:13px;font-weight:500;color:rgba(255,255,255,.75);margin-bottom:6px;letter-spacing:-0.01em">{{ hit.subject }}</div></sc-if>
-                      <div style="font-size:13.5px;color:rgba(255,255,255,.6);line-height:1.65;letter-spacing:-0.005em">{{ hit.excerpt }}</div>
-                      <div style="font-size:11px;color:rgba(255,255,255,.22);margin-top:8px">{{ hit.scoreLabel }}</div>
-                    </div>
-                  </sc-for>
-                </sc-if>
+              <!-- Search: loading -->
+              <sc-if value="{{ inboxShowSearching }}">
+                <div style="text-align:center;padding:40px;color:rgba(255,255,255,.3);font-size:14px">Searching…</div>
+              </sc-if>
+              <!-- Search: no results -->
+              <sc-if value="{{ inboxShowNoResults }}">
+                <div style="text-align:center;padding:40px;color:rgba(255,255,255,.3);font-size:14px">No results found</div>
+              </sc-if>
+              <!-- Search: results -->
+              <sc-if value="{{ inboxShowResults }}">
+                <div style="font-size:11px;font-weight:500;letter-spacing:.2em;text-transform:uppercase;color:rgba(255,255,255,.28);margin-bottom:12px">{{ inboxSearchResults.length }} result{{ inboxSearchResults.length === 1 ? '' : 's' }}</div>
+                <sc-for list="{{ inboxSearchResults }}" as="hit">
+                  <div style="border:1px solid rgba(255,255,255,.07);border-radius:14px;padding:16px 20px;margin-bottom:8px">
+                    <sc-if value="{{ hit.subject }}"><div style="font-size:13px;font-weight:500;color:rgba(255,255,255,.75);margin-bottom:6px;letter-spacing:-0.01em">{{ hit.subject }}</div></sc-if>
+                    <div style="font-size:13.5px;color:rgba(255,255,255,.6);line-height:1.65;letter-spacing:-0.005em">{{ hit.excerpt }}</div>
+                    <div style="font-size:11px;color:rgba(255,255,255,.22);margin-top:8px">{{ hit.scoreLabel }}</div>
+                  </div>
+                </sc-for>
               </sc-if>
 
               <!-- Empty state (only when not searching) -->
-              <sc-if value="{{ !inboxSearch && !inboxMessages.length }}">
+              <sc-if value="{{ inboxShowEmpty }}">
                 <div style="border:1px solid rgba(255,255,255,.07);border-radius:16px;padding:56px 32px;text-align:center">
                   <svg viewBox="0 0 24 24" width="40" height="40" fill="none" stroke="rgba(255,255,255,.15)" stroke-width="1.3" style="display:block;margin:0 auto 16px"><polyline points="22 12 16 12 14 15 10 15 8 12 2 12"/><path d="M5.45 5.11L2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/></svg>
                   <div style="font-size:15px;color:rgba(255,255,255,.28);line-height:1.6">No messages yet.<br>Set a workflow's delivery to <strong style="color:rgba(255,255,255,.45);font-weight:500">Atlas Inbox</strong> to see output here.</div>
@@ -1494,7 +1494,7 @@
               </sc-if>
 
               <!-- Message list / expanded detail (only when not in search mode) -->
-              <sc-if value="{{ !inboxSearch && inboxMessages.length > 0 }}">
+              <sc-if value="{{ inboxShowList }}">
                 <div style="font-size:11px;font-weight:500;letter-spacing:.2em;text-transform:uppercase;color:rgba(255,255,255,.28);margin-bottom:12px">Messages</div>
                 <sc-for list="{{ inboxMessages }}" as="msg">
                   <!-- Collapsed row -->
@@ -4784,6 +4784,14 @@ class Component extends DCLogic {
       inboxSearch: S.inboxSearch || '',
       inboxSearchResults: S.inboxSearchResults,
       inboxSearchLoading: S.inboxSearchLoading || false,
+      // Precompute inbox display state as plain booleans (S8-2/G1): the DC sc-if
+      // did not reliably honor compound conditions (!x.length, x !== null, &&), so
+      // the empty-states rendered alongside a real message. One-of-N booleans fix it.
+      inboxShowSearching:  !!(S.inboxSearch && S.inboxSearchLoading),
+      inboxShowNoResults:  !!(S.inboxSearch && !S.inboxSearchLoading && Array.isArray(S.inboxSearchResults) && S.inboxSearchResults.length === 0),
+      inboxShowResults:    !!(S.inboxSearch && !S.inboxSearchLoading && Array.isArray(S.inboxSearchResults) && S.inboxSearchResults.length > 0),
+      inboxShowEmpty:      !!(!S.inboxSearch && !(S.inboxMessages && S.inboxMessages.length)),
+      inboxShowList:       !!(!S.inboxSearch && S.inboxMessages && S.inboxMessages.length > 0),
       onInboxSearchInput: (e) => this.setState({ inboxSearch: e.target.value, inboxSearchResults: e.target.value ? S.inboxSearchResults : null }),
       onInboxSearchKeydown: (e) => { if (e.key === 'Enter') this.searchInbox(); },
       onInboxSearchClear: () => this.setState({ inboxSearch: '', inboxSearchResults: null }),
