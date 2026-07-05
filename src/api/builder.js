@@ -288,6 +288,9 @@ async function injectCapabilityCredentials(cap, config, { auth, tenant, user }) 
   } else if (cap.connector === 'slack') {
     const grant = getSlackToken({ oauthTokenStore: auth.oauthTokenStore, cipher: auth.tokenCipher, tenantId: tenant.id });
     if (grant?.botToken) config.token = grant.botToken;
+    // So slack_create_channel can invite the operator to the channel it creates —
+    // otherwise only the bot joins and the channel is invisible to them (S8-6).
+    if (user?.email) config._operatorEmail = user.email;
   } else if (cap.connector === 'airtable') {
     const tok = await getAirtableAccessToken({ oauthTokenStore: auth.oauthTokenStore, cipher: auth.tokenCipher, tenantId: tenant.id });
     if (tok) config.airtableToken = tok;
