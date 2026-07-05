@@ -81,10 +81,18 @@ function filesystemSummary(capabilities) {
   const folders  = capabilities?.filesystem ?? [];
   const uploads  = capabilities?.knowledgeUploads ?? [];
   const parts = [];
-  if (folders.length)
-    parts.push(`CONNECTED FILESYSTEM FOLDERS (available for filesystem_read / filesystem_list steps): ${folders.join(', ')}`);
+  if (folders.length) {
+    // Each folder is { name, path, files[] }. Give the converger the ABSOLUTE path so
+    // it can build a valid filesystem_read config: config.path = "<folder path>/<file>".
+    const lines = folders.map(f => {
+      if (typeof f === 'string') return `  - ${f}`;
+      const fileList = (f.files ?? []).length ? ` — files: ${f.files.join(', ')}` : '';
+      return `  - "${f.name}" at path "${f.path}"${fileList}`;
+    });
+    parts.push(`CONNECTED FILESYSTEM FOLDERS (readable via a "filesystem_read" step — config.path must be the folder path + "/" + a file name shown below; or "filesystem_list" with config.path = the folder path):\n${lines.join('\n')}`);
+  }
   if (uploads.length)
-    parts.push(`KNOWLEDGE BASE (RAG-indexed, AI-accessible via context — NOT via filesystem_read): ${uploads.join(', ')}`);
+    parts.push(`KNOWLEDGE BASE (RAG-indexed, AI-accessible via context — NOT via filesystem_read): ${uploads.map(u => typeof u === 'string' ? u : (u.name || u.path)).join(', ')}`);
   return parts.length ? '\n' + parts.join('\n') : '';
 }
 
@@ -331,11 +339,13 @@ export function buildAnalyzePrompt({ intent, clarifications, capabilities }) {
   const prior = (clarifications ?? []).map(({ q, a }) => `Q: ${q}\nA: ${a}`).join('\n');
   const fsFolders = capabilities?.filesystem ?? [];
   const uploads   = capabilities?.knowledgeUploads ?? [];
+  const fsNames = fsFolders.map(f => typeof f === 'string' ? f : f.name);
+  const upNames = uploads.map(u => typeof u === 'string' ? u : (u.name || u.path));
   let fsNote;
   if (fsFolders.length) {
-    fsNote = `Connected filesystem folders: ${fsFolders.join(', ')} — filesystem_read IS available.`;
+    fsNote = `Connected filesystem folders: ${fsNames.join(', ')} — filesystem_read IS available.`;
   } else if (uploads.length) {
-    fsNote = `No server folder connected (filesystem_read NOT available). Knowledge base has RAG-indexed uploads: ${uploads.join(', ')}. Do NOT ask for a folder — the content is indexed and AI steps can reference it via context.`;
+    fsNote = `No server folder connected (filesystem_read NOT available). Knowledge base has RAG-indexed uploads: ${upNames.join(', ')}. Do NOT ask for a folder — the content is indexed and AI steps can reference it via context.`;
   } else {
     fsNote = 'No filesystem folders or knowledge uploads — filesystem_read is NOT available, and no RAG content exists.';
   }

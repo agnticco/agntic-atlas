@@ -91,6 +91,11 @@ const WORKFLOWS_DB = process.env.WORKFLOWS_DB ?? './memory/workflows/workflows.s
 const SOURCES_DB   = process.env.SOURCES_DB   ?? './memory/workflows/sources.sqlite';
 // Base directory for per-tenant RAG stores: VECTOR_DIR/<tenantId>/company.sqlite.
 const VECTOR_DIR   = process.env.VECTOR_DIR   ?? './memory/vectors';
+// Per-tenant "internal filesystem" for browser-uploaded Knowledge files. Browsers
+// can't hand the server a real path, so uploaded docs are persisted here under an
+// app-managed absolute path — which makes them a first-class filesystem folder that
+// workflows can read via filesystem_read/filesystem_list, not just RAG. (S8-9)
+const KNOWLEDGE_DIR = process.env.KNOWLEDGE_DIR ?? './memory/knowledge';
 
 // Per-tenant sources.json helpers — module-level so both bootSpine (filesystem
 // connector registration) and createApp (RAG knowledge routes) can call them.
@@ -1106,9 +1111,19 @@ export function createApp(spine) {
     if (!pathStr) return res.status(400).json({ error: '`path` is required' });
     // Match by exact stored value first; also try resolved absolute path for legacy path-based sources
     const maybeAbs = (pathStr.startsWith('/') || pathStr.startsWith('~')) ? resolve(pathStr) : null;
-    const sources = readSources(req.tenant.id)
-      .filter(s => s.path !== pathStr && (maybeAbs === null || s.path !== maybeAbs));
+    const all = readSources(req.tenant.id);
+    const removed = all.find(s => s.path === pathStr || (maybeAbs !== null && s.path === maybeAbs) || s.name === pathStr);
+    const sources = all.filter(s => s !== removed);
     writeSources(req.tenant.id, sources);
+    // Delete the persisted files ONLY for app-managed upload folders (under KNOWLEDGE_DIR).
+    // NEVER touch an external index-folder path — that's the user's own directory.
+    try {
+      const kbRoot = resolve(KNOWLEDGE_DIR);
+      if (removed?.source === 'upload' && removed.path?.startsWith('/') &&
+          (removed.path === kbRoot || removed.path.startsWith(kbRoot + '/'))) {
+        rmSync(removed.path, { recursive: true, force: true });
+      }
+    } catch { /* best-effort — source entry already removed */ }
     res.json({ ok: true, removed: pathStr });
   });
 
@@ -1121,16 +1136,24 @@ export function createApp(spine) {
     }
     const MAX_FILES = 300;
     const MAX_BYTES = 200_000;
+    // App-managed absolute folder for this upload — persisting the raw files here
+    // makes the Knowledge folder a real filesystem folder workflows can read (S8-9).
+    const safeTenant = String(req.tenant.id).replace(/[^a-z0-9_-]/gi, '');
+    const safeFolder = String(folderName).replace(/[^a-z0-9_.-]/gi, '_') || 'uploads';
+    const folderDir  = resolve(join(KNOWLEDGE_DIR, safeTenant, safeFolder));
     try {
       const rag = await spine.rag.forTenant(req.tenant.id);
       let chunks = 0;
       let ingested = 0;
+      let wroteFiles = 0;
+      const writtenNames = [];
       for (const { path: filePath, content } of files.slice(0, MAX_FILES)) {
         if (typeof content !== 'string' || !content.trim()) continue;
         const ext = (filePath.split('.').pop() ?? '').toLowerCase();
+        const isImage = content.startsWith('data:image/');
 
         let text;
-        if (content.startsWith('data:image/')) {
+        if (isImage) {
           // Image sent as base64 data URL — describe via vision
           const fileName = filePath.split('/').pop() ?? filePath;
           text = await describeImageDataUrl(content, fileName).catch(() => null);
@@ -1144,6 +1167,25 @@ export function createApp(spine) {
         }
 
         if (!text.trim()) continue;
+
+        // Persist non-image files to the app filesystem so workflows can filesystem_read
+        // them by path. Traversal-safe: the resolved dest must stay under folderDir.
+        if (!isImage) {
+          try {
+            let rel = String(filePath);
+            const slash = rel.indexOf('/');
+            if (slash >= 0 && rel.slice(0, slash) === folderName) rel = rel.slice(slash + 1);
+            rel = rel.replace(/\\/g, '/').split('/').filter(seg => seg && seg !== '.' && seg !== '..').join('/');
+            const dest = resolve(join(folderDir, rel));
+            if (rel && (dest === folderDir || dest.startsWith(folderDir + '/'))) {
+              mkdirSync(dirname(dest), { recursive: true });
+              writeFileSync(dest, content.slice(0, MAX_BYTES));
+              wroteFiles++;
+              writtenNames.push(rel);
+            }
+          } catch { /* non-fatal — RAG still holds it */ }
+        }
+
         chunks += await rag.ingest(text.slice(0, MAX_BYTES), {
           source:      'upload',
           source_path: filePath,
@@ -1152,13 +1194,17 @@ export function createApp(spine) {
         });
         ingested++;
       }
+      // Register the source. If we persisted files, store the ABSOLUTE folder path so
+      // filesystem_read/list can reach it and the converger treats it as a filesystem
+      // folder; image-only uploads (nothing persisted) stay RAG-only under the name.
       const sources = readSources(req.tenant.id);
-      const entry   = { path: folderName, addedAt: Date.now(), files: ingested, chunks, source: 'upload' };
-      const idx     = sources.findIndex(s => s.path === folderName);
+      const usePath = wroteFiles > 0 ? folderDir : folderName;
+      const entry   = { path: usePath, name: folderName, addedAt: Date.now(), files: ingested, chunks, source: 'upload', fileNames: writtenNames.slice(0, 100) };
+      const idx     = sources.findIndex(s => s.path === usePath || s.path === folderName || s.name === folderName);
       if (idx >= 0) sources[idx] = { ...sources[idx], ...entry, reindexedAt: Date.now() };
       else sources.push(entry);
       writeSources(req.tenant.id, sources);
-      res.json({ ok: true, folderName, files: ingested, chunks });
+      res.json({ ok: true, folderName, files: ingested, chunks, path: usePath });
     } catch (err) {
       res.status(500).json({ error: `ingest-files failed: ${err.message ?? String(err)}` });
     }
