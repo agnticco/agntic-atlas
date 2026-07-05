@@ -141,6 +141,18 @@ function airtableSchemaSummary(capabilities) {
   return '\n' + lines.join('\n');
 }
 
+// The tenant's EXISTING Slack channels, so the converger can proactively create a
+// named channel that doesn't exist yet instead of building a workflow that 404s (S8-3).
+// Returns '' when the channel list is unknown (never assert existence we can't verify).
+function slackChannelsBlock(capabilities) {
+  const chans = capabilities?.slackChannels;
+  if (!Array.isArray(chans)) return '';
+  if (!chans.length) {
+    return `\nEXISTING SLACK CHANNELS: none found. Any Slack channel the user names must be created FIRST via a "slack_create_channel" setup action (params: { name:"<name without #>" }) before the deliver node.`;
+  }
+  return `\nEXISTING SLACK CHANNELS (the bot can already post to these): ${chans.map(c => '#' + c).join(', ')}.\nIf the user names a Slack channel that is NOT in this list, you MUST propose a "slack_create_channel" setup action (params: { name:"<name without #>" }) BEFORE the deliver node — never build a deliver to a channel that doesn't exist yet.`;
+}
+
 // ── System prompt (shared across all converger LLM calls) ────────────────────
 
 export function buildSystemPrompt(capabilities) {
@@ -175,7 +187,7 @@ ${stepSummary(capabilities)}
 - deliver: Send the final result to a destination. Choose config.channel from the destinations below and set ONLY its routing fields — the message body is filled automatically from the previous step's output, so never put the content in config. MULTIPLE DESTINATIONS: if the user asks to send the result to more than one place (e.g. "email me AND save a Google Doc", "post to Slack and email the team"), add ONE deliver node PER destination, each with its own edge from the final content node (fan-out) — the engine runs them all. Never silently drop a requested destination. Deliver nodes are always terminal (nothing runs after them).
   AVAILABLE DELIVERY DESTINATIONS (these are the only ones connected/runnable right now — never invent one):
 ${deliverySummary(capabilities)}
-  Guidance: a "#channel" goes to channel "slack" with target. A DM / "send it to me" / "message <person>" goes to channel "slack_dm" with user = their email or @handle. If the user wants a Slack channel but hasn't named one, ask which channel.
+  Guidance: a "#channel" goes to channel "slack" with target. A DM / "send it to me" / "message <person>" goes to channel "slack_dm" with user = their email or @handle. If the user wants a Slack channel but hasn't named one, ask which channel.${slackChannelsBlock(capabilities)}
 
 HOW INPUT ENTERS THE WORKFLOW:
 - Workflows are event-driven. The TRIGGER provides the input — e.g. an email trigger
