@@ -416,3 +416,21 @@ break, **published it live**, ran it for real, and went looking for the payoff i
 
 **Value note:** external deliveries (Slack post, Gmail send) were verified working in earlier sessions;
 it's specifically the in-app Inbox channel that's broken (S8-1).
+
+### Session 8b — one-off setup actions + Slack (operator test, 2026-07-04)
+
+Tested exactly the ask: can the agent perform one-off actions a workflow depends on (e.g. create a
+Slack channel that doesn't exist)? Built "post a daily message to #atlas-standup" where the channel
+does not exist.
+
+| ID | Sev | Finding |
+|----|-----|---------|
+| S8-4 | **HIGH** | **The one-off setup action fails to execute (400).** When asked, the converger DOES propose it ("Setup: create_channel 'atlas-standup'" with a "Create it now" button) — good. But clicking it returns `POST /api/builder/sessions/:id/setup → 400 "Capability not found: create_channel"`. Root cause: **capability-id mismatch.** The converger proposes `capabilityId:"create_channel"` (the id in `slack/capabilities.json:72`), but the runtime capability is registered as **`slack_create_channel`** (`slack/index.js:367`), and the setup endpoint resolves via `registry.getHandler(capabilityId)` (`builder.js:946`) → no match → 400. So the channel is never created and the workflow stays broken. (Contrast: `drive_create_folder` is registered and proposed under the SAME id, so folder-creation would work — the bug is specific to Slack's `create_channel` vs `slack_create_channel` namespacing.) Fix: make the converger's action-list ids and the registry ids agree (expose `slack_*` ids to the converger, or alias `create_channel`→`slack_create_channel` in the setup resolver). |
+| S8-3 | MODERATE | **Setup actions aren't offered PROACTIVELY.** The converger built the whole workflow posting to `#atlas-standup` without ever checking that the channel exists, so it produced a broken spec; it only proposed the create-channel setup after I explicitly asked (or the test broke). It should detect a named-but-missing channel/folder during the build (it already lists channels via `slack_list_channels`) and proactively offer to create it — same for Drive folders. |
+| S8-5 | MINOR | **Break mis-attributed to the wrong step.** The Slack post failed (`channel_not_found` on the DELIVER step), but the test panel put the ✕ "Break" on the preceding LLM node and marked DELIVER "Queued" (failIndex off-by-one). The plain-language explanation was correct ("couldn't find the #atlas-standup channel"); only the visual marker is on the wrong node. |
+
+**Slack positives (verified live):** the converger builds a clean Slack flow (schedule → LLM with proper
+Slack **mrkdwn** formatting → deliver), the name correctly reads "Weekday" (S7-7 holding), R14 caught the
+`channel_not_found` honestly with a clear human explanation, and the setup-action proposal UI ("Create
+it now" / "Skip") renders well. The gap is purely that the create-channel action **400s on execute** (S8-4)
+and isn't offered proactively (S8-3).
