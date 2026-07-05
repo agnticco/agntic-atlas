@@ -275,7 +275,9 @@ The result is whatever that capability normally returns; it appears in SETUP COM
 
 PROPOSAL FORMATS (return exactly one):
 
-Setup action (capabilityId must be an id from AVAILABLE CONNECTOR ACTIONS):
+Setup action (capabilityId must be the EXACT id string from AVAILABLE CONNECTOR ACTIONS — copy it
+verbatim, including any connector prefix like "slack_"; do NOT shorten it, e.g. use "slack_create_channel",
+never "create_channel"):
 {"component":"setup_action","capabilityId":"<capability id>","params":{...},"stores_as":"<camelCase key>","rationale":"<one sentence>"}
 
 Trigger examples (use the appropriate type):
