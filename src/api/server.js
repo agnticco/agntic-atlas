@@ -1009,6 +1009,7 @@ export function createApp(spine) {
 
   // ── Login / logout ────────────────────────────────────────────────────────
   app.post('/auth/login', async (req, res) => {
+    if (req.rawBody && req.rawBody.length > 8192) return res.status(413).json({ error: 'payload too large' });
     const retryAfter = loginRetryAfter(req);
     if (retryAfter) {
       res.setHeader('Retry-After', String(retryAfter));
@@ -1830,6 +1831,12 @@ export async function start() {
       : 'local-model';
     console.log(`atlas spine listening on :${PORT} (engine ok, auth ok, llm ${llmState}, rag ${spine.rag.provider})`);
   });
+  // Slowloris hardening: bound how long a client may take to send request
+  // headers. requestTimeout stays generous so a slow but legitimate upload of a
+  // full body (JSON capped at 4mb) isn't cut off; it never limits response
+  // duration, so SSE streams and long workflow runs are unaffected.
+  server.headersTimeout = numEnv('HEADERS_TIMEOUT_MS', 30_000);
+  server.requestTimeout = numEnv('REQUEST_TIMEOUT_MS', 300_000);
 
   let shuttingDown = false;
   const shutdown = (signal) => {
