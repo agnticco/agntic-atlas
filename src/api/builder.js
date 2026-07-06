@@ -26,7 +26,7 @@ import { webConnectionStatus } from '../connectors/web/index.js';
 import { getGoogleAccessToken } from '../connectors/google/index.js';
 import { getSlackToken } from '../connectors/slack/oauth.js';
 import { getAirtableAccessToken } from '../connectors/airtable/oauth.js';
-import { sumTimeSavedMinutes } from '../workflows/time-saved.js';
+import { sumTimeSavedMinutes, timeSavedMinutesForRun, isValueRun } from '../workflows/time-saved.js';
 
 // Retry an LLM call up to maxRetries times on transient provider errors (500/529/503).
 async function withLLMRetry(fn, maxRetries = 2) {
@@ -356,6 +356,85 @@ function makeChatToolExecutor(spine, req, sessionId) {
       msgArray.push(new ToolMessage(resultStr, tc.id));
     }));
   };
+}
+
+// ── Home dashboard ("Data" layout) metric helpers ───────────────────────────
+// All derived from real run rows — no fabricated values. See the run-log schema
+// in workflow-store.js (started_at/completed_at/status/is_test/time_saved_minutes).
+
+const DAY_MS  = 86_400_000;
+const HRS = (mins) => Math.round((mins / 60) * 10) / 10; // one decimal
+
+/** Format total minutes as the same "X hrs" / "X min" convention the home uses. */
+function fmtDuration(mins) {
+  const m = Math.round(mins);
+  if (m >= 60) { const h = m / 60; return (h < 10 ? h.toFixed(1) : Math.round(h)) + ' hrs'; }
+  return m + ' min';
+}
+
+/** Local midnight for a Date (server tz) — bucket boundary for day series. */
+function startOfDay(d) { const x = new Date(d); x.setHours(0, 0, 0, 0); return x; }
+
+/** Short weekday label, e.g. "Mon". */
+function dayLabel(d) { return d.toLocaleDateString('en-US', { weekday: 'short' }); }
+
+/** Short month label, e.g. "Jan". */
+function monthLabel(i) { return ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][i]; }
+
+/**
+ * Derive a per-run trigger label from the owning workflow's trigger definition.
+ * Per-run trigger type is not stored on the run — this reflects how the workflow
+ * is configured to fire (Schedule · time / Email / Event / Manual).
+ */
+function triggerLabel(triggers) {
+  const t = Array.isArray(triggers) ? triggers[0] : null;
+  if (!t) return 'Manual';
+  const type = (t.type || '').toLowerCase();
+  if (type === 'schedule' || type === 'cron') {
+    const time = cronToTime(t.schedule || t.cron);
+    return time ? `Schedule · ${time}` : 'Schedule';
+  }
+  if (type === 'email' || type === 'gmail') return 'Email';
+  if (type === 'manual' || type === '') return 'Manual';
+  if (t.label) return t.label;
+  // connector/event triggers → Title-cased type
+  return type.charAt(0).toUpperCase() + type.slice(1).replace(/[_-]+/g, ' ');
+}
+
+/** Parse the minute+hour fields of a 5-field cron into a "5:00 AM" clock label. */
+function cronToTime(cron) {
+  if (!cron || typeof cron !== 'string') return null;
+  const parts = cron.trim().split(/\s+/);
+  if (parts.length < 2) return null;
+  const min = parts[0], hr = parts[1];
+  if (!/^\d+$/.test(min) || !/^\d+$/.test(hr)) return null; // skip */N and ranges
+  const h = parseInt(hr, 10), m = parseInt(min, 10);
+  if (h > 23 || m > 59) return null;
+  const ampm = h < 12 ? 'AM' : 'PM';
+  const h12 = h % 12 === 0 ? 12 : h % 12;
+  return `${h12}:${String(m).padStart(2, '0')} ${ampm}`;
+}
+
+/** A run counts toward "done" activity when it is a real (non-test) success or error. */
+function isDoneRun(r) { return !r.is_test && (r.status === 'success' || r.status === 'error'); }
+
+/**
+ * Composite health score (0–100) over a set of done runs: the success ratio,
+ * penalised for workflows currently broken or overdue. Returns null when the
+ * window has no runs (no signal). Rating bands documented at the call site.
+ */
+function successPct(doneRuns) {
+  if (!doneRuns.length) return null;
+  const ok = doneRuns.filter(r => r.status === 'success').length;
+  return Math.round((ok / doneRuns.length) * 100);
+}
+
+function healthRating(score) {
+  if (score >= 95) return 'Excellent';
+  if (score >= 85) return 'Great';
+  if (score >= 70) return 'Good';
+  if (score >= 50) return 'Fair';
+  return 'Needs attention';
 }
 
 export function mountBuilderRoutes(app, { spine, requireActiveTenant, requireAuth, readSources, tenantGuard }) {
@@ -1024,6 +1103,10 @@ Rules:
       const hour = new Date().getHours();
       const tod  = hour < 12 ? 'morning' : hour < 17 ? 'afternoon' : 'evening';
 
+      // Flat index of every run (with owning-workflow context) — powers the
+      // day/month/window aggregates below without re-querying.
+      const runIndex = [];
+
       // Build enriched workflow objects once — shared across modules.
       const workflows = wfs.map(wf => {
         // 500 (not 20) so run counts and time-saved aren't undercounted for
@@ -1033,6 +1116,16 @@ Rules:
         const fail = runs.filter(r => r.status === 'error').length;
         const last = runs[0] ?? null;
         const trg  = (wf.triggers || [])[0] ?? null;
+        const baseline = wf.baseline_duration_s ?? 0;
+        for (const r of runs) {
+          runIndex.push({
+            wfId: wf.id, wfName: wf.name || wf.user_intent || 'Untitled',
+            triggers: wf.triggers || [], baseline,
+            status: r.status, is_test: r.is_test,
+            started_at: r.started_at, completed_at: r.completed_at,
+            time_saved_minutes: r.time_saved_minutes,
+          });
+        }
         return {
           id: wf.id, name: wf.name || wf.user_intent || 'Untitled',
           status: wf.status,
@@ -1104,6 +1197,99 @@ Rules:
       // successful runs (test + failed runs no longer inflate it).
       const timeSavedMins = Math.round(workflows.reduce((s, w) => s + w.savedMinutes, 0));
 
+      // ── Data-layout metrics (all derived from runIndex — no fabrication) ────
+      const now      = Date.now();
+      const doneRuns = runIndex.filter(isDoneRun);
+      const savedFor = (r) => timeSavedMinutesForRun(r, r.baseline ?? 0);
+
+      // Failed run attempts (distinct from workflow_health.failed = broken workflows).
+      const failedRuns = doneRuns.filter(r => r.status === 'error').length;
+
+      // Retries (heuristic — no retry column exists): an error run of a workflow
+      // immediately followed by another run of the SAME workflow within 15 min,
+      // which is how the scheduler's retry wrapper produces back-to-back rows.
+      const RETRY_WINDOW_MS = 15 * 60 * 1000;
+      let retries = 0;
+      {
+        const byWf = new Map();
+        for (const r of doneRuns) {
+          if (!byWf.has(r.wfId)) byWf.set(r.wfId, []);
+          byWf.get(r.wfId).push(r);
+        }
+        for (const list of byWf.values()) {
+          const asc = [...list].sort((a, b) => new Date(a.started_at) - new Date(b.started_at));
+          for (let i = 0; i < asc.length; i++) {
+            if (asc[i].status !== 'error' || !asc[i].completed_at) continue;
+            const next = asc[i + 1];
+            if (next && (new Date(next.started_at) - new Date(asc[i].completed_at)) <= RETRY_WINDOW_MS) retries++;
+          }
+        }
+      }
+
+      // Health score: success ratio over the last 30 days, penalised for
+      // currently-broken / overdue workflows. Trend = raw success-% delta vs the
+      // prior 30-day window. Falls back to all-time success when 30d is empty.
+      const overdueCount = ((store.getOverdue?.() ?? []).filter(w => w.tenant_id === tenantId && w.user_id === userId)).length;
+      const cur30  = doneRuns.filter(r => (now - new Date(r.started_at)) <= 30 * DAY_MS);
+      const prev30 = doneRuns.filter(r => { const age = now - new Date(r.started_at); return age > 30 * DAY_MS && age <= 60 * DAY_MS; });
+      const curRaw = successPct(cur30) ?? successPct(doneRuns);
+      let healthModule = null;
+      if (curRaw !== null) {
+        const penalised = Math.max(0, Math.min(100, curRaw - 8 * failedWfs.length - 5 * overdueCount));
+        const prevRaw   = successPct(prev30);
+        healthModule = {
+          score: penalised,
+          rating: healthRating(penalised),
+          trend: prevRaw === null ? 0 : curRaw - prevRaw,
+        };
+      }
+
+      // 7-day activity: per-day run count + hours saved (oldest → newest).
+      const activity7d = [];
+      for (let i = 6; i >= 0; i--) {
+        const dayStart = startOfDay(new Date(now - i * DAY_MS)).getTime();
+        const dayEnd   = dayStart + DAY_MS;
+        const inDay    = doneRuns.filter(r => { const t = new Date(r.started_at).getTime(); return t >= dayStart && t < dayEnd; });
+        activity7d.push({
+          day:   dayLabel(new Date(dayStart)),
+          runs:  inDay.length,
+          hours: HRS(inDay.filter(isValueRun).reduce((s, r) => s + savedFor(r), 0)),
+        });
+      }
+
+      // Performance trend: month-by-month (Jan → current month) of this year.
+      const yearNow = new Date(now).getFullYear();
+      const curMonth = new Date(now).getMonth();
+      const months = [];
+      let yearRuns = 0;
+      for (let m = 0; m <= curMonth; m++) {
+        const inMonth = doneRuns.filter(r => { const d = new Date(r.started_at); return d.getFullYear() === yearNow && d.getMonth() === m; });
+        yearRuns += inMonth.length;
+        months.push({ month: monthLabel(m), runs: inMonth.length, hours: HRS(inMonth.filter(isValueRun).reduce((s, r) => s + savedFor(r), 0)) });
+      }
+      const monthsElapsed = curMonth + 1;
+      const performanceTrend = {
+        months,
+        avgRunsPerMonth: Math.round((yearRuns / monthsElapsed) * 10) / 10,
+        totalThisYear: yearRuns,
+      };
+
+      // Time-saved this week + goal.
+      const weekMinutes = doneRuns.filter(r => isValueRun(r) && (now - new Date(r.started_at)) <= 7 * DAY_MS)
+        .reduce((s, r) => s + savedFor(r), 0);
+      const prefs = spine.auth?.userStore?.getPreferences?.(userId, tenantId) ?? {};
+      const goalMinutes = Number.isFinite(prefs.timeSavedGoalMinutes) ? prefs.timeSavedGoalMinutes : 600; // default 10 hrs
+
+      // Recent runs, page 1 (+ total for the pager).
+      const runsPage = store.getRunsPage({ tenantId, userId, limit: 5, offset: 0 });
+      const recentRunsRows = runsPage.rows.map(r => ({
+        workflowId: r.workflow_id,
+        workflowName: r.wf_name || r.wf_user_intent || 'Untitled',
+        trigger: triggerLabel(r.wf_triggers),
+        status: r.status,
+        at: r.started_at,
+      }));
+
       const modules = {
         ai_greeting: greetingData ?? {
           greeting: `Good ${tod}, ${userName}.`,
@@ -1120,6 +1306,8 @@ Rules:
           rate: successRate !== null ? successRate + '%' : '—',
           totalRuns,
           successRuns: totalOk,
+          failedRuns,
+          retries,
         },
         top_workflows: [...workflows].sort((a, b) => b.runCount - a.runCount).slice(0, 5).map(w => ({
           id: w.id, name: w.name, runCount: w.runCount,
@@ -1145,14 +1333,47 @@ Rules:
           display: timeSavedMins >= 60
             ? (timeSavedMins / 60 < 10 ? (timeSavedMins / 60).toFixed(1) : Math.round(timeSavedMins / 60)) + ' hrs'
             : timeSavedMins + ' min',
+          weekMinutes: Math.round(weekMinutes),
+          weekDisplay: fmtDuration(weekMinutes),
+          goalMinutes,
+          goalDisplay: fmtDuration(goalMinutes),
         },
         ai_tip: tipData ?? { tip: 'Add more workflows to see personalized tips here.' },
+        // ── Data-layout modules ──────────────────────────────────────────────
+        health_score: healthModule,        // { score, rating, trend } | null
+        activity_7d: activity7d,           // [{ day, runs, hours }] oldest→newest
+        performance_trend: performanceTrend, // { months:[{month,runs,hours}], avgRunsPerMonth, totalThisYear }
+        recent_runs: { rows: recentRunsRows, total: runsPage.total, offset: 0, limit: 5 },
       };
 
       logEvent('home.ok', { tenant: tenantId, wfCount: workflows.length });
       res.json({ ok: true, user: { name: userName, email: req.user.email }, workflows, modules });
     } catch (err) {
       logEvent('home.error', errFields(err));
+      res.status(500).json({ ok: false, error: err.message ?? String(err) });
+    }
+  });
+
+  // ── GET /api/builder/home/runs ────────────────────────────────────────────
+  // Paged "Recent runs" for the home Data table (Prev/Next). Scoped to tenant+user.
+  app.get('/api/builder/home/runs', requireActiveTenant, (req, res) => {
+    try {
+      const store    = spine.engine.workflowStore;
+      const userId   = req.user.id;
+      const tenantId = req.tenant.id;
+      const limit    = Math.min(50, Math.max(1, parseInt(req.query.limit, 10) || 5));
+      const offset   = Math.max(0, parseInt(req.query.offset, 10) || 0);
+      const page     = store.getRunsPage({ tenantId, userId, limit, offset });
+      const rows = page.rows.map(r => ({
+        workflowId: r.workflow_id,
+        workflowName: r.wf_name || r.wf_user_intent || 'Untitled',
+        trigger: triggerLabel(r.wf_triggers),
+        status: r.status,
+        at: r.started_at,
+      }));
+      res.json({ ok: true, rows, total: page.total, offset, limit });
+    } catch (err) {
+      logEvent('home.runs.error', errFields(err));
       res.status(500).json({ ok: false, error: err.message ?? String(err) });
     }
   });
