@@ -118,6 +118,30 @@ function isIndexPathAllowed(absPath) {
   return KNOWLEDGE_INDEX_ROOTS.some(root => absPath === root || absPath.startsWith(root + '/'));
 }
 
+// ── Login brute-force throttle ───────────────────────────────────────────────
+// In-memory sliding window keyed by client IP + email. Repeated FAILED guesses
+// for an account get 429'd; a correct password clears the counter, so a
+// legitimate user is never locked out (fail-open). Behind a reverse proxy
+// without `trust proxy` req.ip is the proxy's, but the email dimension still
+// bounds per-account guessing and the edge (Cloudflare) rate-limits upstream.
+const LOGIN_MAX_FAILS = numEnv('LOGIN_MAX_FAILS', 10);
+const LOGIN_WINDOW_MS = numEnv('LOGIN_WINDOW_MS', 15 * 60 * 1000);
+const _loginFails = new Map(); // key -> { count, resetAt }
+function _loginKey(req) { return `${req.ip}|${String(req.body?.email ?? '').toLowerCase().trim()}`; }
+function loginRetryAfter(req) {
+  const e = _loginFails.get(_loginKey(req));
+  if (!e) return 0;
+  if (Date.now() > e.resetAt) { _loginFails.delete(_loginKey(req)); return 0; }
+  return e.count >= LOGIN_MAX_FAILS ? Math.ceil((e.resetAt - Date.now()) / 1000) : 0;
+}
+function recordLoginFail(req) {
+  const now = Date.now(), k = _loginKey(req), e = _loginFails.get(k);
+  if (!e || now > e.resetAt) _loginFails.set(k, { count: 1, resetAt: now + LOGIN_WINDOW_MS });
+  else e.count++;
+  if (_loginFails.size > 5000) for (const [key, v] of _loginFails) if (now > v.resetAt) _loginFails.delete(key); // lazy sweep
+}
+function clearLoginFails(req) { _loginFails.delete(_loginKey(req)); }
+
 // Per-tenant sources.json helpers — module-level so both bootSpine (filesystem
 // connector registration) and createApp (RAG knowledge routes) can call them.
 function sourcesPath(tenantId) {
@@ -943,16 +967,22 @@ export function createApp(spine) {
 
   // ── Login / logout ────────────────────────────────────────────────────────
   app.post('/auth/login', async (req, res) => {
+    const retryAfter = loginRetryAfter(req);
+    if (retryAfter) {
+      res.setHeader('Retry-After', String(retryAfter));
+      return res.status(429).json({ error: 'Too many failed attempts. Try again later.' });
+    }
     try {
       const user = await spine.auth.authProvider.authenticate({ email: req.body?.email, password: req.body?.password });
-      if (!user) return res.status(401).json({ error: 'Invalid credentials' });
+      if (!user) { recordLoginFail(req); return res.status(401).json({ error: 'Invalid credentials' }); }
       if (!spine.auth.tenantStore.isActive(user.tenant_id)) return res.status(403).json({ error: 'tenant suspended' });
+      clearLoginFails(req);
       const { token } = spine.auth.issueSession({ user });
       setSessionCookie(res, token);
       const tenantRow = spine.auth.tenantStore.get(user.tenant_id);
       const tenant = tenantRow ? { id: tenantRow.id, name: tenantRow.name } : null;
       res.json({ ok: true, token, user: pubUser(user), tenant });
-    } catch (err) { res.status(400).json({ error: err.message ?? String(err) }); }
+    } catch (err) { recordLoginFail(req); res.status(400).json({ error: err.message ?? String(err) }); }
   });
   app.post('/auth/logout', requireAuth, (req, res) => {
     try { spine.auth.sessionStore.revoke(req.session.id); } catch { /* ignore */ }
