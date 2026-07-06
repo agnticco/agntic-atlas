@@ -1,9 +1,13 @@
 /**
  * mailer — transactional email for system messages (password reset, etc.).
  *
- * Three modes, chosen automatically:
+ * Modes, chosen automatically in priority order:
  *
- *  1. Gmail API via a Google service account (RECOMMENDED — no app password).
+ *  0. Resend HTTP API (RESEND_API_KEY) — a dedicated transactional provider.
+ *     Verify the sending domain on Resend (SPF/DKIM DNS records) and send from
+ *     an address on it (MAIL_FROM). No Google credential; best deliverability.
+ *
+ *  1. Gmail API via a Google service account (GMAIL_SA_KEY_FILE + GMAIL_SEND_AS).
  *     A service account with domain-wide delegation impersonates a Workspace
  *     user and sends with the least-privilege `gmail.send` scope. Configure:
  *       GMAIL_SA_KEY_FILE   path to the service-account JSON key
@@ -56,9 +60,20 @@ function serviceAccount() {
 }
 
 function mode() {
+  if (process.env.RESEND_API_KEY?.trim()) return 'resend';
   if (serviceAccount() && gmailSendAs()) return 'gmail-sa';
   if (process.env.SMTP_HOST?.trim()) return 'smtp';
   return 'none';
+}
+
+// ── Resend (HTTP API) ────────────────────────────────────────────────────────
+async function sendViaResend({ from, to, subject, text, html }) {
+  const res = await fetch('https://api.resend.com/emails', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${process.env.RESEND_API_KEY.trim()}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ from, to, subject, html, text }),
+  });
+  if (!res.ok) throw new Error(`resend send failed: ${res.status} ${(await res.text()).slice(0, 300)}`);
 }
 
 /** True when real email can be sent (Gmail-SA or SMTP configured). */
@@ -123,6 +138,11 @@ export async function sendMail({ to, subject, text, html }) {
   const from = process.env.MAIL_FROM || gmailSendAs() || process.env.SMTP_USER || 'Atlas <no-reply@atlas.local>';
   const m = mode();
   try {
+    if (m === 'resend') {
+      await sendViaResend({ from, to, subject, text, html });
+      logEvent('mail.sent', { to, subject, via: 'resend' });
+      return { delivered: true };
+    }
     if (m === 'gmail-sa') {
       await sendViaGmailApi({ from, to, subject, text, html });
       logEvent('mail.sent', { to, subject, via: 'gmail-api' });
