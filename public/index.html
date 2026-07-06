@@ -4,6 +4,20 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <script>window.__atlasAuthQueue=[];window.__atlasInitAuth=function(t,u,tn){window.__atlasAuthQueue.push({token:t,user:u,tenant:tn});};</script>
+<script>
+// Theme bootstrap — runs before render so there's no flash. Preference is one of
+// 'system' | 'light' | 'dark' in localStorage['atlas-theme']; 'system' (the
+// default) follows the OS via prefers-color-scheme and live-updates on change.
+(function(){
+  function resolve(pref){ if(pref==='light'||pref==='dark') return pref; return (window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches) ? 'light' : 'dark'; }
+  function apply(){ var pref = null; try { pref = localStorage.getItem('atlas-theme'); } catch(e){} pref = pref || 'system'; var el = document.documentElement; el.setAttribute('data-theme', resolve(pref)); el.setAttribute('data-theme-pref', pref); return pref; }
+  window.__atlasThemePref = function(){ try { return localStorage.getItem('atlas-theme') || 'system'; } catch(e){ return 'system'; } };
+  window.__atlasSetTheme = function(pref){ try { localStorage.setItem('atlas-theme', pref); } catch(e){} apply(); };
+  window.__atlasApplyTheme = apply;
+  apply();
+  if(window.matchMedia){ try { window.matchMedia('(prefers-color-scheme: light)').addEventListener('change', function(){ if((window.__atlasThemePref())==='system') apply(); }); } catch(e){} }
+})();
+</script>
 <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
 <script src="./support.js"></script>
 </head>
@@ -13,12 +27,30 @@
 <link href="https://fonts.googleapis.com/css2?family=Inter+Tight:wght@400;500;600&family=Instrument+Serif:ital@0;1&display=swap" rel="stylesheet"/>
 <style>
   *{box-sizing:border-box}
+  /* ── Theme tokens ──────────────────────────────────────────────────────────
+     --fg is an R,G,B triple driving every neutral text/border/fill via
+     rgba(var(--fg),α); backgrounds + accents swap per theme. Default = dark;
+     [data-theme] on <html> (set from the user's OS setting or their Account
+     Settings override) flips the palette. */
+  :root{
+    --bg:#0A0A0A; --panel:#101012; --fg:255,255,255;
+    --green:#9fd6a8; --green2:#7fc28a; --green3:#7fe0a0; --amber:#f0c97a; --red:#e87878;
+    --grid:rgba(255,255,255,.06); --grid-axis:rgba(255,255,255,.1); --axis-label:rgba(255,255,255,.35);
+  }
+  :root[data-theme=light]{
+    --bg:#f4f4f2; --panel:#ffffff; --fg:24,26,30;
+    --green:#2f8f5c; --green2:#2f8f5c; --green3:#37a06a; --amber:#bd851f; --red:#cf5a5a;
+    --grid:rgba(24,26,30,.08); --grid-axis:rgba(24,26,30,.14); --axis-label:rgba(24,26,30,.4);
+  }
   body{margin:0;background:#000;color:#fff;font-family:'Inter Tight',-apple-system,BlinkMacSystemFont,'Helvetica Neue',sans-serif;-webkit-font-smoothing:antialiased;letter-spacing:-0.005em}
   input::placeholder{color:rgba(255,255,255,.34)}
   ::selection{background:#fff;color:#0a0a0a}
   .ab-scroll::-webkit-scrollbar{width:8px}
   .ab-scroll::-webkit-scrollbar-thumb{background:rgba(255,255,255,.09);border-radius:8px}
   .ab-scroll::-webkit-scrollbar-track{background:transparent}
+  /* Narrow collapsed-rail scroll: scrollable but no visible scrollbar */
+  .rail-scroll{scrollbar-width:none;-ms-overflow-style:none}
+  .rail-scroll::-webkit-scrollbar{display:none}
   .atlas-md p{margin:0 0 .5em}.atlas-md p:last-child{margin-bottom:0}.atlas-md ul,.atlas-md ol{margin:.25em 0 .5em 1.4em;padding:0}.atlas-md li{margin:.1em 0}.atlas-md strong{color:rgba(255,255,255,.95);font-weight:600}.atlas-md em{font-style:italic}.atlas-md code{font-family:'SFMono-Regular',Consolas,monospace;font-size:12.5px;background:rgba(255,255,255,.1);padding:1px 5px;border-radius:4px}.atlas-md pre{background:rgba(255,255,255,.06);border-radius:8px;padding:12px;overflow-x:auto;margin:.4em 0}.atlas-md pre code{background:none;padding:0;font-size:13px}.atlas-md h1,.atlas-md h2,.atlas-md h3{font-size:15px;font-weight:600;color:rgba(255,255,255,.9);margin:.6em 0 .2em}.atlas-md a{color:rgba(120,180,255,.9);text-decoration:none}.atlas-md a:hover{text-decoration:underline}
   @keyframes msgIn{from{transform:translateY(10px);opacity:.4}to{transform:none;opacity:1}}
   @keyframes flowPulse{0%,100%{opacity:.5}50%{opacity:1}}
@@ -89,7 +121,7 @@
                 </sc-if>
               </div>
             </div>
-            <div style="display:flex;flex-direction:column;gap:1px">
+            <div class="ab-scroll" style="display:flex;flex-direction:column;gap:1px;flex:1;min-height:0;overflow-y:auto;margin:0 -6px 6px 0;padding-right:4px">
               <sc-for list="{{ sidebarWorkflows }}" as="w" hint-placeholder-count="4">
                 <div class="{{ w.itemClass }} wf-item-row" onClick="{{ w.onClick }}" style="position:relative;display:flex;align-items:center;gap:10px;padding:10px;border-radius:9px;background:{{ w.bg }};border:1px solid {{ w.border }};cursor:pointer;color:{{ w.nameColor }};transition:color .15s" style-hover="background:rgba(255,255,255,.06)">
                   <span style="flex:none;width:8px;height:8px;{{ w.radius }};background:{{ w.dot }};filter:{{ w.glow }}"></span>
@@ -115,9 +147,7 @@
               </sc-for>
             </div>
 
-            <div style="flex:1"></div>
-
-            <div style="display:flex;flex-direction:column;gap:1px">
+            <div style="flex:none;display:flex;flex-direction:column;gap:1px">
               <div onClick="{{ onOpenAccount }}" style="display:flex;align-items:center;gap:11px;padding:9px 11px;border-radius:9px;cursor:pointer;font-size:13px;color:rgba(255,255,255,.85);letter-spacing:-0.005em" style-hover="background:rgba(255,255,255,.07)">
                 <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="rgba(255,255,255,.55)" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" style="flex:none"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1Z"/></svg>
                 Account settings
@@ -165,12 +195,11 @@
             <img src="assets/atlas-globe-white.svg" alt="atlas" style="height:22px;width:22px"/>
             <button onClick="{{ onToggleLeft }}" title="Expand" style="border:none;background:none;cursor:pointer;color:rgba(255,255,255,.55);width:30px;height:30px;border-radius:8px;display:flex;align-items:center;justify-content:center;margin-top:14px" style-hover="background:rgba(255,255,255,.07)"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg></button>
             <button onClick="{{ onReset }}" title="New workflow" style="border:none;cursor:pointer;background:none;color:rgba(255,255,255,.55);width:34px;height:34px;border-radius:9px;display:flex;align-items:center;justify-content:center;margin-top:14px" style-hover="background:rgba(255,255,255,.07);color:rgba(255,255,255,.85)"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg></button>
-            <div style="display:flex;flex-direction:column;gap:12px;margin-top:14px;align-items:center">
+            <div class="rail-scroll" style="display:flex;flex-direction:column;gap:12px;margin-top:14px;align-items:center;flex:1;min-height:0;overflow-y:auto;width:100%">
               <sc-for list="{{ sidebarWorkflows }}" as="w" hint-placeholder-count="4">
-                <span style="width:8px;height:8px;{{ w.radius }};background:{{ w.dot }};filter:{{ w.glow }}"></span>
+                <span style="flex:none;width:8px;height:8px;{{ w.radius }};background:{{ w.dot }};filter:{{ w.glow }}"></span>
               </sc-for>
             </div>
-            <div style="flex:1"></div>
             <button onClick="{{ onOpenAccount }}" title="Account settings" style="border:none;cursor:pointer;background:none;color:rgba(255,255,255,.55);width:34px;height:34px;border-radius:9px;display:flex;align-items:center;justify-content:center" style-hover="background:rgba(255,255,255,.07);color:rgba(255,255,255,.85)"><svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1Z"/></svg></button>
             <button onClick="{{ onOpenKnowledge }}" title="Knowledge" style="border:none;cursor:pointer;background:none;color:rgba(255,255,255,.55);width:34px;height:34px;border-radius:9px;display:flex;align-items:center;justify-content:center;margin-top:2px" style-hover="background:rgba(255,255,255,.07);color:rgba(255,255,255,.85)"><svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/></svg></button>
             <button onClick="{{ onOpenInbox }}" title="Inbox" style="position:relative;border:none;cursor:pointer;background:none;color:rgba(255,255,255,.55);width:34px;height:34px;border-radius:9px;display:flex;align-items:center;justify-content:center;margin-top:2px" style-hover="background:rgba(255,255,255,.07);color:rgba(255,255,255,.85)"><svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.7"><polyline points="22 12 16 12 14 15 10 15 8 12 2 12"/><path d="M5.45 5.11L2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/></svg><sc-if value="{{ inboxUnread > 0 }}"><span style="position:absolute;top:4px;right:4px;width:8px;height:8px;border-radius:50%;background:#4f8ef7;border:1.5px solid #101012"></span></sc-if></button>
@@ -647,12 +676,12 @@
 
       <!-- ░ MODE: HOME ░ -->
       <sc-if value="{{ modeHome }}" hint-placeholder-val="{{ false }}">
-      <div style="flex:1;min-width:0;background:#0A0A0A;display:flex;flex-direction:column;overflow:hidden;position:relative">
+      <div style="flex:1;min-width:0;background:var(--bg);display:flex;flex-direction:column;overflow:hidden;position:relative">
 
         <!-- Iris loading overlay: absolutely centered, fades out when content is ready -->
         <sc-if value="{{ homeGlobeVisible }}" hint-placeholder-val="{{ false }}">
-          <div style="position:fixed;inset:0;display:flex;align-items:center;justify-content:center;z-index:1000;background:#0A0A0A;opacity:{{ homeGlobeOpacity }};transition:{{ homeGlobeTrans }}">
-            <div style="position:relative;width:200px;height:200px;color:#ffffff;">
+          <div style="position:fixed;inset:0;display:flex;align-items:center;justify-content:center;z-index:1000;background:var(--bg);opacity:{{ homeGlobeOpacity }};transition:{{ homeGlobeTrans }}">
+            <div style="position:relative;width:200px;height:200px;color:rgb(var(--fg));">
               <div style="position:absolute;inset:-30%;border-radius:50%;background:radial-gradient(circle,rgba(255,255,255,.18) 0%,rgba(255,255,255,0) 65%);animation:irisGlow 3500ms cubic-bezier(.5,0,.2,1) infinite;pointer-events:none;"></div>
               <svg viewBox="0 0 1080 1080" style="position:relative;width:100%;height:100%;overflow:visible;display:block;filter:drop-shadow(0 0 6px rgba(255,255,255,.55)) drop-shadow(0 0 16px rgba(255,255,255,.3));">
                 <circle cx="540" cy="540" r="318" fill="none" stroke="currentColor" stroke-width="20" stroke-linejoin="round" style="transform-box:view-box;transform-origin:540px 540px;animation:irisRing 3500ms cubic-bezier(.5,0,.2,1) infinite;animation-delay:0ms;"></circle>
@@ -708,200 +737,212 @@
             <sc-if value="{{ !homeLoading }}" hint-placeholder-val="{{ false }}">
               <div style="animation:msgIn .45s ease both">
 
-                <!-- MODULE: AI Greeting -->
-                <sc-if value="{{ hmAiGreeting }}" hint-placeholder-val="{{ false }}">
-                  <div style="margin-bottom:36px">
-                    <div style="font-family:'Instrument Serif',serif;font-size:42px;letter-spacing:-0.02em;color:#fff;line-height:1.1;margin-bottom:10px">{{ hmGreeting }}</div>
-                    <div style="font-size:15px;color:rgba(255,255,255,.45);line-height:1.5">{{ hmHeadline }}</div>
-                  </div>
-                </sc-if>
+                <!-- ═══ HOME · "DATA" DASHBOARD ═══ -->
+                <sc-if value="{{ homeHasWorkflows }}" hint-placeholder-val="{{ false }}">
+                <div>
 
-                <!-- MODULE: Workflow Health -->
-                <sc-if value="{{ hmWorkflowHealth }}" hint-placeholder-val="{{ false }}">
-                  <div style="margin-bottom:28px">
-                    <div style="font-size:11px;font-weight:500;letter-spacing:.2em;text-transform:uppercase;color:rgba(255,255,255,.28);margin-bottom:12px">Workflow Health</div>
-                    <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px">
-                      <div style="border:1px solid rgba(159,214,168,.2);background:rgba(159,214,168,.05);border-radius:14px;padding:16px 18px">
-                        <div style="font-size:28px;font-weight:600;letter-spacing:-0.03em;color:#9fd6a8">{{ hmHealthActive }}</div>
-                        <div style="font-size:11px;font-weight:500;letter-spacing:.12em;text-transform:uppercase;color:rgba(255,255,255,.35);margin-top:4px">Active</div>
-                      </div>
-                      <div style="border:1px solid rgba(232,120,120,.2);background:rgba(232,120,120,.05);border-radius:14px;padding:16px 18px">
-                        <div style="font-size:28px;font-weight:600;letter-spacing:-0.03em;color:#e87878">{{ hmHealthPaused }}</div>
-                        <div style="font-size:11px;font-weight:500;letter-spacing:.12em;text-transform:uppercase;color:rgba(255,255,255,.35);margin-top:4px">Paused</div>
-                      </div>
-                      <div style="border:1px solid rgba(232,120,120,.2);background:rgba(232,120,120,.05);border-radius:14px;padding:16px 18px">
-                        <div style="font-size:28px;font-weight:600;letter-spacing:-0.03em;color:#e87878">{{ hmHealthFailed }}</div>
-                        <div style="font-size:11px;font-weight:500;letter-spacing:.12em;text-transform:uppercase;color:rgba(255,255,255,.35);margin-top:4px">Failed</div>
-                      </div>
-                      <div style="border:1px solid rgba(255,255,255,.08);background:rgba(255,255,255,.025);border-radius:14px;padding:16px 18px">
-                        <div style="font-size:28px;font-weight:600;letter-spacing:-0.03em;color:rgba(255,255,255,.55)">{{ hmHealthTotal }}</div>
-                        <div style="font-size:11px;font-weight:500;letter-spacing:.12em;text-transform:uppercase;color:rgba(255,255,255,.35);margin-top:4px">Total</div>
-                      </div>
-                    </div>
-                  </div>
-                </sc-if>
-
-                <!-- MODULE: Success Rate -->
-                <sc-if value="{{ hmSuccessRate }}" hint-placeholder-val="{{ false }}">
-                  <div style="margin-bottom:28px;border:1px solid rgba(255,255,255,.08);background:rgba(255,255,255,.025);border-radius:16px;padding:20px 24px;display:flex;align-items:baseline;gap:18px">
-                    <div>
-                      <div style="font-family:'Instrument Serif',serif;font-style:italic;font-size:48px;letter-spacing:-0.02em;color:#9fd6a8;line-height:1">{{ hmSrRate }}</div>
-                      <div style="font-size:11px;font-weight:500;letter-spacing:.16em;text-transform:uppercase;color:rgba(255,255,255,.35);margin-top:6px">Success rate</div>
-                    </div>
-                    <div style="width:1px;height:44px;background:rgba(255,255,255,.1)"></div>
-                    <div>
-                      <div style="font-size:28px;font-weight:600;letter-spacing:-0.02em;color:rgba(255,255,255,.7)">{{ hmSrTotal }}</div>
-                      <div style="font-size:11px;font-weight:500;letter-spacing:.16em;text-transform:uppercase;color:rgba(255,255,255,.35);margin-top:6px">Total runs</div>
-                    </div>
-                  </div>
-                </sc-if>
-
-                <!-- MODULE: Time Saved -->
-                <sc-if value="{{ hmTimeSaved }}" hint-placeholder-val="{{ false }}">
-                  <div onClick="{{ onOpenRoi }}" style="margin-bottom:28px;border:1px solid rgba(255,220,100,.15);background:rgba(255,220,100,.03);border-radius:16px;padding:20px 24px;display:flex;align-items:baseline;gap:14px;cursor:pointer;transition:background .12s" style-hover="background:rgba(255,220,100,.06)">
-                    <div style="font-family:'Instrument Serif',serif;font-style:italic;font-size:48px;letter-spacing:-0.02em;color:#f0c97a;line-height:1">{{ hmTimeSavedDisplay }}</div>
-                    <div style="font-size:14px;color:rgba(255,255,255,.4)">estimated time saved by your automations</div>
-                    <div style="margin-left:auto;align-self:center;font-size:13px;font-weight:500;color:#f0c97a;white-space:nowrap">View ROI report →</div>
-                  </div>
-                </sc-if>
-
-                <!-- MODULE: Recent Activity -->
-                <sc-if value="{{ hmRecentActivity }}" hint-placeholder-val="{{ false }}">
-                  <div style="margin-bottom:28px">
-                    <div style="font-size:11px;font-weight:500;letter-spacing:.2em;text-transform:uppercase;color:rgba(255,255,255,.28);margin-bottom:12px">Recent Activity</div>
-                    <div style="border:1px solid rgba(255,255,255,.07);border-radius:14px;overflow:hidden">
-                      <sc-for list="{{ hmRecentRuns }}" as="r" hint-placeholder-count="3">
-                        <div onClick="{{ r.onClick }}" style="display:flex;align-items:center;gap:12px;padding:13px 18px;border-bottom:1px solid rgba(255,255,255,.05);cursor:pointer;transition:background .12s ease" style-hover="background:rgba(255,255,255,.04)">
-                          <span style="flex:none;width:7px;height:7px;border-radius:50%;background:{{ r.dot }}"></span>
-                          <div style="flex:1;min-width:0;font-size:13.5px;color:rgba(255,255,255,.8);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ r.name }}</div>
-                          <div style="flex:none;font-size:12px;color:rgba(255,255,255,.32)">{{ r.at }}</div>
-                        </div>
-                      </sc-for>
-                    </div>
-                  </div>
-                </sc-if>
-
-                <!-- MODULE: Overdue schedules (always shown when present) -->
-                <sc-if value="{{ hmHasOverdue }}" hint-placeholder-val="{{ false }}">
-                  <div style="margin-bottom:28px;border:1px solid rgba(240,191,107,.3);background:rgba(240,191,107,.06);border-radius:16px;padding:18px 22px">
-                    <div style="font-size:11px;font-weight:500;letter-spacing:.16em;text-transform:uppercase;color:#f0bf6b;margin-bottom:8px">Overdue — missed scheduled run</div>
-                    <div style="font-size:14px;color:rgba(255,255,255,.65);line-height:1.55;margin-bottom:14px">{{ hmOverdueSummary }}</div>
-                    <div style="display:flex;flex-direction:column;gap:8px">
-                      <sc-for list="{{ hmOverdueWfs }}" as="ow" hint-placeholder-count="1">
-                        <div style="display:flex;align-items:center;gap:12px;padding:10px 14px;border:1px solid rgba(240,191,107,.2);background:rgba(240,191,107,.05);border-radius:12px">
-                          <div onClick="{{ ow.onOpen }}" style="flex:1;min-width:0;cursor:pointer">
-                            <div style="font-size:14px;font-weight:500;color:rgba(255,255,255,.9);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ ow.name }}</div>
-                            <div style="font-size:12px;color:rgba(255,255,255,.4);margin-top:1px">{{ ow.schedule }}</div>
+                  <!-- Kept alerts: overdue missed runs -->
+                  <sc-if value="{{ hmHasOverdue }}" hint-placeholder-val="{{ false }}">
+                    <div style="margin-bottom:12px;border:1px solid rgba(240,191,107,.3);background:rgba(240,191,107,.06);border-radius:14px;padding:18px 22px">
+                      <div style="font-size:11px;font-weight:500;letter-spacing:.16em;text-transform:uppercase;color:#f0bf6b;margin-bottom:8px">Overdue — missed scheduled run</div>
+                      <div style="font-size:14px;color:rgba(var(--fg),.65);line-height:1.55;margin-bottom:14px">{{ hmOverdueSummary }}</div>
+                      <div style="display:flex;flex-direction:column;gap:8px">
+                        <sc-for list="{{ hmOverdueWfs }}" as="ow" hint-placeholder-count="1">
+                          <div style="display:flex;align-items:center;gap:12px;padding:10px 14px;border:1px solid rgba(240,191,107,.2);background:rgba(240,191,107,.05);border-radius:12px">
+                            <div onClick="{{ ow.onOpen }}" style="flex:1;min-width:0;cursor:pointer">
+                              <div style="font-size:14px;font-weight:500;color:rgba(var(--fg),.9);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ ow.name }}</div>
+                              <div style="font-size:12px;color:rgba(var(--fg),.4);margin-top:1px">{{ ow.schedule }}</div>
+                            </div>
+                            <div onClick="{{ ow.onRun }}" style="flex:none;font-size:12.5px;font-weight:500;color:var(--green);border:1px solid rgba(127,194,138,.35);background:rgba(127,194,138,.1);border-radius:8px;padding:6px 12px;cursor:pointer">Run now</div>
+                            <div onClick="{{ ow.onDefer }}" style="flex:none;font-size:12.5px;font-weight:500;color:rgba(var(--fg),.55);border:1px solid rgba(var(--fg),.15);background:rgba(var(--fg),.04);border-radius:8px;padding:6px 12px;cursor:pointer">Defer</div>
                           </div>
-                          <div onClick="{{ ow.onRun }}" style="flex:none;font-size:12.5px;font-weight:500;color:#9fd6a8;border:1px solid rgba(127,194,138,.35);background:rgba(127,194,138,.1);border-radius:8px;padding:6px 12px;cursor:pointer">Run now</div>
-                          <div onClick="{{ ow.onDefer }}" style="flex:none;font-size:12.5px;font-weight:500;color:rgba(255,255,255,.55);border:1px solid rgba(255,255,255,.15);background:rgba(255,255,255,.04);border-radius:8px;padding:6px 12px;cursor:pointer">Defer</div>
-                        </div>
-                      </sc-for>
+                        </sc-for>
+                      </div>
                     </div>
-                  </div>
-                </sc-if>
+                  </sc-if>
 
-                <!-- MODULE: Failure Alerts -->
-                <sc-if value="{{ hmFailureAlerts }}" hint-placeholder-val="{{ false }}">
+                  <!-- Kept alerts: failures -->
                   <sc-if value="{{ hmHasFail }}" hint-placeholder-val="{{ false }}">
-                    <div style="margin-bottom:28px;border:1px solid rgba(232,120,120,.25);background:rgba(232,120,120,.05);border-radius:16px;padding:18px 22px">
-                      <div style="font-size:11px;font-weight:500;letter-spacing:.16em;text-transform:uppercase;color:#e87878;margin-bottom:8px">Failure Alerts</div>
-                      <div style="font-size:14px;color:rgba(255,255,255,.65);line-height:1.55;margin-bottom:12px">{{ hmFailSummary }}</div>
+                    <div style="margin-bottom:12px;border:1px solid rgba(232,120,120,.25);background:rgba(232,120,120,.05);border-radius:14px;padding:18px 22px">
+                      <div style="font-size:11px;font-weight:500;letter-spacing:.16em;text-transform:uppercase;color:var(--red);margin-bottom:8px">Failure alerts</div>
+                      <div style="font-size:14px;color:rgba(var(--fg),.65);line-height:1.55;margin-bottom:12px">{{ hmFailSummary }}</div>
                       <div style="display:flex;flex-wrap:wrap;gap:6px">
                         <sc-for list="{{ hmFailWfs }}" as="fw" hint-placeholder-count="1">
-                          <div onClick="{{ fw.onClick }}" style="font-size:12.5px;font-weight:500;color:#e87878;border:1px solid rgba(232,120,120,.3);background:rgba(232,120,120,.08);border-radius:8px;padding:5px 11px;cursor:pointer">{{ fw.name }}</div>
+                          <div onClick="{{ fw.onClick }}" style="font-size:12.5px;font-weight:500;color:var(--red);border:1px solid rgba(232,120,120,.3);background:rgba(232,120,120,.08);border-radius:8px;padding:5px 11px;cursor:pointer">{{ fw.name }}</div>
                         </sc-for>
                       </div>
                     </div>
                   </sc-if>
-                </sc-if>
 
-                <!-- MODULE: Top Workflows -->
-                <sc-if value="{{ hmTopWorkflows }}" hint-placeholder-val="{{ false }}">
-                  <div style="margin-bottom:28px">
-                    <div style="font-size:11px;font-weight:500;letter-spacing:.2em;text-transform:uppercase;color:rgba(255,255,255,.28);margin-bottom:12px">Top Workflows</div>
-                    <div style="display:flex;flex-direction:column;gap:6px">
-                      <sc-for list="{{ hmTopWfs }}" as="tw" hint-placeholder-count="3">
-                        <div onClick="{{ tw.onClick }}" style="display:flex;align-items:center;gap:14px;padding:12px 18px;border:1px solid rgba(255,255,255,.07);background:rgba(255,255,255,.02);border-radius:12px;cursor:pointer;transition:background .12s" style-hover="background:rgba(255,255,255,.05)">
-                          <div style="flex:1;font-size:14px;font-weight:500;color:rgba(255,255,255,.85)">{{ tw.name }}</div>
-                          <div style="font-size:13px;color:rgba(255,255,255,.4)">{{ tw.count }} runs · {{ tw.sr }}</div>
-                          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="rgba(255,255,255,.2)" stroke-width="2" stroke-linecap="round"><path d="M9 18l6-6-6-6"/></svg>
-                        </div>
-                      </sc-for>
+                  <!-- header -->
+                  <div style="display:flex;align-items:flex-end;justify-content:space-between;margin-bottom:22px">
+                    <div>
+                      <div style="font-size:24px;font-weight:600;color:rgb(var(--fg));letter-spacing:-0.02em">Automation overview</div>
+                      <div style="font-size:13.5px;color:rgba(var(--fg),.42);margin-top:3px">A live snapshot of how your automations are performing</div>
+                    </div>
+                    <div style="font-size:12.5px;color:rgba(var(--fg),.4)">Last 30 days</div>
+                  </div>
+
+                  <!-- KPI TILES -->
+                  <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;margin-bottom:12px">
+                    <!-- Runs this month -->
+                    <div style="position:relative;overflow:hidden;border-radius:16px;background:rgba(var(--fg),.025);border:1px solid rgba(var(--fg),.08);padding:19px 20px;color:rgb(var(--fg))">
+                      <svg viewBox="0 0 24 24" width="82" height="82" fill="none" stroke="rgb(var(--fg))" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" style="position:absolute;right:-14px;bottom:-14px;opacity:.06"><circle cx="9" cy="8" r="3.4"/><path d="M2 20c0-3 3-5 7-5s7 2 7 5M17 6a3 3 0 0 1 0 6M20 20c0-2.2-1.4-3.8-3-4.4"/></svg>
+                      <div style="font-size:11px;font-weight:500;letter-spacing:.16em;text-transform:uppercase;color:rgba(var(--fg),.35)">Runs this month</div>
+                      <div style="font-family:'Instrument Serif',serif;font-size:44px;line-height:1;margin:8px 0 14px;color:rgb(var(--fg))">{{ kpiRunsMonth }}</div>
+                      <div style="display:flex;flex-wrap:wrap;gap:10px 18px;position:relative;min-width:0">
+                        <div><div style="font-size:10px;font-weight:500;letter-spacing:.14em;text-transform:uppercase;color:rgba(var(--fg),.35)">Success</div><div style="font-size:14.5px;font-weight:600;color:var(--green)">{{ kpiRunsSuccess }}</div></div>
+                        <div><div style="font-size:10px;font-weight:500;letter-spacing:.14em;text-transform:uppercase;color:rgba(var(--fg),.35)">Active</div><div style="font-size:14.5px;font-weight:600;color:rgb(var(--fg))">{{ kpiRunsActive }}</div></div>
+                      </div>
+                    </div>
+                    <!-- Success rate -->
+                    <div style="position:relative;overflow:hidden;border-radius:16px;background:rgba(159,214,168,.05);border:1px solid rgba(159,214,168,.2);padding:19px 20px;color:rgb(var(--fg))">
+                      <svg viewBox="0 0 24 24" width="82" height="82" fill="none" stroke="#9fd6a8" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" style="position:absolute;right:-14px;bottom:-14px;opacity:.1"><path d="M22 11.1V12a10 10 0 1 1-5.9-9.1"/><path d="M9 11l3 3L22 4"/></svg>
+                      <div style="font-size:11px;font-weight:500;letter-spacing:.16em;text-transform:uppercase;color:rgba(var(--fg),.4)">Success rate</div>
+                      <div style="font-family:'Instrument Serif',serif;font-style:italic;font-size:44px;line-height:1;margin:8px 0 14px;color:var(--green)">{{ kpiSrRate }}</div>
+                      <div style="display:flex;flex-wrap:wrap;gap:10px 18px;position:relative;min-width:0">
+                        <div><div style="font-size:10px;font-weight:500;letter-spacing:.14em;text-transform:uppercase;color:rgba(var(--fg),.35)">Failed</div><div style="font-size:14.5px;font-weight:600;color:rgb(var(--fg))">{{ kpiSrFailed }}</div></div>
+                        <div><div style="font-size:10px;font-weight:500;letter-spacing:.14em;text-transform:uppercase;color:rgba(var(--fg),.35)">Retries</div><div style="font-size:14.5px;font-weight:600;color:rgb(var(--fg))">{{ kpiSrRetries }}</div></div>
+                      </div>
+                    </div>
+                    <!-- Time saved -->
+                    <div onClick="{{ onOpenRoi }}" style="position:relative;overflow:hidden;border-radius:16px;background:rgba(255,220,100,.03);border:1px solid rgba(255,220,100,.15);padding:19px 20px;color:rgb(var(--fg));cursor:pointer">
+                      <svg viewBox="0 0 24 24" width="82" height="82" fill="none" stroke="#f0c97a" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" style="position:absolute;right:-14px;bottom:-14px;opacity:.13"><circle cx="12" cy="13" r="8"/><path d="M12 9v4l2.5 2.5M9 3h6"/></svg>
+                      <div style="font-size:11px;font-weight:500;letter-spacing:.16em;text-transform:uppercase;color:rgba(var(--fg),.4)">Time saved</div>
+                      <div style="font-family:'Instrument Serif',serif;font-style:italic;font-size:44px;line-height:1;margin:8px 0 14px;color:var(--amber)">{{ kpiTimeSaved }}</div>
+                      <div style="display:flex;flex-wrap:wrap;gap:10px 18px;position:relative;min-width:0">
+                        <div><div style="font-size:10px;font-weight:500;letter-spacing:.14em;text-transform:uppercase;color:rgba(var(--fg),.35)">This week</div><div style="font-size:14.5px;font-weight:600;color:rgb(var(--fg))">{{ kpiTimeWeek }}</div></div>
+                        <div><div style="font-size:10px;font-weight:500;letter-spacing:.14em;text-transform:uppercase;color:rgba(var(--fg),.35)">Goal</div><div style="font-size:14.5px;font-weight:600;color:rgb(var(--fg))">{{ kpiTimeGoal }}</div></div>
+                      </div>
+                    </div>
+                    <!-- Health score -->
+                    <sc-if value="{{ kpiHealthShow }}" hint-placeholder-val="{{ false }}">
+                    <div style="position:relative;overflow:hidden;border-radius:16px;background:rgba(var(--fg),.025);border:1px solid rgba(var(--fg),.08);padding:19px 20px;color:rgb(var(--fg))">
+                      <svg viewBox="0 0 24 24" width="82" height="82" fill="none" stroke="#9fd6a8" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" style="position:absolute;right:-14px;bottom:-14px;opacity:.1"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10Z"/><path d="M9 12l2 2 4-4"/></svg>
+                      <div style="font-size:11px;font-weight:500;letter-spacing:.16em;text-transform:uppercase;color:rgba(var(--fg),.35)">Health score</div>
+                      <div style="font-family:'Instrument Serif',serif;font-size:44px;line-height:1;margin:8px 0 14px;color:var(--green)">{{ kpiHealthScore }}</div>
+                      <div style="display:flex;flex-wrap:wrap;gap:10px 18px;position:relative;min-width:0">
+                        <div><div style="font-size:10px;font-weight:500;letter-spacing:.14em;text-transform:uppercase;color:rgba(var(--fg),.35)">Rating</div><div style="font-size:14.5px;font-weight:600;color:var(--green)">{{ kpiHealthRating }}</div></div>
+                        <div><div style="font-size:10px;font-weight:500;letter-spacing:.14em;text-transform:uppercase;color:rgba(var(--fg),.35)">Trend</div><div style="font-size:14.5px;font-weight:600;color:{{ kpiHealthTrendColor }}">{{ kpiHealthTrend }}</div></div>
+                      </div>
+                    </div>
+                    </sc-if>
+                  </div>
+
+                  <!-- ACTIVITY CHART (7-day) -->
+                  <div style="border:1px solid rgba(var(--fg),.08);background:rgba(var(--fg),.02);border-radius:14px;padding:22px 24px;margin-bottom:12px">
+                    <div style="display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:18px">
+                      <div>
+                        <div style="font-size:14px;font-weight:600;color:rgb(var(--fg));letter-spacing:-0.01em">Activity over the last 7 days</div>
+                        <div style="font-size:12.5px;color:rgba(var(--fg),.4);margin-top:3px">How many times your automations ran, and the hours they saved</div>
+                      </div>
+                      <div style="display:flex;gap:16px">
+                        <div style="display:flex;align-items:center;gap:7px;font-size:12px;color:rgba(var(--fg),.6)"><span style="width:10px;height:10px;border-radius:3px;background:var(--green2)"></span>Runs</div>
+                        <div style="display:flex;align-items:center;gap:7px;font-size:12px;color:rgba(var(--fg),.6)"><span style="width:10px;height:10px;border-radius:3px;background:var(--amber)"></span>Hours saved</div>
+                      </div>
+                    </div>
+                    <div ref="{{ actChartRef }}"></div>
+                  </div>
+
+                  <!-- CONNECTORS + DONUT -->
+                  <div style="display:grid;grid-template-columns:1.15fr 1fr;gap:12px;margin-bottom:12px">
+                    <div style="border:1px solid rgba(var(--fg),.08);background:rgba(var(--fg),.02);border-radius:14px;padding:22px 24px">
+                      <div style="font-size:14px;font-weight:600;color:rgb(var(--fg));letter-spacing:-0.01em">Connector status</div>
+                      <div style="font-size:12.5px;color:rgba(var(--fg),.4);margin-top:3px;margin-bottom:20px">Which tools your automations are connected to</div>
+                      <div style="display:flex;flex-direction:column;gap:16px">
+                        <sc-for list="{{ hmConnectors }}" as="c" hint-placeholder-count="4">
+                          <div><div style="display:flex;justify-content:space-between;font-size:13px;margin-bottom:7px"><span style="color:rgba(var(--fg),.78)">{{ c.name }}</span><span style="color:{{ c.statusColor }}">{{ c.statusText }}</span></div><div style="height:7px;border-radius:99px;background:rgba(var(--fg),.07);overflow:hidden"><div style="height:100%;width:{{ c.barPct }};background:{{ c.barColor }}"></div></div></div>
+                        </sc-for>
+                      </div>
+                    </div>
+                    <div style="border:1px solid rgba(var(--fg),.08);background:rgba(var(--fg),.02);border-radius:14px;padding:22px 24px;display:flex;flex-direction:column">
+                      <div style="font-size:14px;font-weight:600;color:rgb(var(--fg));letter-spacing:-0.01em">Runs by automation</div>
+                      <div style="font-size:12.5px;color:rgba(var(--fg),.4);margin-top:3px">{{ donutSubtitle }}</div>
+                      <div ref="{{ donutRef }}" style="flex:1"></div>
                     </div>
                   </div>
-                </sc-if>
 
-                <!-- MODULE: Quick Run -->
-                <sc-if value="{{ hmQuickRun }}" hint-placeholder-val="{{ false }}">
-                  <div style="margin-bottom:28px">
-                    <div style="font-size:11px;font-weight:500;letter-spacing:.2em;text-transform:uppercase;color:rgba(255,255,255,.28);margin-bottom:12px">Quick Run</div>
-                    <div style="display:flex;flex-wrap:wrap;gap:8px">
-                      <sc-for list="{{ hmQrWfs }}" as="qw" hint-placeholder-count="2">
-                        <div style="display:flex;align-items:center;border:1px solid rgba(255,255,255,.1);border-radius:12px;overflow:hidden">
-                          <div onClick="{{ qw.onOpen }}" style="font-size:13.5px;font-weight:500;color:rgba(255,255,255,.75);padding:11px 16px;cursor:pointer;transition:background .12s" style-hover="background:rgba(255,255,255,.05)">{{ qw.name }}</div>
-                          <div onClick="{{ qw.onRun }}" style="border-left:1px solid rgba(255,255,255,.1);padding:11px 14px;cursor:pointer;color:#9fd6a8;font-size:14px;transition:background .12s" style-hover="background:rgba(159,214,168,.08)">▶</div>
-                        </div>
-                      </sc-for>
+                  <!-- RECENT RUNS TABLE -->
+                  <div style="border:1px solid rgba(var(--fg),.08);background:rgba(var(--fg),.02);border-radius:14px;padding:22px 4px 8px;margin-bottom:12px">
+                    <div style="padding:0 20px 16px"><div style="font-size:14px;font-weight:600;color:rgb(var(--fg));letter-spacing:-0.01em">Recent runs</div><div style="font-size:12.5px;color:rgba(var(--fg),.4);margin-top:3px">Every time an automation ran and how it went</div></div>
+                    <div style="display:grid;grid-template-columns:2fr 1.4fr 1fr 1fr;gap:0;padding:0 20px 10px;font-size:11px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;color:rgba(var(--fg),.38);border-bottom:1px solid rgba(var(--fg),.07)">
+                      <div>Automation</div><div>Trigger</div><div>Result</div><div style="text-align:right">When</div>
+                    </div>
+                    <sc-for list="{{ hmRunRows }}" as="r" hint-placeholder-count="5">
+                      <div onClick="{{ r.onClick }}" style="display:grid;grid-template-columns:2fr 1.4fr 1fr 1fr;padding:14px 20px;border-bottom:1px solid rgba(var(--fg),.05);font-size:13.5px;align-items:center;cursor:pointer">
+                        <div style="color:rgb(var(--fg));font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding-right:10px">{{ r.name }}</div>
+                        <div style="color:rgba(var(--fg),.5)">{{ r.trigger }}</div>
+                        <div style="color:{{ r.resultColor }};display:flex;align-items:center;gap:6px">{{ r.resultLabel }}</div>
+                        <div style="text-align:right;color:rgba(var(--fg),.42)">{{ r.at }}</div>
+                      </div>
+                    </sc-for>
+                    <div style="display:flex;align-items:center;justify-content:space-between;padding:14px 20px">
+                      <div style="font-size:12.5px;color:rgba(var(--fg),.4)">{{ hmRunsShowing }}</div>
+                      <div style="display:flex;gap:8px">
+                        <button onClick="{{ onRunsPrev }}" style="border:1px solid rgba(var(--fg),.12);background:none;color:{{ hmRunsPrevColor }};font-family:inherit;font-size:12.5px;font-weight:500;padding:7px 15px;border-radius:8px;cursor:{{ hmRunsPrevCursor }}">Previous</button>
+                        <button onClick="{{ onRunsNext }}" style="border:none;background:{{ hmRunsNextBg }};color:{{ hmRunsNextColor }};font-family:inherit;font-size:12.5px;font-weight:600;padding:7px 15px;border-radius:8px;cursor:{{ hmRunsNextCursor }}">Next</button>
+                      </div>
                     </div>
                   </div>
-                </sc-if>
 
-                <!-- MODULE: Next Scheduled -->
-                <sc-if value="{{ hmNextScheduled }}" hint-placeholder-val="{{ false }}">
-                  <div style="margin-bottom:28px">
-                    <div style="font-size:11px;font-weight:500;letter-spacing:.2em;text-transform:uppercase;color:rgba(255,255,255,.28);margin-bottom:12px">Scheduled Workflows</div>
-                    <div style="display:flex;flex-direction:column;gap:6px">
-                      <sc-for list="{{ hmSched }}" as="sw" hint-placeholder-count="2">
-                        <div onClick="{{ sw.onClick }}" style="display:flex;align-items:center;gap:14px;padding:12px 18px;border:1px solid rgba(255,255,255,.07);background:rgba(255,255,255,.02);border-radius:12px;cursor:pointer;transition:background .12s" style-hover="background:rgba(255,255,255,.05)">
-                          <div style="flex:1;font-size:14px;font-weight:500;color:rgba(255,255,255,.85)">{{ sw.name }}</div>
-                          <div style="font-size:12.5px;color:rgba(255,255,255,.38)">{{ sw.schedule }}</div>
-                          <div style="font-size:12px;color:rgba(255,255,255,.3)">last {{ sw.lastRun }}</div>
-                        </div>
-                      </sc-for>
+                  <!-- TREND + ACTIVITY -->
+                  <div style="display:grid;grid-template-columns:1.3fr 1fr;gap:12px;margin-bottom:12px">
+                    <div style="border:1px solid rgba(var(--fg),.08);background:rgba(var(--fg),.02);border-radius:14px;padding:22px 24px">
+                      <div style="font-size:14px;font-weight:600;color:rgb(var(--fg));letter-spacing:-0.01em">Performance trend</div>
+                      <div style="font-size:12.5px;color:rgba(var(--fg),.4);margin-top:3px;margin-bottom:16px">Runs and hours saved, month by month</div>
+                      <div ref="{{ trendChartRef }}"></div>
+                      <div style="display:flex;gap:28px;margin-top:16px;padding-top:16px;border-top:1px solid rgba(var(--fg),.07)">
+                        <div><div style="font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:rgba(var(--fg),.4)">Avg runs / month</div><div style="font-size:19px;font-weight:600;color:rgb(var(--fg));margin-top:3px">{{ trendAvg }}</div></div>
+                        <div><div style="font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:rgba(var(--fg),.4)">Total this year</div><div style="font-size:19px;font-weight:600;color:var(--green3);margin-top:3px">{{ trendTotal }}</div></div>
+                      </div>
+                    </div>
+                    <div style="border:1px solid rgba(var(--fg),.08);background:rgba(var(--fg),.02);border-radius:14px;padding:22px 24px">
+                      <div style="font-size:14px;font-weight:600;color:rgb(var(--fg));letter-spacing:-0.01em">Activity</div>
+                      <div style="font-size:12.5px;color:rgba(var(--fg),.4);margin-top:3px;margin-bottom:8px">What happened recently</div>
+                      <div>
+                        <sc-for list="{{ hmActivityItems }}" as="a" hint-placeholder-count="5">
+                          <div onClick="{{ a.onClick }}" style="display:flex;align-items:center;gap:13px;padding:13px 0;border-bottom:1px solid rgba(var(--fg),.06);cursor:pointer"><span style="flex:none;width:9px;height:9px;border-radius:50%;background:{{ a.dot }}"></span><div style="flex:1;min-width:0;font-size:13.5px;color:rgba(var(--fg),.82);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ a.label }}</div><div style="font-size:12px;color:rgba(var(--fg),.36)">{{ a.at }}</div></div>
+                        </sc-for>
+                      </div>
                     </div>
                   </div>
-                </sc-if>
 
-                <!-- MODULE: Daily Tip -->
-                <sc-if value="{{ hmAiTip }}" hint-placeholder-val="{{ false }}">
-                  <div style="margin-bottom:28px;border:1px solid rgba(159,214,168,.15);background:rgba(159,214,168,.04);border-radius:16px;padding:18px 22px">
-                    <div style="font-size:11px;font-weight:500;letter-spacing:.16em;text-transform:uppercase;color:#9fd6a8;margin-bottom:8px">Daily Tip</div>
-                    <div style="font-size:14px;color:rgba(255,255,255,.65);line-height:1.6">{{ hmTip }}</div>
-                  </div>
-                </sc-if>
+                  <!-- Kept: Daily tip -->
+                  <sc-if value="{{ hmTip }}" hint-placeholder-val="{{ false }}">
+                    <div style="margin-bottom:12px;border:1px solid rgba(159,214,168,.15);background:rgba(159,214,168,.04);border-radius:14px;padding:18px 22px">
+                      <div style="font-size:11px;font-weight:500;letter-spacing:.16em;text-transform:uppercase;color:var(--green);margin-bottom:8px">Daily tip</div>
+                      <div style="font-size:14px;color:rgba(var(--fg),.65);line-height:1.6">{{ hmTip }}</div>
+                    </div>
+                  </sc-if>
 
-                <!-- MODULE: Workflows List -->
-                <sc-if value="{{ hmWorkflowsList }}" hint-placeholder-val="{{ false }}">
-                  <sc-if value="{{ homeHasWorkflows }}" hint-placeholder-val="{{ false }}">
-                    <div style="margin-bottom:28px">
-                      <div style="font-size:11px;font-weight:500;letter-spacing:.2em;text-transform:uppercase;color:rgba(255,255,255,.28);margin-bottom:14px">Your workflows</div>
-                      <div style="display:flex;flex-direction:column;gap:8px;margin-bottom:18px">
-                        <sc-for list="{{ homeWorkflows }}" as="wf" hint-placeholder-count="3">
-                          <div onClick="{{ wf.onClick }}" style="display:flex;align-items:center;gap:16px;border:1px solid rgba(255,255,255,.07);background:rgba(255,255,255,.025);border-radius:14px;padding:16px 20px;cursor:pointer;transition:background .15s ease,border-color .15s ease" style-hover="background:rgba(255,255,255,.055);border-color:rgba(255,255,255,.14)">
-                            <span style="flex:none;width:10px;height:10px;{{ wf.radius }};background:{{ wf.dot }};filter:{{ wf.glow }}"></span>
-                            <div style="flex:1;min-width:0">
-                              <div style="font-size:14.5px;font-weight:500;color:#fff;letter-spacing:-0.01em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ wf.name }}</div>
-                              <div style="font-size:12.5px;color:rgba(255,255,255,.35);margin-top:2px">{{ wf.trigger }} · {{ wf.runCount }} runs · last {{ wf.lastRun }}</div>
-                            </div>
-                            <div style="flex:none;font-size:12px;font-weight:500;color:rgba(255,255,255,.3);letter-spacing:.04em">{{ wf.statusLabel }}</div>
-                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="rgba(255,255,255,.2)" stroke-width="1.8" stroke-linecap="round"><path d="M9 18l6-6-6-6"/></svg>
+                  <!-- Kept: Quick run -->
+                  <sc-if value="{{ hmHasQuickRun }}" hint-placeholder-val="{{ false }}">
+                    <div style="margin-bottom:12px">
+                      <div style="font-size:11px;font-weight:500;letter-spacing:.2em;text-transform:uppercase;color:rgba(var(--fg),.28);margin-bottom:12px">Quick run</div>
+                      <div style="display:flex;flex-wrap:wrap;gap:8px">
+                        <sc-for list="{{ hmQrWfs }}" as="qw" hint-placeholder-count="2">
+                          <div style="display:flex;align-items:center;border:1px solid rgba(var(--fg),.1);border-radius:12px;overflow:hidden">
+                            <div onClick="{{ qw.onOpen }}" style="font-size:13.5px;font-weight:500;color:rgba(var(--fg),.75);padding:11px 16px;cursor:pointer">{{ qw.name }}</div>
+                            <div onClick="{{ qw.onRun }}" style="border-left:1px solid rgba(var(--fg),.1);padding:11px 14px;cursor:pointer;color:var(--green);font-size:14px">▶</div>
                           </div>
                         </sc-for>
                       </div>
-                      <button onClick="{{ onReset }}" style="border:1px solid rgba(255,255,255,.12);background:rgba(255,255,255,.05);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);color:rgba(255,255,255,.7);font-family:inherit;font-size:14px;font-weight:500;padding:12px 24px;border-radius:999px;cursor:pointer;transition:background .2s,border-color .2s" style-hover="background:rgba(255,255,255,.1);border-color:rgba(255,255,255,.22);color:#fff">+ New workflow</button>
                     </div>
                   </sc-if>
+
+                  <!-- New workflow -->
+                  <button onClick="{{ onReset }}" style="margin-top:8px;border:1px solid rgba(var(--fg),.12);background:rgba(var(--fg),.05);color:rgba(var(--fg),.7);font-family:inherit;font-size:14px;font-weight:500;padding:12px 24px;border-radius:999px;cursor:pointer">+ New workflow</button>
+
+                </div>
                 </sc-if>
 
-                <!-- Empty state (always visible when no workflows exist) -->
+                <!-- Empty state (no workflows) -->
                 <sc-if value="{{ homeEmpty }}" hint-placeholder-val="{{ false }}">
-                  <div style="border:1px dashed rgba(255,255,255,.1);border-radius:20px;padding:56px 36px;text-align:center">
-                    <div style="font-size:15px;color:rgba(255,255,255,.4);margin-bottom:22px;max-width:38ch;margin-left:auto;margin-right:auto;line-height:1.65">No workflows yet. Tell Atlas what you'd like to automate and it'll build it with you, one step at a time.</div>
-                    <button onClick="{{ onReset }}" style="border:none;background:#fff;color:#0a0a0a;font-family:inherit;font-size:14px;font-weight:600;padding:13px 28px;border-radius:999px;cursor:pointer;transition:transform .2s cubic-bezier(.2,.7,.3,1),box-shadow .2s cubic-bezier(.2,.7,.3,1),background .15s ease" style-hover="transform:translateY(-2px) scale(1.03);box-shadow:0 8px 28px rgba(255,255,255,.18);background:rgba(255,255,255,.93)">Build your first workflow →</button>
+                  <div style="border:1px dashed rgba(var(--fg),.1);border-radius:20px;padding:56px 36px;text-align:center">
+                    <div style="font-size:15px;color:rgba(var(--fg),.4);margin-bottom:22px;max-width:38ch;margin-left:auto;margin-right:auto;line-height:1.65">No workflows yet. Tell Atlas what you'd like to automate and it'll build it with you, one step at a time.</div>
+                    <button onClick="{{ onReset }}" style="border:none;background:rgb(var(--fg));color:var(--bg);font-family:inherit;font-size:14px;font-weight:600;padding:13px 28px;border-radius:999px;cursor:pointer">Build your first workflow →</button>
                   </div>
                 </sc-if>
-
               </div>
             </sc-if>
 
@@ -1668,15 +1709,15 @@
             <div style="font-size:13px;color:rgba(255,255,255,.55)">{{ connectedCount }} connections</div>
             <div onClick="{{ onToggleConnections }}" style="font-size:12px;color:#9fd6a8;cursor:pointer" style-hover="color:#c8f0ce">Manage →</div>
           </div>
-          <div style="padding:8px 16px 4px;font-size:10px;font-weight:600;letter-spacing:.16em;text-transform:uppercase;color:rgba(255,255,255,.25)">Homepage</div>
-          <sc-for list="{{ hmOptions }}" as="mod" hint-placeholder-count="3">
-            <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;padding:7px 16px">
-              <div style="font-size:12.5px;color:rgba(255,255,255,.75)">{{ mod.label }}</div>
-              <div onClick="{{ mod.onToggle }}" style="flex:none;width:44px;height:24px;border-radius:999px;background:{{ mod.trackBg }};position:relative;cursor:pointer;transition:background .22s ease">
-                <div style="position:absolute;top:2px;left:{{ mod.thumbPos }};width:20px;height:20px;border-radius:50%;background:#fff;box-shadow:0 1px 4px rgba(0,0,0,.35);transition:left .22s ease"></div>
-              </div>
+          <div style="padding:8px 16px 4px;font-size:10px;font-weight:600;letter-spacing:.16em;text-transform:uppercase;color:rgba(255,255,255,.25)">Appearance</div>
+          <div style="padding:4px 16px 12px">
+            <div style="display:flex;gap:4px;background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.08);border-radius:10px;padding:3px">
+              <sc-for list="{{ themeOptions }}" as="th" hint-placeholder-count="3">
+                <div onClick="{{ th.onSelect }}" style="flex:1;text-align:center;font-size:12.5px;font-weight:500;padding:7px 0;border-radius:8px;cursor:pointer;background:{{ th.bg }};color:{{ th.color }};transition:background .18s,color .18s">{{ th.label }}</div>
+              </sc-for>
             </div>
-          </sc-for>
+            <div style="font-size:11px;color:rgba(255,255,255,.3);margin-top:7px;line-height:1.4">{{ themeHint }}</div>
+          </div>
           <div style="padding:10px 16px 14px;margin-top:4px;border-top:1px solid rgba(255,255,255,.05)">
             <button onClick="{{ onSignOut }}" style="width:100%;border:1px solid rgba(232,116,97,.3);background:rgba(232,116,97,.06);color:#f0a896;font-family:inherit;font-weight:500;font-size:13px;padding:9px;border-radius:10px;cursor:pointer" style-hover="background:rgba(232,116,97,.12);border-color:rgba(232,116,97,.45)">Sign out</button>
           </div>
@@ -2175,7 +2216,8 @@ class Component extends DCLogic {
       baselineMinutes: "", baselineSeconds: "", baselineRecordingPath: null, profileExpandedOutputs: {},
       consoleDrawerRun: null, consoleLoading: false, consoleRunning: false,
       homeData: null, homeReady: false, homeFading: false,
-      homepageModules: ['ai_greeting'],
+      homeRuns: null, dashConnectors: [],
+      themePref: (typeof window !== 'undefined' && window.__atlasThemePref) ? window.__atlasThemePref() : 'system',
       tutorialOpen: false, tutorialSlide: 0,
       knowledgeSources: [], knowledgeIndexing: false, knowledgeFolderInput: '', knowledgeTreeExpanded: {},
       chatFolderIndexing: false,
@@ -2567,7 +2609,7 @@ class Component extends DCLogic {
     fetch('/api/builder/home', { headers: this._H() })
       .then(r => r.ok ? r.json() : null)
       .then(function(d) {
-        self.setState({ homeData: (d && d.ok) ? d : null });
+        self.setState({ homeData: (d && d.ok) ? d : null, homeRuns: null });
         self._homeDataDone = true;
         self._checkHomeReady();
       })
@@ -2577,19 +2619,117 @@ class Component extends DCLogic {
         self._checkHomeReady();
       });
   }
+  // Theme preference: 'system' | 'light' | 'dark'. Persists to localStorage and
+  // re-renders so the token-based dashboard + injected charts pick up new colors.
+  setTheme(pref) {
+    if (typeof window !== 'undefined' && window.__atlasSetTheme) window.__atlasSetTheme(pref);
+    this.setState({ themePref: pref });
+  }
+  // Recent-runs table pager (Prev/Next) — fetches a page of runs across workflows.
+  _loadHomeRuns(offset) {
+    const self = this, limit = 5;
+    fetch('/api/builder/home/runs?offset=' + Math.max(0, offset) + '&limit=' + limit, { headers: this._H() })
+      .then(r => r.ok ? r.json() : null)
+      .then(function(d) { if (d && d.ok) self.setState({ homeRuns: { rows: d.rows, total: d.total, offset: d.offset, limit: d.limit } }); })
+      .catch(function() {});
+  }
+  onHomeRunsNext() {
+    const hr = this._homeRunsState();
+    if (hr.offset + hr.limit < hr.total) this._loadHomeRuns(hr.offset + hr.limit);
+  }
+  onHomeRunsPrev() {
+    const hr = this._homeRunsState();
+    if (hr.offset > 0) this._loadHomeRuns(Math.max(0, hr.offset - hr.limit));
+  }
+  // Current runs page — state override if the pager was used, else page 1 from homeData.
+  _homeRunsState() {
+    if (this.state.homeRuns) return this.state.homeRuns;
+    const rr = this.state.homeData?.modules?.recent_runs;
+    return rr ? { rows: rr.rows, total: rr.total, offset: rr.offset || 0, limit: rr.limit || 5 } : { rows: [], total: 0, offset: 0, limit: 5 };
+  }
+
+  // ── Home chart builders (SVG strings, injected via ref) ────────────────────
+  // Theme-aware: gridlines/labels/accents recomputed per render so light mode is
+  // legible (hardcoded white lines would vanish on a white card).
+  _chartColors() {
+    const light = document.documentElement.getAttribute('data-theme') === 'light';
+    return light
+      ? { grid:'rgba(24,26,30,.08)', axis:'rgba(24,26,30,.14)', label:'rgba(24,26,30,.4)', green:'#2f8f5c', amber:'#bd851f', muted:'rgba(24,26,30,.28)', fg:'rgb(24,26,30)', areaTop:'rgba(47,143,92,.18)', areaBot:'rgba(47,143,92,0)' }
+      : { grid:'rgba(255,255,255,.06)', axis:'rgba(255,255,255,.1)', label:'rgba(255,255,255,.35)', green:'#7fc28a', amber:'#f0c97a', muted:'rgba(255,255,255,.28)', fg:'rgb(255,255,255)', areaTop:'rgba(127,194,138,.32)', areaBot:'rgba(127,194,138,0)' };
+  }
+  _niceMax(v) {
+    if (!(v > 0)) return 4;
+    const steps = [1,2,3,4,5,6,8,10,12,15,20,25,30,40,50,60,80,100];
+    for (const s of steps) if (v <= s) return s;
+    return Math.ceil(v / 50) * 50;
+  }
+  _fmtNum(v) { return Math.round(v * 10) / 10; }
+  _svgActivity(series) {
+    const c = this._chartColors();
+    const W=720,H=250,L=46,Rt=712,top=20,bot=220, n=Math.max(1, series.length);
+    const xs = i => n === 1 ? (L+Rt)/2 : L + (Rt-L) * (i/(n-1));
+    const maxV = this._niceMax(Math.max(1, ...series.map(d => Math.max(d.runs||0, d.hours||0))));
+    const y = v => bot - (bot-top) * (Math.max(0, Math.min(maxV, v)) / maxV);
+    const rp = series.map((d,i) => `${xs(i).toFixed(1)},${y(d.runs||0).toFixed(1)}`);
+    const hp = series.map((d,i) => `${xs(i).toFixed(1)},${y(d.hours||0).toFixed(1)}`);
+    const gl = [0,0.25,0.5,0.75,1].map(f => { const yy = top + (bot-top)*f; const val = maxV*(1-f); return { yy, val }; });
+    const gridLines = gl.map(g => `<line x1="${L}" y1="${g.yy.toFixed(1)}" x2="${Rt}" y2="${g.yy.toFixed(1)}" stroke="${g.val===0?c.axis:c.grid}"/>`).join('');
+    const gridLabels = gl.map(g => `<text x="38" y="${(g.yy+4).toFixed(1)}" text-anchor="end" fill="${c.label}" font-size="11" font-family="Inter Tight">${this._fmtNum(g.val)}</text>`).join('');
+    const dayLabels = series.map((d,i) => `<text x="${xs(i).toFixed(1)}" y="242" text-anchor="middle" fill="${c.label}" font-size="11" font-family="Inter Tight">${d.day}</text>`).join('');
+    const area = `M${rp.join(' L')} L${xs(n-1).toFixed(1)},${bot} L${L},${bot} Z`;
+    return `<svg viewBox="0 0 ${W} ${H}" style="width:100%;height:auto;display:block;overflow:visible">`
+      + gridLines + gridLabels
+      + `<defs><linearGradient id="actFill" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="${c.areaTop}"/><stop offset="1" stop-color="${c.areaBot}"/></linearGradient></defs>`
+      + `<path d="${area}" fill="url(#actFill)"/>`
+      + `<path d="M${rp.join(' L')}" fill="none" stroke="${c.green}" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/>`
+      + `<path d="M${hp.join(' L')}" fill="none" stroke="${c.amber}" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/>`
+      + dayLabels + `</svg>`;
+  }
+  _svgTrend(months) {
+    const c = this._chartColors();
+    const W=480,H=210,L=34,Rt=474,top=20,bot=180, n=Math.max(1, months.length);
+    const xs = i => n === 1 ? (L+Rt)/2 : (L+18) + (Rt-L-18) * (i/(n-1));
+    const maxV = this._niceMax(Math.max(1, ...months.map(d => Math.max(d.runs||0, d.hours||0))));
+    const y = v => bot - (bot-top) * (Math.max(0, Math.min(maxV, v)) / maxV);
+    const rp = months.map((d,i) => `${xs(i).toFixed(1)},${y(d.runs||0).toFixed(1)}`);
+    const hp = months.map((d,i) => `${xs(i).toFixed(1)},${y(d.hours||0).toFixed(1)}`);
+    const gl = [0,0.33,0.66,1].map(f => top + (bot-top)*f);
+    const gridLines = gl.map((yy,i) => `<line x1="${L}" y1="${yy.toFixed(1)}" x2="${Rt}" y2="${yy.toFixed(1)}" stroke="${i===gl.length-1?c.axis:c.grid}"/>`).join('');
+    const mLabels = months.map((d,i) => `<text x="${xs(i).toFixed(1)}" y="200" text-anchor="middle" fill="${c.label}" font-size="11" font-family="Inter Tight">${d.month}</text>`).join('');
+    return `<svg viewBox="0 0 ${W} ${H}" style="width:100%;height:auto;display:block;overflow:visible">`
+      + gridLines
+      + `<polyline points="${rp.join(' ')}" fill="none" stroke="${c.green}" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/>`
+      + `<polyline points="${hp.join(' ')}" fill="none" stroke="${c.amber}" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/>`
+      + mLabels + `</svg>`;
+  }
+  _svgDonut(topWfs, total) {
+    const c = this._chartColors();
+    const items = (topWfs || []).filter(w => (w.runCount || 0) > 0);
+    const denom = total > 0 ? total : items.reduce((s,w) => s + (w.runCount||0), 0);
+    const R = 64, C = 2 * Math.PI * R;
+    let svg = `<svg width="160" height="160" viewBox="0 0 180 180" style="display:block"><circle cx="90" cy="90" r="${R}" fill="none" stroke="${c.grid}" stroke-width="20"/>`;
+    let legend = '';
+    if (denom > 0 && items.length) {
+      const top = items[0];
+      const topPct = Math.round((top.runCount / denom) * 100);
+      const topLen = C * (top.runCount / denom);
+      svg += `<circle cx="90" cy="90" r="${R}" fill="none" stroke="${c.green}" stroke-width="20" stroke-dasharray="${topLen.toFixed(1)} ${(C-topLen).toFixed(1)}" transform="rotate(-90 90 90)"/>`;
+      const restLen = C - topLen;
+      if (restLen > 0.5) svg += `<circle cx="90" cy="90" r="${R}" fill="none" stroke="${c.muted}" stroke-width="20" stroke-dasharray="${restLen.toFixed(1)} ${topLen.toFixed(1)}" stroke-dashoffset="${(-topLen).toFixed(1)}" transform="rotate(-90 90 90)"/>`;
+      const esc = (s) => String(s).replace(/[&<>]/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[m]));
+      const restPct = Math.max(0, 100 - topPct);
+      legend = `<div style="display:flex;align-items:center;gap:9px;font-size:13px;color:rgba(var(--fg),.7)"><span style="width:9px;height:9px;border-radius:3px;background:var(--green2)"></span><span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(top.name)}</span><span style="color:rgba(var(--fg),.5)">${topPct}%</span></div>`;
+      if (items.length > 1) legend += `<div style="display:flex;align-items:center;gap:9px;font-size:13px;color:rgba(var(--fg),.7)"><span style="width:9px;height:9px;border-radius:3px;background:rgba(var(--fg),.3)"></span><span style="flex:1">Other automations</span><span style="color:rgba(var(--fg),.5)">${restPct}%</span></div>`;
+    }
+    svg += `</svg>`;
+    return `<div style="display:flex;align-items:center;justify-content:center;padding:14px 0"><div style="position:relative;flex:none;width:160px;height:160px">${svg}<div style="position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center"><div style="font-family:'Instrument Serif',serif;font-size:34px;color:rgb(var(--fg));line-height:1">${denom}</div><div style="font-size:11px;color:rgba(var(--fg),.45);margin-top:2px">runs</div></div></div></div><div style="display:flex;flex-direction:column;gap:9px">${legend}</div>`;
+  }
   _checkHomeReady() {
     if (!this._homeDataDone || !this._homeAnimDone || this.state.homeReady) return;
     // Both gates passed — start the crossfade: content appears, globe fades out.
     const self = this;
     this.setState({ homeReady: true, homeFading: true });
     setTimeout(function() { self.setState({ homeFading: false }); }, 420);
-  }
-  _loadPreferences() {
-    const self = this;
-    fetch('/api/user/preferences', { headers: this._H() })
-      .then(r => r.ok ? r.json() : null)
-      .then(d => { if (d && d.ok && Array.isArray(d.homepageModules)) self.setState({ homepageModules: d.homepageModules }); })
-      .catch(() => {});
   }
   _loadIntro() {
     const self = this;
@@ -2598,13 +2738,6 @@ class Component extends DCLogic {
       .then(r => r.ok ? r.json() : null)
       .then(d => { self.setState({ introMsg: (d && d.greeting) || self.GREETING }); })
       .catch(() => { self.setState({ introMsg: self.GREETING }); });
-  }
-  toggleHomeModule(id) {
-    const mods = this.state.homepageModules || [];
-    const next = mods.includes(id) ? mods.filter(m => m !== id) : [...mods, id];
-    this.setState({ homepageModules: next });
-    fetch('/api/user/preferences', { method: 'PUT', headers: this._H(), body: JSON.stringify({ homepageModules: next }) })
-      .catch(() => {});
   }
   _quickRunWorkflow(id) {
     const self = this;
@@ -2799,7 +2932,6 @@ class Component extends DCLogic {
     this._loadMentions();
     this._loadRagSources();
     this._loadWorkflows();
-    this._loadPreferences();
     this._loadHomeData();
     this._loadInbox();
     // Bring back an in-progress build from a previous session/refresh.
@@ -2823,7 +2955,20 @@ class Component extends DCLogic {
       const webApiKey = !!(w && w.anthropic);
       const webLogo = 'assets/atlas-web-search-white.svg?v=4';
       (webC ? connected : available).push({ name: "Web", logo: webLogo, provider: "web", meta: webC ? "Search & fetch" : "Web access", isApiKey: !webApiKey });
-      self.setState({ connected, available });
+
+      // Dashboard "Connector status" panel — real connect/health per connector.
+      // NB: Airtable's status `expiry` is the short-lived (1h) ACCESS-token expiry,
+      // auto-refreshed on demand via the rotating refresh token — a past value does
+      // NOT mean the grant is dead. No connector exposes an honest "connection
+      // expiring" signal today, so we report connected/healthy vs not-connected only
+      // (matching the Connections flyout, so the two views never contradict).
+      const dashConnectors = [
+        { name: 'Slack', connected: isC(s), warn: null },
+        { name: 'Google Workspace', connected: isC(g), warn: null },
+        { name: 'Airtable', connected: isC(a), warn: null },
+        { name: 'Web', connected: webC, warn: null },
+      ];
+      self.setState({ connected, available, dashConnectors });
     });
   }
 
@@ -3231,11 +3376,14 @@ class Component extends DCLogic {
       yLabels += '<text x="' + (pL - 7) + '" y="' + (y + 4) + '" text-anchor="end" font-size="10" fill="rgba(255,255,255,.32)">' + fmtY(yv) + "</text>";
     });
 
-    // X-axis date labels (first, middle, last)
-    var xLabels = "";
-    [[0, "start"], [Math.floor((n-1)/2), "middle"], [n-1, "end"]].forEach(function(pair) {
-      var idx = pair[0], anchor = pair[1] === "start" ? "start" : pair[1] === "end" ? "end" : "middle";
-      if (idx < 0 || idx >= n) return;
+    // X-axis date labels (first, middle, last) — dedupe indices so small run
+    // counts (n<=2) don't stack two labels at the same x. Anchor is chosen by
+    // position: leftmost start-anchored, rightmost end-anchored, else centered.
+    var xLabels = "", seenX = {};
+    [0, Math.floor((n - 1) / 2), n - 1].forEach(function(idx) {
+      if (idx < 0 || idx >= n || seenX[idx]) return;
+      seenX[idx] = true;
+      var anchor = idx === 0 ? "start" : idx === n - 1 ? "end" : "middle";
       xLabels += '<text x="' + xOf(idx) + '" y="' + (H - 8) + '" text-anchor="' + anchor + '" font-size="10" fill="rgba(255,255,255,.32)">' + fmtDate(pts[idx].at) + "</text>";
     });
 
@@ -5127,17 +5275,6 @@ class Component extends DCLogic {
       homeGlobeOpacity: S.homeFading ? '0' : '1',
       homeGlobeTrans: S.homeFading ? 'opacity .38s ease-out' : 'none',
       // module enabled flags
-      hmAiGreeting:     (S.homepageModules || []).includes('ai_greeting'),
-      hmWorkflowHealth: (S.homepageModules || []).includes('workflow_health'),
-      hmRecentActivity: (S.homepageModules || []).includes('recent_activity'),
-      hmSuccessRate:    (S.homepageModules || []).includes('success_rate'),
-      hmTopWorkflows:   (S.homepageModules || []).includes('top_workflows'),
-      hmQuickRun:       (S.homepageModules || []).includes('quick_run'),
-      hmNextScheduled:  (S.homepageModules || []).includes('next_scheduled'),
-      hmFailureAlerts:  (S.homepageModules || []).includes('failure_alerts'),
-      hmTimeSaved:      (S.homepageModules || []).includes('time_saved'),
-      hmAiTip:          (S.homepageModules || []).includes('ai_tip'),
-      hmWorkflowsList:  (S.homepageModules || []).includes('workflows_list'),
       // module data
       hmGreeting:       S.homeData?.modules?.ai_greeting?.greeting || '',
       hmHeadline:       S.homeData?.modules?.ai_greeting?.headline || '',
@@ -5145,6 +5282,56 @@ class Component extends DCLogic {
       hmHealthPaused:   String(S.homeData?.modules?.workflow_health?.paused ?? 0),
       hmHealthFailed:   String(S.homeData?.modules?.workflow_health?.failed ?? 0),
       hmHealthTotal:    String(S.homeData?.modules?.workflow_health?.total ?? 0),
+      // ── "Data" dashboard props ───────────────────────────────────────────
+      kpiRunsMonth:    (() => { const m = S.homeData?.modules?.performance_trend?.months; return m && m.length ? String(m[m.length-1].runs) : '0'; })(),
+      kpiRunsSuccess:  S.homeData?.modules?.success_rate?.rate || '—',
+      kpiRunsActive:   String(S.homeData?.modules?.workflow_health?.active ?? 0),
+      kpiSrRate:       S.homeData?.modules?.success_rate?.rate || '—',
+      kpiSrFailed:     String(S.homeData?.modules?.success_rate?.failedRuns ?? 0),
+      kpiSrRetries:    String(S.homeData?.modules?.success_rate?.retries ?? 0),
+      kpiTimeSaved:    S.homeData?.modules?.time_saved?.display || '—',
+      kpiTimeWeek:     S.homeData?.modules?.time_saved?.weekDisplay || '—',
+      kpiTimeGoal:     S.homeData?.modules?.time_saved?.goalDisplay || '—',
+      kpiHealthShow:   !!S.homeData?.modules?.health_score,
+      kpiHealthScore:  String(S.homeData?.modules?.health_score?.score ?? '—'),
+      kpiHealthRating: S.homeData?.modules?.health_score?.rating || '—',
+      kpiHealthTrend:  (() => { const t = S.homeData?.modules?.health_score?.trend; if (t == null) return '0'; return (t > 0 ? '+' : t < 0 ? '−' : '') + Math.abs(t); })(),
+      kpiHealthTrendColor: (() => { const t = S.homeData?.modules?.health_score?.trend || 0; return t > 0 ? 'var(--green)' : t < 0 ? 'var(--red)' : 'rgb(var(--fg))'; })(),
+      actChartRef:     (el) => { if (el) el.innerHTML = this._svgActivity(S.homeData?.modules?.activity_7d || []); },
+      trendChartRef:   (el) => { if (el) el.innerHTML = this._svgTrend(S.homeData?.modules?.performance_trend?.months || []); },
+      trendAvg:        String(S.homeData?.modules?.performance_trend?.avgRunsPerMonth ?? 0),
+      trendTotal:      String(S.homeData?.modules?.performance_trend?.totalThisYear ?? 0),
+      donutRef:        (el) => { if (el) el.innerHTML = this._svgDonut(S.homeData?.modules?.top_workflows || [], S.homeData?.modules?.success_rate?.totalRuns ?? 0); },
+      donutSubtitle:   (() => { const t = S.homeData?.modules?.success_rate?.totalRuns ?? 0; return 'Share of ' + t + ' run' + (t === 1 ? '' : 's') + ' across your automations'; })(),
+      hmConnectors:    (S.dashConnectors || []).map(c => ({
+        name: c.name,
+        statusText:  !c.connected ? 'Not connected' : (c.warn || 'Connected · healthy'),
+        statusColor: !c.connected ? 'rgba(var(--fg),.35)' : (c.warn ? 'var(--amber)' : 'rgba(var(--fg),.45)'),
+        barPct:      !c.connected ? '0%' : '100%',
+        barColor:    c.warn ? 'var(--amber)' : 'var(--green2)',
+      })),
+      hmRunRows:       (() => { const hr = this._homeRunsState(); return (hr.rows || []).map(r => ({
+        name: r.workflowName, trigger: r.trigger,
+        resultLabel: r.status === 'success' ? '✓ Success' : '✕ Failed',
+        resultColor: r.status === 'success' ? 'var(--green3)' : 'var(--red)',
+        at: this._relTime(r.at),
+        onClick: r.workflowId ? () => this.openConsole(r.workflowId) : () => {},
+      })); })(),
+      hmRunsShowing:   (() => { const hr = this._homeRunsState(); const from = hr.total ? hr.offset + 1 : 0; const to = Math.min(hr.offset + hr.limit, hr.total); return 'Showing ' + (hr.total ? (from + '–' + to) : '0') + ' of ' + hr.total + ' run' + (hr.total === 1 ? '' : 's'); })(),
+      hmRunsPrevColor: (() => { const hr = this._homeRunsState(); return hr.offset > 0 ? 'rgba(var(--fg),.7)' : 'rgba(var(--fg),.3)'; })(),
+      hmRunsPrevCursor:(() => { const hr = this._homeRunsState(); return hr.offset > 0 ? 'pointer' : 'default'; })(),
+      hmRunsNextBg:    (() => { const hr = this._homeRunsState(); return (hr.offset + hr.limit < hr.total) ? 'var(--green2)' : 'rgba(var(--fg),.1)'; })(),
+      hmRunsNextColor: (() => { const hr = this._homeRunsState(); return (hr.offset + hr.limit < hr.total) ? '#06210d' : 'rgba(var(--fg),.4)'; })(),
+      hmRunsNextCursor:(() => { const hr = this._homeRunsState(); return (hr.offset + hr.limit < hr.total) ? 'pointer' : 'default'; })(),
+      onRunsPrev:      () => this.onHomeRunsPrev(),
+      onRunsNext:      () => this.onHomeRunsNext(),
+      hmActivityItems: (S.homeData?.modules?.recent_activity || []).map(r => ({
+        label: r.workflowName + ' ran',
+        dot: r.status === 'success' ? '#7fc28a' : r.status === 'error' ? '#e87878' : '#888',
+        at: this._relTime(r.at),
+        onClick: () => this.openConsole(r.workflowId),
+      })),
+      hmHasQuickRun:   !!(S.homeData?.modules?.quick_run?.length),
       hmRecentRuns:     (S.homeData?.modules?.recent_activity || []).map(r => ({
         name: r.workflowName, status: r.status,
         at: this._relTime(r.at),
@@ -5199,26 +5386,14 @@ class Component extends DCLogic {
       }) : [],
       homeHasWorkflows: !!(S.homeData && S.homeData.workflows.length),
       homeEmpty: !!(S.homeData && !S.homeData.workflows.length),
-      // account settings homepage options
-      hmOptions: [
-        { id:'ai_greeting',     label:'AI Greeting',      desc:'Personalized welcome message and daily insight' },
-        { id:'workflow_health', label:'Workflow Health',   desc:'Active, paused, and failed workflow counts' },
-        { id:'recent_activity', label:'Recent Activity',  desc:'Latest runs across all workflows' },
-        { id:'success_rate',    label:'Success Rate',     desc:'Overall success % and total run count' },
-        { id:'top_workflows',   label:'Top Workflows',    desc:'Most active workflows ranked by runs' },
-        { id:'quick_run',       label:'Quick Run',        desc:'One-click trigger buttons for active workflows' },
-        { id:'next_scheduled',  label:'Next Scheduled',   desc:'Upcoming runs for scheduled workflows' },
-        { id:'failure_alerts',  label:'Failure Alerts',   desc:'AI-summarized recent errors and failures' },
-        { id:'time_saved',      label:'Time Saved',       desc:'Estimated hours saved by your automations' },
-        { id:'ai_tip',          label:'Daily Tip',        desc:'Personalized AI tip to improve your workflows' },
-        { id:'workflows_list',  label:'Your Workflows',   desc:'Full list of all your workflows with status and run info' },
-      ].map(m => ({
-        ...m,
-        enabled: (S.homepageModules || []).includes(m.id),
-        trackBg: (S.homepageModules || []).includes(m.id) ? 'rgba(159,214,168,.9)' : 'rgba(255,255,255,.1)',
-        thumbPos: (S.homepageModules || []).includes(m.id) ? '22px' : '2px',
-        onToggle: () => this.toggleHomeModule(m.id),
+      // account settings — appearance / theme
+      themeOptions: [['system','System'],['light','Light'],['dark','Dark']].map(([p,label]) => ({
+        label,
+        bg: (S.themePref || 'system') === p ? 'rgba(255,255,255,.12)' : 'transparent',
+        color: (S.themePref || 'system') === p ? '#fff' : 'rgba(255,255,255,.5)',
+        onSelect: () => this.setTheme(p),
       })),
+      themeHint: (S.themePref || 'system') === 'system' ? 'Follows your device appearance setting.' : (S.themePref || 'system') === 'light' ? 'Always use the light theme.' : 'Always use the dark theme.',
     };
   }
 }
