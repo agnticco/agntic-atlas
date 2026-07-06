@@ -142,6 +142,27 @@ function recordLoginFail(req) {
 }
 function clearLoginFails(req) { _loginFails.delete(_loginKey(req)); }
 
+// Content-Security-Policy — shipped Report-Only so it can't break the app while
+// we observe violations at /csp-report. script-src/style-src must allow inline
+// + eval (the DC UI framework compiles templates with `new Function` and the
+// page carries inline bootstrap scripts), so those directives can't be tightened
+// without a UI refactor. The rest (object-src none, base-uri, frame-ancestors,
+// form-action, connect-src self, …) is strict and — once reports are clean —
+// safe to promote to an enforced Content-Security-Policy header.
+const CSP_POLICY = [
+  "default-src 'self'",
+  "base-uri 'self'",
+  "object-src 'none'",
+  "frame-ancestors 'self'",
+  "form-action 'self'",
+  "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://cdn.jsdelivr.net https://unpkg.com",
+  "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
+  "font-src 'self' https://fonts.gstatic.com",
+  "img-src 'self' data: blob: https:",
+  "connect-src 'self'",
+  "report-uri /csp-report",
+].join('; ');
+
 // Per-tenant sources.json helpers — module-level so both bootSpine (filesystem
 // connector registration) and createApp (RAG knowledge routes) can call them.
 function sourcesPath(tenantId) {
@@ -870,14 +891,16 @@ export function createApp(spine) {
     credentials: true,
   }));
 
-  // Security headers (defense-in-depth behind Cloudflare). No CSP yet — the SPA
-  // relies on inline scripts/styles, so a meaningful CSP needs a UI refactor first.
+  // Security headers (defense-in-depth behind Cloudflare). CSP ships Report-Only
+  // (see CSP_POLICY): script/style must stay 'unsafe-inline'/'unsafe-eval' for the
+  // SPA, but the rest is strict and reports to /csp-report ahead of enforcement.
   app.use((_req, res, next) => {
     res.setHeader('X-Content-Type-Options', 'nosniff');
     res.setHeader('X-Frame-Options', 'SAMEORIGIN');
     res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
     res.setHeader('X-XSS-Protection', '0'); // disable legacy auditor (modern best practice)
     if (SECURE_COOKIES) res.setHeader('Strict-Transport-Security', 'max-age=15552000; includeSubDomains');
+    res.setHeader('Content-Security-Policy-Report-Only', CSP_POLICY);
     next();
   });
 
@@ -918,6 +941,25 @@ export function createApp(spine) {
   // every (mostly tenant-scoped, authenticated) API response — so run-history,
   // inbox, and workflow data can't be recovered from cache after logout.
   app.use((_req, res, next) => { res.setHeader('Cache-Control', 'no-store'); next(); });
+
+  // CSP violation reports (from the Report-Only policy above). Unauthenticated —
+  // browsers post these without credentials — with a tight body cap; logged
+  // truncated so a flood can't bloat the event log.
+  app.post('/csp-report',
+    express.json({ type: ['application/csp-report', 'application/reports+json', 'application/json'], limit: '32kb' }),
+    (req, res) => {
+      try {
+        const items = Array.isArray(req.body) ? req.body.map(r => r?.body ?? r) : [req.body?.['csp-report'] ?? req.body ?? {}];
+        for (const r of items.slice(0, 10)) {
+          logEvent('csp.report', {
+            directive: (r['violated-directive'] ?? r.effectiveDirective ?? '').toString().slice(0, 80),
+            blocked:   (r['blocked-uri'] ?? r.blockedURL ?? '').toString().slice(0, 200),
+            doc:       (r['document-uri'] ?? r.documentURL ?? '').toString().slice(0, 200),
+          });
+        }
+      } catch { /* never fail on a report */ }
+      res.status(204).end();
+    });
 
   const optionalAuth = spine.auth?.middleware?.optionalAuth ?? ((_req, _res, next) => next());
   // RAG holds company context → no anonymous access. requireAuth resolves req.tenant,
