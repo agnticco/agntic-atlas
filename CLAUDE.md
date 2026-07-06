@@ -69,6 +69,15 @@ refactor them without an explicit decision recorded here:
   [`docs/capabilities/local-models-rag.md`](docs/capabilities/local-models-rag.md).
 
 **Recorded salvage edits** (the only intentional changes to salvage code):
+- **Password reset (2026-07-06)** — `src/auth/index.js` `createAuthSubsystem` now also
+  instantiates a `PasswordResetStore` (new `src/auth/password-reset-store.js`) on the
+  shared auth DB and exposes it as `spine.auth.passwordResetStore`. Purely additive — no
+  change to existing auth logic. Powers the self-service reset flow (`/auth/forgot`,
+  `/auth/reset/verify`, `/auth/reset` in `server.js`) + `src/utils/mailer.js` (SMTP via
+  nodemailer, dev-fallback logs when unconfigured). Tokens are stored **hashed** (SHA-256),
+  single-use, 30-min TTL; reset consumes the token, sets the password via the existing
+  `changePassword({oldPassword:null})` path, and `revokeAllForUser`. Email is globally
+  unique so `findByEmail` resolves one user; `/auth/forgot` is anti-enumeration + throttled.
 - `src/rag/embedding-model.js` — local-embedding `getLlama({gpu})` was hardcoded
   `false`; made configurable (default `'auto'`, `LLAMA_GPU` to override). Hardcoded
   `false` broke on Metal-only node-llama-cpp prebuilts (Apple Silicon). 2026-06-08.

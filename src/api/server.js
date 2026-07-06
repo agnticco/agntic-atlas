@@ -79,6 +79,9 @@ import { mountAdminRoutes } from '../admin/server.js';
 import { logEvent, errFields } from '../utils/event-log.js';
 import { boolEnv, numEnv } from '../utils/env.js';
 import { FileCheckpointer } from '../graph/checkpointer/index.js';
+import { sendMail } from '../utils/mailer.js';
+import { renderResetEmail } from '../auth/reset-email.js';
+import { oauthRedirectBase } from '../connectors/oauth-redirect.js';
 
 const PORT = numEnv('PORT', 3000);
 // Cookies are Secure by default (the app runs behind Cloudflare HTTPS); only a
@@ -96,6 +99,83 @@ const VECTOR_DIR   = process.env.VECTOR_DIR   ?? './memory/vectors';
 // app-managed absolute path — which makes them a first-class filesystem folder that
 // workflows can read via filesystem_read/filesystem_list, not just RAG. (S8-9)
 const KNOWLEDGE_DIR = process.env.KNOWLEDGE_DIR ?? './memory/knowledge';
+
+// Directories that POST /rag/index-folder is allowed to ingest from. Without
+// this containment an authenticated user could point it at ANY readable server
+// path (.env, ~/.ssh, /etc, another tenant's data) and read it back via RAG.
+// Default: the app-managed knowledge dir only. Operators opt-in additional
+// server roots via KNOWLEDGE_INDEX_ROOTS (colon-separated absolute paths).
+const KNOWLEDGE_INDEX_ROOTS = (() => {
+  const roots = new Set([resolve(KNOWLEDGE_DIR)]);
+  for (const p of (process.env.KNOWLEDGE_INDEX_ROOTS ?? '').split(':')) {
+    const t = p.trim();
+    if (t) roots.add(resolve(t));
+  }
+  return [...roots];
+})();
+// True iff absPath is one of, or nested under, an allowed root. Paths are
+// resolve()'d (so `..` is normalised away) before comparison. Note: a symlink
+// *inside* an allowed root could still point outward, but writing symlinks
+// there requires filesystem access the app never grants to end users.
+function isIndexPathAllowed(absPath) {
+  return KNOWLEDGE_INDEX_ROOTS.some(root => absPath === root || absPath.startsWith(root + '/'));
+}
+
+// ── Login brute-force throttle ───────────────────────────────────────────────
+// In-memory sliding window keyed by client IP + email. Repeated FAILED guesses
+// for an account get 429'd; a correct password clears the counter, so a
+// legitimate user is never locked out (fail-open). Behind a reverse proxy
+// without `trust proxy` req.ip is the proxy's, but the email dimension still
+// bounds per-account guessing and the edge (Cloudflare) rate-limits upstream.
+const LOGIN_MAX_FAILS = numEnv('LOGIN_MAX_FAILS', 10);
+const LOGIN_WINDOW_MS = numEnv('LOGIN_WINDOW_MS', 15 * 60 * 1000);
+const _loginFails = new Map(); // key -> { count, resetAt }
+function _loginKey(req) { return `${req.ip}|${String(req.body?.email ?? '').toLowerCase().trim()}`; }
+function loginRetryAfter(req) {
+  const e = _loginFails.get(_loginKey(req));
+  if (!e) return 0;
+  if (Date.now() > e.resetAt) { _loginFails.delete(_loginKey(req)); return 0; }
+  return e.count >= LOGIN_MAX_FAILS ? Math.ceil((e.resetAt - Date.now()) / 1000) : 0;
+}
+function recordLoginFail(req) {
+  const now = Date.now(), k = _loginKey(req), e = _loginFails.get(k);
+  if (!e || now > e.resetAt) _loginFails.set(k, { count: 1, resetAt: now + LOGIN_WINDOW_MS });
+  else e.count++;
+  if (_loginFails.size > 5000) for (const [key, v] of _loginFails) if (now > v.resetAt) _loginFails.delete(key); // lazy sweep
+}
+function clearLoginFails(req) { _loginFails.delete(_loginKey(req)); }
+
+// Throttle password-reset requests (per IP + email) so /auth/forgot can't be
+// used to email-bomb an address or to probe timing. 5 requests / 15 min.
+const _forgotHits = new Map();
+function forgotThrottled(req) {
+  const key = _loginKey(req), now = Date.now(), win = 15 * 60 * 1000;
+  const e = _forgotHits.get(key);
+  if (!e || now > e.resetAt) { _forgotHits.set(key, { count: 1, resetAt: now + win }); if (_forgotHits.size > 5000) for (const [k, v] of _forgotHits) if (now > v.resetAt) _forgotHits.delete(k); return false; }
+  e.count++;
+  return e.count > 5;
+}
+
+// Content-Security-Policy — shipped Report-Only so it can't break the app while
+// we observe violations at /csp-report. script-src/style-src must allow inline
+// + eval (the DC UI framework compiles templates with `new Function` and the
+// page carries inline bootstrap scripts), so those directives can't be tightened
+// without a UI refactor. The rest (object-src none, base-uri, frame-ancestors,
+// form-action, connect-src self, …) is strict and — once reports are clean —
+// safe to promote to an enforced Content-Security-Policy header.
+const CSP_POLICY = [
+  "default-src 'self'",
+  "base-uri 'self'",
+  "object-src 'none'",
+  "frame-ancestors 'self'",
+  "form-action 'self'",
+  "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://cdn.jsdelivr.net https://unpkg.com",
+  "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
+  "font-src 'self' https://fonts.gstatic.com",
+  "img-src 'self' data: blob: https:",
+  "connect-src 'self'",
+  "report-uri /csp-report",
+].join('; ');
 
 // Per-tenant sources.json helpers — module-level so both bootSpine (filesystem
 // connector registration) and createApp (RAG knowledge routes) can call them.
@@ -825,14 +905,16 @@ export function createApp(spine) {
     credentials: true,
   }));
 
-  // Security headers (defense-in-depth behind Cloudflare). No CSP yet — the SPA
-  // relies on inline scripts/styles, so a meaningful CSP needs a UI refactor first.
+  // Security headers (defense-in-depth behind Cloudflare). CSP ships Report-Only
+  // (see CSP_POLICY): script/style must stay 'unsafe-inline'/'unsafe-eval' for the
+  // SPA, but the rest is strict and reports to /csp-report ahead of enforcement.
   app.use((_req, res, next) => {
     res.setHeader('X-Content-Type-Options', 'nosniff');
     res.setHeader('X-Frame-Options', 'SAMEORIGIN');
     res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
     res.setHeader('X-XSS-Protection', '0'); // disable legacy auditor (modern best practice)
     if (SECURE_COOKIES) res.setHeader('Strict-Transport-Security', 'max-age=15552000; includeSubDomains');
+    res.setHeader('Content-Security-Policy-Report-Only', CSP_POLICY);
     next();
   });
 
@@ -866,6 +948,32 @@ export function createApp(spine) {
 
   app.use(express.static(join(process.cwd(), 'public')));
   app.use('/recordings', express.static(join(process.cwd(), 'memory/recordings')));
+
+  // App-wide: never let a browser or shared/proxy cache retain a DYNAMIC
+  // response. Static assets above are already served by express.static and keep
+  // their normal caching; this only runs for routes that fall through — i.e.
+  // every (mostly tenant-scoped, authenticated) API response — so run-history,
+  // inbox, and workflow data can't be recovered from cache after logout.
+  app.use((_req, res, next) => { res.setHeader('Cache-Control', 'no-store'); next(); });
+
+  // CSP violation reports (from the Report-Only policy above). Unauthenticated —
+  // browsers post these without credentials — with a tight body cap; logged
+  // truncated so a flood can't bloat the event log.
+  app.post('/csp-report',
+    express.json({ type: ['application/csp-report', 'application/reports+json', 'application/json'], limit: '32kb' }),
+    (req, res) => {
+      try {
+        const items = Array.isArray(req.body) ? req.body.map(r => r?.body ?? r) : [req.body?.['csp-report'] ?? req.body ?? {}];
+        for (const r of items.slice(0, 10)) {
+          logEvent('csp.report', {
+            directive: (r['violated-directive'] ?? r.effectiveDirective ?? '').toString().slice(0, 80),
+            blocked:   (r['blocked-uri'] ?? r.blockedURL ?? '').toString().slice(0, 200),
+            doc:       (r['document-uri'] ?? r.documentURL ?? '').toString().slice(0, 200),
+          });
+        }
+      } catch { /* never fail on a report */ }
+      res.status(204).end();
+    });
 
   const optionalAuth = spine.auth?.middleware?.optionalAuth ?? ((_req, _res, next) => next());
   // RAG holds company context → no anonymous access. requireAuth resolves req.tenant,
@@ -915,20 +1023,80 @@ export function createApp(spine) {
 
   // ── Login / logout ────────────────────────────────────────────────────────
   app.post('/auth/login', async (req, res) => {
+    if (req.rawBody && req.rawBody.length > 8192) return res.status(413).json({ error: 'payload too large' });
+    const retryAfter = loginRetryAfter(req);
+    if (retryAfter) {
+      res.setHeader('Retry-After', String(retryAfter));
+      return res.status(429).json({ error: 'Too many failed attempts. Try again later.' });
+    }
     try {
       const user = await spine.auth.authProvider.authenticate({ email: req.body?.email, password: req.body?.password });
-      if (!user) return res.status(401).json({ error: 'Invalid credentials' });
+      if (!user) { recordLoginFail(req); return res.status(401).json({ error: 'Invalid credentials' }); }
       if (!spine.auth.tenantStore.isActive(user.tenant_id)) return res.status(403).json({ error: 'tenant suspended' });
+      clearLoginFails(req);
       const { token } = spine.auth.issueSession({ user });
       setSessionCookie(res, token);
       const tenantRow = spine.auth.tenantStore.get(user.tenant_id);
       const tenant = tenantRow ? { id: tenantRow.id, name: tenantRow.name } : null;
       res.json({ ok: true, token, user: pubUser(user), tenant });
-    } catch (err) { res.status(400).json({ error: err.message ?? String(err) }); }
+    } catch (err) { recordLoginFail(req); res.status(400).json({ error: err.message ?? String(err) }); }
   });
   app.post('/auth/logout', requireAuth, (req, res) => {
     try { spine.auth.sessionStore.revoke(req.session.id); } catch { /* ignore */ }
     res.clearCookie('session', { path: '/' });
+    res.json({ ok: true });
+  });
+
+  // ── Password reset (self-service) ──────────────────────────────────────────
+  // Request a reset link. ALWAYS returns { ok: true } regardless of whether the
+  // email maps to a user — never reveal account existence (anti-enumeration).
+  // Rate-limited to prevent email-bombing. The token is emailed; it is never
+  // returned in the response.
+  app.post('/auth/forgot', async (req, res) => {
+    if (req.rawBody && req.rawBody.length > 8192) return res.status(413).json({ error: 'payload too large' });
+    const email = String(req.body?.email ?? '').trim();
+    if (!email) return res.status(400).json({ error: 'email is required' });
+    if (forgotThrottled(req)) return res.status(429).json({ error: 'Too many requests. Try again later.' });
+    try {
+      const user = spine.auth.userStore.findByEmail(email);
+      if (user && !user.disabled_at) {
+        const token = spine.auth.passwordResetStore.create({ userId: user.id, tenantId: user.tenant_id });
+        const base  = oauthRedirectBase();
+        const link  = `${base}/?reset=${encodeURIComponent(token)}`;
+        const mail  = renderResetEmail({ resetLink: link, userEmail: user.email, base });
+        await sendMail({ to: user.email, subject: mail.subject, text: mail.text, html: mail.html })
+          .catch((err) => logEvent('auth.forgot.mail.error', errFields(err)));
+        logEvent('auth.forgot.issued', { tenant: user.tenant_id, user: user.id });
+      } else {
+        logEvent('auth.forgot.nomatch', {}); // no email, timing-neutral response
+      }
+    } catch (err) { logEvent('auth.forgot.error', errFields(err)); }
+    res.json({ ok: true });
+  });
+
+  // Check a reset token is still valid (for the UI to show the form vs. an
+  // "expired link" message). Reveals only validity, never the account.
+  app.post('/auth/reset/verify', (req, res) => {
+    const valid = !!spine.auth.passwordResetStore.peek(String(req.body?.token ?? ''));
+    res.json({ ok: true, valid });
+  });
+
+  // Complete a reset: set the new password, consume the token, and revoke all of
+  // the user's existing sessions so a stolen session can't survive the reset.
+  app.post('/auth/reset', async (req, res) => {
+    if (req.rawBody && req.rawBody.length > 8192) return res.status(413).json({ error: 'payload too large' });
+    const { token, password } = req.body ?? {};
+    const row = spine.auth.passwordResetStore.peek(String(token ?? ''));
+    if (!row) return res.status(400).json({ error: 'This reset link is invalid or has expired.' });
+    try {
+      // changePassword validates strength; if it throws, the token is NOT consumed.
+      await spine.auth.authProvider.changePassword({ userId: row.user_id, oldPassword: null, newPassword: password });
+    } catch (err) {
+      return res.status(400).json({ error: err.message ?? 'Could not set password.' });
+    }
+    spine.auth.passwordResetStore.markUsed(String(token));
+    try { spine.auth.sessionStore.revokeAllForUser(row.user_id); } catch { /* best effort */ }
+    logEvent('auth.reset.ok', { tenant: row.tenant_id, user: row.user_id });
     res.json({ ok: true });
   });
 
@@ -1074,6 +1242,12 @@ export function createApp(spine) {
       return res.status(400).json({ error: '`path` is required' });
     }
     const absPath = resolve(folderPath.trim());
+    // Containment first — never index outside an allowed root, and don't leak
+    // whether an out-of-bounds path exists.
+    if (!isIndexPathAllowed(absPath)) {
+      logEvent('rag.index-folder.denied', { tenant: req.tenant?.id ?? null, user: req.user?.id ?? null, path: absPath });
+      return res.status(403).json({ error: 'Path is not within an allowed knowledge root.' });
+    }
     if (!existsSync(absPath)) {
       return res.status(400).json({ error: `Path not found: ${absPath}` });
     }
@@ -1724,6 +1898,12 @@ export async function start() {
       : 'local-model';
     console.log(`atlas spine listening on :${PORT} (engine ok, auth ok, llm ${llmState}, rag ${spine.rag.provider})`);
   });
+  // Slowloris hardening: bound how long a client may take to send request
+  // headers. requestTimeout stays generous so a slow but legitimate upload of a
+  // full body (JSON capped at 4mb) isn't cut off; it never limits response
+  // duration, so SSE streams and long workflow runs are unaffected.
+  server.headersTimeout = numEnv('HEADERS_TIMEOUT_MS', 30_000);
+  server.requestTimeout = numEnv('REQUEST_TIMEOUT_MS', 300_000);
 
   let shuttingDown = false;
   const shutdown = (signal) => {
