@@ -5317,7 +5317,7 @@ class Component extends DCLogic {
         at: this._relTime(r.at),
         onClick: r.workflowId ? () => this.openConsole(r.workflowId) : () => {},
       })); })(),
-      hmRunsShowing:   (() => { const hr = this._homeRunsState(); const from = hr.total ? hr.offset + 1 : 0; const to = Math.min(hr.offset + hr.limit, hr.total); return 'Showing ' + (hr.total ? (from + '–' + to) : '0') + ' of ' + hr.total + ' run' + (hr.total === 1 ? '' : 's'); })(),
+      hmRunsShowing:   (() => { const hr = this._homeRunsState(); const off = Math.max(0, Math.min(hr.offset, hr.total)); const from = hr.total ? off + 1 : 0; const to = Math.min(off + hr.limit, hr.total); return 'Showing ' + (hr.total ? (from + '–' + to) : '0') + ' of ' + hr.total + ' run' + (hr.total === 1 ? '' : 's'); })(),
       hmRunsPrevColor: (() => { const hr = this._homeRunsState(); return hr.offset > 0 ? 'rgba(var(--fg),.7)' : 'rgba(var(--fg),.3)'; })(),
       hmRunsPrevCursor:(() => { const hr = this._homeRunsState(); return hr.offset > 0 ? 'pointer' : 'default'; })(),
       hmRunsNextBg:    (() => { const hr = this._homeRunsState(); return (hr.offset + hr.limit < hr.total) ? 'var(--green2)' : 'rgba(var(--fg),.1)'; })(),
