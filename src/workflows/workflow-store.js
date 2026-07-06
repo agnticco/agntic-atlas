@@ -903,6 +903,41 @@ export class WorkflowStore {
     return matching.slice(0, limit);
   }
 
+  /**
+   * Paged runs across all of the user's workflows, newest first — for the
+   * home "Recent runs" table. Returns { rows, total } so the client can render
+   * "Showing N of TOTAL" + a Prev/Next pager. Scoped by tenantId + userId.
+   * Rows carry the workflow name + triggers JSON so the caller can label the
+   * per-run trigger (per-run trigger type is not stored on the run itself —
+   * it is derived from the owning workflow's trigger definition).
+   */
+  getRunsPage({ tenantId = undefined, userId = undefined, limit = 5, offset = 0, excludeTests = true } = {}) {
+    const where = ['(? = 0 OR r.is_test = 0)', "r.status IN ('success', 'error')"];
+    const args = [excludeTests ? 1 : 0];
+    if (tenantId !== undefined) { where.push('r.tenant_id IS ?'); args.push(tenantId); }
+    if (userId !== undefined)   { where.push('r.user_id IS ?');   args.push(userId); }
+    const whereSql = where.join(' AND ');
+
+    const total = this.db.prepare(
+      `SELECT COUNT(*) AS n FROM workflow_runs r WHERE ${whereSql}`
+    ).get(...args).n;
+
+    const rows = this.db.prepare(
+      `SELECT r.id, r.workflow_id, r.status, r.started_at, r.completed_at, r.is_test,
+              w.name AS wf_name, w.user_intent AS wf_user_intent, w.triggers AS wf_triggers
+       FROM workflow_runs r
+       JOIN workflows w ON w.id = r.workflow_id
+       WHERE ${whereSql}
+       ORDER BY r.started_at DESC
+       LIMIT ? OFFSET ?`
+    ).all(...args, Math.max(1, limit), Math.max(0, offset));
+
+    for (const r of rows) {
+      try { r.wf_triggers = JSON.parse(r.wf_triggers); } catch { r.wf_triggers = []; }
+    }
+    return { rows, total };
+  }
+
   // ── Versions ─────────────────────────────────────────────────────────────
 
   /** List versions (oldest → newest) for a workflow. Scoped by userId. */

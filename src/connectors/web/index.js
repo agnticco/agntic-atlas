@@ -12,8 +12,79 @@
 
 import { Readability }       from '@mozilla/readability';
 import { JSDOM }             from 'jsdom';
+import dns                   from 'node:dns/promises';
+import { lookup as dnsLookup } from 'node:dns';
+import net                   from 'node:net';
+import { Agent }             from 'undici';
 import { SystemMessage, HumanMessage } from '../../core/message.js';
 import { mapNativeWebSources }         from '../../llm/native-citations.js';
+
+// ── SSRF guard ───────────────────────────────────────────────────────────────
+// web_fetch takes a user/workflow-controlled URL. Without this a workflow could
+// point it at cloud metadata (169.254.169.254 → IAM creds), loopback, or private
+// network services and read the response back. We reject non-http(s) schemes and
+// any host that is — or resolves to — a private/reserved address, and re-check on
+// every redirect hop. (Residual: DNS-rebinding TOCTOU between this lookup and the
+// socket connect is not covered; would require pinning the resolved IP.)
+const MAX_REDIRECTS = 5;
+
+function ipToLong(ip) { return ip.split('.').reduce((a, o) => ((a << 8) + parseInt(o, 10)) >>> 0, 0); }
+function v4Blocked(ip) {
+  const n = ipToLong(ip);
+  const inRange = (base, bits) => (n >>> (32 - bits)) === (ipToLong(base) >>> (32 - bits));
+  return inRange('0.0.0.0', 8) || inRange('10.0.0.0', 8) || inRange('100.64.0.0', 10) ||
+         inRange('127.0.0.0', 8) || inRange('169.254.0.0', 16) || inRange('172.16.0.0', 12) ||
+         inRange('192.0.0.0', 24) || inRange('192.168.0.0', 16) || inRange('198.18.0.0', 15) ||
+         n >= ipToLong('224.0.0.0'); // 224.0.0.0/3 — multicast + reserved
+}
+function ipBlocked(ip) {
+  const kind = net.isIP(ip);
+  if (kind === 4) return v4Blocked(ip);
+  if (kind === 6) {
+    const lc = ip.toLowerCase();
+    if (lc === '::1' || lc === '::') return true;                 // loopback / unspecified
+    if (lc.startsWith('fe8') || lc.startsWith('fe9') || lc.startsWith('fea') || lc.startsWith('feb')) return true; // fe80::/10 link-local
+    if (lc.startsWith('fc') || lc.startsWith('fd')) return true;  // fc00::/7 unique-local
+    const mapped = lc.match(/(?:::ffff:)(\d+\.\d+\.\d+\.\d+)$/);  // IPv4-mapped
+    if (mapped) return v4Blocked(mapped[1]);
+    return false;
+  }
+  return true; // not a recognised IP → block
+}
+async function assertPublicUrl(url) {
+  let u;
+  try { u = new URL(url); } catch { throw new Error('web_fetch: invalid URL'); }
+  if (u.protocol !== 'http:' && u.protocol !== 'https:') throw new Error('web_fetch: only http(s) URLs are allowed');
+  const host = u.hostname.replace(/^\[|\]$/g, '');
+  if (net.isIP(host)) {
+    if (ipBlocked(host)) throw new Error('web_fetch: refusing to fetch a private/reserved address');
+    return;
+  }
+  const lc = host.toLowerCase();
+  if (lc === 'localhost' || lc.endsWith('.localhost') || lc.endsWith('.local') || lc.endsWith('.internal')) {
+    throw new Error('web_fetch: refusing to fetch a local address');
+  }
+  let addrs;
+  try { addrs = await dns.lookup(host, { all: true }); } catch { throw new Error(`web_fetch: could not resolve ${host}`); }
+  for (const a of addrs) if (ipBlocked(a.address)) throw new Error('web_fetch: host resolves to a private/reserved address');
+}
+
+// Connect-time DNS validation: undici calls this to resolve a hostname right
+// before opening the socket, so the IP we validate is the exact IP connected to
+// — closing the DNS-rebinding TOCTOU where a hostname resolves "public" during
+// assertPublicUrl but "private" at connect time. (Literal-IP URLs skip lookup,
+// so assertPublicUrl still guards those.)
+function guardedLookup(hostname, options, callback) {
+  dnsLookup(hostname, { all: true, family: options?.family ?? 0, hints: options?.hints }, (err, addresses) => {
+    if (err) return callback(err);
+    for (const a of addresses) {
+      if (ipBlocked(a.address)) return callback(new Error('web_fetch: host resolves to a private/reserved address'));
+    }
+    if (options?.all) return callback(null, addresses);
+    callback(null, addresses[0].address, addresses[0].family);
+  });
+}
+const ssrfDispatcher = new Agent({ connect: { lookup: guardedLookup } });
 
 const DEPTH_INSTRUCTIONS = {
   snippets: 'For each article give only the headline and a one-sentence description.',
@@ -68,14 +139,25 @@ async function runWebSearch(llm, query, { count = 5, depth = 'standard', session
 }
 
 async function runWebFetch(url) {
-  const res = await fetch(url, {
-    headers: { 'User-Agent': 'AtlasWorkflow/1.0 (Mozilla/5.0 compatible)' },
-    redirect: 'follow',
-  });
+  // Follow redirects manually so each hop is SSRF-checked (a public URL can 3xx
+  // to an internal one).
+  let current = url, res, hops = 0;
+  for (;;) {
+    await assertPublicUrl(current);
+    res = await fetch(current, {
+      headers: { 'User-Agent': 'AtlasWorkflow/1.0 (Mozilla/5.0 compatible)' },
+      redirect: 'manual',
+      dispatcher: ssrfDispatcher, // connect-time IP re-validation (anti-rebinding)
+    });
+    const location = res.status >= 300 && res.status < 400 ? res.headers.get('location') : null;
+    if (!location) break;
+    if (++hops > MAX_REDIRECTS) throw new Error('web_fetch: too many redirects');
+    current = new URL(location, current).toString();
+  }
   if (!res.ok) throw new Error(`web_fetch: HTTP ${res.status} fetching ${url}`);
   const html = await res.text();
 
-  const dom     = new JSDOM(html, { url });
+  const dom     = new JSDOM(html, { url: current });
   const article = new Readability(dom.window.document).parse();
 
   if (article) {
