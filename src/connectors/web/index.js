@@ -13,7 +13,9 @@
 import { Readability }       from '@mozilla/readability';
 import { JSDOM }             from 'jsdom';
 import dns                   from 'node:dns/promises';
+import { lookup as dnsLookup } from 'node:dns';
 import net                   from 'node:net';
+import { Agent }             from 'undici';
 import { SystemMessage, HumanMessage } from '../../core/message.js';
 import { mapNativeWebSources }         from '../../llm/native-citations.js';
 
@@ -66,6 +68,23 @@ async function assertPublicUrl(url) {
   try { addrs = await dns.lookup(host, { all: true }); } catch { throw new Error(`web_fetch: could not resolve ${host}`); }
   for (const a of addrs) if (ipBlocked(a.address)) throw new Error('web_fetch: host resolves to a private/reserved address');
 }
+
+// Connect-time DNS validation: undici calls this to resolve a hostname right
+// before opening the socket, so the IP we validate is the exact IP connected to
+// — closing the DNS-rebinding TOCTOU where a hostname resolves "public" during
+// assertPublicUrl but "private" at connect time. (Literal-IP URLs skip lookup,
+// so assertPublicUrl still guards those.)
+function guardedLookup(hostname, options, callback) {
+  dnsLookup(hostname, { all: true, family: options?.family ?? 0, hints: options?.hints }, (err, addresses) => {
+    if (err) return callback(err);
+    for (const a of addresses) {
+      if (ipBlocked(a.address)) return callback(new Error('web_fetch: host resolves to a private/reserved address'));
+    }
+    if (options?.all) return callback(null, addresses);
+    callback(null, addresses[0].address, addresses[0].family);
+  });
+}
+const ssrfDispatcher = new Agent({ connect: { lookup: guardedLookup } });
 
 const DEPTH_INSTRUCTIONS = {
   snippets: 'For each article give only the headline and a one-sentence description.',
@@ -128,6 +147,7 @@ async function runWebFetch(url) {
     res = await fetch(current, {
       headers: { 'User-Agent': 'AtlasWorkflow/1.0 (Mozilla/5.0 compatible)' },
       redirect: 'manual',
+      dispatcher: ssrfDispatcher, // connect-time IP re-validation (anti-rebinding)
     });
     const location = res.status >= 300 && res.status < 400 ? res.headers.get('location') : null;
     if (!location) break;
