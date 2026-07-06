@@ -365,6 +365,20 @@ function makeChatToolExecutor(spine, req, sessionId) {
 const DAY_MS  = 86_400_000;
 const HRS = (mins) => Math.round((mins / 60) * 10) / 10; // one decimal
 
+// Neutralise user-controlled strings (workflow names, error text) before they
+// are embedded in an LLM prompt: strip line breaks so a name can't inject fake
+// list items / instructions, drop the delimiter quotes, and hard-cap length.
+// The home greeting/tip/alert prompts interpolate workflow names, so a name is
+// an untrusted-input surface even though it is only ever the caller's own data.
+function promptSafe(s, max = 80) {
+  return String(s ?? '')
+    .replace(/[\r\n\t]+/g, ' ')
+    .replace(/[`"]/g, "'")
+    .replace(/\s{2,}/g, ' ')
+    .trim()
+    .slice(0, max);
+}
+
 /** Format total minutes as the same "X hrs" / "X min" convention the home uses. */
 function fmtDuration(mins) {
   const m = Math.round(mins);
@@ -1168,7 +1182,7 @@ Rules:
 
       // ── Compute all modules in parallel where possible ───────────────────
       const wfLines = workflows.length
-        ? workflows.map(w => `  - "${w.name}" [${w.status}] trigger:${w.trigger} runs:${w.runCount} failures:${w.failCount}${w.lastRunAt ? ' last:' + new Date(w.lastRunAt).toLocaleDateString() : ''}`).join('\n')
+        ? workflows.map(w => `  - "${promptSafe(w.name)}" [${w.status}] trigger:${promptSafe(w.trigger, 40)} runs:${w.runCount} failures:${w.failCount}${w.lastRunAt ? ' last:' + new Date(w.lastRunAt).toLocaleDateString() : ''}`).join('\n')
         : '  (no workflows yet)';
 
       const [greetingData, tipData, alertData] = await Promise.all([
@@ -1182,7 +1196,7 @@ Rules:
           : Promise.resolve(null),
         // failure_alerts
         failedWfs.length
-          ? llmJson(`These workflows last ran with errors:\n${failedWfs.map(w => `  - "${w.name}": ${w.lastError || 'unknown error'}`).join('\n')}\n\nReturn JSON:\n{"summary":"<1-2 sentence overview of the failures and a suggested next step>"}`)
+          ? llmJson(`These workflows last ran with errors:\n${failedWfs.map(w => `  - "${promptSafe(w.name)}": ${promptSafe(w.lastError || 'unknown error', 160)}`).join('\n')}\n\nReturn JSON:\n{"summary":"<1-2 sentence overview of the failures and a suggested next step>"}`)
           : Promise.resolve(null),
       ]);
 
