@@ -5439,6 +5439,24 @@ class Component extends DCLogic {
       <input type="password" autocomplete="current-password" placeholder="Password" required style="display:block;width:100%;margin-bottom:6px;background:rgba(0,0,0,.3);border:1px solid rgba(255,255,255,.14);border-radius:11px;padding:12px 14px;color:#fff;font-family:inherit;font-size:14px;outline:none"/>
       <div id="login-err" style="display:none;color:#e87461;font-size:12.5px;margin:6px 2px 0"></div>
       <button type="submit" style="margin-top:14px;width:100%;border:none;cursor:pointer;background:#fff;color:#0a0a0a;font-family:inherit;font-weight:500;font-size:14.5px;padding:13px;border-radius:999px">Sign in</button>
+      <div style="text-align:center;margin-top:14px"><span id="forgot-link" style="font-size:12.5px;color:rgba(255,255,255,.5);cursor:pointer;text-decoration:underline;text-decoration-color:rgba(255,255,255,.22);text-underline-offset:2px">Forgot password?</span></div>
+    </form>
+
+    <form id="forgot-form" style="display:none">
+      <div style="font-size:13px;color:rgba(255,255,255,.55);margin:14px 0 18px;line-height:1.5">Enter your email and we'll send a link to reset your password.</div>
+      <input type="email" autocomplete="username" placeholder="Email" required style="display:block;width:100%;margin-bottom:6px;background:rgba(0,0,0,.3);border:1px solid rgba(255,255,255,.14);border-radius:11px;padding:12px 14px;color:#fff;font-family:inherit;font-size:14px;outline:none"/>
+      <div id="forgot-msg" style="display:none;font-size:12.5px;margin:8px 2px 0;line-height:1.5"></div>
+      <button type="submit" style="margin-top:14px;width:100%;border:none;cursor:pointer;background:#fff;color:#0a0a0a;font-family:inherit;font-weight:500;font-size:14.5px;padding:13px;border-radius:999px">Send reset link</button>
+      <div style="text-align:center;margin-top:14px"><span id="forgot-back" style="font-size:12.5px;color:rgba(255,255,255,.5);cursor:pointer">Back to sign in</span></div>
+    </form>
+
+    <form id="reset-form" style="display:none">
+      <div style="font-size:13px;color:rgba(255,255,255,.55);margin:14px 0 18px;line-height:1.5">Choose a new password for your account.</div>
+      <input id="reset-pass" type="password" autocomplete="new-password" placeholder="New password" required style="display:block;width:100%;margin-bottom:10px;background:rgba(0,0,0,.3);border:1px solid rgba(255,255,255,.14);border-radius:11px;padding:12px 14px;color:#fff;font-family:inherit;font-size:14px;outline:none"/>
+      <input id="reset-pass2" type="password" autocomplete="new-password" placeholder="Confirm new password" required style="display:block;width:100%;margin-bottom:6px;background:rgba(0,0,0,.3);border:1px solid rgba(255,255,255,.14);border-radius:11px;padding:12px 14px;color:#fff;font-family:inherit;font-size:14px;outline:none"/>
+      <div id="reset-err" style="display:none;color:#e87461;font-size:12.5px;margin:6px 2px 0"></div>
+      <button type="submit" style="margin-top:14px;width:100%;border:none;cursor:pointer;background:#7fc28a;color:#06210d;font-family:inherit;font-weight:600;font-size:14.5px;padding:13px;border-radius:999px">Reset password</button>
+      <div style="text-align:center;margin-top:14px"><span id="reset-back" style="font-size:12.5px;color:rgba(255,255,255,.5);cursor:pointer">Back to sign in</span></div>
     </form>
 
     <form id="setup-form" style="display:none">
@@ -5460,13 +5478,22 @@ class Component extends DCLogic {
   var ov = document.getElementById("login-overlay");
   var loginForm = document.getElementById("login-form");
   var setupForm = document.getElementById("setup-form");
+  var forgotForm = document.getElementById("forgot-form");
+  var resetForm = document.getElementById("reset-form");
   var loginErr = document.getElementById("login-err");
   var setupErr = document.getElementById("setup-err");
+  var forgotMsg = document.getElementById("forgot-msg");
+  var resetErr = document.getElementById("reset-err");
   function show() { ov.style.display = "flex"; }
   function hide() { ov.style.display = "none"; }
-  function showLogin() { loginForm.style.display = "block"; setupForm.style.display = "none"; }
-  function showSetup() { loginForm.style.display = "none"; setupForm.style.display = "block"; }
+  function only(f) { [loginForm, setupForm, forgotForm, resetForm].forEach(function (x) { if (x) x.style.display = x === f ? "block" : "none"; }); }
+  function showLogin() { loginErr.style.color = "#e87461"; only(loginForm); }
+  function showSetup() { only(setupForm); }
+  function showForgot() { only(forgotForm); }
+  function showReset() { only(resetForm); }
   function err(el, msg) { if (el) { el.textContent = msg || ""; el.style.display = msg ? "block" : "none"; } }
+  function getResetParam() { try { return new URLSearchParams(location.search).get("reset"); } catch (e) { return null; } }
+  function clearResetParam() { try { var u = new URL(location.href); u.searchParams.delete("reset"); history.replaceState({}, "", u.pathname + (u.search || "") + u.hash); } catch (e) {} }
 
   function applyToken(token, user, tenant) {
     if (user && tenant) { hide(); (window.__atlasInitAuth || function() {})(token, user, tenant); return; }
@@ -5476,13 +5503,25 @@ class Component extends DCLogic {
       .catch(function () { try { localStorage.removeItem(TOKEN_KEY); } catch (e) {} showLogin(); show(); err(loginErr, "Session expired — sign in again."); });
   }
 
-  fetch("/setup/status").then(function (r) { return r.ok ? r.json() : {}; }).then(function (s) {
-    if (s && s.required) { showSetup(); show(); }
-    else { showLogin(); var saved = null; try { saved = localStorage.getItem(TOKEN_KEY); } catch (e) {} if (saved) applyToken(saved); else show(); }
-  }).catch(function () { showLogin(); var saved = null; try { saved = localStorage.getItem(TOKEN_KEY); } catch (e) {} if (saved) applyToken(saved); else show(); });
+  var resetTok = getResetParam();
+  if (resetTok) {
+    // A password-reset link takes precedence over any saved session.
+    fetch("/auth/reset/verify", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token: resetTok }) })
+      .then(function (r) { return r.ok ? r.json() : {}; })
+      .then(function (d) {
+        if (d && d.valid) { showReset(); show(); }
+        else { clearResetParam(); showLogin(); show(); err(loginErr, "That reset link is invalid or has expired. Request a new one below."); }
+      })
+      .catch(function () { clearResetParam(); showLogin(); show(); });
+  } else {
+    fetch("/setup/status").then(function (r) { return r.ok ? r.json() : {}; }).then(function (s) {
+      if (s && s.required) { showSetup(); show(); }
+      else { showLogin(); var saved = null; try { saved = localStorage.getItem(TOKEN_KEY); } catch (e) {} if (saved) applyToken(saved); else show(); }
+    }).catch(function () { showLogin(); var saved = null; try { saved = localStorage.getItem(TOKEN_KEY); } catch (e) {} if (saved) applyToken(saved); else show(); });
+  }
 
   loginForm.addEventListener("submit", function (e) {
-    e.preventDefault(); err(loginErr, "");
+    e.preventDefault(); loginErr.style.color = "#e87461"; err(loginErr, "");
     var email = loginForm.querySelector("input[type=email]").value.trim();
     var pass = loginForm.querySelector("input[type=password]").value;
     var btn = loginForm.querySelector("button[type=submit]"); btn.disabled = true; var ot = btn.textContent; btn.textContent = "Signing in…";
@@ -5503,6 +5542,43 @@ class Component extends DCLogic {
       .then(function (r) { return r.json().then(function (d) { return { ok: r.ok, data: d }; }); })
       .then(function (r) { if (!r.ok || !r.data.token) throw new Error(r.data.error || "Setup failed"); try { localStorage.setItem(TOKEN_KEY, r.data.token); } catch (e) {} applyToken(r.data.token); })
       .catch(function (x) { btn.disabled = false; btn.textContent = ot; err(setupErr, String(x.message || x)); });
+  });
+
+  // ── Password reset UI ──────────────────────────────────────────────────────
+  document.getElementById("forgot-link").addEventListener("click", function () { err(loginErr, ""); err(forgotMsg, ""); showForgot(); });
+  document.getElementById("forgot-back").addEventListener("click", function () { err(forgotMsg, ""); showLogin(); });
+  document.getElementById("reset-back").addEventListener("click", function () { clearResetParam(); err(resetErr, ""); showLogin(); });
+
+  forgotForm.addEventListener("submit", function (e) {
+    e.preventDefault(); err(forgotMsg, "");
+    var email = forgotForm.querySelector("input[type=email]").value.trim();
+    var btn = forgotForm.querySelector("button[type=submit]"); btn.disabled = true; var ot = btn.textContent; btn.textContent = "Sending…";
+    fetch("/auth/forgot", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ email: email }) })
+      .then(function (r) {
+        btn.disabled = false; btn.textContent = ot;
+        if (r.status === 429) { forgotMsg.style.color = "#e87461"; err(forgotMsg, "Too many requests. Please wait a few minutes and try again."); return; }
+        // Anti-enumeration: identical message whether or not the account exists.
+        forgotMsg.style.color = "rgba(159,214,168,.95)";
+        err(forgotMsg, "If an account exists for that email, a reset link is on its way. Check your inbox.");
+      })
+      .catch(function () { btn.disabled = false; btn.textContent = ot; forgotMsg.style.color = "#e87461"; err(forgotMsg, "Something went wrong. Please try again."); });
+  });
+
+  resetForm.addEventListener("submit", function (e) {
+    e.preventDefault(); err(resetErr, "");
+    var p1 = document.getElementById("reset-pass").value, p2 = document.getElementById("reset-pass2").value;
+    if (p1 !== p2) { err(resetErr, "Passwords don't match."); return; }
+    var token = getResetParam();
+    var btn = resetForm.querySelector("button[type=submit]"); btn.disabled = true; var ot = btn.textContent; btn.textContent = "Resetting…";
+    fetch("/auth/reset", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token: token, password: p1 }) })
+      .then(function (r) { return r.json().then(function (d) { return { ok: r.ok, data: d }; }); })
+      .then(function (r) {
+        if (!r.ok) throw new Error(r.data.error || "Reset failed");
+        clearResetParam(); showLogin();
+        loginErr.style.color = "rgba(159,214,168,.95)"; err(loginErr, "Password reset — sign in with your new password.");
+        btn.disabled = false; btn.textContent = ot;
+      })
+      .catch(function (x) { btn.disabled = false; btn.textContent = ot; err(resetErr, String(x.message || x)); });
   });
 })();
 </script>

@@ -79,6 +79,8 @@ import { mountAdminRoutes } from '../admin/server.js';
 import { logEvent, errFields } from '../utils/event-log.js';
 import { boolEnv, numEnv } from '../utils/env.js';
 import { FileCheckpointer } from '../graph/checkpointer/index.js';
+import { sendMail } from '../utils/mailer.js';
+import { oauthRedirectBase } from '../connectors/oauth-redirect.js';
 
 const PORT = numEnv('PORT', 3000);
 // Cookies are Secure by default (the app runs behind Cloudflare HTTPS); only a
@@ -141,6 +143,17 @@ function recordLoginFail(req) {
   if (_loginFails.size > 5000) for (const [key, v] of _loginFails) if (now > v.resetAt) _loginFails.delete(key); // lazy sweep
 }
 function clearLoginFails(req) { _loginFails.delete(_loginKey(req)); }
+
+// Throttle password-reset requests (per IP + email) so /auth/forgot can't be
+// used to email-bomb an address or to probe timing. 5 requests / 15 min.
+const _forgotHits = new Map();
+function forgotThrottled(req) {
+  const key = _loginKey(req), now = Date.now(), win = 15 * 60 * 1000;
+  const e = _forgotHits.get(key);
+  if (!e || now > e.resetAt) { _forgotHits.set(key, { count: 1, resetAt: now + win }); if (_forgotHits.size > 5000) for (const [k, v] of _forgotHits) if (now > v.resetAt) _forgotHits.delete(k); return false; }
+  e.count++;
+  return e.count > 5;
+}
 
 // Content-Security-Policy — shipped Report-Only so it can't break the app while
 // we observe violations at /csp-report. script-src/style-src must allow inline
@@ -1030,6 +1043,61 @@ export function createApp(spine) {
   app.post('/auth/logout', requireAuth, (req, res) => {
     try { spine.auth.sessionStore.revoke(req.session.id); } catch { /* ignore */ }
     res.clearCookie('session', { path: '/' });
+    res.json({ ok: true });
+  });
+
+  // ── Password reset (self-service) ──────────────────────────────────────────
+  // Request a reset link. ALWAYS returns { ok: true } regardless of whether the
+  // email maps to a user — never reveal account existence (anti-enumeration).
+  // Rate-limited to prevent email-bombing. The token is emailed; it is never
+  // returned in the response.
+  app.post('/auth/forgot', async (req, res) => {
+    if (req.rawBody && req.rawBody.length > 8192) return res.status(413).json({ error: 'payload too large' });
+    const email = String(req.body?.email ?? '').trim();
+    if (!email) return res.status(400).json({ error: 'email is required' });
+    if (forgotThrottled(req)) return res.status(429).json({ error: 'Too many requests. Try again later.' });
+    try {
+      const user = spine.auth.userStore.findByEmail(email);
+      if (user && !user.disabled_at) {
+        const token = spine.auth.passwordResetStore.create({ userId: user.id, tenantId: user.tenant_id });
+        const link  = `${oauthRedirectBase()}/?reset=${encodeURIComponent(token)}`;
+        await sendMail({
+          to: user.email,
+          subject: 'Reset your Atlas password',
+          text: `We received a request to reset your Atlas password.\n\nOpen this link to choose a new password (valid for 30 minutes):\n${link}\n\nIf you didn't request this, you can safely ignore this email — your password won't change.`,
+          html: `<p>We received a request to reset your Atlas password.</p><p><a href="${link}">Choose a new password</a> (valid for 30 minutes).</p><p style="color:#888">If you didn't request this, you can safely ignore this email — your password won't change.</p>`,
+        }).catch((err) => logEvent('auth.forgot.mail.error', errFields(err)));
+        logEvent('auth.forgot.issued', { tenant: user.tenant_id, user: user.id });
+      } else {
+        logEvent('auth.forgot.nomatch', {}); // no email, timing-neutral response
+      }
+    } catch (err) { logEvent('auth.forgot.error', errFields(err)); }
+    res.json({ ok: true });
+  });
+
+  // Check a reset token is still valid (for the UI to show the form vs. an
+  // "expired link" message). Reveals only validity, never the account.
+  app.post('/auth/reset/verify', (req, res) => {
+    const valid = !!spine.auth.passwordResetStore.peek(String(req.body?.token ?? ''));
+    res.json({ ok: true, valid });
+  });
+
+  // Complete a reset: set the new password, consume the token, and revoke all of
+  // the user's existing sessions so a stolen session can't survive the reset.
+  app.post('/auth/reset', async (req, res) => {
+    if (req.rawBody && req.rawBody.length > 8192) return res.status(413).json({ error: 'payload too large' });
+    const { token, password } = req.body ?? {};
+    const row = spine.auth.passwordResetStore.peek(String(token ?? ''));
+    if (!row) return res.status(400).json({ error: 'This reset link is invalid or has expired.' });
+    try {
+      // changePassword validates strength; if it throws, the token is NOT consumed.
+      await spine.auth.authProvider.changePassword({ userId: row.user_id, oldPassword: null, newPassword: password });
+    } catch (err) {
+      return res.status(400).json({ error: err.message ?? 'Could not set password.' });
+    }
+    spine.auth.passwordResetStore.markUsed(String(token));
+    try { spine.auth.sessionStore.revokeAllForUser(row.user_id); } catch { /* best effort */ }
+    logEvent('auth.reset.ok', { tenant: row.tenant_id, user: row.user_id });
     res.json({ ok: true });
   });
 

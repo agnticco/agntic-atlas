@@ -19,6 +19,7 @@ import { dirname, resolve } from 'node:path';
 
 import { UserStore, PLATFORM_TENANT_ID } from './user-store.js';
 import { SessionStore } from './session-store.js';
+import { PasswordResetStore } from './password-reset-store.js';
 import { TenantStore } from './tenant-store.js';
 import { TokenService, COOKIE_TTL_MS, BEARER_TTL_MS } from './token-service.js';
 import { AuthProvider } from './auth-provider.js';
@@ -77,6 +78,8 @@ export async function createAuthSubsystem({
   await userStore.init();
   const sessionStore = new SessionStore({ db });
   await sessionStore.init();
+  const passwordResetStore = new PasswordResetStore({ db });
+  await passwordResetStore.init();
   const tenantStore  = new TenantStore({ db });
   await tenantStore.init();
   tenantStore.ensurePlatformTenant();
@@ -129,6 +132,7 @@ export async function createAuthSubsystem({
     db,
     userStore,
     sessionStore,
+    passwordResetStore,
     tenantStore,
     tokenService,
     authProvider,
