@@ -19,6 +19,10 @@
 })();
 </script>
 <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+<!-- Vendored locally (not a CDN dependency) — sanitizes all marked() output
+     before it is injected as innerHTML, so untrusted content flowing through
+     workflows into the inbox/chat cannot execute script. -->
+<script src="./vendor/purify.min.js"></script>
 <script src="./support.js"></script>
 </head>
 <body>
@@ -1956,6 +1960,21 @@ class Component extends DCLogic {
     return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
   }
 
+  // Render markdown to HTML that is SAFE to assign via innerHTML. Workflow
+  // outputs (inbox messages, chat) can carry untrusted content that reached
+  // the workflow from email/web/records — marked() does not sanitize, so its
+  // output is always run through DOMPurify. Fail-closed: if the sanitizer is
+  // unavailable, escape the source to inert text rather than inject raw HTML.
+  // Returns null only when there is no renderer at all.
+  _safeMarkdownHTML(text) {
+    const src = text == null ? '' : String(text);
+    if (window.DOMPurify && typeof window.DOMPurify.sanitize === 'function' && window.marked) {
+      return window.DOMPurify.sanitize(window.marked.parse(src, { breaks: true, gfm: true }));
+    }
+    if (window.marked) return this._esc(src).replace(/\n/g, '<br>'); // no sanitizer → inert text
+    return null;
+  }
+
   _swatchHTML(connector, px, logoPx) {
     const logo = connector.logo || {};
     const bg = logo.swatchBg || this._grad(connector.colors);
@@ -2046,9 +2065,9 @@ class Component extends DCLogic {
     if (item.text == null) return item;
     const parts = this._parseMentions(item.text);
     const result = Object.assign({}, item, { parts });
-    if ((result.isAtlas || result.isGreeting) && window.marked) {
-      const html = window.marked.parse(result.text, { breaks: true, gfm: true });
-      return Object.assign({}, result, { mdRef: (el) => { if (el) el.innerHTML = html; } });
+    if (result.isAtlas || result.isGreeting) {
+      const html = this._safeMarkdownHTML(result.text);
+      if (html != null) return Object.assign({}, result, { mdRef: (el) => { if (el) el.innerHTML = html; } });
     }
     return result;
   }
@@ -2507,8 +2526,8 @@ class Component extends DCLogic {
       .then(r => r.ok ? r.json() : null)
       .then(msg => {
         if (!msg) return;
-        const html = window.marked ? window.marked.parse(msg.content || '', { breaks: true, gfm: true }) : null;
-        const mdRef = html ? (el) => { if (el) el.innerHTML = html; } : null;
+        const html = self._safeMarkdownHTML(msg.content || '');
+        const mdRef = html != null ? (el) => { if (el) el.innerHTML = html; } : null;
         self.setState({
           inboxSelected: { ...msg, timeLabel: self._relativeTime(msg.created_at), mdRef },
           inboxMessages: (self.state.inboxMessages || []).map(m => m.id === id ? { ...m, read_at: msg.read_at } : m),
@@ -3334,8 +3353,18 @@ class Component extends DCLogic {
     vid.appendChild(src);
     const bar = document.createElement("div");
     bar.style.cssText = "padding:10px 16px;background:rgba(255,255,255,.03);display:flex;align-items:center;justify-content:space-between";
-    bar.innerHTML = '<span style="font-size:12px;color:rgba(255,255,255,.4)">Baseline recording</span>' +
-      '<a href="' + path + '" download style="border:1px solid rgba(255,255,255,.12);background:none;color:rgba(255,255,255,.45);font-size:11.5px;padding:5px 12px;border-radius:6px;cursor:pointer;text-decoration:none;font-family:inherit">Download</a>';
+    // Build via DOM (not innerHTML) so the recording path can't inject markup
+    // through the href attribute.
+    const barLabel = document.createElement("span");
+    barLabel.style.cssText = "font-size:12px;color:rgba(255,255,255,.4)";
+    barLabel.textContent = "Baseline recording";
+    const dl = document.createElement("a");
+    dl.href = path;
+    dl.setAttribute("download", "");
+    dl.textContent = "Download";
+    dl.style.cssText = "border:1px solid rgba(255,255,255,.12);background:none;color:rgba(255,255,255,.45);font-size:11.5px;padding:5px 12px;border-radius:6px;cursor:pointer;text-decoration:none;font-family:inherit";
+    bar.appendChild(barLabel);
+    bar.appendChild(dl);
     wrap.appendChild(vid);
     wrap.appendChild(bar);
     el.innerHTML = "";
