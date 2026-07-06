@@ -97,6 +97,27 @@ const VECTOR_DIR   = process.env.VECTOR_DIR   ?? './memory/vectors';
 // workflows can read via filesystem_read/filesystem_list, not just RAG. (S8-9)
 const KNOWLEDGE_DIR = process.env.KNOWLEDGE_DIR ?? './memory/knowledge';
 
+// Directories that POST /rag/index-folder is allowed to ingest from. Without
+// this containment an authenticated user could point it at ANY readable server
+// path (.env, ~/.ssh, /etc, another tenant's data) and read it back via RAG.
+// Default: the app-managed knowledge dir only. Operators opt-in additional
+// server roots via KNOWLEDGE_INDEX_ROOTS (colon-separated absolute paths).
+const KNOWLEDGE_INDEX_ROOTS = (() => {
+  const roots = new Set([resolve(KNOWLEDGE_DIR)]);
+  for (const p of (process.env.KNOWLEDGE_INDEX_ROOTS ?? '').split(':')) {
+    const t = p.trim();
+    if (t) roots.add(resolve(t));
+  }
+  return [...roots];
+})();
+// True iff absPath is one of, or nested under, an allowed root. Paths are
+// resolve()'d (so `..` is normalised away) before comparison. Note: a symlink
+// *inside* an allowed root could still point outward, but writing symlinks
+// there requires filesystem access the app never grants to end users.
+function isIndexPathAllowed(absPath) {
+  return KNOWLEDGE_INDEX_ROOTS.some(root => absPath === root || absPath.startsWith(root + '/'));
+}
+
 // Per-tenant sources.json helpers — module-level so both bootSpine (filesystem
 // connector registration) and createApp (RAG knowledge routes) can call them.
 function sourcesPath(tenantId) {
@@ -1081,6 +1102,12 @@ export function createApp(spine) {
       return res.status(400).json({ error: '`path` is required' });
     }
     const absPath = resolve(folderPath.trim());
+    // Containment first — never index outside an allowed root, and don't leak
+    // whether an out-of-bounds path exists.
+    if (!isIndexPathAllowed(absPath)) {
+      logEvent('rag.index-folder.denied', { tenant: req.tenant?.id ?? null, user: req.user?.id ?? null, path: absPath });
+      return res.status(403).json({ error: 'Path is not within an allowed knowledge root.' });
+    }
     if (!existsSync(absPath)) {
       return res.status(400).json({ error: `Path not found: ${absPath}` });
     }
