@@ -80,6 +80,7 @@ import { logEvent, errFields } from '../utils/event-log.js';
 import { boolEnv, numEnv } from '../utils/env.js';
 import { FileCheckpointer } from '../graph/checkpointer/index.js';
 import { sendMail } from '../utils/mailer.js';
+import { renderResetEmail } from '../auth/reset-email.js';
 import { oauthRedirectBase } from '../connectors/oauth-redirect.js';
 
 const PORT = numEnv('PORT', 3000);
@@ -1060,13 +1061,11 @@ export function createApp(spine) {
       const user = spine.auth.userStore.findByEmail(email);
       if (user && !user.disabled_at) {
         const token = spine.auth.passwordResetStore.create({ userId: user.id, tenantId: user.tenant_id });
-        const link  = `${oauthRedirectBase()}/?reset=${encodeURIComponent(token)}`;
-        await sendMail({
-          to: user.email,
-          subject: 'Reset your Atlas password',
-          text: `We received a request to reset your Atlas password.\n\nOpen this link to choose a new password (valid for 30 minutes):\n${link}\n\nIf you didn't request this, you can safely ignore this email — your password won't change.`,
-          html: `<p>We received a request to reset your Atlas password.</p><p><a href="${link}">Choose a new password</a> (valid for 30 minutes).</p><p style="color:#888">If you didn't request this, you can safely ignore this email — your password won't change.</p>`,
-        }).catch((err) => logEvent('auth.forgot.mail.error', errFields(err)));
+        const base  = oauthRedirectBase();
+        const link  = `${base}/?reset=${encodeURIComponent(token)}`;
+        const mail  = renderResetEmail({ resetLink: link, userEmail: user.email, base });
+        await sendMail({ to: user.email, subject: mail.subject, text: mail.text, html: mail.html })
+          .catch((err) => logEvent('auth.forgot.mail.error', errFields(err)));
         logEvent('auth.forgot.issued', { tenant: user.tenant_id, user: user.id });
       } else {
         logEvent('auth.forgot.nomatch', {}); // no email, timing-neutral response
