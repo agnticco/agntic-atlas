@@ -867,6 +867,13 @@ export function createApp(spine) {
   app.use(express.static(join(process.cwd(), 'public')));
   app.use('/recordings', express.static(join(process.cwd(), 'memory/recordings')));
 
+  // App-wide: never let a browser or shared/proxy cache retain a DYNAMIC
+  // response. Static assets above are already served by express.static and keep
+  // their normal caching; this only runs for routes that fall through — i.e.
+  // every (mostly tenant-scoped, authenticated) API response — so run-history,
+  // inbox, and workflow data can't be recovered from cache after logout.
+  app.use((_req, res, next) => { res.setHeader('Cache-Control', 'no-store'); next(); });
+
   const optionalAuth = spine.auth?.middleware?.optionalAuth ?? ((_req, _res, next) => next());
   // RAG holds company context → no anonymous access. requireAuth resolves req.tenant,
   // and every RAG call is scoped to that tenant's own physically-isolated store.

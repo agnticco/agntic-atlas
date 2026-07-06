@@ -1347,9 +1347,6 @@ Rules:
       };
 
       logEvent('home.ok', { tenant: tenantId, wfCount: workflows.length });
-      // Tenant-scoped workflow/run data — never let a browser or shared cache
-      // retain it (guards against back-button exposure after logout).
-      res.set('Cache-Control', 'no-store');
       res.json({ ok: true, user: { name: userName, email: req.user.email }, workflows, modules });
     } catch (err) {
       logEvent('home.error', errFields(err));
@@ -1374,7 +1371,6 @@ Rules:
         status: r.status,
         at: r.started_at,
       }));
-      res.set('Cache-Control', 'no-store'); // tenant-scoped run data — do not cache
       res.json({ ok: true, rows, total: page.total, offset, limit });
     } catch (err) {
       logEvent('home.runs.error', errFields(err));
