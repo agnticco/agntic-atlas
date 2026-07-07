@@ -1,11 +1,11 @@
 [
   {
-    "version": "0.2.0",
+    "version": "1.0.0",
     "date": "2026-07-07",
-    "title": "What's New is here",
+    "title": "Atlas is live",
     "notes": [
-      "Introducing release notes — you'll now get a short summary like this each time we ship an update to Atlas.",
-      "Request a connector: open Connections and tell us which tools you need. We build what's most in demand."
+      "Welcome to the Atlas alpha. You'll get a short note like this each time we ship an update.",
+      "Request a connector: open Connections and tell us which tools you need — we build what's most in demand."
     ]
   }
 ]
