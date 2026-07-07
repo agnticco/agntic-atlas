@@ -1,0 +1,19 @@
+# Cloudflare Tunnel config — copy to ~/.cloudflared/config.yml on the VPS.
+# See docs/deployment/vps-runbook.md §7.
+#
+# Fill <TUNNEL_ID> with the id printed by `cloudflared tunnel create atlas`.
+# The tunnel dials OUT to Cloudflare, so NO inbound port is opened on the VPS.
+#
+#   cloudflared tunnel login
+#   cloudflared tunnel create atlas
+#   # (put this file at ~/.cloudflared/config.yml, filling the id below)
+#   cloudflared tunnel route dns atlas atlas.agntic.co   # creates the DNS CNAME
+#   sudo cloudflared service install                     # run as a service
+
+tunnel: <TUNNEL_ID>
+credentials-file: /home/atlas/.cloudflared/<TUNNEL_ID>.json
+
+ingress:
+  - hostname: atlas.agntic.co
+    service: http://localhost:3000
+  - service: http_status:404
