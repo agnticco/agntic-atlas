@@ -1644,6 +1644,20 @@
               </div>
             </div>
           </sc-for>
+          <sc-if value="{{ hasRequestable }}" hint-placeholder-val="{{ false }}">
+          <div style="padding:10px 16px 4px;margin-top:4px;font-size:10px;font-weight:600;letter-spacing:.16em;text-transform:uppercase;color:rgba(255,255,255,.25)">Request a connector</div>
+          <div style="padding:0 16px 6px;font-size:11px;color:rgba(255,255,255,.28);line-height:1.45">Not built yet — tell us what you need and we'll prioritise by demand.</div>
+          <sc-for list="{{ requestableList }}" as="c" hint-placeholder-count="1">
+            <div onClick="{{ c.onRequest }}" style="display:flex;align-items:center;gap:10px;padding:9px 16px;cursor:{{ c.cursor }}" style-hover="background:rgba(255,255,255,.04)">
+              <div style="flex:none;width:22px;height:22px;border-radius:6px;background:rgba(255,255,255,.07);border:1px solid rgba(255,255,255,.1);display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:600;color:rgba(255,255,255,.55)">{{ c.monogram }}</div>
+              <div style="flex:1;min-width:0">
+                <div style="font-size:13px;font-weight:500;color:rgba(255,255,255,.65);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ c.name }}</div>
+                <div style="font-size:11px;color:rgba(255,255,255,.3);margin-top:1px">{{ c.statusText }}</div>
+              </div>
+              <span style="flex:none;font-size:11px;font-weight:600;color:{{ c.pillColor }};background:{{ c.pillBg }};border:1px solid {{ c.pillBorder }};border-radius:999px;padding:3px 9px">{{ c.pillText }}</span>
+            </div>
+          </sc-for>
+          </sc-if>
           <div style="height:6px"></div>
         </div>
       </div>
@@ -2989,6 +3003,28 @@ class Component extends DCLogic {
       ];
       self.setState({ connected, available, dashConnectors });
     });
+    this._loadRequestable();
+  }
+
+  _loadRequestable() {
+    const self = this;
+    fetch("/connectors/requestable", { headers: { "Authorization": "Bearer " + this.state.authToken } })
+      .then(r => r.ok ? r.json() : null)
+      .then(d => { if (d && d.connectors) self.setState({ requestable: d.connectors }); })
+      .catch(() => {});
+  }
+
+  requestConnector(id) {
+    const self = this;
+    if (!id) return;
+    fetch("/connectors/" + encodeURIComponent(id) + "/request-access", { method: "POST", headers: this._H(), body: "{}" })
+      .then(r => r.ok ? r.json() : null)
+      .then(d => {
+        if (!d) return;
+        self.setState({ requestable: (self.state.requestable || []).map(c =>
+          c.id === id ? { ...c, youRequested: true, requestCount: d.requestCount } : c) });
+      })
+      .catch(() => {});
   }
 
   _loadMentions() {
@@ -4998,6 +5034,23 @@ class Component extends DCLogic {
       // only header — show "Connectors" instead (Q19).
       inactiveHeader: (S.connected || []).length > 0 ? "Inactive" : "Connectors",
       availableList: S.available.map(c => ({ ...c, connected: false, statusText: c.meta || "Not connected", onAction: (e) => { const r = e.currentTarget.getBoundingClientRect(); this.setState({ connectorModal: { ...c, connected: false }, _mtx: r.left + r.width/2, _mty: r.top + r.height/2 }); } })),
+      requestableList: (S.requestable || []).map(c => {
+        const n = c.requestCount || 0, you = !!c.youRequested;
+        return {
+          id: c.id, name: c.name,
+          monogram: (c.name || "?").trim().charAt(0).toUpperCase(),
+          statusText: you
+            ? (n > 1 ? ("You + " + (n - 1) + " other" + (n - 1 === 1 ? "" : "s") + " interested") : "You requested this")
+            : (n > 0 ? (n + (n === 1 ? " tenant" : " tenants") + " interested") : "Not built yet"),
+          pillText:   you ? "Requested ✓" : "Request",
+          pillColor:  you ? "#9fd6a8" : "rgba(255,255,255,.7)",
+          pillBg:     you ? "rgba(127,194,138,.1)" : "rgba(255,255,255,.06)",
+          pillBorder: you ? "rgba(127,194,138,.3)" : "rgba(255,255,255,.14)",
+          cursor:     you ? "default" : "pointer",
+          onRequest:  () => { if (!you) this.requestConnector(c.id); },
+        };
+      }),
+      hasRequestable: (S.requestable || []).length > 0,
       stopProp: (e) => e.stopPropagation(),
       connectorModalOpen: !!(S.connectorModal || S.connectorModalClosing),
       connectorModalAnim: S.connectorModalClosing
