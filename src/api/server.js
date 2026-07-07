@@ -40,6 +40,7 @@ import {
 } from '../workflows/index.js';
 import { CapabilityRegistry } from '../connectors/capability-registry.js';
 import { ConnectorDemandStore, REQUESTABLE_CONNECTORS, isRequestable } from '../connectors/connector-demand.js';
+import { APP_VERSION } from '../version.js';
 import { LlamaCppLLM, ModelPool, ChatModel, CostTracker } from '../llm/index.js';
 import { EmbeddingModel, TextSplitter, VectorStore, DocumentLoader } from '../rag/index.js';
 import { registerSlackChannel, registerSlackTriggers, createSlackCapabilityProvider } from '../connectors/slack/index.js';
@@ -986,7 +987,7 @@ export function createApp(spine) {
     res.json({
       status: 'ok',
       uptime: Math.round(process.uptime()),
-      version: '0.1.0',
+      version: APP_VERSION,
       engine: spine.engine ? 'ok' : 'down',
       auth: spine.auth ? 'ok' : 'down',
       llm: spine.engine?.llm ? 'ready' : 'unconfigured',
@@ -1151,7 +1152,9 @@ export function createApp(spine) {
     if (!Array.isArray(homepageModules) || homepageModules.some(m => !VALID_HOMEPAGE_MODULES.includes(m))) {
       return res.status(400).json({ error: 'invalid homepageModules' });
     }
-    spine.auth.userStore.update(req.user.id, { preferences: { homepageModules } }, req.tenant.id);
+    // Merge — never clobber other preference keys (e.g. last_seen_version).
+    const prefs = { ...(spine.auth.userStore.getPreferences(req.user.id, req.tenant.id) ?? {}), homepageModules };
+    spine.auth.userStore.update(req.user.id, { preferences: prefs }, req.tenant.id);
     res.json({ ok: true, homepageModules });
   });
 

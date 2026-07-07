@@ -27,6 +27,8 @@ import { getGoogleAccessToken } from '../connectors/google/index.js';
 import { getSlackToken } from '../connectors/slack/oauth.js';
 import { getAirtableAccessToken } from '../connectors/airtable/oauth.js';
 import { sumTimeSavedMinutes, timeSavedMinutesForRun, isValueRun } from '../workflows/time-saved.js';
+import { APP_VERSION } from '../version.js';
+import { notesSince } from '../release-notes.js';
 
 // Retry an LLM call up to maxRetries times on transient provider errors (500/529/503).
 async function withLLMRetry(fn, maxRetries = 2) {
@@ -457,7 +459,26 @@ export function mountBuilderRoutes(app, { spine, requireActiveTenant, requireAut
 
   // ── GET /api/builder/me ──────────────────────────────────────────────────────
   app.get('/api/builder/me', requireAuth, (req, res) => {
-    res.json({ user: pubUser(req.user), tenant: { id: req.tenant.id, name: req.tenant.name } });
+    res.json({ user: pubUser(req.user), tenant: { id: req.tenant.id, name: req.tenant.name }, version: APP_VERSION });
+  });
+
+  // ── What's New — release notes since the user last acknowledged ───────────────
+  // GET returns the current version + any release-note entries the user hasn't
+  // seen yet (by their stored last_seen_version). POST /ack marks them seen.
+  app.get('/api/builder/whats-new', requireActiveTenant, (req, res) => {
+    try {
+      const prefs = spine.auth?.userStore?.getPreferences?.(req.user.id, req.tenant.id) ?? {};
+      res.json({ version: APP_VERSION, entries: notesSince(prefs.last_seen_version ?? null) });
+    } catch (err) { res.status(500).json({ error: err.message ?? String(err) }); }
+  });
+
+  app.post('/api/builder/whats-new/ack', requireActiveTenant, (req, res) => {
+    try {
+      const prefs = { ...(spine.auth.userStore.getPreferences(req.user.id, req.tenant.id) ?? {}) };
+      prefs.last_seen_version = APP_VERSION;
+      spine.auth.userStore.update(req.user.id, { preferences: prefs }, req.tenant.id);
+      res.json({ ok: true, version: APP_VERSION });
+    } catch (err) { res.status(500).json({ error: err.message ?? String(err) }); }
   });
 
   // ── GET /api/builder/greeting ────────────────────────────────────────────────

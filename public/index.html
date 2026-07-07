@@ -1609,6 +1609,27 @@
       </div>
     </sc-if>
 
+    <!-- ░ WHAT'S NEW MODAL ░ -->
+    <sc-if value="{{ whatsNewOpen }}" hint-placeholder-val="{{ false }}">
+      <div onClick="{{ onDismissWhatsNew }}" style="position:fixed;inset:0;z-index:230;background:rgba(0,0,0,.6);display:flex;align-items:center;justify-content:center;backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px);animation:backdropIn .18s ease both">
+        <div onClick="{{ stopProp }}" style="width:440px;max-width:calc(100vw - 40px);max-height:80vh;overflow-y:auto;border-radius:22px;border:1px solid rgba(255,255,255,.1);background:linear-gradient(160deg,rgba(28,28,32,.98),rgba(16,16,18,.98));box-shadow:0 32px 80px rgba(0,0,0,.7),inset 0 1px 0 rgba(255,255,255,.08);padding:28px 26px 24px;animation:modalExpand .38s cubic-bezier(.34,1.15,.64,1) both">
+          <div style="font-size:11px;font-weight:600;letter-spacing:.14em;text-transform:uppercase;color:oklch(0.82 0.12 73);margin-bottom:16px">What's new · v{{ whatsNewVersion }}</div>
+          <sc-for list="{{ whatsNewEntries }}" as="e" hint-placeholder-count="1">
+            <div style="margin-bottom:16px">
+              <div style="font-size:19px;font-weight:700;color:#fff;letter-spacing:-0.02em;margin-bottom:11px">{{ e.title }}</div>
+              <sc-for list="{{ e.notes }}" as="n" hint-placeholder-count="1">
+                <div style="display:flex;gap:10px;margin-bottom:9px">
+                  <span style="flex:none;color:oklch(0.82 0.12 73);font-size:14px;line-height:1.5">•</span>
+                  <span style="font-size:14px;line-height:1.55;color:rgba(255,255,255,.72)">{{ n.text }}</span>
+                </div>
+              </sc-for>
+            </div>
+          </sc-for>
+          <button onClick="{{ onDismissWhatsNew }}" style="width:100%;border:none;background:#fff;color:#0a0a0a;font-family:inherit;font-size:14px;font-weight:600;padding:12px;border-radius:12px;cursor:pointer;margin-top:8px" style-hover="background:rgba(255,255,255,.9)">Got it</button>
+        </div>
+      </div>
+    </sc-if>
+
     <!-- ░ CONNECTIONS FLYOUT ░ -->
     <sc-if value="{{ modeConnections }}" hint-placeholder-val="{{ false }}">
       <div onClick="{{ onCloseConnections }}" style="position:fixed;inset:0;z-index:200"></div>
@@ -2967,10 +2988,34 @@ class Component extends DCLogic {
     this._loadWorkflows();
     this._loadHomeData();
     this._loadInbox();
+    this._loadWhatsNew();
     // Bring back an in-progress build from a previous session/refresh.
     this._restoreBuild((tenant && tenant.id) || "", (user && user.email) || "");
     // Show tutorial to new users (or those who haven't dismissed it).
     try { if (!localStorage.getItem('atlas_tutorial_done')) { const self = this; setTimeout(function() { self.setState({ tutorialOpen: true, tutorialSlide: 0 }); }, 600); } } catch(e) {}
+  }
+
+  // What's New: fetch release notes the user hasn't seen. Brand-new users get the
+  // tutorial instead, so we silently mark them caught up (no backlog later).
+  _loadWhatsNew() {
+    const self = this;
+    let isNewUser = false;
+    try { isNewUser = !localStorage.getItem('atlas_tutorial_done'); } catch (e) {}
+    fetch("/api/builder/whats-new", { headers: { "Authorization": "Bearer " + this.state.authToken } })
+      .then(r => r.ok ? r.json() : null)
+      .then(d => {
+        if (!d || !(d.entries && d.entries.length)) return;
+        if (isNewUser) { self._ackWhatsNew(); return; }
+        self.setState({ whatsNew: { version: d.version, entries: d.entries }, whatsNewOpen: true });
+      })
+      .catch(() => {});
+  }
+  _ackWhatsNew() {
+    fetch("/api/builder/whats-new/ack", { method: "POST", headers: this._H() }).catch(() => {});
+  }
+  dismissWhatsNew() {
+    this.setState({ whatsNewOpen: false });
+    this._ackWhatsNew();
   }
 
   _loadConnections() {
@@ -5052,6 +5097,13 @@ class Component extends DCLogic {
       }),
       hasRequestable: (S.requestable || []).length > 0,
       stopProp: (e) => e.stopPropagation(),
+      whatsNewOpen: !!S.whatsNewOpen,
+      whatsNewVersion: (S.whatsNew && S.whatsNew.version) || "",
+      whatsNewEntries: ((S.whatsNew && S.whatsNew.entries) || []).map(e => ({
+        title: e.title || ("Version " + e.version),
+        notes: (e.notes || []).map(n => ({ text: n })),
+      })),
+      onDismissWhatsNew: () => this.dismissWhatsNew(),
       connectorModalOpen: !!(S.connectorModal || S.connectorModalClosing),
       connectorModalAnim: S.connectorModalClosing
         ? "modalCollapse .28s cubic-bezier(.4,0,1,1) both"
@@ -5548,11 +5600,26 @@ class Component extends DCLogic {
   function getResetParam() { try { return new URLSearchParams(location.search).get("reset"); } catch (e) { return null; } }
   function clearResetParam() { try { var u = new URL(location.href); u.searchParams.delete("reset"); history.replaceState({}, "", u.pathname + (u.search || "") + u.hash); } catch (e) {} }
 
+  // Platform admins (the reserved 'platform' tenant) operate the whole system,
+  // not a workflow workspace — send them straight to the /admin dashboard rather
+  // than the builder. Both surfaces are same-origin, so we hand the admin app the
+  // session by writing its token key before redirecting (it auto-restores from
+  // atlas_admin_token on boot) — no second login.
+  function isPlatformAdmin(user, tenant) {
+    return !!(user && tenant && tenant.id === "platform" && user.role === "admin");
+  }
+  function gotoAdminIfPlatform(token, user, tenant) {
+    if (!isPlatformAdmin(user, tenant)) return false;
+    try { localStorage.setItem("atlas_admin_token", token); if (user.email) localStorage.setItem("atlas_admin_email", user.email); } catch (e) {}
+    window.location = "/admin";
+    return true;
+  }
+
   function applyToken(token, user, tenant) {
-    if (user && tenant) { hide(); (window.__atlasInitAuth || function() {})(token, user, tenant); return; }
+    if (user && tenant) { if (gotoAdminIfPlatform(token, user, tenant)) return; hide(); (window.__atlasInitAuth || function() {})(token, user, tenant); return; }
     fetch("/api/builder/me", { headers: { "Authorization": "Bearer " + token } })
       .then(function (r) { if (!r.ok) throw new Error("unauthorized"); return r.json(); })
-      .then(function (d) { hide(); (window.__atlasInitAuth || function () {})(token, d.user, d.tenant); })
+      .then(function (d) { if (gotoAdminIfPlatform(token, d.user, d.tenant)) return; hide(); (window.__atlasInitAuth || function () {})(token, d.user, d.tenant); })
       .catch(function () { try { localStorage.removeItem(TOKEN_KEY); } catch (e) {} showLogin(); show(); err(loginErr, "Session expired — sign in again."); });
   }
 
