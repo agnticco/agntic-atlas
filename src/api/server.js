@@ -39,6 +39,7 @@ import {
   WorkflowService,
 } from '../workflows/index.js';
 import { CapabilityRegistry } from '../connectors/capability-registry.js';
+import { ConnectorDemandStore, REQUESTABLE_CONNECTORS, isRequestable } from '../connectors/connector-demand.js';
 import { LlamaCppLLM, ModelPool, ChatModel, CostTracker } from '../llm/index.js';
 import { EmbeddingModel, TextSplitter, VectorStore, DocumentLoader } from '../rag/index.js';
 import { registerSlackChannel, registerSlackTriggers, createSlackCapabilityProvider } from '../connectors/slack/index.js';
@@ -1816,6 +1817,30 @@ export function createApp(spine) {
     set.add(req.tenant.id);
     writeWebDisabled(set);
     res.json({ ok: true });
+  });
+
+  // ── Request-access stubs for not-yet-built connectors (demand capture) ──────
+  // Users see these in the Connections flyout; clicking records a per-tenant
+  // "vote" so the team can prioritise which connector to build next.
+  const connectorDemand = new ConnectorDemandStore();
+
+  app.get('/connectors/requestable', requireActiveTenant, (req, res) => {
+    res.json({ connectors: connectorDemand.listFor(req.tenant.id) });
+  });
+
+  app.post('/connectors/:id/request-access', requireActiveTenant, (req, res) => {
+    const id = req.params.id;
+    if (!isRequestable(id)) return res.status(404).json({ error: 'unknown connector' });
+    const requestCount = connectorDemand.record(id, {
+      tenantId: req.tenant.id, userId: req.user.id, note: req.body?.note,
+    });
+    logEvent('connector.request_access', { tenantId: req.tenant.id, connector: id, requestCount });
+    res.json({ ok: true, youRequested: true, requestCount });
+  });
+
+  // Platform-admin aggregate — the "what to build next" demand ranking.
+  app.get('/connectors/demand', requireAuth, requirePlatformAdmin, (_req, res) => {
+    res.json({ demand: connectorDemand.all() });
   });
 
   // Disconnect — best-effort delete all registered webhooks, then remove the token.
