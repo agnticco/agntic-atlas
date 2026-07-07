@@ -1,0 +1,28 @@
+# Atlas systemd unit — copy to /etc/systemd/system/atlas.service on the VPS.
+# See docs/deployment/vps-runbook.md §6.
+#
+#   sudo cp deploy/atlas.service /etc/systemd/system/atlas.service
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now atlas
+#   journalctl -u atlas -f
+[Unit]
+Description=Atlas
+After=network.target
+
+[Service]
+Type=simple
+User=atlas
+WorkingDirectory=/home/atlas/atlas
+ExecStart=/usr/bin/npm run prod
+Restart=always
+RestartSec=3
+# Give the app time to drain in-flight runs on SIGTERM (pairs with
+# SHUTDOWN_GRACE_MS; keep this > that value).
+TimeoutStopSec=20
+# Light sandboxing — the app only needs its own home dir for ./memory.
+NoNewPrivileges=true
+ProtectSystem=full
+ProtectHome=false
+
+[Install]
+WantedBy=multi-user.target
