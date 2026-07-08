@@ -21,6 +21,8 @@ import { randomBytes } from 'node:crypto';
 import { renderInviteEmail } from '../auth/invite-email.js';
 import { sendMail } from '../utils/mailer.js';
 import { oauthRedirectBase } from '../connectors/oauth-redirect.js';
+import { screenshotToDataUrl } from '../api/tickets.js';
+import { renderTicketBrief, ticketGithubTitle, ticketGithubLabels } from '../support/ticket-brief.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -304,6 +306,137 @@ export function mountAdminRoutes(app, { spine, requireAuth, requirePlatformAdmin
       res.json({ overall, perTenant, daily });
     } catch (err) {
       logEvent('admin.usage.error', errFields(err));
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // ── Support tickets (triage + coding-agent hand-off) ──────────────────────
+  // Cross-tenant reads by design — gated by requirePlatformAdmin. The submit
+  // endpoint (POST /api/tickets) is tenant-scoped and lives in src/api/tickets.js.
+
+  const tickets = spine.tickets ?? null;
+  const ticketsUnavailable = (res) => res.status(503).json({ error: 'ticketing unavailable' });
+
+  // List with optional status/type/tenant filters + headline counts.
+  app.get('/admin/tickets', adminOnly, (req, res) => {
+    try {
+      if (!tickets) return ticketsUnavailable(res);
+      const { status, type, tenant } = req.query ?? {};
+      const rows = tickets.list({ status: status || null, type: type || null, tenantId: tenant || null });
+      // Attach a friendly workspace name per ticket for the list view.
+      const nameCache = new Map();
+      const list = rows.map((t) => {
+        if (!nameCache.has(t.tenant_id)) {
+          let n = null; try { n = tenants.get(t.tenant_id)?.name ?? null; } catch { /* ignore */ }
+          nameCache.set(t.tenant_id, n);
+        }
+        const { context, ...rest } = t; // omit the full context blob from the list payload
+        return { ...rest, tenantName: nameCache.get(t.tenant_id) ?? t.tenant_id };
+      });
+      res.json({ tickets: list, counts: tickets.counts() });
+    } catch (err) {
+      logEvent('admin.tickets.list.error', errFields(err));
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Single ticket — full context + inline screenshot + the Markdown brief.
+  app.get('/admin/tickets/:id', adminOnly, (req, res) => {
+    try {
+      if (!tickets) return ticketsUnavailable(res);
+      const t = tickets.get(req.params.id);
+      if (!t) return res.status(404).json({ error: 'Ticket not found' });
+      let tenantName = t.tenant_id;
+      try { tenantName = tenants.get(t.tenant_id)?.name ?? t.tenant_id; } catch { /* ignore */ }
+      const screenshot = t.screenshot_path ? screenshotToDataUrl(t.screenshot_path) : null;
+      const adminUrl = `${oauthRedirectBase()}/admin`;
+      const brief = renderTicketBrief(t, { adminUrl });
+      res.json({ ticket: { ...t, tenantName }, screenshot, brief, githubConfigured: !!(process.env.GITHUB_REPO && process.env.GITHUB_TOKEN) });
+    } catch (err) {
+      logEvent('admin.tickets.get.error', errFields(err));
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Markdown brief as a downloadable file (coding-agent hand-off).
+  app.get('/admin/tickets/:id/brief', adminOnly, (req, res) => {
+    try {
+      if (!tickets) return ticketsUnavailable(res);
+      const t = tickets.get(req.params.id);
+      if (!t) return res.status(404).json({ error: 'Ticket not found' });
+      const adminUrl = `${oauthRedirectBase()}/admin`;
+      const md = renderTicketBrief(t, { adminUrl });
+      res.setHeader('Content-Type', 'text/markdown; charset=utf-8');
+      res.setHeader('Content-Disposition', `attachment; filename="${t.id}.md"`);
+      res.send(md);
+    } catch (err) {
+      logEvent('admin.tickets.brief.error', errFields(err));
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Update triage fields (status / notes).
+  app.patch('/admin/tickets/:id', adminOnly, (req, res) => {
+    try {
+      if (!tickets) return ticketsUnavailable(res);
+      const { status, adminNotes } = req.body ?? {};
+      const patch = {};
+      if (status !== undefined) patch.status = status;
+      if (adminNotes !== undefined) patch.adminNotes = adminNotes;
+      const t = tickets.update(req.params.id, patch);
+      if (!t) return res.status(404).json({ error: 'Ticket not found' });
+      logEvent('admin.tickets.updated', { ticket: t.id, status: t.status });
+      res.json({ ok: true, ticket: t });
+    } catch (err) {
+      logEvent('admin.tickets.update.error', errFields(err));
+      res.status(400).json({ error: err.message });
+    }
+  });
+
+  // File the ticket as a GitHub issue (coding-agent hand-off). Requires
+  // GITHUB_REPO ("owner/repo") + GITHUB_TOKEN (repo/issues scope) on the box.
+  app.post('/admin/tickets/:id/github', adminOnly, async (req, res) => {
+    try {
+      if (!tickets) return ticketsUnavailable(res);
+      const repo = process.env.GITHUB_REPO;
+      const token = process.env.GITHUB_TOKEN;
+      if (!repo || !token) {
+        return res.status(400).json({ error: 'GitHub not configured — set GITHUB_REPO and GITHUB_TOKEN on the server.' });
+      }
+      const t = tickets.get(req.params.id);
+      if (!t) return res.status(404).json({ error: 'Ticket not found' });
+      if (t.github_issue_url) return res.json({ ok: true, url: t.github_issue_url, number: t.github_issue_number, already: true });
+
+      const adminUrl = `${oauthRedirectBase()}/admin`;
+      const payload = {
+        title: ticketGithubTitle(t),
+        body: renderTicketBrief(t, { adminUrl }),
+        labels: ticketGithubLabels(t),
+      };
+      const ghHeaders = {
+        authorization: `Bearer ${token}`,
+        accept: 'application/vnd.github+json',
+        'content-type': 'application/json',
+        'user-agent': 'atlas-support-tickets',
+        'x-github-api-version': '2022-11-28',
+      };
+      const url = `https://api.github.com/repos/${repo}/issues`;
+      let ghRes = await fetch(url, { method: 'POST', headers: ghHeaders, body: JSON.stringify(payload) });
+      // A repo without our labels 422s — retry once without labels rather than fail.
+      if (ghRes.status === 422) {
+        ghRes = await fetch(url, { method: 'POST', headers: ghHeaders, body: JSON.stringify({ title: payload.title, body: payload.body }) });
+      }
+      if (!ghRes.ok) {
+        const detail = await ghRes.text().catch(() => '');
+        logEvent('admin.tickets.github.error', { ticket: t.id, status: ghRes.status, detail: detail.slice(0, 500) });
+        return res.status(502).json({ error: `GitHub responded ${ghRes.status}. Check GITHUB_REPO/GITHUB_TOKEN and its scopes.` });
+      }
+      const issue = await ghRes.json();
+      const updated = tickets.update(t.id, { githubIssueUrl: issue.html_url, githubIssueNumber: issue.number });
+      logEvent('admin.tickets.github.filed', { ticket: t.id, number: issue.number });
+      res.json({ ok: true, url: issue.html_url, number: issue.number, ticket: updated });
+    } catch (err) {
+      logEvent('admin.tickets.github.error', errFields(err));
       res.status(500).json({ error: err.message });
     }
   });

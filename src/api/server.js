@@ -71,6 +71,8 @@ import {
 } from '../connectors/airtable/oauth.js';
 import { InteractionStore } from '../converger/interaction-store.js';
 import { InboxStore } from '../inbox/inbox-store.js';
+import { TicketStore } from '../support/ticket-store.js';
+import { mountTicketRoutes } from './tickets.js';
 import { registerInboxCapability, INBOX_CAPABILITY_IDS } from '../inbox/index.js';
 import { registerFilesystemCapabilities, FILESYSTEM_CAPABILITY_IDS } from '../connectors/filesystem.js';
 import { registerWebCapabilities, webConnectionStatus, WEB_CAPABILITY_IDS } from '../connectors/web/index.js';
@@ -200,6 +202,7 @@ const EMBEDDING_MODEL_PATH = process.env.EMBEDDING_MODEL_PATH
 const INTERACTIONS_DB       = process.env.INTERACTIONS_DB       ?? './memory/interactions.sqlite';
 const AIRTABLE_WEBHOOKS_FILE = process.env.AIRTABLE_WEBHOOKS_FILE ?? './memory/airtable-webhooks.json';
 const INBOX_DB               = process.env.INBOX_DB               ?? './memory/inbox.sqlite';
+const TICKETS_DB             = process.env.TICKETS_DB             ?? './memory/tickets/tickets.sqlite';
 const AUTH_DB     = process.env.AUTH_DB     ?? './memory/auth.sqlite';
 const AUTH_SECRET = process.env.AUTH_SECRET ?? './memory/.jwt-secret';
 const OAUTH_DB    = process.env.OAUTH_DB    ?? './memory/oauth.sqlite';
@@ -855,12 +858,18 @@ export async function bootSpine() {
   const interactionStore = new InteractionStore({ dbPath: INTERACTIONS_DB });
   interactionStore.init();
 
+  // Support tickets — end-user bug/idea/request submissions, triaged in the admin app.
+  ensureDir(TICKETS_DB);
+  const ticketStore = new TicketStore({ dbPath: TICKETS_DB });
+  await ticketStore.init();
+
   return {
     auth,
     engine,
     rag,
     ragInbox,
     inboxStore,
+    tickets: ticketStore,
     slack,
     slackOAuth,
     google,
@@ -885,6 +894,7 @@ export async function bootSpine() {
       try { rag.close?.(); } catch { /* ignore */ }
       try { ragInbox.close?.(); } catch { /* ignore */ }
       try { inboxStore.close?.(); } catch { /* ignore */ }
+      try { ticketStore.close?.(); } catch { /* ignore */ }
       try { auth.close?.(); } catch { /* ignore */ }
     },
   };
@@ -1905,6 +1915,7 @@ export function createApp(spine) {
 
   mountBuilderRoutes(app, { spine, requireActiveTenant, requireAuth, readSources, tenantGuard });
   mountConsoleRoutes(app, { spine, requireActiveTenant });
+  mountTicketRoutes(app, { spine, requireActiveTenant });
   mountAdminRoutes(app, { spine, requireAuth, requirePlatformAdmin, optionalAuth });
 
   // Global error handler — last middleware. Catches anything a route's try/catch
