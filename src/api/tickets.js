@@ -16,7 +16,7 @@
  * @module src/api/tickets.js
  */
 
-import { mkdirSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
+import { mkdirSync, writeFileSync, readFileSync, existsSync, unlinkSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { APP_VERSION } from '../version.js';
@@ -64,12 +64,16 @@ export function screenshotToDataUrl(relPath) {
   } catch { return null; }
 }
 
+// Neutralize Slack mrkdwn control chars so user-submitted text can't inject
+// broadcast tokens (<!channel>, <!here>) or user mentions (<@U…>) into the alert.
+const slackEscape = (s) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
 /** Best-effort team alert on a new ticket. Never throws into the request path. */
 async function notifyTeam(spine, ticket) {
   const base = oauthRedirectBase();
   const adminUrl = `${base}/admin`;
-  const who = ticket.user_email ?? ticket.user_id;
-  const workspace = ticket.context?.tenantName ?? ticket.tenant_id;
+  const who = slackEscape(ticket.user_email ?? ticket.user_id);
+  const workspace = slackEscape(ticket.context?.tenantName ?? ticket.tenant_id);
   const sev = ticket.type === 'bug' && ticket.severity ? ` (${ticket.severity})` : '';
 
   // Slack → the internal Agntic workspace (platform bot), not the customer's.
@@ -77,9 +81,9 @@ async function notifyTeam(spine, ticket) {
   const token = process.env.SLACK_BOT_TOKEN;
   if (channel && token) {
     const text = [
-      `🆕 New ${ticket.type}${sev}: *${ticket.title}*`,
+      `🆕 New ${ticket.type}${sev}: *${slackEscape(ticket.title)}*`,
       `${workspace} · ${who}`,
-      ticket.description.slice(0, 400),
+      slackEscape(ticket.description).slice(0, 400),
       `<${adminUrl}|Open in Atlas admin>`,
     ].join('\n');
     try {
@@ -108,6 +112,13 @@ export function mountTicketRoutes(app, { spine, requireActiveTenant }) {
       const b = req.body ?? {};
       const type = ['bug', 'idea', 'request'].includes(b.type) ? b.type : 'bug';
 
+      // Validate BEFORE writing the screenshot so a bad request can't leave an
+      // orphaned blob on disk (the store re-validates as the source of truth).
+      const title = String(b.title ?? '').trim();
+      const description = String(b.description ?? '').trim();
+      if (!title) return res.status(400).json({ error: 'title is required' });
+      if (!description) return res.status(400).json({ error: 'description is required' });
+
       let screenshotPath = null;
       if (typeof b.screenshot === 'string' && b.screenshot.startsWith('data:image/')) {
         try { screenshotPath = writeScreenshot(req.tenant.id, b.screenshot); }
@@ -126,21 +137,30 @@ export function mountTicketRoutes(app, { spine, requireActiveTenant }) {
         receivedAt: new Date().toISOString(),
       };
 
-      const ticket = spine.tickets.create({
-        tenantId: req.tenant.id,
-        userId: req.user.id,
-        userEmail: req.user.email ?? null,
-        userName: req.user.display_name ?? req.user.name ?? null,
-        type,
-        severity: b.severity ?? null,
-        title: b.title,
-        description: b.description,
-        steps: b.steps ?? null,
-        expected: b.expected ?? null,
-        actual: b.actual ?? null,
-        context,
-        screenshotPath,
-      });
+      let ticket;
+      try {
+        ticket = spine.tickets.create({
+          tenantId: req.tenant.id,
+          userId: req.user.id,
+          userEmail: req.user.email ?? null,
+          userName: req.user.display_name ?? req.user.name ?? null,
+          type,
+          severity: b.severity ?? null,
+          title,
+          description,
+          steps: b.steps ?? null,
+          expected: b.expected ?? null,
+          actual: b.actual ?? null,
+          context,
+          screenshotPath,
+        });
+      } catch (err) {
+        // Don't leave the screenshot orphaned if the insert fails.
+        if (screenshotPath) {
+          try { unlinkSync(resolve(join(TICKETS_DIR, screenshotPath))); } catch { /* ignore */ }
+        }
+        throw err;
+      }
 
       logEvent('tickets.created', {
         ticket: ticket.id, tenant: req.tenant.id, user: req.user.id,

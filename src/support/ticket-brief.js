@@ -14,8 +14,10 @@
 
 const TYPE_LABEL = { bug: 'Bug', idea: 'Idea', request: 'Request' };
 
+// Tilde fence: captured error/URL text can contain a lone ``` line, which would
+// close a backtick fence early and corrupt the rest of the brief. ~~~ won't collide.
 function fence(lang, body) {
-  return '```' + lang + '\n' + body + '\n```';
+  return '~~~' + lang + '\n' + body + '\n~~~';
 }
 
 function section(title, body) {

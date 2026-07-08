@@ -1150,8 +1150,8 @@ async function loadTickets() {
   render();
 }
 
-async function loadTicketDetail(id) {
-  setState({ view: 'ticket', selectedTicket: id, ticketDetail: null, ticketMsg: '' });
+async function loadTicketDetail(id, msg = '') {
+  setState({ view: 'ticket', selectedTicket: id, ticketDetail: null, ticketMsg: msg });
   try {
     const data = await apiGet('/admin/tickets/' + encodeURIComponent(id));
     S.ticketDetail = data || { error: 'Not found' };
@@ -1279,8 +1279,7 @@ function renderTicketDetail() {
       ghBtn.disabled = true; ghBtn.textContent = 'Filing…';
       try {
         const res = await apiPost('/admin/tickets/' + encodeURIComponent(t.id) + '/github', {});
-        S.ticketMsg = 'Filed as GitHub issue #' + res.number;
-        loadTicketDetail(t.id);
+        loadTicketDetail(t.id, 'Filed as GitHub issue #' + res.number);
       } catch (e) {
         S.ticketMsg = 'GitHub: ' + (e.message || 'failed');
         ghBtn.disabled = false; ghBtn.textContent = 'Create GitHub issue';
@@ -1305,8 +1304,7 @@ function renderTicketDetail() {
         body: JSON.stringify({ status: statusSel.value, adminNotes: notes.value }),
       });
       if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || 'Save failed');
-      S.ticketMsg = 'Saved.';
-      loadTicketDetail(t.id);
+      loadTicketDetail(t.id, 'Saved.');
     } catch (e) {
       S.ticketMsg = e.message; saveBtn.disabled = false; saveBtn.textContent = 'Save status'; render();
     }
