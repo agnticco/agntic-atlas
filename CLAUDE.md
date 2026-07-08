@@ -209,6 +209,21 @@ refactor them without an explicit decision recorded here:
   The old `search_web` built-in node type remains but is no longer promoted to the converger;
   `web_search` connector-action is the primary path.
 
+## Support tickets (in-app feedback / bug reporting) — added 2026-07-08
+
+Users submit bugs/ideas/requests from a floating **Feedback** button in the operator
+app; the team triages in the admin app and hands off to a coding agent (Markdown brief
+or one-click GitHub issue). New code: `src/support/{ticket-store.js,ticket-brief.js}`,
+`src/api/tickets.js` (`POST /api/tickets`, mounted in `server.js`), admin routes +
+Tickets view in `src/admin/{server.js,index.html}`, and the widget + a JS-error/failed-
+fetch ring buffer (`window.__atlasDiag`) in `public/index.html` (+ vendored
+`public/html2canvas.min.js`). `TicketStore` is its own SQLite (`./memory/tickets/`),
+fail-closed on tenant for writes; admin reads are cross-tenant by design (platform-admin
+gated). Optional env (`SUPPORT_EMAIL`, `SUPPORT_SLACK_CHANNEL`, `GITHUB_REPO`,
+`GITHUB_TOKEN`) — feature works storing-only without them. Full design:
+[`docs/support-tickets.md`](docs/support-tickets.md). NOT the same as the dead-wired
+`src/workflows/feedback-store.js` (per-run feedback).
+
 ## The frozen canonical spec
 
 Phase 3's correctness criterion is "the converger reproduces *this exact*
