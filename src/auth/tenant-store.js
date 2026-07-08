@@ -19,12 +19,14 @@ CREATE TABLE IF NOT EXISTS tenants (
   name        TEXT NOT NULL,
   slug        TEXT UNIQUE NOT NULL,
   status      TEXT NOT NULL CHECK(status IN ('active','suspended')) DEFAULT 'active',
+  plan        TEXT NOT NULL DEFAULT 'starter',
   created_at  TEXT NOT NULL,
   updated_at  TEXT NOT NULL
 );
 `;
 
 const SLUG_RE = /^[a-z0-9][a-z0-9-]{1,62}$/;
+export const VALID_PLANS = ['founding', 'starter', 'team', 'enterprise'];
 
 export class TenantStore {
   constructor({ db = null, dbPath = null } = {}) {
@@ -39,6 +41,11 @@ export class TenantStore {
       this.db.pragma('synchronous = NORMAL');
     }
     this.db.exec(SCHEMA);
+    // Additive migration: plan column for tier gating (pre-existing DBs).
+    const cols = this.db.prepare('PRAGMA table_info(tenants)').all().map((c) => c.name);
+    if (!cols.includes('plan')) {
+      this.db.exec("ALTER TABLE tenants ADD COLUMN plan TEXT NOT NULL DEFAULT 'starter'");
+    }
   }
 
   close() {
@@ -65,16 +72,25 @@ export class TenantStore {
    * Create a tenant. `id` defaults to the slug (stable, human-readable). Throws
    * on a duplicate slug or a malformed slug.
    */
-  create({ name, slug, id = null }) {
+  create({ name, slug, id = null, plan = 'starter' }) {
     const cleanSlug = String(slug ?? '').trim().toLowerCase();
     if (!SLUG_RE.test(cleanSlug)) throw new Error('slug must be 2-63 chars, [a-z0-9-], starting alphanumeric');
     if (cleanSlug === PLATFORM_TENANT_ID) throw new Error('"platform" is reserved');
+    const cleanPlan = VALID_PLANS.includes(String(plan)) ? String(plan) : 'starter';
     const tid = id ?? cleanSlug;
     if (this.get(tid) || this.getBySlug(cleanSlug)) throw new Error('A tenant with that slug already exists.');
     const now = new Date().toISOString();
-    this.db.prepare(`INSERT INTO tenants (id, name, slug, status, created_at, updated_at)
-      VALUES (?, ?, ?, 'active', ?, ?)`).run(tid, String(name ?? cleanSlug), cleanSlug, now, now);
+    this.db.prepare(`INSERT INTO tenants (id, name, slug, status, plan, created_at, updated_at)
+      VALUES (?, ?, ?, 'active', ?, ?, ?)`).run(tid, String(name ?? cleanSlug), cleanSlug, cleanPlan, now, now);
     return this.get(tid);
+  }
+
+  /** Change a tenant's plan (tier gating). */
+  setPlan(id, plan) {
+    if (!VALID_PLANS.includes(String(plan))) throw new Error('invalid plan');
+    this.db.prepare('UPDATE tenants SET plan = ?, updated_at = ? WHERE id = ?')
+      .run(String(plan), new Date().toISOString(), id);
+    return this.get(id);
   }
 
   get(id) {

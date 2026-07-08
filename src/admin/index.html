@@ -148,6 +148,33 @@
     /* ── Errors ── */
     .err-msg { color: var(--red); font-size: 12px; margin-bottom: 12px; }
 
+    /* ── Create workspace ── */
+    .head-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; }
+    .cw-new-btn { padding: 9px 15px; background: var(--accent); color: #fff; border: none; border-radius: 9px; font-size: 13px; font-weight: 600; cursor: pointer; white-space: nowrap; flex-shrink: 0; }
+    .cw-new-btn:hover { background: #5a6bf0; }
+    .btn-ghost { padding: 10px 16px; background: transparent; color: var(--muted); border: 1px solid var(--border); border-radius: 9px; font-size: 13.5px; font-weight: 600; cursor: pointer; }
+    .btn-ghost:hover { color: var(--text); border-color: var(--dim); }
+    .plan-badge { padding: 2px 8px; border-radius: 5px; font-size: 10.5px; font-weight: 700; letter-spacing: .02em; text-transform: uppercase; flex-shrink: 0; }
+    .plan-founding { color: var(--amber); background: rgba(224,164,88,.14); }
+    .plan-team     { color: var(--accent); background: rgba(107,123,255,.15); }
+    .plan-starter  { color: var(--muted);  background: rgba(139,144,163,.12); }
+    .plan-enterprise { color: var(--teal); background: rgba(56,198,192,.14); }
+    .cw-overlay { position: fixed; inset: 0; background: rgba(9,10,15,.66); backdrop-filter: blur(3px); display: flex; align-items: center; justify-content: center; padding: 24px; z-index: 100; animation: fadein .16s ease; }
+    .cw-modal { width: 440px; max-width: 100%; background: var(--card); border: 1px solid var(--border); border-radius: 16px; box-shadow: 0 30px 70px rgba(0,0,0,.55); overflow: hidden; }
+    .cw-head { padding: 24px 26px 4px; }
+    .cw-head h3 { font-size: 18px; font-weight: 700; }
+    .cw-head p { color: var(--muted); font-size: 12.5px; margin-top: 4px; }
+    .cw-body { padding: 20px 26px 4px; display: flex; flex-direction: column; gap: 16px; }
+    .cw-field { display: flex; flex-direction: column; gap: 7px; }
+    .cw-field .form-input, .cw-field .form-select { margin-bottom: 0; }
+    .cw-note { display: flex; gap: 9px; font-size: 11.5px; color: var(--dim); line-height: 1.5; background: var(--card2); border: 1px solid var(--border2); border-radius: 9px; padding: 11px 13px; }
+    .cw-foot { display: flex; gap: 10px; justify-content: flex-end; padding: 18px 26px 24px; }
+    .cw-done { background: rgba(78,201,138,.08); border: 1px solid rgba(78,201,138,.25); border-radius: 9px; padding: 14px 15px; }
+    .cw-done-title { font-size: 14px; font-weight: 700; color: var(--green); margin-bottom: 6px; }
+    .cw-done-body { font-size: 12.5px; color: var(--muted); line-height: 1.55; }
+    .cw-link { font-family: 'JetBrains Mono', ui-monospace, monospace; color: var(--accent); word-break: break-all; font-size: 11.5px; }
+    .form-select { width: 100%; padding: 11px 13px; background: var(--bg); border: 1px solid var(--border); border-radius: 9px; color: var(--text); font-size: 14px; appearance: none; background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%238b90a3' d='M6 8L1 3h10z'/%3E%3C/svg%3E"); background-repeat: no-repeat; background-position: right 12px center; padding-right: 30px; cursor: pointer; }
+
     /* ── Loading ── */
     .loading { display: flex; align-items: center; gap: 10px; color: var(--muted); font-size: 13px; padding: 40px; }
     .spinner { width: 18px; height: 18px; border: 2px solid var(--border); border-top-color: var(--accent); border-radius: 50%; animation: spin .7s linear infinite; }
@@ -205,12 +232,13 @@ async function apiGet(path) {
 }
 
 async function apiPost(path, body) {
-  const r = await fetch(path, { method: 'POST', headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' }, body: JSON.stringify(body) });
+  const r = await fetch(path, { method: 'POST', headers: { 'Content-Type': 'application/json', 'Accept': 'application/json', 'Authorization': 'Bearer ' + (S.token || '') }, body: JSON.stringify(body) });
   if (!r.ok) { const e = await r.json().catch(() => ({})); throw new Error(e.error || r.statusText); }
   return r.json();
 }
 
 // ── Formatters ─────────────────────────────────────────────────────────────────
+function esc(s) { return String(s == null ? '' : s).replace(/[&<>"]/g, m => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;' }[m])); }
 function money(n, d=0) { return '$' + Number(n||0).toLocaleString('en-US', { minimumFractionDigits: d, maximumFractionDigits: d }); }
 function moneyAuto(n) { n = n || 0; if (n === 0) return '$0.00'; if (n < 0.005) return '$' + n.toFixed(4); if (n < 1) return '$' + n.toFixed(2); return '$' + Number(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
 function num(n)   { return Number(Math.round(n||0)).toLocaleString('en-US'); }
@@ -304,8 +332,15 @@ async function fetchAndStore() {
   const pdaily = Object.values(dayMap).sort((a,b) => a.day < b.day ? -1 : 1);
   const recent = [].concat(...tenants.map(t => t.recent)).sort((a,b) => a.mins - b.mins).slice(0, 20);
 
+  // Plan per tenant (for badges) — from the full roster, which carries plans.
+  const planById = {};
+  try {
+    const roster = await apiGet('/admin/tenants');
+    (roster?.tenants || []).forEach(t => { planById[t.id] = t.plan; });
+  } catch { /* badges are optional */ }
+
   // Write directly to S without calling setState (avoids triggering render())
-  S.data = { overall: usage.overall, tenants, pdaily, recent };
+  S.data = { overall: usage.overall, tenants, pdaily, recent, planById };
 }
 
 // Patch #main children in place — no sidebar re-render, scroll preserved.
@@ -776,13 +811,23 @@ function renderUsage(db) {
   return main;
 }
 
+function planBadge(plan) {
+  if (!plan) return '';
+  const label = String(plan).charAt(0).toUpperCase() + String(plan).slice(1);
+  return `<span class="plan-badge plan-${esc(plan)}">${esc(label)}</span>`;
+}
+
 function renderTenants(db) {
   if (!db) return div('loading', div('spinner'), 'Loading data…');
   const sorted = [...db.tenants].sort((a,b) => b.costUsd - a.costUsd);
   const maxCost = sorted[0]?.costUsd || 1;
 
   const main = div('fadein');
-  main.innerHTML = `<div class="page-header"><h2>Tenants</h2><p>${sorted.length} active tenants · ranked by lifetime LLM spend · est. monthly = projected run-rate · click to drill in</p></div>`;
+  main.innerHTML = `<div class="head-row">
+    <div class="page-header"><h2>Tenants</h2><p>${sorted.length} active tenants · ranked by lifetime LLM spend · click to drill in</p></div>
+    <button class="cw-new-btn" id="cw-open">+ Create workspace</button>
+  </div>`;
+  main.querySelector('#cw-open').addEventListener('click', () => setState({ createOpen: true }));
 
   const card = div('card');
   const cols = '30px 2fr 1.6fr 1fr 1fr 0.9fr';
@@ -800,6 +845,7 @@ function renderTenants(db) {
       <span class="mono" style="font-size:12px;color:var(--dim)">${String(i+1).padStart(2,'0')}</span>
       <div style="display:flex;align-items:center;gap:9px;min-width:0">
         <span style="font-size:13.5px;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${t.name}</span>
+        ${planBadge((db.planById || {})[t.id])}
         ${t.isSpike ? '<span class="badge-spike">SPIKE</span>' : ''}
       </div>
       <div style="display:flex;align-items:center;gap:10px">
@@ -1091,6 +1137,80 @@ function buildMainContent() {
   }
 }
 
+function renderCreateModal() {
+  const overlay = div('cw-overlay');
+  const modal = div('cw-modal');
+  modal.innerHTML = `
+    <div class="cw-head">
+      <h3>Create workspace</h3>
+      <p>Provision a new tenant and email its first admin an invite.</p>
+    </div>
+    <div class="cw-body" id="cw-form">
+      <div class="cw-field">
+        <label class="form-label" for="cw-name">Workspace name</label>
+        <input class="form-input" id="cw-name" type="text" placeholder="Acme Operations" autocomplete="off" />
+      </div>
+      <div class="cw-field">
+        <label class="form-label" for="cw-email">Admin email</label>
+        <input class="form-input" id="cw-email" type="email" placeholder="name@company.com" autocomplete="off" />
+      </div>
+      <div class="cw-field">
+        <label class="form-label" for="cw-plan">Plan</label>
+        <select class="form-select" id="cw-plan">
+          <option value="founding">Founding — $149/mo, full access</option>
+          <option value="starter">Starter — $149/mo</option>
+          <option value="team">Team — $300/mo</option>
+          <option value="enterprise">Enterprise — from $500/mo</option>
+        </select>
+      </div>
+      <div class="cw-note"><span>›</span><span>We email them a secure link to set their password (valid 7 days). They sign in at atlas.agntic.co and can start building right away.</span></div>
+      <div id="cw-err" class="err-msg" style="display:none"></div>
+    </div>
+    <div id="cw-success" style="display:none;padding:20px 26px 4px"></div>
+    <div class="cw-foot">
+      <button id="cw-cancel" class="btn-ghost">Cancel</button>
+      <button id="cw-submit" class="btn-primary" style="width:auto">Create workspace</button>
+    </div>`;
+
+  let created = false;
+  const close = () => { setState({ createOpen: false }); if (created) loadAll(false); };
+  overlay.addEventListener('click', close);
+  modal.addEventListener('click', e => e.stopPropagation());
+  modal.querySelector('#cw-cancel').addEventListener('click', close);
+
+  modal.querySelector('#cw-submit').addEventListener('click', async () => {
+    const name  = modal.querySelector('#cw-name').value.trim();
+    const email = modal.querySelector('#cw-email').value.trim();
+    const plan  = modal.querySelector('#cw-plan').value;
+    const errEl = modal.querySelector('#cw-err');
+    const btn   = modal.querySelector('#cw-submit');
+    errEl.style.display = 'none';
+    if (!name) { errEl.textContent = 'Enter a workspace name.'; errEl.style.display = 'block'; return; }
+    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) { errEl.textContent = 'Enter a valid admin email.'; errEl.style.display = 'block'; return; }
+    btn.disabled = true; btn.textContent = 'Creating…';
+    try {
+      const res = await apiPost('/admin/tenants', { name, plan, admin: { email } });
+      created = true;
+      const msg = res.invited
+        ? `<b style="color:var(--text)">${esc(email)}</b> has been emailed a secure link to set their password and sign in.`
+        : `Email isn't configured on this server — share this one-time set-password link (valid 7 days):<br><span class="cw-link">${esc(res.inviteLink || '')}</span>`;
+      modal.querySelector('#cw-form').style.display = 'none';
+      const succ = modal.querySelector('#cw-success');
+      succ.style.display = 'block';
+      succ.innerHTML = `<div class="cw-done"><div class="cw-done-title">✓ ${esc(name)} created</div><div class="cw-done-body">${msg}</div></div>`;
+      btn.style.display = 'none';
+      modal.querySelector('#cw-cancel').textContent = 'Done';
+    } catch (e) {
+      errEl.textContent = e.message; errEl.style.display = 'block';
+      btn.disabled = false; btn.textContent = 'Create workspace';
+    }
+  });
+
+  setTimeout(() => { const el = modal.querySelector('#cw-name'); if (el) el.focus(); }, 30);
+  overlay.appendChild(modal);
+  return overlay;
+}
+
 function render() {
   const root = document.getElementById('root');
   root.innerHTML = '';
@@ -1108,6 +1228,8 @@ function render() {
   const content = buildMainContent();
   if (content) main.appendChild(content);
   root.appendChild(main);
+
+  if (S.createOpen) root.appendChild(renderCreateModal());
 }
 
 // ── Boot ───────────────────────────────────────────────────────────────────────

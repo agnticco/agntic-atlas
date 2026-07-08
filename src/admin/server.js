@@ -17,6 +17,10 @@ import { logEvent, errFields } from '../utils/event-log.js';
 import { existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
+import { randomBytes } from 'node:crypto';
+import { renderInviteEmail } from '../auth/invite-email.js';
+import { sendMail } from '../utils/mailer.js';
+import { oauthRedirectBase } from '../connectors/oauth-redirect.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -60,6 +64,54 @@ export function mountAdminRoutes(app, { spine, requireAuth, requirePlatformAdmin
     } catch (err) {
       logEvent('admin.tenants.error', errFields(err));
       res.status(500).json({ error: err.message });
+    }
+  });
+
+  // ── Create a workspace (provision tenant + first admin + email invite) ──────
+  app.post('/admin/tenants', adminOnly, async (req, res) => {
+    try {
+      const name  = String(req.body?.name ?? '').trim();
+      const email = String(req.body?.admin?.email ?? req.body?.email ?? '').trim().toLowerCase();
+      const plan  = String(req.body?.plan ?? 'starter');
+      if (!name) return res.status(400).json({ error: 'Workspace name is required.' });
+      if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) return res.status(400).json({ error: 'A valid admin email is required.' });
+
+      // Derive a slug from the name, deduped against existing workspaces.
+      let root = name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 60) || 'workspace';
+      if (root.length < 2) root += '-ws';
+      let slug = root, n = 2;
+      while (tenants.getBySlug(slug)) slug = `${root}-${n++}`;
+
+      // 1. Tenant (with plan).
+      const tenant = tenants.create({ name, slug, plan });
+
+      // 2. First admin — random password; they set their own via the invite link.
+      const admin = await spine.auth.authProvider.register({
+        tenantId: tenant.id, email, password: randomBytes(24).toString('base64url'), role: 'admin', display_name: '',
+      });
+
+      // 3. 7-day invite token → email a set-password link (same /?reset= flow).
+      let invited = false, inviteLink = null;
+      try {
+        const token = spine.auth.passwordResetStore.create({
+          userId: admin.id, tenantId: tenant.id, ttlMs: 7 * 24 * 60 * 60 * 1000,
+        });
+        const base = oauthRedirectBase();
+        inviteLink = `${base}/?reset=${encodeURIComponent(token)}`;
+        const mail = renderInviteEmail({ inviteLink, userEmail: email, workspaceName: name, base });
+        const r = await sendMail({ to: email, subject: mail.subject, text: mail.text, html: mail.html });
+        invited = !!r?.delivered;
+      } catch (mailErr) {
+        logEvent('admin.tenant.invite_error', { tenant: tenant.id, error: mailErr.message ?? String(mailErr) });
+      }
+
+      logEvent('admin.tenant.created', { tenant: tenant.id, plan: tenant.plan, invited });
+      // When email wasn't delivered (mailer unconfigured), hand back the link so the
+      // operator can still onboard the admin manually.
+      res.json({ ok: true, tenant, admin: { id: admin.id, email: admin.email }, invited, ...(invited ? {} : { inviteLink }) });
+    } catch (err) {
+      logEvent('admin.tenant.create_error', errFields(err));
+      res.status(400).json({ error: err.message ?? String(err) });
     }
   });
 
