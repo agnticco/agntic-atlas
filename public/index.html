@@ -1630,6 +1630,56 @@
       </div>
     </sc-if>
 
+    <!-- ░ TEAM MODAL ░ -->
+    <sc-if value="{{ teamOpen }}" hint-placeholder-val="{{ false }}">
+      <div onClick="{{ onCloseTeam }}" style="position:fixed;inset:0;z-index:232;background:rgba(0,0,0,.6);display:flex;align-items:center;justify-content:center;backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px);animation:backdropIn .18s ease both">
+        <div onClick="{{ stopProp }}" style="width:460px;max-width:calc(100vw - 40px);max-height:82vh;overflow-y:auto;border-radius:22px;border:1px solid rgba(255,255,255,.1);background:linear-gradient(160deg,rgba(28,28,32,.98),rgba(16,16,18,.98));box-shadow:0 32px 80px rgba(0,0,0,.7),inset 0 1px 0 rgba(255,255,255,.08);padding:26px 26px 22px;animation:modalExpand .38s cubic-bezier(.34,1.15,.64,1) both">
+          <div style="display:flex;align-items:baseline;justify-content:space-between">
+            <div style="font-size:18px;font-weight:700;color:#fff">Team</div>
+            <div style="font-size:12px;color:rgba(255,255,255,.4)">{{ teamSeatsLabel }}</div>
+          </div>
+          <div style="font-size:12.5px;color:rgba(255,255,255,.4);margin:3px 0 16px">{{ tenantName }}</div>
+
+          <sc-for list="{{ teamMembers }}" as="m" hint-placeholder-count="1">
+            <div style="display:flex;align-items:center;gap:11px;padding:9px 0;border-bottom:1px solid rgba(255,255,255,.05)">
+              <span style="flex:none;width:30px;height:30px;border-radius:50%;background:linear-gradient(150deg,#43434B,#191920);display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:600;color:rgba(255,255,255,.9)">{{ m.initial }}</span>
+              <div style="flex:1;min-width:0">
+                <div style="font-size:13px;color:#fff;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ m.email }}</div>
+                <div style="font-size:11px;color:rgba(255,255,255,.35);margin-top:1px">{{ m.roleLabel }}</div>
+              </div>
+              <span style="flex:none;font-size:10.5px;font-weight:600;color:{{ m.badgeColor }};background:{{ m.badgeBg }};border-radius:6px;padding:3px 8px">{{ m.badgeText }}</span>
+              <sc-if value="{{ m.canRemove }}" hint-placeholder-val="{{ false }}">
+                <span onClick="{{ m.onRemove }}" style="flex:none;font-size:11px;color:rgba(240,120,110,.75);cursor:pointer;padding:3px 6px" style-hover="color:#f0a896">Remove</span>
+              </sc-if>
+            </div>
+          </sc-for>
+
+          <sc-if value="{{ teamCanInvite }}" hint-placeholder-val="{{ false }}">
+            <div style="margin-top:18px">
+              <div style="font-size:10px;font-weight:600;letter-spacing:.16em;text-transform:uppercase;color:rgba(255,255,255,.25);margin-bottom:8px">Invite a teammate</div>
+              <div style="display:flex;gap:8px">
+                <input value="{{ teamInviteEmail }}" onInput="{{ onTeamInviteInput }}" onKeyDown="{{ onTeamInviteKey }}" type="email" placeholder="name@company.com" style="flex:1;min-width:0;background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.12);border-radius:9px;padding:10px 12px;color:#fff;font-family:inherit;font-size:13.5px;outline:none"/>
+                <button onClick="{{ onInviteTeammate }}" style="flex:none;border:none;background:#fff;color:#0a0a0a;font-family:inherit;font-size:13.5px;font-weight:600;padding:10px 18px;border-radius:9px;cursor:pointer" style-hover="background:rgba(255,255,255,.9)">Invite</button>
+              </div>
+              <div style="font-size:11.5px;color:rgba(255,255,255,.3);margin-top:8px;line-height:1.45">They'll get an email to set their password and join {{ tenantName }}.</div>
+            </div>
+          </sc-if>
+          <sc-if value="{{ teamAtLimit }}" hint-placeholder-val="{{ false }}">
+            <div style="margin-top:16px;font-size:12px;color:rgba(224,164,88,.9);background:rgba(224,164,88,.08);border:1px solid rgba(224,164,88,.2);border-radius:9px;padding:11px 13px;line-height:1.5">{{ teamLimitMsg }}</div>
+          </sc-if>
+
+          <sc-if value="{{ teamErr }}" hint-placeholder-val="{{ false }}">
+            <div style="margin-top:12px;font-size:12.5px;color:#f0a896">{{ teamErr }}</div>
+          </sc-if>
+          <sc-if value="{{ teamFlash }}" hint-placeholder-val="{{ false }}">
+            <div style="margin-top:12px;font-size:12.5px;color:#9fd6a8">{{ teamFlash }}</div>
+          </sc-if>
+
+          <button onClick="{{ onCloseTeam }}" style="width:100%;margin-top:18px;border:1px solid rgba(255,255,255,.12);background:rgba(255,255,255,.04);color:rgba(255,255,255,.7);font-family:inherit;font-size:13.5px;font-weight:500;padding:10px;border-radius:10px;cursor:pointer" style-hover="background:rgba(255,255,255,.07)">Done</button>
+        </div>
+      </div>
+    </sc-if>
+
     <!-- ░ CONNECTIONS FLYOUT ░ -->
     <sc-if value="{{ modeConnections }}" hint-placeholder-val="{{ false }}">
       <div onClick="{{ onCloseConnections }}" style="position:fixed;inset:0;z-index:200"></div>
@@ -1747,6 +1797,10 @@
           <div style="display:flex;align-items:center;justify-content:space-between;padding:10px 16px;border-bottom:1px solid rgba(255,255,255,.05)">
             <div style="font-size:13px;color:rgba(255,255,255,.55)">{{ connectedCount }} connections</div>
             <div onClick="{{ onToggleConnections }}" style="font-size:12px;color:#9fd6a8;cursor:pointer" style-hover="color:#c8f0ce">Manage →</div>
+          </div>
+          <div style="display:flex;align-items:center;justify-content:space-between;padding:10px 16px;border-bottom:1px solid rgba(255,255,255,.05)">
+            <div style="font-size:13px;color:rgba(255,255,255,.55)">{{ teamCountLabel }}</div>
+            <div onClick="{{ onOpenTeam }}" style="font-size:12px;color:#9fd6a8;cursor:pointer" style-hover="color:#c8f0ce">Manage →</div>
           </div>
           <div style="padding:8px 16px 4px;font-size:10px;font-weight:600;letter-spacing:.16em;text-transform:uppercase;color:rgba(255,255,255,.25)">Appearance</div>
           <div style="padding:4px 16px 12px">
@@ -2989,6 +3043,7 @@ class Component extends DCLogic {
     this._loadHomeData();
     this._loadInbox();
     this._loadWhatsNew();
+    this._loadTeam();
     // Bring back an in-progress build from a previous session/refresh.
     this._restoreBuild((tenant && tenant.id) || "", (user && user.email) || "");
     // Show tutorial to new users (or those who haven't dismissed it).
@@ -3016,6 +3071,39 @@ class Component extends DCLogic {
   dismissWhatsNew() {
     this.setState({ whatsNewOpen: false });
     this._ackWhatsNew();
+  }
+
+  // ── Team / members ──────────────────────────────────────────────────────────
+  _loadTeam() {
+    const self = this;
+    fetch("/api/builder/team", { headers: { "Authorization": "Bearer " + this.state.authToken } })
+      .then(r => r.ok ? r.json() : null)
+      .then(d => { if (d) self.setState({ team: d }); })
+      .catch(() => {});
+  }
+  openTeam() { this.setState({ teamOpen: true, teamErr: "", teamFlash: "", teamInviteEmail: "" }); this._loadTeam(); }
+  closeTeam() { this.setState({ teamOpen: false, teamErr: "", teamFlash: "" }); }
+  inviteTeammate() {
+    const self = this;
+    const email = (this.state.teamInviteEmail || "").trim();
+    if (!email) return;
+    this.setState({ teamErr: "", teamFlash: "" });
+    fetch("/api/builder/team/invite", { method: "POST", headers: this._H(), body: JSON.stringify({ email: email }) })
+      .then(r => r.json().then(d => ({ ok: r.ok, d: d })))
+      .then(res => {
+        if (!res.ok) { self.setState({ teamErr: (res.d && res.d.error) || "Could not send the invite." }); return; }
+        self.setState({ teamInviteEmail: "", teamFlash: "Invite sent to " + email });
+        self._loadTeam();
+      })
+      .catch(() => self.setState({ teamErr: "Could not send the invite." }));
+  }
+  removeTeammate(id) {
+    const self = this;
+    if (!id) return;
+    fetch("/api/builder/team/" + encodeURIComponent(id) + "/remove", { method: "POST", headers: this._H(), body: "{}" })
+      .then(r => r.ok ? r.json() : null)
+      .then(() => { self.setState({ teamFlash: "Teammate removed." }); self._loadTeam(); })
+      .catch(() => {});
   }
 
   _loadConnections() {
@@ -5104,6 +5192,30 @@ class Component extends DCLogic {
         notes: (e.notes || []).map(n => ({ text: n })),
       })),
       onDismissWhatsNew: () => this.dismissWhatsNew(),
+      teamOpen: !!S.teamOpen,
+      teamInviteEmail: S.teamInviteEmail || "",
+      teamErr: S.teamErr || "",
+      teamFlash: S.teamFlash || "",
+      teamCountLabel: (S.team && S.team.members) ? (S.team.members.length + " member" + (S.team.members.length === 1 ? "" : "s")) : "Team",
+      teamSeatsLabel: (S.team && S.team.seats) ? (S.team.seats.limit == null ? (S.team.seats.used + " member" + (S.team.seats.used === 1 ? "" : "s")) : (S.team.seats.used + " of " + S.team.seats.limit + " seat" + (S.team.seats.limit === 1 ? "" : "s"))) : "",
+      teamMembers: ((S.team && S.team.members) || []).map(m => ({
+        id: m.id, email: m.email,
+        initial: (m.email || "?").charAt(0).toUpperCase(),
+        roleLabel: (m.role === "admin" ? "Admin" : "Member"),
+        badgeText: m.is_you ? "You" : (m.pending ? "Invited" : "Active"),
+        badgeColor: m.is_you ? "rgba(255,255,255,.6)" : (m.pending ? "#8b9cff" : "#9fd6a8"),
+        badgeBg: m.is_you ? "rgba(255,255,255,.06)" : (m.pending ? "rgba(107,123,255,.14)" : "rgba(127,194,138,.1)"),
+        canRemove: !!(S.team && S.team.isAdmin) && !m.is_you,
+        onRemove: () => this.removeTeammate(m.id),
+      })),
+      teamCanInvite: !!(S.team && S.team.isAdmin && !(S.team.seats && S.team.seats.limit != null && S.team.seats.used >= S.team.seats.limit)),
+      teamAtLimit: !!(S.team && S.team.isAdmin && S.team.seats && S.team.seats.limit != null && S.team.seats.used >= S.team.seats.limit),
+      teamLimitMsg: (S.team ? ("Your " + (S.team.plan || "plan") + " plan includes " + ((S.team.seats && S.team.seats.limit != null) ? S.team.seats.limit : 1) + " seat" + (((S.team.seats && S.team.seats.limit) === 1) ? "" : "s") + ". Contact us to add teammates.") : ""),
+      onOpenTeam: () => this.openTeam(),
+      onCloseTeam: () => this.closeTeam(),
+      onTeamInviteInput: (e) => this.setState({ teamInviteEmail: e.target.value }),
+      onTeamInviteKey: (e) => { if (e.key === "Enter") { e.preventDefault(); this.inviteTeammate(); } },
+      onInviteTeammate: () => this.inviteTeammate(),
       connectorModalOpen: !!(S.connectorModal || S.connectorModalClosing),
       connectorModalAnim: S.connectorModalClosing
         ? "modalCollapse .28s cubic-bezier(.4,0,1,1) both"

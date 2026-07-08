@@ -29,6 +29,11 @@ import { getAirtableAccessToken } from '../connectors/airtable/oauth.js';
 import { sumTimeSavedMinutes, timeSavedMinutesForRun, isValueRun } from '../workflows/time-saved.js';
 import { APP_VERSION } from '../version.js';
 import { notesSince } from '../release-notes.js';
+import { sendMail } from '../utils/mailer.js';
+import { renderInviteEmail } from '../auth/invite-email.js';
+import { oauthRedirectBase } from '../connectors/oauth-redirect.js';
+import { seatLimit } from '../entitlements/index.js';
+import { randomBytes } from 'node:crypto';
 
 // Retry an LLM call up to maxRetries times on transient provider errors (500/529/503).
 async function withLLMRetry(fn, maxRetries = 2) {
@@ -479,6 +484,67 @@ export function mountBuilderRoutes(app, { spine, requireActiveTenant, requireAut
       spine.auth.userStore.update(req.user.id, { preferences: prefs }, req.tenant.id);
       res.json({ ok: true, version: APP_VERSION });
     } catch (err) { res.status(500).json({ error: err.message ?? String(err) }); }
+  });
+
+  // ── Team: members list + invite teammate (seat-gated) + remove ──────────────
+  const activeMembers = (tenantId) => spine.auth.userStore.list(tenantId).filter((u) => !u.disabled_at);
+
+  app.get('/api/builder/team', requireActiveTenant, (req, res) => {
+    try {
+      const tenant = spine.auth.tenantStore.get(req.tenant.id);
+      const limit = seatLimit(tenant?.plan);
+      const members = activeMembers(req.tenant.id).map((u) => ({
+        id: u.id, email: u.email, display_name: u.display_name, role: u.role,
+        pending: !u.last_login_at, is_you: u.id === req.user.id,
+      }));
+      res.json({
+        members, plan: tenant?.plan ?? 'starter', isAdmin: req.user.role === 'admin',
+        seats: { used: members.length, limit: limit === Infinity ? null : limit },
+      });
+    } catch (err) { res.status(500).json({ error: err.message ?? String(err) }); }
+  });
+
+  app.post('/api/builder/team/invite', requireActiveTenant, async (req, res) => {
+    try {
+      if (req.user.role !== 'admin') return res.status(403).json({ error: 'Only workspace admins can invite teammates.' });
+      const email = String(req.body?.email ?? '').trim().toLowerCase();
+      const role = req.body?.role === 'admin' ? 'admin' : 'user';
+      if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) return res.status(400).json({ error: 'Enter a valid email address.' });
+      if (spine.auth.userStore.findByEmail(email)) return res.status(409).json({ error: 'That email is already in use on Atlas.' });
+
+      const tenant = spine.auth.tenantStore.get(req.tenant.id);
+      const limit = seatLimit(tenant?.plan);
+      if (activeMembers(req.tenant.id).length >= limit) {
+        return res.status(402).json({ error: `Your ${tenant?.plan ?? 'plan'} plan includes ${limit} seat${limit === 1 ? '' : 's'}. Upgrade to add teammates.`, code: 'PLAN_LIMIT', feature: 'seats' });
+      }
+
+      const member = await spine.auth.authProvider.register({
+        tenantId: req.tenant.id, email, password: randomBytes(24).toString('base64url'), role, display_name: '',
+      });
+      let invited = false, inviteLink = null;
+      try {
+        const token = spine.auth.passwordResetStore.create({ userId: member.id, tenantId: req.tenant.id, ttlMs: 7 * 24 * 60 * 60 * 1000 });
+        const base = oauthRedirectBase();
+        inviteLink = `${base}/?reset=${encodeURIComponent(token)}`;
+        const mail = renderInviteEmail({ inviteLink, userEmail: email, workspaceName: tenant?.name ?? 'your workspace', base });
+        const r = await sendMail({ to: email, subject: mail.subject, text: mail.text, html: mail.html });
+        invited = !!r?.delivered;
+      } catch (mailErr) { logEvent('team.invite.mail_error', { tenant: req.tenant.id, error: mailErr.message ?? String(mailErr) }); }
+
+      logEvent('team.invite', { tenant: req.tenant.id, by: req.user.id, invited });
+      res.json({ ok: true, member: { id: member.id, email: member.email, role: member.role, pending: true, is_you: false }, invited, ...(invited ? {} : { inviteLink }) });
+    } catch (err) { res.status(400).json({ error: err.message ?? String(err) }); }
+  });
+
+  app.post('/api/builder/team/:userId/remove', requireActiveTenant, (req, res) => {
+    try {
+      if (req.user.role !== 'admin') return res.status(403).json({ error: 'Only workspace admins can remove teammates.' });
+      if (req.params.userId === req.user.id) return res.status(400).json({ error: "You can't remove yourself." });
+      spine.auth.userStore.disable(req.params.userId, req.tenant.id); // tenant-guarded; no-op if not in this tenant
+      try { spine.auth.sessionStore.revokeAllForUser(req.params.userId); } catch { /* best effort */ }
+      logEvent('team.remove', { tenant: req.tenant.id, by: req.user.id, target: req.params.userId });
+      res.json({ ok: true });
+    } catch (err) { res.status(400).json({ error: err.message ?? String(err) }); }
   });
 
   // ── GET /api/builder/greeting ────────────────────────────────────────────────
