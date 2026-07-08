@@ -20,6 +20,7 @@ CREATE TABLE IF NOT EXISTS tenants (
   slug        TEXT UNIQUE NOT NULL,
   status      TEXT NOT NULL CHECK(status IN ('active','suspended')) DEFAULT 'active',
   plan        TEXT NOT NULL DEFAULT 'starter',
+  archived_at TEXT,
   created_at  TEXT NOT NULL,
   updated_at  TEXT NOT NULL
 );
@@ -45,6 +46,9 @@ export class TenantStore {
     const cols = this.db.prepare('PRAGMA table_info(tenants)').all().map((c) => c.name);
     if (!cols.includes('plan')) {
       this.db.exec("ALTER TABLE tenants ADD COLUMN plan TEXT NOT NULL DEFAULT 'starter'");
+    }
+    if (!cols.includes('archived_at')) {
+      this.db.exec('ALTER TABLE tenants ADD COLUMN archived_at TEXT');
     }
   }
 
@@ -106,10 +110,10 @@ export class TenantStore {
     return this.db.prepare('SELECT * FROM tenants ORDER BY created_at').all();
   }
 
-  /** True iff the tenant exists AND is active. Used to gate request handling. */
+  /** True iff the tenant exists, is active, AND is not archived. Gates requests + scheduling. */
   isActive(id) {
     const t = this.get(id);
-    return !!t && t.status === 'active';
+    return !!t && t.status === 'active' && !t.archived_at;
   }
 
   setStatus(id, status) {
@@ -117,6 +121,26 @@ export class TenantStore {
     if (id === PLATFORM_TENANT_ID && status === 'suspended') throw new Error('cannot suspend the platform tenant');
     this.db.prepare('UPDATE tenants SET status = ?, updated_at = ? WHERE id = ?')
       .run(status, new Date().toISOString(), id);
+    return this.get(id);
+  }
+
+  /**
+   * Soft-delete (archive) a tenant — hidden + inactive (users locked out,
+   * scheduling halted), but all data is retained so it can be restored. A
+   * separate hard-purge removes the data permanently. Cannot archive platform.
+   */
+  archive(id) {
+    if (id === PLATFORM_TENANT_ID) throw new Error('cannot archive the platform tenant');
+    if (!this.get(id)) throw new Error('tenant not found');
+    const now = new Date().toISOString();
+    this.db.prepare('UPDATE tenants SET archived_at = ?, updated_at = ? WHERE id = ?').run(now, now, id);
+    return this.get(id);
+  }
+
+  /** Restore a previously-archived tenant to active. */
+  restore(id) {
+    this.db.prepare('UPDATE tenants SET archived_at = NULL, status = ?, updated_at = ? WHERE id = ?')
+      .run('active', new Date().toISOString(), id);
     return this.get(id);
   }
 }

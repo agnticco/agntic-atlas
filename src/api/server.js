@@ -784,6 +784,17 @@ export async function bootSpine() {
     });
   });
 
+  // Halt scheduled/email-triggered runs for suspended or archived tenants — a
+  // non-paying or cancelled tenant's automations must not run (nor cost money).
+  // Fail-open: unknown/legacy tenant ids are allowed; only tenants that exist
+  // AND are explicitly inactive are skipped.
+  engine.workflowScheduler.registerTenantGate((tenantId) => {
+    try {
+      const t = auth.tenantStore.get(tenantId);
+      return !t || (t.status === 'active' && !t.archived_at);
+    } catch { return true; }
+  });
+
   // Reconcile runs orphaned in 'running' by a prior crash/restart BEFORE the
   // scheduler starts, so the inbox never shows a perma-running run.
   try {
