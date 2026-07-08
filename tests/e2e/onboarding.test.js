@@ -1,0 +1,101 @@
+/**
+ * Onboarding suite (#8) — admin-provisioned workspaces.
+ *
+ * Boots the real spine, creates the platform admin via /setup, then exercises
+ * POST /admin/tenants: create a tenant with a plan + first admin, issue a 7-day
+ * invite token. Offline (no mailer configured → invite link returned in the
+ * response), deterministic.
+ *
+ *   node --test tests/e2e/onboarding.test.js
+ */
+import { test, before, after } from 'node:test';
+import assert from 'node:assert/strict';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
+let spine, server, base, tmp, platformToken;
+
+const api = async (method, path, { token, body } = {}) => {
+  const res = await fetch(base + path, {
+    method,
+    headers: { 'content-type': 'application/json', ...(token ? { authorization: `Bearer ${token}` } : {}) },
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  const ct = res.headers.get('content-type') || '';
+  const data = ct.includes('application/json') ? await res.json().catch(() => null) : await res.text();
+  return { status: res.status, data };
+};
+
+before(async () => {
+  tmp = mkdtempSync(join(tmpdir(), 'atlas-onb-'));
+  for (const [k, v] of Object.entries({
+    WORKFLOWS_DB: 'w.sqlite', SOURCES_DB: 's.sqlite', VECTOR_DIR: 'vectors',
+    AUTH_DB: 'a.sqlite', AUTH_SECRET: '.jwt', OAUTH_DB: 'o.sqlite', OAUTH_KEY: '.okey',
+    INTERACTIONS_DB: 'i.sqlite', INBOX_DB: 'inbox.sqlite',
+  })) process.env[k] = join(tmp, v);
+  process.env.DB_BACKUP_KEEP = '0';
+  process.env.SCHEDULER_ENABLED = 'false';
+
+  const { bootSpine, createApp } = await import('../../src/api/server.js');
+  spine = await bootSpine();
+  const app = createApp(spine);
+  server = await new Promise((r) => { const s = app.listen(0, () => r(s)); });
+  base = `http://127.0.0.1:${server.address().port}`;
+
+  const setup = await api('POST', '/setup', { body: { token: spine.auth.bootstrap.token, email: 'ops@atlas.dev', password: 'ops-pw-12345' } });
+  platformToken = setup.data.token;
+  assert.ok(platformToken, 'platform admin token');
+});
+
+after(async () => {
+  try { server?.close(); } catch { /* ignore */ }
+  try { spine?.close(); } catch { /* ignore */ }
+  try { await spine?.disposeModels?.(); } catch { /* ignore */ }
+  try { rmSync(tmp, { recursive: true, force: true }); } catch { /* ignore */ }
+});
+
+test('create workspace: requires platform admin', async () => {
+  const r = await api('POST', '/admin/tenants', { body: { name: 'Nope', admin: { email: 'x@y.test' } } });
+  assert.equal(r.status, 401, 'unauthenticated is rejected');
+});
+
+test('create workspace: provisions tenant + plan + invite token', async () => {
+  const r = await api('POST', '/admin/tenants', { token: platformToken, body: { name: 'Acme Operations', plan: 'team', admin: { email: 'boss@acme.test' } } });
+  assert.equal(r.status, 200, `200 (got ${r.status}: ${JSON.stringify(r.data)})`);
+  assert.equal(r.data.ok, true);
+  assert.equal(r.data.tenant.plan, 'team', 'plan stored');
+  assert.equal(r.data.tenant.slug, 'acme-operations', 'slug derived from name');
+  assert.equal(r.data.tenant.status, 'active');
+  assert.equal(r.data.admin.email, 'boss@acme.test');
+  // No mailer in test → invite not delivered, link handed back instead.
+  assert.equal(r.data.invited, false, 'mailer unconfigured → not delivered');
+  assert.ok(typeof r.data.inviteLink === 'string' && r.data.inviteLink.includes('/?reset='), 'invite link returned');
+
+  // The invite token is a real, valid reset token.
+  const token = new URL(r.data.inviteLink).searchParams.get('reset');
+  const verify = await api('POST', '/auth/reset/verify', { body: { token } });
+  assert.equal(verify.status, 200);
+  assert.equal(verify.data.valid, true, 'invite token validates via the reset flow');
+});
+
+test('create workspace: shows up in the tenant roster with its plan', async () => {
+  const r = await api('GET', '/admin/tenants', { token: platformToken });
+  assert.equal(r.status, 200);
+  const acme = (r.data.tenants || []).find((t) => t.id === 'acme-operations');
+  assert.ok(acme, 'new tenant listed');
+  assert.equal(acme.plan, 'team', 'roster carries the plan');
+});
+
+test('create workspace: validates input + dedupes slugs', async () => {
+  const noEmail = await api('POST', '/admin/tenants', { token: platformToken, body: { name: 'No Email Co' } });
+  assert.equal(noEmail.status, 400, 'missing admin email → 400');
+
+  const badPlan = await api('POST', '/admin/tenants', { token: platformToken, body: { name: 'Bad Plan Co', plan: 'wizard', admin: { email: 'a@bad.test' } } });
+  assert.equal(badPlan.data.tenant.plan, 'starter', 'unknown plan falls back to starter');
+
+  // Same name again → slug is deduped, not a crash.
+  const dupe = await api('POST', '/admin/tenants', { token: platformToken, body: { name: 'Acme Operations', plan: 'starter', admin: { email: 'boss2@acme.test' } } });
+  assert.equal(dupe.status, 200);
+  assert.equal(dupe.data.tenant.slug, 'acme-operations-2', 'duplicate name → -2 slug');
+});
