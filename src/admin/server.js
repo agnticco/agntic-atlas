@@ -58,7 +58,10 @@ export function mountAdminRoutes(app, { spine, requireAuth, requirePlatformAdmin
       const allTenants = tenants.list();
       const result = allTenants.map(t => {
         const metrics = _tenantRunMetrics(store.db, t.id);
-        return { ...t, metrics };
+        // "pending" = the workspace has been created/invited but nobody has signed
+        // in yet (no user has a last_login_at).
+        const pending = !spine.auth.userStore.hasLogin(t.id);
+        return { ...t, metrics, pending };
       });
       res.json({ tenants: result });
     } catch (err) {

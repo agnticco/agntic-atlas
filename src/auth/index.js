@@ -99,6 +99,7 @@ export async function createAuthSubsystem({
   function issueSession({ user, transport = 'bearer', userAgent = null, ip = null }) {
     const ttlMs = transport === 'cookie' ? COOKIE_TTL_MS : BEARER_TTL_MS;
     const session = sessionStore.create({ userId: user.id, tenantId: user.tenant_id, ttlMs, transport, userAgent, ip });
+    userStore.markLogin(user.id); // track first/most-recent sign-in (powers the "invited, not yet signed in" status)
     const token = tokenService.sign({ userId: user.id, tenantId: user.tenant_id, sessionId: session.id, role: user.role, ttlMs });
     return { session, token, ttlMs };
   }
