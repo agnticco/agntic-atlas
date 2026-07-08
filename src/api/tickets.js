@@ -68,38 +68,99 @@ export function screenshotToDataUrl(relPath) {
 // broadcast tokens (<!channel>, <!here>) or user mentions (<@U…>) into the alert.
 const slackEscape = (s) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
+// Per-type Slack identity — the bot names + icons itself by what came in, so the
+// channel is scannable at a glance.
+const TYPE_SLACK_META = {
+  bug:     { label: 'bug',     emoji: '🐞', username: 'Atlas · Bug Report',   icon: ':lady_beetle:' },
+  idea:    { label: 'idea',    emoji: '💡', username: 'Atlas · Feature Idea', icon: ':bulb:' },
+  request: { label: 'request', emoji: '✨', username: 'Atlas · Request',       icon: ':sparkles:' },
+};
+
+async function postSlack(token, payload) {
+  const r = await fetch('https://slack.com/api/chat.postMessage', {
+    method: 'POST',
+    headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  return r.json().catch(() => ({ ok: false, error: 'bad_response' }));
+}
+
+/** Build the Block Kit message for a new ticket: type-named bot, session metadata,
+ *  and a button linking straight to the ticket in the admin app. */
+export function buildTicketSlackMessage(ticket, ticketUrl) {
+  const meta = TYPE_SLACK_META[ticket.type] ?? TYPE_SLACK_META.bug;
+  const ctx = ticket.context ?? {};
+  const sev = ticket.type === 'bug' && ticket.severity ? ` · ${ticket.severity}` : '';
+  const workspace = slackEscape(ctx.tenantName ?? ticket.tenant_id);
+  const who = slackEscape(ticket.user_name
+    ? `${ticket.user_name} (${ticket.user_email ?? ticket.user_id})`
+    : (ticket.user_email ?? ticket.user_id));
+  const where = slackEscape([ctx.surface, ctx.phase].filter(Boolean).join(' · ') || '—');
+  const errN = Array.isArray(ctx.consoleErrors) ? ctx.consoleErrors.length : 0;
+  const netN = Array.isArray(ctx.networkErrors) ? ctx.networkErrors.length : 0;
+  const safeUrl = (ctx.url && /^https?:\/\//.test(ctx.url)) ? ctx.url.replace(/[<>|]/g, '') : null;
+
+  const contextBits = [
+    safeUrl ? `<${safeUrl}|page>` : null,
+    ctx.viewport ? slackEscape(ctx.viewport) : null,
+    ctx.appVersion ? `v${slackEscape(ctx.appVersion)}` : null,
+    `${errN} console err${errN === 1 ? '' : 's'}`,
+    `${netN} failed req${netN === 1 ? '' : 's'}`,
+    ctx.workflowId ? `wf \`${slackEscape(ctx.workflowId)}\`` : null,
+    `\`${ticket.id}\``,
+  ].filter(Boolean).join('   ·   ');
+
+  const blocks = [
+    { type: 'header', text: { type: 'plain_text', text: `${meta.emoji} New ${meta.label}${sev}`, emoji: true } },
+    { type: 'section', text: { type: 'mrkdwn', text: `*${slackEscape(ticket.title)}*` } },
+    { type: 'section', fields: [
+      { type: 'mrkdwn', text: `*Workspace*\n${workspace}` },
+      { type: 'mrkdwn', text: `*From*\n${who}` },
+      { type: 'mrkdwn', text: `*Where*\n${where}` },
+      { type: 'mrkdwn', text: `*App version*\n${slackEscape(ctx.appVersion ?? '—')}` },
+    ] },
+    { type: 'section', text: { type: 'mrkdwn', text: slackEscape(ticket.description).slice(0, 600) || '_(no description)_' } },
+    { type: 'context', elements: [{ type: 'mrkdwn', text: contextBits }] },
+    { type: 'actions', elements: [{ type: 'button', text: { type: 'plain_text', text: 'Open ticket in admin  →', emoji: true }, url: ticketUrl, style: 'primary' }] },
+  ];
+
+  return {
+    username: meta.username,
+    icon_emoji: meta.icon,
+    text: `${meta.emoji} New ${meta.label}${sev}: ${slackEscape(ticket.title)}`, // notification-preview fallback
+    blocks,
+  };
+}
+
 /** Best-effort team alert on a new ticket. Never throws into the request path. */
 async function notifyTeam(spine, ticket) {
   const base = oauthRedirectBase();
   const adminUrl = `${base}/admin`;
-  const who = slackEscape(ticket.user_email ?? ticket.user_id);
-  const workspace = slackEscape(ticket.context?.tenantName ?? ticket.tenant_id);
-  const sev = ticket.type === 'bug' && ticket.severity ? ` (${ticket.severity})` : '';
+  const ticketUrl = `${adminUrl}?ticket=${encodeURIComponent(ticket.id)}`;
 
   // Slack → the internal Agntic workspace (platform bot), not the customer's.
   const channel = process.env.SUPPORT_SLACK_CHANNEL;
   const token = process.env.SLACK_BOT_TOKEN;
   if (channel && token) {
-    const text = [
-      `🆕 New ${ticket.type}${sev}: *${slackEscape(ticket.title)}*`,
-      `${workspace} · ${who}`,
-      slackEscape(ticket.description).slice(0, 400),
-      `<${adminUrl}|Open in Atlas admin>`,
-    ].join('\n');
     try {
-      await fetch('https://slack.com/api/chat.postMessage', {
-        method: 'POST',
-        headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
-        body: JSON.stringify({ channel, text, unfurl_links: false }),
-      });
+      const msg = buildTicketSlackMessage(ticket, ticketUrl);
+      const payload = { channel, unfurl_links: false, text: msg.text, blocks: msg.blocks, username: msg.username, icon_emoji: msg.icon_emoji };
+      let r = await postSlack(token, payload);
+      // Custom username/icon needs the chat:write.customize scope. If that's the
+      // only blocker, re-post without them so the alert still lands.
+      if (r && r.ok === false && /scope|customize|username|icon/i.test(r.error ?? '')) {
+        const { username, icon_emoji, ...plain } = payload;
+        r = await postSlack(token, plain);
+      }
+      if (r && r.ok === false) logEvent('tickets.notify.slack_error', { error: r.error, channel });
     } catch (err) { logEvent('tickets.notify.slack_error', errFields(err)); }
   }
 
-  // Email → the support inbox, carrying the full brief.
+  // Email → the support inbox, carrying the full brief (deep-linked to the ticket).
   const to = process.env.SUPPORT_EMAIL;
   if (to) {
     try {
-      const brief = renderTicketBrief(ticket, { adminUrl });
+      const brief = renderTicketBrief(ticket, { adminUrl: ticketUrl });
       await sendMail({ to, subject: `[Atlas] ${ticketGithubTitle(ticket)}`, text: brief });
     } catch (err) { logEvent('tickets.notify.email_error', errFields(err)); }
   }

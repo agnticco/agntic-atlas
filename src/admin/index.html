@@ -239,6 +239,8 @@ function getToken()    { try { return localStorage.getItem('atlas_admin_token');
 function setToken(t,e) { try { localStorage.setItem('atlas_admin_token', t); if (e) localStorage.setItem('atlas_admin_email', e); } catch {} }
 function clearToken()  { try { localStorage.removeItem('atlas_admin_token'); localStorage.removeItem('atlas_admin_email'); } catch {} }
 function getSaved()    { try { return { token: localStorage.getItem('atlas_admin_token'), email: localStorage.getItem('atlas_admin_email') }; } catch { return {}; } }
+// Deep link from a Slack/email notification: /admin?ticket=<id> opens it directly.
+function _pendingTicket() { try { return new URLSearchParams(location.search).get('ticket'); } catch { return null; } }
 
 // ── API ────────────────────────────────────────────────────────────────────────
 async function apiGet(path) {
@@ -679,8 +681,9 @@ function renderLogin() {
       // Verify platform admin
       const me = await apiGet('/admin/me');
       if (!me || !me.isAdmin) throw new Error('This account does not have platform admin access.');
-      setState({ view: 'dashboard', token: data.token, adminEmail: email, error: '' });
-      loadAll();
+      const dt = _pendingTicket();
+      setState({ view: dt ? 'ticket' : 'dashboard', token: data.token, adminEmail: email, error: '' });
+      if (dt) { loadTicketDetail(dt); loadAll(false); } else { loadAll(); }
     } catch(e) {
       errDiv.textContent = e.message;
       errDiv.style.display = 'block';
@@ -1615,9 +1618,10 @@ function render() {
     try {
       const me = await apiGet('/admin/me');
       if (me && me.isAdmin) {
-        S.view = 'dashboard';
+        const dt = _pendingTicket();
+        S.view = dt ? 'ticket' : 'dashboard';
         render();
-        loadAll();
+        if (dt) { loadTicketDetail(dt); loadAll(false); } else { loadAll(); }
         return;
       }
     } catch {}
