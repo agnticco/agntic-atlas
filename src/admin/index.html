@@ -154,6 +154,17 @@
     .cw-new-btn:hover { background: #5a6bf0; }
     .btn-ghost { padding: 10px 16px; background: transparent; color: var(--muted); border: 1px solid var(--border); border-radius: 9px; font-size: 13.5px; font-weight: 600; cursor: pointer; }
     .btn-ghost:hover { color: var(--text); border-color: var(--dim); }
+    .lc-ok { background: var(--accent); color: #fff; border: none; }
+    .lc-ok:hover { background: #5a6bf0; }
+    .lc-warn { background: rgba(224,164,88,.12); color: var(--amber); border: 1px solid rgba(224,164,88,.3); }
+    .lc-warn:hover { background: rgba(224,164,88,.2); }
+    .lc-danger { background: rgba(240,97,109,.1); color: var(--red); border: 1px solid rgba(240,97,109,.3); }
+    .lc-danger:hover { background: rgba(240,97,109,.18); }
+    .lc-ok:disabled, .lc-danger:disabled, .lc-warn:disabled { opacity: .5; cursor: not-allowed; }
+    .status-badge { padding: 3px 10px; border-radius: 6px; font-size: 11px; font-weight: 700; }
+    .st-active { color: var(--green); background: rgba(78,201,138,.13); }
+    .st-suspended { color: var(--amber); background: rgba(224,164,88,.14); }
+    .st-archived { color: var(--dim); background: rgba(139,144,163,.12); }
     .plan-badge { padding: 2px 8px; border-radius: 5px; font-size: 10.5px; font-weight: 700; letter-spacing: .02em; text-transform: uppercase; flex-shrink: 0; }
     .plan-founding { color: var(--amber); background: rgba(224,164,88,.14); }
     .plan-team     { color: var(--accent); background: rgba(107,123,255,.15); }
@@ -312,13 +323,13 @@ async function fetchAndStore() {
   const usage = await apiGet('/admin/usage');
   if (!usage || !Array.isArray(usage.perTenant)) return;
 
-  const tenants = [];
+  const enriched = [];
   for (const p of usage.perTenant) {
     const [cost, runs] = await Promise.all([
       apiGet('/admin/tenants/' + p.tenantId + '/cost'),
       apiGet('/admin/tenants/' + p.tenantId + '/runs'),
     ]);
-    tenants.push(mapTenant(p, cost, runs));
+    enriched.push(mapTenant(p, cost, runs));
   }
 
   const dayMap = {};
@@ -330,14 +341,20 @@ async function fetchAndStore() {
     dayMap[k].webs  += d.web_searches || 0;
   });
   const pdaily = Object.values(dayMap).sort((a,b) => a.day < b.day ? -1 : 1);
-  const recent = [].concat(...tenants.map(t => t.recent)).sort((a,b) => a.mins - b.mins).slice(0, 20);
+  const recent = [].concat(...enriched.map(t => t.recent)).sort((a,b) => a.mins - b.mins).slice(0, 20);
 
-  // Plan per tenant (for badges) — from the full roster, which carries plans.
+  // Merge the full roster (all tenants incl. suspended / archived / no-activity)
+  // with usage-derived metrics, so lifecycle management can reach every
+  // workspace. The platform (operator) tenant is excluded from the customer list.
+  let roster = [];
+  try { roster = (await apiGet('/admin/tenants'))?.tenants || []; } catch { /* roster optional */ }
+  const enrichedById = {};
+  enriched.forEach(t => { enrichedById[t.id] = t; });
   const planById = {};
-  try {
-    const roster = await apiGet('/admin/tenants');
-    (roster?.tenants || []).forEach(t => { planById[t.id] = t.plan; });
-  } catch { /* badges are optional */ }
+  roster.forEach(r => { planById[r.id] = r.plan; });
+  const tenants = roster
+    .filter(r => r.id !== 'platform')
+    .map(r => ({ ...(enrichedById[r.id] || minimalTenant(r)), plan: r.plan, status: r.status, archived_at: r.archived_at || null }));
 
   // Write directly to S without calling setState (avoids triggering render())
   S.data = { overall: usage.overall, tenants, pdaily, recent, planById };
@@ -816,6 +833,17 @@ function planBadge(plan) {
   const label = String(plan).charAt(0).toUpperCase() + String(plan).slice(1);
   return `<span class="plan-badge plan-${esc(plan)}">${esc(label)}</span>`;
 }
+function statusOf(t) { return t.archived_at ? 'archived' : (t.status || 'active'); }
+function statusBadge(status) {
+  const label = String(status).charAt(0).toUpperCase() + String(status).slice(1);
+  return `<span class="status-badge st-${esc(status)}">${esc(label)}</span>`;
+}
+function minimalTenant(r) {
+  return { id: r.id, name: r.name, costUsd: 0, llmCalls: 0, tokensIn: 0, tokensOut: 0, webSearches: 0,
+    cost30dUsd: 0, estMonthlyUsd: 0, daysObserved: 0, activity: [], activityTotal: 0, totalRuns: 0,
+    runStatus: { succeeded: 0, failed: 0, running: 0, test_runs: 0 },
+    daily: [], byContext: [], categories: cats([]), workflows: [], recent: [], isSpike: false };
+}
 
 function renderTenants(db) {
   if (!db) return div('loading', div('spinner'), 'Loading data…');
@@ -824,7 +852,7 @@ function renderTenants(db) {
 
   const main = div('fadein');
   main.innerHTML = `<div class="head-row">
-    <div class="page-header"><h2>Tenants</h2><p>${sorted.length} active tenants · ranked by lifetime LLM spend · click to drill in</p></div>
+    <div class="page-header"><h2>Tenants</h2><p>${sorted.length} workspace${sorted.length === 1 ? '' : 's'} · ranked by lifetime LLM spend · click to manage</p></div>
     <button class="cw-new-btn" id="cw-open">+ Create workspace</button>
   </div>`;
   main.querySelector('#cw-open').addEventListener('click', () => setState({ createOpen: true }));
@@ -844,8 +872,9 @@ function renderTenants(db) {
     row.innerHTML = `
       <span class="mono" style="font-size:12px;color:var(--dim)">${String(i+1).padStart(2,'0')}</span>
       <div style="display:flex;align-items:center;gap:9px;min-width:0">
-        <span style="font-size:13.5px;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${t.name}</span>
+        <span style="flex:1;min-width:0;font-size:13.5px;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(t.name)}</span>
         ${planBadge((db.planById || {})[t.id])}
+        ${statusOf(t) !== 'active' ? statusBadge(statusOf(t)) : ''}
         ${t.isSpike ? '<span class="badge-spike">SPIKE</span>' : ''}
       </div>
       <div style="display:flex;align-items:center;gap:10px">
@@ -882,14 +911,29 @@ function renderTenantDetail(tenantId, db) {
   back.onmouseleave = () => back.style.color = MUTED;
   main.appendChild(back);
 
-  // Heading
+  // Heading + lifecycle controls
+  const status = statusOf(t);
   const heading = div('');
-  heading.style.cssText = 'display:flex;align-items:center;gap:12px;margin-bottom:24px';
+  heading.style.cssText = 'display:flex;align-items:center;gap:12px;margin-bottom:24px;flex-wrap:wrap';
   heading.innerHTML = `
-    <div style="font-size:22px;font-weight:700">${t.name}</div>
-    <span class="mono badge-tag">${t.id}</span>
-    ${t.isSpike ? '<span style="font-size:10px;color:var(--red);background:rgba(240,97,109,.13);padding:3px 9px;border-radius:6px;font-weight:700;letter-spacing:.04em">COST SPIKE DETECTED</span>' : ''}`;
+    <div style="font-size:22px;font-weight:700">${esc(t.name)}</div>
+    <span class="mono badge-tag">${esc(t.id)}</span>
+    ${statusBadge(status)}
+    ${t.isSpike ? '<span style="font-size:10px;color:var(--red);background:rgba(240,97,109,.13);padding:3px 9px;border-radius:6px;font-weight:700;letter-spacing:.04em">COST SPIKE DETECTED</span>' : ''}
+    <div style="flex:1"></div>
+    <div id="lc-actions" style="display:flex;gap:8px"></div>`;
   main.appendChild(heading);
+  const lcActions = heading.querySelector('#lc-actions');
+  const lcBtn = (label, cls, action) => {
+    const b = document.createElement('button');
+    b.className = cls; b.textContent = label;
+    b.style.cssText = 'padding:8px 14px;font-size:12.5px;font-weight:600;border-radius:8px;cursor:pointer';
+    b.addEventListener('click', () => setState({ lifecycleModal: { action, id: t.id, name: t.name } }));
+    return b;
+  };
+  if (status === 'active')         lcActions.append(lcBtn('Suspend','lc-warn','suspend'),   lcBtn('Archive','lc-danger','archive'));
+  else if (status === 'suspended') lcActions.append(lcBtn('Reactivate','lc-ok','activate'), lcBtn('Archive','lc-danger','archive'));
+  else if (status === 'archived')  lcActions.append(lcBtn('Restore','lc-ok','restore'));
 
   // Stat cards — cost-focused headline; lifetime + projected monthly run-rate.
   const grid = div('card-grid-4');
@@ -1211,6 +1255,53 @@ function renderCreateModal() {
   return overlay;
 }
 
+function renderLifecycleModal() {
+  const m = S.lifecycleModal;
+  const COPY = {
+    suspend:  { title: 'Suspend ' + m.name + '?',    body: 'Users are locked out and all automations stop running. Nothing is deleted — reactivate anytime (e.g. once payment clears).', btn: 'Suspend',           cls: 'lc-warn',   confirm: false },
+    activate: { title: 'Reactivate ' + m.name + '?', body: 'Restores access and resumes their automations.',                                                                             btn: 'Reactivate',        cls: 'lc-ok',     confirm: false },
+    archive:  { title: 'Archive ' + m.name + '?',    body: 'The workspace is hidden and everything stops, but data is retained so you can restore it later. Use this for cancellations.', btn: 'Archive workspace', cls: 'lc-danger', confirm: true  },
+    restore:  { title: 'Restore ' + m.name + '?',    body: 'Un-archives the workspace and makes it active again.',                                                                        btn: 'Restore',           cls: 'lc-ok',     confirm: false },
+  }[m.action];
+  const overlay = div('cw-overlay');
+  const modal = div('cw-modal');
+  modal.innerHTML = `
+    <div class="cw-head"><h3>${esc(COPY.title)}</h3></div>
+    <div class="cw-body">
+      <div style="font-size:13px;color:var(--muted);line-height:1.55">${esc(COPY.body)}</div>
+      ${COPY.confirm ? `<div class="cw-field"><label class="form-label">Type <b style="color:var(--text)">${esc(m.name)}</b> to confirm</label><input class="form-input" id="lc-confirm" type="text" autocomplete="off" /></div>` : ''}
+      <div id="lc-err" class="err-msg" style="display:none;margin-top:14px"></div>
+    </div>
+    <div class="cw-foot">
+      <button id="lc-cancel" class="btn-ghost">Cancel</button>
+      <button id="lc-go" class="${COPY.cls}" style="padding:10px 16px;font-size:13.5px;font-weight:600;border-radius:9px;cursor:pointer"${COPY.confirm ? ' disabled' : ''}>${esc(COPY.btn)}</button>
+    </div>`;
+  const close = () => setState({ lifecycleModal: null });
+  overlay.addEventListener('click', close);
+  modal.addEventListener('click', e => e.stopPropagation());
+  modal.querySelector('#lc-cancel').addEventListener('click', close);
+  const go = modal.querySelector('#lc-go');
+  if (COPY.confirm) {
+    const input = modal.querySelector('#lc-confirm');
+    input.addEventListener('input', () => { go.disabled = input.value.trim() !== m.name; });
+    setTimeout(() => input.focus(), 30);
+  }
+  go.addEventListener('click', async () => {
+    const errEl = modal.querySelector('#lc-err'); errEl.style.display = 'none';
+    go.disabled = true; go.textContent = 'Working…';
+    try {
+      await apiPost('/admin/tenants/' + encodeURIComponent(m.id) + '/' + m.action, {});
+      setState({ lifecycleModal: null });
+      loadAll(false);
+    } catch (e) {
+      errEl.textContent = e.message; errEl.style.display = 'block';
+      go.disabled = false; go.textContent = COPY.btn;
+    }
+  });
+  overlay.appendChild(modal);
+  return overlay;
+}
+
 function render() {
   const root = document.getElementById('root');
   root.innerHTML = '';
@@ -1230,6 +1321,7 @@ function render() {
   root.appendChild(main);
 
   if (S.createOpen) root.appendChild(renderCreateModal());
+  if (S.lifecycleModal) root.appendChild(renderLifecycleModal());
 }
 
 // ── Boot ───────────────────────────────────────────────────────────────────────

@@ -115,6 +115,25 @@ export function mountAdminRoutes(app, { spine, requireAuth, requirePlatformAdmin
     }
   });
 
+  // ── Tenant lifecycle: suspend / reactivate (billing hold) + archive / restore ─
+  // suspend/archive halt the tenant everywhere (users locked out via isActive,
+  // scheduled runs skipped via the scheduler's tenant gate). Data is retained.
+  function lifecycle(action, fn) {
+    app.post(`/admin/tenants/:id/${action}`, adminOnly, (req, res) => {
+      try {
+        const tenant = fn(req.params.id);
+        logEvent(`admin.tenant.${action}`, { tenant: req.params.id });
+        res.json({ ok: true, tenant });
+      } catch (err) {
+        res.status(400).json({ error: err.message ?? String(err) });
+      }
+    });
+  }
+  lifecycle('suspend',  (id) => tenants.setStatus(id, 'suspended'));
+  lifecycle('activate', (id) => tenants.setStatus(id, 'active'));
+  lifecycle('archive',  (id) => tenants.archive(id));
+  lifecycle('restore',  (id) => tenants.restore(id));
+
   // ── Single tenant overview ────────────────────────────────────────────────
 
   app.get('/admin/tenants/:id', adminOnly, (req, res) => {

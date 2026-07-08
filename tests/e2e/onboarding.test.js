@@ -99,3 +99,26 @@ test('create workspace: validates input + dedupes slugs', async () => {
   assert.equal(dupe.status, 200);
   assert.equal(dupe.data.tenant.slug, 'acme-operations-2', 'duplicate name → -2 slug');
 });
+
+test('lifecycle: suspend / reactivate / archive / restore', async () => {
+  const c = await api('POST', '/admin/tenants', { token: platformToken, body: { name: 'Lifecycle Co', plan: 'starter', admin: { email: 'lc@lifecycle.test' } } });
+  const id = c.data.tenant.id;
+
+  let r = await api('POST', `/admin/tenants/${id}/suspend`, { token: platformToken });
+  assert.equal(r.status, 200); assert.equal(r.data.tenant.status, 'suspended', 'suspended');
+
+  r = await api('POST', `/admin/tenants/${id}/activate`, { token: platformToken });
+  assert.equal(r.data.tenant.status, 'active', 'reactivated');
+
+  r = await api('POST', `/admin/tenants/${id}/archive`, { token: platformToken });
+  assert.equal(r.status, 200); assert.ok(r.data.tenant.archived_at, 'archived_at set');
+
+  r = await api('POST', `/admin/tenants/${id}/restore`, { token: platformToken });
+  assert.equal(r.data.tenant.archived_at, null, 'restored'); assert.equal(r.data.tenant.status, 'active');
+});
+
+test('lifecycle: auth required + platform tenant protected', async () => {
+  assert.equal((await api('POST', '/admin/tenants/x/suspend', {})).status, 401, 'unauth rejected');
+  assert.equal((await api('POST', '/admin/tenants/platform/suspend', { token: platformToken })).status, 400, 'platform not suspendable');
+  assert.equal((await api('POST', '/admin/tenants/platform/archive', { token: platformToken })).status, 400, 'platform not archivable');
+});

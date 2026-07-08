@@ -81,8 +81,12 @@ export class WorkflowScheduler {
     this._running = true;
 
     try {
+      // Skip workflows whose tenant is inactive (suspended/archived) — a
+      // non-paying or cancelled tenant's automations must not run.
+      const active = (w) => !this._tenantGate || this._tenantGate(w.tenant_id);
+
       // 1. Schedule-triggered workflows (existing behaviour).
-      const due = this.workflowStore.getDue();
+      const due = this.workflowStore.getDue().filter(active);
       if (due.length > 0) {
         log.info(`[workflow-scheduler] ${due.length} workflow(s) due`);
         for (const workflow of due) {
@@ -95,7 +99,8 @@ export class WorkflowScheduler {
       //    registered via registerEmailPoller().
       if (this._pollEmail) {
         const emailFlows = this.workflowStore.list({ kind: 'flow', status: 'active' })
-          .filter((w) => (w.triggers ?? []).some((t) => t.type === 'email'));
+          .filter((w) => (w.triggers ?? []).some((t) => t.type === 'email'))
+          .filter(active);
         for (const workflow of emailFlows) {
           try {
             const newEmails = await this._pollEmail(workflow);
@@ -146,6 +151,16 @@ export class WorkflowScheduler {
    */
   registerErrorNotifier(fn) {
     this._errorNotifier = fn;
+  }
+
+  /**
+   * Register a tenant-active predicate. Before running a due/email-triggered
+   * workflow, the scheduler asks this hook whether the owning tenant is active;
+   * suspended/archived tenants are skipped so their automations don't run.
+   * @param {(tenantId: string) => boolean} fn
+   */
+  registerTenantGate(fn) {
+    this._tenantGate = fn;
   }
 
   /**
