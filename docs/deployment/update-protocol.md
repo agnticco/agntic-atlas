@@ -33,11 +33,24 @@ git push origin main
 The pre-push hook blocks any commit carrying a `Gate:` trailer unless that phase's
 check passes — so a broken gate physically can't ship.
 
-### 4. Deploy on the VPS
+**If the push is rejected** (`! [rejected] ... fetch first`) a parallel session
+pushed to `main` first. Integrate before pushing — never force:
 ```bash
-ssh atlas@<static-ip>
-cd ~/atlas && ./scripts/deploy.sh
+git pull --rebase origin main    # replay your commits on top; resolve any conflict
+git push origin main
 ```
+
+### 4. Deploy on the VPS
+The live box is **AWS Lightsail, static IP `32.198.159.147`**. You log in as
+`ubuntu` (Lightsail's default SSH user); the app runs as the `atlas` service
+account under `/home/atlas/atlas`. So you SSH as `ubuntu` and `sudo -u atlas` to
+run the deploy. One line, no interactive shell needed:
+```bash
+ssh ubuntu@32.198.159.147 'sudo -u atlas -H bash -c "cd /home/atlas/atlas && ./scripts/deploy.sh"'
+```
+(There is no `atlas` SSH login — don't try `ssh atlas@…`. To poke around
+interactively: `ssh ubuntu@32.198.159.147`, then `sudo -u atlas -H bash`.)
+
 `deploy.sh` is idempotent and self-verifying: it `git pull --ff-only`s `main`,
 runs `npm ci`, `sudo systemctl restart atlas`, then polls `/health` for 30s. On
 failure it prints the exact rollback command. If `main` hasn't moved it no-ops.

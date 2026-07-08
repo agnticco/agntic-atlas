@@ -318,6 +318,38 @@ spec is actually executable, not just structurally similar to the frozen file.
   server.js, so this only bites when copying logic out of the salvage file.)
   Full map: [`docs/salvage-map.md`](docs/salvage-map.md).
 
+## Production & deploying (the pilot is LIVE)
+
+Atlas runs in production at **https://atlas.agntic.co** — a single Node process
+(`systemd` unit `atlas`) behind a Cloudflare Tunnel (`cloudflared`) on an **AWS
+Lightsail** box (Ubuntu, static IP **`32.198.159.147`**). The app lives at
+`/home/atlas/atlas`, owned by the `atlas` service account. You **SSH in as `ubuntu`**
+(Lightsail's default — there is no `atlas` SSH login) and **`sudo -u atlas`** to act
+as the run user. Secrets live in `/home/atlas/atlas/.env` **on the box** (gitignored,
+never committed); the operator manages them — agents never enter or echo secret values.
+
+**Shipping a change to prod** (full protocol + rollback:
+[`docs/deployment/update-protocol.md`](docs/deployment/update-protocol.md)):
+
+1. **Bump the version** — every prod push moves `package.json` (the single source of
+   truth for `/health` + the What's-New modal): `./scripts/release.sh patch` (silent)
+   or `./scripts/release.sh patch --title "…" "user-facing note"` (adds a What's-New
+   entry shown once per user on next login). Stages the change to commit *with* the code.
+2. **Commit + push `main`** (conventional message + `Phase:` trailer). If the push is
+   rejected because a parallel session pushed first, `git pull --rebase origin main`
+   then push — never force.
+3. **Deploy on the box** (pulls `main`, `npm ci`, restarts `atlas`, polls `/health`):
+   ```bash
+   ssh ubuntu@32.198.159.147 'sudo -u atlas -H bash -c "cd /home/atlas/atlas && ./scripts/deploy.sh"'
+   ```
+4. **Verify** — `curl -s https://atlas.agntic.co/health` shows the new `version`, then
+   eyeball the change (hard-refresh for frontend). A deploy is not done until the
+   restarted process serves the new code. `deploy.sh` prints the exact rollback SHA on
+   failure.
+
+Deploying is outward-facing: do it only when the operator asks. Committing/pushing to
+`main` does **not** auto-deploy — prod only changes when `deploy.sh` runs on the box.
+
 ## Working rules
 
 - **One deliverable per session, ending at a gate.** Rehydrate from this file +
