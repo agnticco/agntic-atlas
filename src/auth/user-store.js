@@ -98,12 +98,27 @@ export class UserStore {
     this.db.exec(`CREATE INDEX IF NOT EXISTS idx_users_tenant ON users(tenant_id)`);
   }
 
-  /** Additive migration: add preferences JSON column for user settings. */
+  /** Additive migrations: preferences JSON + last-login timestamp. */
   _migratePreferences() {
     const cols = this.db.prepare(`PRAGMA table_info(users)`).all().map((c) => c.name);
     if (!cols.includes('preferences')) {
       this.db.exec(`ALTER TABLE users ADD COLUMN preferences TEXT`);
     }
+    if (!cols.includes('last_login_at')) {
+      this.db.exec(`ALTER TABLE users ADD COLUMN last_login_at TEXT`);
+    }
+  }
+
+  /** Record a successful authentication. Used to tell "invited but not yet signed in". */
+  markLogin(userId) {
+    if (!userId) return;
+    this.db.prepare('UPDATE users SET last_login_at = ? WHERE id = ?').run(new Date().toISOString(), userId);
+  }
+
+  /** True if any user in the tenant has ever signed in (has a last_login_at). */
+  hasLogin(tenantId) {
+    if (!tenantId) return false;
+    return !!this.db.prepare('SELECT 1 FROM users WHERE tenant_id = ? AND last_login_at IS NOT NULL LIMIT 1').get(tenantId);
   }
 
   /** Return parsed user preferences, falling back to defaults when unset or corrupt. */

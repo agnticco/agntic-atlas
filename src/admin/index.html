@@ -165,6 +165,7 @@
     .st-active { color: var(--green); background: rgba(78,201,138,.13); }
     .st-suspended { color: var(--amber); background: rgba(224,164,88,.14); }
     .st-archived { color: var(--dim); background: rgba(139,144,163,.12); }
+    .st-pending { color: var(--accent); background: rgba(107,123,255,.14); }
     .plan-badge { padding: 2px 8px; border-radius: 5px; font-size: 10.5px; font-weight: 700; letter-spacing: .02em; text-transform: uppercase; flex-shrink: 0; }
     .plan-founding { color: var(--amber); background: rgba(224,164,88,.14); }
     .plan-team     { color: var(--accent); background: rgba(107,123,255,.15); }
@@ -354,7 +355,7 @@ async function fetchAndStore() {
   roster.forEach(r => { planById[r.id] = r.plan; });
   const tenants = roster
     .filter(r => r.id !== 'platform')
-    .map(r => ({ ...(enrichedById[r.id] || minimalTenant(r)), plan: r.plan, status: r.status, archived_at: r.archived_at || null }));
+    .map(r => ({ ...(enrichedById[r.id] || minimalTenant(r)), plan: r.plan, status: r.status, archived_at: r.archived_at || null, pending: !!r.pending }));
 
   // Write directly to S without calling setState (avoids triggering render())
   S.data = { overall: usage.overall, tenants, pdaily, recent, planById };
@@ -835,8 +836,15 @@ function planBadge(plan) {
 }
 function statusOf(t) { return t.archived_at ? 'archived' : (t.status || 'active'); }
 function statusBadge(status) {
-  const label = String(status).charAt(0).toUpperCase() + String(status).slice(1);
+  const label = status === 'pending' ? 'Invited' : (String(status).charAt(0).toUpperCase() + String(status).slice(1));
   return `<span class="status-badge st-${esc(status)}">${esc(label)}</span>`;
+}
+// Badge for the list: suspended/archived always; an active-but-never-signed-in
+// workspace shows "Invited"; a normal active+signed-in workspace shows nothing.
+function tenantStatusBadge(t) {
+  const s = statusOf(t);
+  if (s !== 'active') return statusBadge(s);
+  return t.pending ? statusBadge('pending') : '';
 }
 function minimalTenant(r) {
   return { id: r.id, name: r.name, costUsd: 0, llmCalls: 0, tokensIn: 0, tokensOut: 0, webSearches: 0,
@@ -874,7 +882,7 @@ function renderTenants(db) {
       <div style="display:flex;align-items:center;gap:9px;min-width:0">
         <span style="flex:1;min-width:0;font-size:13.5px;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(t.name)}</span>
         ${planBadge((db.planById || {})[t.id])}
-        ${statusOf(t) !== 'active' ? statusBadge(statusOf(t)) : ''}
+        ${tenantStatusBadge(t)}
         ${t.isSpike ? '<span class="badge-spike">SPIKE</span>' : ''}
       </div>
       <div style="display:flex;align-items:center;gap:10px">
@@ -918,7 +926,7 @@ function renderTenantDetail(tenantId, db) {
   heading.innerHTML = `
     <div style="font-size:22px;font-weight:700">${esc(t.name)}</div>
     <span class="mono badge-tag">${esc(t.id)}</span>
-    ${statusBadge(status)}
+    ${statusBadge(status === 'active' && t.pending ? 'pending' : status)}
     ${t.isSpike ? '<span style="font-size:10px;color:var(--red);background:rgba(240,97,109,.13);padding:3px 9px;border-radius:6px;font-weight:700;letter-spacing:.04em">COST SPIKE DETECTED</span>' : ''}
     <div style="flex:1"></div>
     <div id="lc-actions" style="display:flex;gap:8px"></div>`;

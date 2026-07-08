@@ -122,3 +122,23 @@ test('lifecycle: auth required + platform tenant protected', async () => {
   assert.equal((await api('POST', '/admin/tenants/platform/suspend', { token: platformToken })).status, 400, 'platform not suspendable');
   assert.equal((await api('POST', '/admin/tenants/platform/archive', { token: platformToken })).status, 400, 'platform not archivable');
 });
+
+test('pending status: true until the admin actually signs in', async () => {
+  const c = await api('POST', '/admin/tenants', { token: platformToken, body: { name: 'Pending Co', plan: 'starter', admin: { email: 'newadmin@pending.test' } } });
+  const id = c.data.tenant.id;
+  const token = new URL(c.data.inviteLink).searchParams.get('reset');
+
+  // Freshly created, nobody has signed in → pending.
+  let roster = (await api('GET', '/admin/tenants', { token: platformToken })).data.tenants;
+  assert.equal(roster.find((t) => t.id === id).pending, true, 'new workspace is pending');
+
+  // Admin sets their password via the invite link, then signs in.
+  const setPw = await api('POST', '/auth/reset', { body: { token, password: 'set-Pass-word-12345' } });
+  assert.equal(setPw.status, 200, 'password set via invite token');
+  const login = await api('POST', '/auth/login', { body: { email: 'newadmin@pending.test', password: 'set-Pass-word-12345' } });
+  assert.ok(login.data.token, 'admin signs in');
+
+  // No longer pending.
+  roster = (await api('GET', '/admin/tenants', { token: platformToken })).data.tenants;
+  assert.equal(roster.find((t) => t.id === id).pending, false, 'signed-in workspace is no longer pending');
+});
