@@ -220,12 +220,16 @@ const RUN_META = {
 
 // ── State ──────────────────────────────────────────────────────────────────────
 let S = {
-  view: 'login', // login | dashboard | usage | tenants | tenant
+  view: 'login', // login | dashboard | usage | tenants | tenant | tickets | ticket
   token: null, adminEmail: null,
   data: null, // { overall, tenants[], pdaily[], recent[] }
   selectedTenant: null,
   trendFilter: 'all',
   error: '', loading: false,
+  // support tickets
+  tickets: null, ticketsCounts: null,
+  ticketStatusFilter: 'open', ticketTypeFilter: '',
+  selectedTicket: null, ticketDetail: null, ticketBusy: false, ticketMsg: '',
 };
 
 function setState(patch) { Object.assign(S, patch); render(); }
@@ -359,12 +363,18 @@ async function fetchAndStore() {
 
   // Write directly to S without calling setState (avoids triggering render())
   S.data = { overall: usage.overall, tenants, pdaily, recent, planById };
+
+  // Keep the sidebar Tickets badge fresh (cheap query; shown on next full render).
+  try { const td = await apiGet('/admin/tickets?status=open'); if (td && td.counts) S.ticketsCounts = td.counts; } catch { /* optional */ }
 }
 
 // Patch #main children in place — no sidebar re-render, scroll preserved.
 function patchMainContent() {
   const main = document.getElementById('main');
   if (!main) return;
+  // Don't let the 5s dashboard poll rebuild the ticket detail (re-decodes the
+  // screenshot → flicker). The detail is rendered on demand via render().
+  if (S.view === 'ticket') return;
   const scrollTop = main.scrollTop;
 
   const content = buildMainContent();
@@ -1112,6 +1122,260 @@ function renderTenantDetail(tenantId, db) {
   return main;
 }
 
+// ── Support tickets ──────────────────────────────────────────────────────────
+const TICKET_TYPE_META = {
+  bug:     { label: 'Bug',     icon: '🐞', color: RED },
+  idea:    { label: 'Idea',    icon: '💡', color: AMBER },
+  request: { label: 'Request', icon: '✦',  color: TEAL },
+};
+const TICKET_STATUS_META = {
+  new:         { label: 'New',          color: ACCENT },
+  triaged:     { label: 'Triaged',      color: TEAL },
+  in_progress: { label: 'In progress',  color: AMBER },
+  resolved:    { label: 'Resolved',     color: GREEN },
+  wontfix:     { label: "Won't fix",    color: MUTED },
+  closed:      { label: 'Closed',       color: MUTED },
+};
+const TICKET_SEV_COLOR = { blocker: RED, high: RED, medium: AMBER, low: GREEN };
+
+async function loadTickets() {
+  const q = new URLSearchParams();
+  if (S.ticketStatusFilter) q.set('status', S.ticketStatusFilter);
+  if (S.ticketTypeFilter)   q.set('type', S.ticketTypeFilter);
+  try {
+    const data = await apiGet('/admin/tickets?' + q.toString());
+    S.tickets = (data && data.tickets) || [];
+    S.ticketsCounts = (data && data.counts) || S.ticketsCounts;
+  } catch { S.tickets = []; }
+  render();
+}
+
+async function loadTicketDetail(id) {
+  setState({ view: 'ticket', selectedTicket: id, ticketDetail: null, ticketMsg: '' });
+  try {
+    const data = await apiGet('/admin/tickets/' + encodeURIComponent(id));
+    S.ticketDetail = data || { error: 'Not found' };
+  } catch (e) { S.ticketDetail = { error: e.message || 'Failed to load' }; }
+  render();
+}
+
+function ticketBadge(text, color) {
+  return `<span class="badge" style="color:${color};background:${color}22">${esc(text)}</span>`;
+}
+
+function renderTicketsList() {
+  const main = div('');
+  const counts = S.ticketsCounts || { open: 0, total: 0, byType: {} };
+
+  const head = div('');
+  head.style.cssText = 'display:flex;align-items:flex-start;justify-content:space-between;gap:16px;margin-bottom:22px;flex-wrap:wrap';
+  const titleWrap = div('');
+  titleWrap.innerHTML = `<h1 style="font-size:22px;font-weight:600;margin:0 0 4px">Support tickets</h1>
+    <div style="font-size:13px;color:var(--muted)">${num(counts.open)} open · ${num(counts.total)} total</div>`;
+  head.appendChild(titleWrap);
+
+  // Filters
+  const filters = div('');
+  filters.style.cssText = 'display:flex;gap:10px;align-items:center';
+  const statusSel = h('select', { class: 'form-select', style: { width: 'auto' } });
+  [['open', 'Open'], ['', 'All statuses'], ['new', 'New'], ['triaged', 'Triaged'], ['in_progress', 'In progress'], ['resolved', 'Resolved'], ['wontfix', "Won't fix"], ['closed', 'Closed']]
+    .forEach(([v, l]) => { const o = h('option', { value: v }, l); if (v === S.ticketStatusFilter) o.selected = true; statusSel.appendChild(o); });
+  statusSel.addEventListener('change', () => { S.ticketStatusFilter = statusSel.value; loadTickets(); });
+  const typeSel = h('select', { class: 'form-select', style: { width: 'auto' } });
+  [['', 'All types'], ['bug', 'Bugs'], ['idea', 'Ideas'], ['request', 'Requests']]
+    .forEach(([v, l]) => { const o = h('option', { value: v }, l); if (v === S.ticketTypeFilter) o.selected = true; typeSel.appendChild(o); });
+  typeSel.addEventListener('change', () => { S.ticketTypeFilter = typeSel.value; loadTickets(); });
+  const refresh = div('sb-logout'); refresh.textContent = 'Refresh ↺'; refresh.style.cssText = 'padding:8px 12px';
+  refresh.addEventListener('click', () => loadTickets());
+  filters.appendChild(statusSel); filters.appendChild(typeSel); filters.appendChild(refresh);
+  head.appendChild(filters);
+  main.appendChild(head);
+
+  const rows = S.tickets;
+  if (rows === null) { main.appendChild(div('empty', 'Loading…')); return main; }
+  if (!rows.length) { main.appendChild(div('empty', 'No tickets match this filter.')); return main; }
+
+  const card = div('card'); card.style.cssText = 'padding:0;overflow:hidden';
+  const table = div(''); table.style.cssText = 'display:flex;flex-direction:column';
+  const header = div(''); header.style.cssText = 'display:grid;grid-template-columns:88px 1fr 150px 96px 108px 84px;gap:12px;padding:12px 18px;border-bottom:1px solid var(--border);font-size:11px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;color:var(--dim)';
+  ['Type', 'Title', 'Workspace', 'Severity', 'Status', 'When'].forEach(t => header.appendChild(h('div', {}, t)));
+  table.appendChild(header);
+
+  rows.forEach(t => {
+    const tm = TICKET_TYPE_META[t.type] || { label: t.type, icon: '•', color: MUTED };
+    const sm = TICKET_STATUS_META[t.status] || { label: t.status, color: MUTED };
+    const row = div(''); row.style.cssText = 'display:grid;grid-template-columns:88px 1fr 150px 96px 108px 84px;gap:12px;padding:13px 18px;border-bottom:1px solid var(--border);align-items:center;cursor:pointer;font-size:13px';
+    row.addEventListener('mouseenter', () => row.style.background = 'rgba(255,255,255,.02)');
+    row.addEventListener('mouseleave', () => row.style.background = 'transparent');
+    row.addEventListener('click', () => loadTicketDetail(t.id));
+    const sev = (t.type === 'bug' && t.severity) ? `<span style="color:${TICKET_SEV_COLOR[t.severity] || MUTED};font-weight:600;text-transform:capitalize">${esc(t.severity)}</span>` : '<span style="color:var(--dim)">—</span>';
+    row.innerHTML = `
+      <div>${ticketBadge(tm.icon + ' ' + tm.label, tm.color)}</div>
+      <div style="min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text)">${esc(t.title)}${t.github_issue_url ? ' <span title="Filed to GitHub" style="color:var(--dim)">⧉</span>' : ''}</div>
+      <div style="color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(t.tenantName || t.tenant_id)}</div>
+      <div>${sev}</div>
+      <div>${ticketBadge(sm.label, sm.color)}</div>
+      <div style="color:var(--dim);font-size:12px">${relTime(t.created_at)}</div>`;
+    table.appendChild(row);
+  });
+  card.appendChild(table);
+  main.appendChild(card);
+  return main;
+}
+
+function renderTicketDetail() {
+  const main = div('');
+  const back = div(''); back.textContent = '← All tickets';
+  back.style.cssText = 'font-size:13px;color:var(--muted);cursor:pointer;margin-bottom:18px;display:inline-block';
+  back.addEventListener('click', () => { setState({ view: 'tickets' }); });
+  main.appendChild(back);
+
+  const d = S.ticketDetail;
+  if (!d) { main.appendChild(div('empty', 'Loading…')); return main; }
+  if (d.error) { main.appendChild(div('empty', 'Could not load this ticket: ' + esc(d.error))); return main; }
+  const t = d.ticket;
+  const tm = TICKET_TYPE_META[t.type] || { label: t.type, icon: '•', color: MUTED };
+  const ctx = t.context || {};
+
+  // ── Header card ──
+  const card = div('card');
+  const sevChip = (t.type === 'bug' && t.severity) ? ticketBadge(t.severity, TICKET_SEV_COLOR[t.severity] || MUTED) : '';
+  card.innerHTML = `
+    <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:16px;flex-wrap:wrap">
+      <div style="min-width:0">
+        <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px">
+          ${ticketBadge(tm.icon + ' ' + tm.label, tm.color)}${sevChip}
+        </div>
+        <h1 style="font-size:20px;font-weight:600;margin:0 0 6px;line-height:1.3">${esc(t.title)}</h1>
+        <div style="font-size:12.5px;color:var(--muted)">
+          ${esc(t.tenantName || t.tenant_id)} · ${esc([t.user_name, t.user_email].filter(Boolean).join(' · ') || t.user_id)} · ${esc(relTime(t.created_at))}
+          · <span class="mono" style="color:var(--dim)">${esc(t.id)}</span>
+        </div>
+      </div>
+    </div>`;
+  main.appendChild(card);
+
+  // ── Triage controls (status + notes + actions) ──
+  const triage = div('card'); triage.style.cssText = 'margin-top:16px';
+  const tHead = h('div', { style: { fontSize: '11px', fontWeight: '600', letterSpacing: '.08em', textTransform: 'uppercase', color: 'var(--dim)', marginBottom: '12px' } }, 'Triage');
+  triage.appendChild(tHead);
+
+  const ctrlRow = div(''); ctrlRow.style.cssText = 'display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:12px';
+  const statusSel = h('select', { class: 'form-select', style: { width: 'auto' } });
+  Object.entries(TICKET_STATUS_META).forEach(([v, m]) => { const o = h('option', { value: v }, m.label); if (v === t.status) o.selected = true; statusSel.appendChild(o); });
+  ctrlRow.appendChild(statusSel);
+
+  const saveBtn = h('button', { class: 'btn-primary', style: { width: 'auto', padding: '9px 16px' } }, 'Save status');
+  ctrlRow.appendChild(saveBtn);
+
+  // GitHub button
+  const ghWrap = div(''); ghWrap.style.cssText = 'margin-left:auto;display:flex;align-items:center;gap:10px';
+  if (t.github_issue_url) {
+    const link = h('a', { href: t.github_issue_url, target: '_blank', style: { fontSize: '13px', color: ACCENT, textDecoration: 'none' } }, '⧉ Issue #' + (t.github_issue_number || '') + ' on GitHub');
+    ghWrap.appendChild(link);
+  } else {
+    const ghBtn = h('button', { class: 'btn-ghost', style: { padding: '9px 16px' } }, d.githubConfigured ? 'Create GitHub issue' : 'Create GitHub issue…');
+    ghBtn.addEventListener('click', async () => {
+      ghBtn.disabled = true; ghBtn.textContent = 'Filing…';
+      try {
+        const res = await apiPost('/admin/tickets/' + encodeURIComponent(t.id) + '/github', {});
+        S.ticketMsg = 'Filed as GitHub issue #' + res.number;
+        loadTicketDetail(t.id);
+      } catch (e) {
+        S.ticketMsg = 'GitHub: ' + (e.message || 'failed');
+        ghBtn.disabled = false; ghBtn.textContent = 'Create GitHub issue';
+        render();
+      }
+    });
+    ghWrap.appendChild(ghBtn);
+  }
+  ctrlRow.appendChild(ghWrap);
+  triage.appendChild(ctrlRow);
+
+  const notes = h('textarea', { class: 'form-input', id: 'ticket-notes', placeholder: 'Triage notes (internal)…', style: { width: '100%', minHeight: '60px', resize: 'vertical', boxSizing: 'border-box' } });
+  notes.value = t.admin_notes || '';
+  triage.appendChild(notes);
+
+  saveBtn.addEventListener('click', async () => {
+    saveBtn.disabled = true; saveBtn.textContent = 'Saving…';
+    try {
+      const r = await fetch('/admin/tickets/' + encodeURIComponent(t.id), {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + (S.token || '') },
+        body: JSON.stringify({ status: statusSel.value, adminNotes: notes.value }),
+      });
+      if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || 'Save failed');
+      S.ticketMsg = 'Saved.';
+      loadTicketDetail(t.id);
+    } catch (e) {
+      S.ticketMsg = e.message; saveBtn.disabled = false; saveBtn.textContent = 'Save status'; render();
+    }
+  });
+  if (S.ticketMsg) triage.appendChild(h('div', { style: { fontSize: '12.5px', color: 'var(--muted)', marginTop: '10px' } }, S.ticketMsg));
+  main.appendChild(triage);
+
+  // ── Body: description + repro ──
+  const body = div('card'); body.style.cssText = 'margin-top:16px';
+  const seg = (label, text) => text ? `<div style="margin-bottom:16px"><div style="font-size:11px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;color:var(--dim);margin-bottom:6px">${esc(label)}</div><div style="font-size:13.5px;color:var(--text);line-height:1.6;white-space:pre-wrap">${esc(text)}</div></div>` : '';
+  body.innerHTML = seg('Description', t.description) +
+    (t.type === 'bug' ? (seg('Steps to reproduce', t.steps) + seg('Expected', t.expected) + seg('Actual', t.actual)) : '');
+  main.appendChild(body);
+
+  // ── Screenshot ──
+  if (d.screenshot) {
+    const shot = div('card'); shot.style.cssText = 'margin-top:16px';
+    shot.innerHTML = `<div style="font-size:11px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;color:var(--dim);margin-bottom:10px">Screenshot</div>`;
+    const img = h('img', { src: d.screenshot, alt: 'screenshot', style: { maxWidth: '100%', borderRadius: '10px', border: '1px solid var(--border)', display: 'block' } });
+    shot.appendChild(img);
+    main.appendChild(shot);
+  }
+
+  // ── Environment / context ──
+  const envItems = [
+    ['App version', ctx.appVersion], ['Surface', ctx.surface || ctx.view], ['Builder phase', ctx.phase],
+    ['Workflow id', ctx.workflowId], ['URL', ctx.url], ['Viewport', ctx.viewport],
+    ['Console errors', (ctx.consoleErrors || []).length], ['Failed requests', (ctx.networkErrors || []).length],
+    ['User agent', ctx.userAgent],
+  ].filter(([, v]) => v !== null && v !== undefined && String(v).trim() !== '');
+  if (envItems.length) {
+    const env = div('card'); env.style.cssText = 'margin-top:16px';
+    env.innerHTML = `<div style="font-size:11px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;color:var(--dim);margin-bottom:12px">Environment</div>` +
+      envItems.map(([k, v]) => `<div style="display:flex;gap:12px;padding:5px 0;font-size:12.5px"><div style="width:130px;color:var(--muted);flex:none">${esc(k)}</div><div class="mono" style="color:var(--text);word-break:break-all">${esc(String(v))}</div></div>`).join('');
+    main.appendChild(env);
+  }
+
+  // ── Coding-agent brief ──
+  const briefCard = div('card'); briefCard.style.cssText = 'margin-top:16px';
+  const bHead = div(''); bHead.style.cssText = 'display:flex;align-items:center;justify-content:space-between;margin-bottom:10px';
+  bHead.innerHTML = `<div style="font-size:11px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;color:var(--dim)">Coding-agent brief</div>`;
+  const bBtns = div(''); bBtns.style.cssText = 'display:flex;gap:8px';
+  const copyBtn = h('button', { class: 'btn-ghost', style: { padding: '6px 12px', fontSize: '12.5px' } }, 'Copy');
+  copyBtn.addEventListener('click', () => {
+    try { navigator.clipboard.writeText(d.brief || ''); copyBtn.textContent = 'Copied ✓'; setTimeout(() => { copyBtn.textContent = 'Copy'; }, 1500); }
+    catch { copyBtn.textContent = 'Copy failed'; }
+  });
+  const dlBtn = h('button', { class: 'btn-ghost', style: { padding: '6px 12px', fontSize: '12.5px' } }, 'Download .md');
+  dlBtn.addEventListener('click', async () => {
+    try {
+      const r = await fetch('/admin/tickets/' + encodeURIComponent(t.id) + '/brief', { headers: { 'Authorization': 'Bearer ' + (S.token || '') } });
+      if (!r.ok) throw new Error('Download failed');
+      const blob = await r.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a'); a.href = url; a.download = t.id + '.md'; document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    } catch (e) { S.ticketMsg = e.message; render(); }
+  });
+  bBtns.appendChild(copyBtn); bBtns.appendChild(dlBtn);
+  bHead.appendChild(bBtns);
+  briefCard.appendChild(bHead);
+  const pre = h('pre', { style: { margin: '0', maxHeight: '340px', overflow: 'auto', background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: '10px', padding: '14px', fontSize: '12px', lineHeight: '1.55', color: 'var(--muted)', whiteSpace: 'pre-wrap', wordBreak: 'break-word' } });
+  pre.textContent = d.brief || '';
+  briefCard.appendChild(pre);
+  main.appendChild(briefCard);
+
+  return main;
+}
+
 // ── Sidebar ────────────────────────────────────────────────────────────────────
 function renderSidebar() {
   const sb = div('');
@@ -1136,6 +1400,15 @@ function renderSidebar() {
     item.addEventListener('click', () => setState({ view: n.key }));
     nav.appendChild(item);
   });
+
+  // Support section — tickets, with an open-count badge.
+  const supHead = div('sb-section'); supHead.textContent = 'Support'; nav.appendChild(supHead);
+  const tItem = div('nav-item' + (S.view === 'tickets' || S.view === 'ticket' ? ' active' : ''));
+  tItem.style.cssText = 'display:flex;align-items:center;justify-content:space-between';
+  const openN = (S.ticketsCounts && S.ticketsCounts.open) || 0;
+  tItem.innerHTML = '<span>Tickets</span>' + (openN > 0 ? `<span style="font-size:11px;font-weight:600;color:${ACCENT};background:${ACCENT}22;border-radius:999px;padding:1px 8px">${openN}</span>` : '');
+  tItem.addEventListener('click', () => { setState({ view: 'tickets' }); loadTickets(); });
+  nav.appendChild(tItem);
 
   // Active tenant label
   if (S.view === 'tenant' && S.data) {
@@ -1185,6 +1458,8 @@ function buildMainContent() {
     case 'usage':     return renderUsage(db);
     case 'tenants':   return renderTenants(db);
     case 'tenant':    return renderTenantDetail(S.selectedTenant, db);
+    case 'tickets':   return renderTicketsList();
+    case 'ticket':    return renderTicketDetail();
     default:          return null;
   }
 }
