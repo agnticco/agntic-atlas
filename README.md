@@ -4,7 +4,7 @@
     <img src="public/assets/atlas-globe-black.png" width="76" alt="Atlas logo">
   </picture>
 
-  <h1>Atlas</h1>
+  <h1>Atlas by Agntic</h1>
 
   <p><strong>Build automations by talking.</strong></p>
 
