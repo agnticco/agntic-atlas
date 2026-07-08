@@ -142,3 +142,42 @@ test('pending status: true until the admin actually signs in', async () => {
   roster = (await api('GET', '/admin/tenants', { token: platformToken })).data.tenants;
   assert.equal(roster.find((t) => t.id === id).pending, false, 'signed-in workspace is no longer pending');
 });
+
+// Helper: create a workspace on a plan and return a signed-in admin token.
+async function makeAdmin(name, plan, email) {
+  const c = await api('POST', '/admin/tenants', { token: platformToken, body: { name, plan, admin: { email } } });
+  const token = new URL(c.data.inviteLink).searchParams.get('reset');
+  await api('POST', '/auth/reset', { body: { token, password: 'a-Strong-Pass-12345' } });
+  return (await api('POST', '/auth/login', { body: { email, password: 'a-Strong-Pass-12345' } })).data.token;
+}
+
+test('team: admin invites a teammate (same invite flow), unlimited on team plan', async () => {
+  const adminToken = await makeAdmin('Teamco', 'team', 'lead@teamco.test');
+
+  let team = (await api('GET', '/api/builder/team', { token: adminToken })).data;
+  assert.equal(team.members.length, 1);
+  assert.equal(team.isAdmin, true);
+  assert.equal(team.plan, 'team');
+  assert.equal(team.seats.limit, null, 'team = unlimited seats');
+
+  const inv = await api('POST', '/api/builder/team/invite', { token: adminToken, body: { email: 'mate@teamco.test' } });
+  assert.equal(inv.status, 200, `invite ok (got ${inv.status}: ${JSON.stringify(inv.data)})`);
+  assert.equal(inv.data.member.pending, true);
+  assert.ok(inv.data.inviteLink && inv.data.inviteLink.includes('/?reset='), 'invite link handed back (no mailer in test)');
+
+  team = (await api('GET', '/api/builder/team', { token: adminToken })).data;
+  assert.equal(team.members.length, 2);
+  assert.equal(team.members.find((m) => m.email === 'mate@teamco.test').pending, true, 'teammate is pending until sign-in');
+});
+
+test('team: starter seat limit enforced; auth required', async () => {
+  const adminToken = await makeAdmin('Solo', 'starter', 'solo@solo.test');
+  const team = (await api('GET', '/api/builder/team', { token: adminToken })).data;
+  assert.equal(team.seats.limit, 1, 'starter = 1 seat');
+
+  const blocked = await api('POST', '/api/builder/team/invite', { token: adminToken, body: { email: 'extra@solo.test' } });
+  assert.equal(blocked.status, 402, 'over seat limit → 402');
+  assert.equal(blocked.data.code, 'PLAN_LIMIT');
+
+  assert.equal((await api('GET', '/api/builder/team', {})).status, 401, 'team list requires auth');
+});

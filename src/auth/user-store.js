@@ -336,6 +336,7 @@ function publicShape(row) {
     role:         row.role,
     display_name: row.display_name ?? '',
     disabled_at:  row.disabled_at ?? null,
+    last_login_at: row.last_login_at ?? null,
     created_at:   row.created_at,
     updated_at:   row.updated_at,
   };

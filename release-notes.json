@@ -1,5 +1,13 @@
 [
   {
+    "version": "1.3.0",
+    "date": "2026-07-07",
+    "title": "Invite your team",
+    "notes": [
+      "Workspace admins can now invite teammates from Account settings — invitees get an email to set their password and join."
+    ]
+  },
+  {
     "version": "1.0.0",
     "date": "2026-07-07",
     "title": "Atlas is live",
