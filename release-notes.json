@@ -1,5 +1,13 @@
 [
   {
+    "version": "1.3.2",
+    "date": "2026-07-08",
+    "title": "Send us bugs & feedback in-app",
+    "notes": [
+      "New: a Feedback button (bottom-right on every screen) to report a bug, share an idea, or request a feature — with an auto-captured screenshot, in one click."
+    ]
+  },
+  {
     "version": "1.3.1",
     "date": "2026-07-07",
     "title": "A fresh sign-in",
