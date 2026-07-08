@@ -18,12 +18,47 @@
   if(window.matchMedia){ try { window.matchMedia('(prefers-color-scheme: light)').addEventListener('change', function(){ if((window.__atlasThemePref())==='system') apply(); }); } catch(e){} }
 })();
 </script>
+<script>
+// Diagnostics ring buffer — captures the last N JS errors + failed network calls
+// so a submitted bug report carries real runtime evidence (there is otherwise no
+// console/network capture in this app). Installed as early as possible.
+(function(){
+  var MAX = 25, errs = [], net = [];
+  function push(a, x){ a.push(x); if (a.length > MAX) a.shift(); }
+  function nowISO(){ try { return new Date().toISOString(); } catch(e){ return null; } }
+  window.addEventListener('error', function(e){
+    try { push(errs, { at: nowISO(), message: (e && e.message) || String(e),
+      source: (e && e.filename) ? String(e.filename).split('/').pop() : null, line: (e && e.lineno) || null }); } catch(_){}
+  });
+  window.addEventListener('unhandledrejection', function(e){
+    try { var r = e && e.reason; push(errs, { at: nowISO(),
+      message: 'Unhandled rejection: ' + ((r && (r.message || r)) || 'unknown'), source: null, line: null }); } catch(_){}
+  });
+  var _fetch = window.fetch;
+  if (_fetch) {
+    window.fetch = function(input, init){
+      var url = (typeof input === 'string') ? input : (input && input.url) || '';
+      var method = (init && init.method) || (input && input.method) || 'GET';
+      return _fetch.apply(this, arguments).then(function(res){
+        try { if (res && !res.ok) push(net, { at: nowISO(), method: method, url: String(url), status: res.status }); } catch(_){}
+        return res;
+      }, function(err){
+        try { push(net, { at: nowISO(), method: method, url: String(url), error: (err && err.message) || 'network error' }); } catch(_){}
+        throw err;
+      });
+    };
+  }
+  window.__atlasDiag = { errors: function(){ return errs.slice(); }, network: function(){ return net.slice(); } };
+})();
+</script>
 <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
 <!-- Vendored locally (not a CDN dependency) — sanitizes all marked() output
      before it is injected as innerHTML, so untrusted content flowing through
      workflows into the inbox/chat cannot execute script. -->
 <script src="./vendor/purify.min.js"></script>
 <script src="./support.js"></script>
+<!-- Vendored (not a CDN dependency) — DOM-snapshot for the feedback/bug widget. -->
+<script defer src="./html2canvas.min.js"></script>
 </head>
 <body>
 <x-dc>
@@ -1680,6 +1715,87 @@
       </div>
     </sc-if>
 
+    <!-- ░ FEEDBACK / BUG-REPORT WIDGET ░ -->
+    <sc-if value="{{ fbShow }}" hint-placeholder-val="{{ false }}">
+      <button id="fb-launcher" onClick="{{ onOpenFeedback }}" title="Send feedback or report a bug" style="position:fixed;right:20px;bottom:20px;z-index:190;display:flex;align-items:center;gap:7px;border:1px solid rgba(255,255,255,.14);background:rgba(20,20,26,.72);backdrop-filter:blur(20px) saturate(160%);-webkit-backdrop-filter:blur(20px) saturate(160%);color:rgba(255,255,255,.82);font-family:inherit;font-size:12.5px;font-weight:500;padding:9px 14px;border-radius:999px;cursor:pointer;box-shadow:0 8px 28px rgba(0,0,0,.4)" style-hover="background:rgba(32,32,40,.86);color:#fff;border-color:rgba(255,255,255,.24)">
+        <span style="font-size:13px;line-height:1">✦</span>Feedback
+      </button>
+    </sc-if>
+    <sc-if value="{{ fbOpen }}" hint-placeholder-val="{{ false }}">
+      <div id="fb-overlay" onClick="{{ onCloseFeedback }}" style="position:fixed;inset:0;z-index:230;background:rgba(0,0,0,.6);display:flex;align-items:center;justify-content:center;backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px);animation:backdropIn .18s ease both">
+        <div onClick="{{ stopProp }}" style="width:460px;max-width:calc(100vw - 40px);max-height:88vh;overflow-y:auto;border-radius:22px;border:1px solid rgba(255,255,255,.1);background:linear-gradient(160deg,rgba(28,28,32,.98),rgba(16,16,18,.98));box-shadow:0 32px 80px rgba(0,0,0,.7),inset 0 1px 0 rgba(255,255,255,.08);padding:24px 24px 20px;animation:modalExpand .38s cubic-bezier(.34,1.15,.64,1) both">
+          <div style="display:flex;align-items:baseline;justify-content:space-between;margin-bottom:16px">
+            <div style="font-size:17px;font-weight:700;color:#fff">{{ fbHeading }}</div>
+            <button onClick="{{ onCloseFeedback }}" style="border:none;background:rgba(255,255,255,.06);cursor:pointer;color:rgba(255,255,255,.5);width:26px;height:26px;border-radius:50%;font-size:15px" style-hover="background:rgba(255,255,255,.1);color:#fff">×</button>
+          </div>
+
+          <!-- confirmation -->
+          <sc-if value="{{ fbDone }}" hint-placeholder-val="{{ false }}">
+            <div style="text-align:center;padding:14px 6px 8px">
+              <div style="font-size:34px;margin-bottom:10px;color:#7fc28a">✓</div>
+              <div style="font-size:15px;font-weight:600;color:#fff;margin-bottom:6px">Thanks — we've got it.</div>
+              <div style="font-size:12.5px;color:rgba(255,255,255,.5);line-height:1.5">Your {{ fbTypeLabel }} was received{{ fbTicketRef }}. Our team will take a look.</div>
+              <button onClick="{{ onCloseFeedback }}" style="margin-top:18px;border:none;background:#fff;color:#0a0a0a;font-family:inherit;font-size:13.5px;font-weight:600;padding:10px 24px;border-radius:10px;cursor:pointer">Done</button>
+            </div>
+          </sc-if>
+
+          <!-- form -->
+          <sc-if value="{{ fbShowForm }}" hint-placeholder-val="{{ false }}">
+            <div style="display:flex;gap:8px;margin-bottom:15px">
+              <sc-for list="{{ fbTypes }}" as="ty" hint-placeholder-count="3">
+                <div onClick="{{ ty.onSelect }}" style="flex:1;text-align:center;padding:10px 6px;border-radius:12px;cursor:pointer;border:1px solid {{ ty.border }};background:{{ ty.bg }}" style-hover="border-color:rgba(255,255,255,.3)">
+                  <div style="font-size:17px;margin-bottom:3px">{{ ty.icon }}</div>
+                  <div style="font-size:12px;font-weight:600;color:{{ ty.color }}">{{ ty.label }}</div>
+                </div>
+              </sc-for>
+            </div>
+
+            <input value="{{ fbTitle }}" onInput="{{ onFbTitle }}" placeholder="{{ fbTitlePlaceholder }}" style="display:block;width:100%;box-sizing:border-box;margin-bottom:10px;background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.12);border-radius:10px;padding:11px 13px;color:#fff;font-family:inherit;font-size:13.5px;outline:none"/>
+            <textarea value="{{ fbDescription }}" onInput="{{ onFbDescription }}" placeholder="{{ fbDescPlaceholder }}" style="display:block;width:100%;box-sizing:border-box;margin-bottom:10px;background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.12);border-radius:10px;padding:11px 13px;color:#fff;font-family:inherit;font-size:13.5px;outline:none;resize:vertical;min-height:76px"></textarea>
+
+            <sc-if value="{{ fbIsBug }}" hint-placeholder-val="{{ false }}">
+              <div style="font-size:10px;font-weight:600;letter-spacing:.14em;text-transform:uppercase;color:rgba(255,255,255,.25);margin:2px 0 7px">How bad is it?</div>
+              <div style="display:flex;gap:6px;margin-bottom:11px">
+                <sc-for list="{{ fbSeverities }}" as="sv" hint-placeholder-count="4">
+                  <div onClick="{{ sv.onSelect }}" style="flex:1;text-align:center;font-size:11.5px;font-weight:600;padding:8px 4px;border-radius:8px;cursor:pointer;color:{{ sv.color }};background:{{ sv.bg }};border:1px solid {{ sv.border }}">{{ sv.label }}</div>
+                </sc-for>
+              </div>
+              <textarea value="{{ fbSteps }}" onInput="{{ onFbSteps }}" placeholder="Steps to reproduce (optional)" style="display:block;width:100%;box-sizing:border-box;margin-bottom:9px;background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.12);border-radius:10px;padding:10px 12px;color:#fff;font-family:inherit;font-size:13px;outline:none;resize:vertical;min-height:52px"></textarea>
+              <div style="display:flex;gap:8px;margin-bottom:2px">
+                <textarea value="{{ fbExpected }}" onInput="{{ onFbExpected }}" placeholder="What you expected" style="flex:1;box-sizing:border-box;background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.12);border-radius:10px;padding:10px 12px;color:#fff;font-family:inherit;font-size:13px;outline:none;resize:vertical;min-height:48px"></textarea>
+                <textarea value="{{ fbActual }}" onInput="{{ onFbActual }}" placeholder="What actually happened" style="flex:1;box-sizing:border-box;background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.12);border-radius:10px;padding:10px 12px;color:#fff;font-family:inherit;font-size:13px;outline:none;resize:vertical;min-height:48px"></textarea>
+              </div>
+            </sc-if>
+
+            <div style="margin:12px 0">
+              <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:7px">
+                <div style="font-size:10px;font-weight:600;letter-spacing:.14em;text-transform:uppercase;color:rgba(255,255,255,.25)">Screenshot</div>
+                <div style="display:flex;gap:12px">
+                  <span onClick="{{ onFbRetake }}" style="font-size:11px;color:rgba(255,255,255,.5);cursor:pointer" style-hover="color:#fff">{{ fbRetakeLabel }}</span>
+                  <span onClick="{{ onFbUpload }}" style="font-size:11px;color:rgba(255,255,255,.5);cursor:pointer" style-hover="color:#fff">Upload</span>
+                  <sc-if value="{{ fbHasShot }}" hint-placeholder-val="{{ false }}"><span onClick="{{ onFbRemoveShot }}" style="font-size:11px;color:rgba(240,120,110,.7);cursor:pointer" style-hover="color:#f0a896">Remove</span></sc-if>
+                </div>
+              </div>
+              <div style="border:1px dashed rgba(255,255,255,.15);border-radius:10px;min-height:64px;display:flex;align-items:center;justify-content:center;overflow:hidden;background:rgba(0,0,0,.2)">
+                <sc-if value="{{ fbCapturing }}" hint-placeholder-val="{{ false }}"><div style="font-size:12px;color:rgba(255,255,255,.4);padding:22px">Capturing…</div></sc-if>
+                <sc-if value="{{ fbHasShot }}" hint-placeholder-val="{{ false }}"><img src="{{ fbShot }}" alt="screenshot" style="max-width:100%;max-height:200px;display:block"/></sc-if>
+                <sc-if value="{{ fbShotEmpty }}" hint-placeholder-val="{{ false }}"><div style="font-size:11.5px;color:rgba(255,255,255,.32);padding:18px;text-align:center;line-height:1.55">No screenshot attached.<br/>Use "Recapture", Upload, or paste (⌘/Ctrl+V) an image.</div></sc-if>
+              </div>
+            </div>
+
+            <div onClick="{{ onFbToggleTech }}" style="font-size:11.5px;color:rgba(255,255,255,.42);cursor:pointer;margin-bottom:9px" style-hover="color:rgba(255,255,255,.7)">{{ fbTechToggleLabel }}</div>
+            <sc-if value="{{ fbTechOpen }}" hint-placeholder-val="{{ false }}">
+              <div style="font-size:11px;color:rgba(255,255,255,.42);background:rgba(0,0,0,.25);border:1px solid rgba(255,255,255,.07);border-radius:8px;padding:10px 12px;margin-bottom:11px;line-height:1.65;font-family:ui-monospace,Menlo,monospace;white-space:pre-wrap">{{ fbTechSummary }}</div>
+            </sc-if>
+
+            <sc-if value="{{ fbError }}" hint-placeholder-val="{{ false }}"><div style="font-size:12.5px;color:#f0a896;margin-bottom:10px">{{ fbError }}</div></sc-if>
+
+            <button onClick="{{ onFbSubmit }}" style="width:100%;border:none;background:{{ fbSubmitBg }};color:#0a0a0a;font-family:inherit;font-size:14px;font-weight:600;padding:12px;border-radius:12px;cursor:{{ fbSubmitCursor }}">{{ fbSubmitLabel }}</button>
+          </sc-if>
+        </div>
+      </div>
+    </sc-if>
+
     <!-- ░ CONNECTIONS FLYOUT ░ -->
     <sc-if value="{{ modeConnections }}" hint-placeholder-val="{{ false }}">
       <div onClick="{{ onCloseConnections }}" style="position:fixed;inset:0;z-index:200"></div>
@@ -2330,6 +2446,10 @@ class Component extends DCLogic {
       knowledgeSources: [], knowledgeIndexing: false, knowledgeFolderInput: '', knowledgeTreeExpanded: {},
       chatFolderIndexing: false,
       inboxMessages: [], inboxUnread: 0, inboxSelected: null, inboxSearch: '', inboxSearchResults: null, inboxSearchLoading: false,
+      // feedback / bug-report widget
+      fbOpen: false, fbType: 'bug', fbTitle: '', fbDescription: '', fbSeverity: 'medium',
+      fbSteps: '', fbExpected: '', fbActual: '', fbShot: null, fbCapturing: false,
+      fbSubmitting: false, fbDone: false, fbError: '', fbTechOpen: false, fbTicketId: null,
     };
   }
 
@@ -4455,6 +4575,138 @@ class Component extends DCLogic {
   openAccount() { this.setState({ accountOpen: true, accountClosing: false, connectionsOpen: false, connectionsClosing: false, profileOpen: false }); }
   closeAccount() { this.setState({ accountOpen: false, accountClosing: false }); }
   toggleProfile() { this.setState(s => ({ profileOpen: !s.profileOpen })); }
+
+  // ── Feedback / bug-report widget ────────────────────────────────────────────
+  openFeedback() {
+    this.setState({
+      fbOpen: true, fbDone: false, fbError: "", fbSubmitting: false,
+      fbType: this.state.fbType || "bug", fbTitle: "", fbDescription: "",
+      fbSeverity: "medium", fbSteps: "", fbExpected: "", fbActual: "",
+      fbShot: null, fbCapturing: false, fbTechOpen: false, fbTicketId: null,
+      connectionsOpen: false, accountOpen: false, profileOpen: false,
+    });
+    // Paste-to-attach while the dialog is open.
+    if (!this._fbPaste) { this._fbPaste = (e) => this._fbHandlePaste(e); document.addEventListener("paste", this._fbPaste); }
+    // Auto-capture the current screen (the dialog itself is excluded via ignoreElements).
+    this._fbCapture();
+  }
+  closeFeedback() {
+    if (this._fbPaste) { document.removeEventListener("paste", this._fbPaste); this._fbPaste = null; }
+    this.setState({ fbOpen: false });
+  }
+  _fbCapture() {
+    if (typeof window === "undefined" || typeof window.html2canvas !== "function") { this.setState({ fbCapturing: false }); return; }
+    this.setState({ fbCapturing: true, fbShot: null });
+    const self = this;
+    // Defer a frame so the "Capturing…" state paints; then snapshot the app,
+    // ignoring the feedback dialog + launcher so the shot shows the real screen.
+    setTimeout(function () {
+      try {
+        window.html2canvas(document.body, {
+          logging: false, useCORS: true, backgroundColor: "#0a0a0a",
+          scale: 1,
+          ignoreElements: function (el) { return el && (el.id === "fb-overlay" || el.id === "fb-launcher"); },
+        }).then(function (canvas) {
+          self.setState({ fbShot: self._downscaleCanvas(canvas, 1600, 0.72), fbCapturing: false });
+        }).catch(function () { self.setState({ fbCapturing: false }); });
+      } catch (e) { self.setState({ fbCapturing: false }); }
+    }, 60);
+  }
+  _downscaleCanvas(canvas, maxW, quality) {
+    try {
+      let w = canvas.width, h = canvas.height;
+      if (w > maxW) { h = Math.round(h * maxW / w); w = maxW; }
+      const c2 = document.createElement("canvas"); c2.width = w; c2.height = h;
+      c2.getContext("2d").drawImage(canvas, 0, 0, w, h);
+      return c2.toDataURL("image/jpeg", quality);
+    } catch (e) { try { return canvas.toDataURL("image/jpeg", quality); } catch (_) { return null; } }
+  }
+  _fbHandlePaste(e) {
+    if (!this.state.fbOpen) return;
+    const items = (e.clipboardData && e.clipboardData.items) || [];
+    for (let i = 0; i < items.length; i++) {
+      if (items[i].type && items[i].type.indexOf("image/") === 0) {
+        const file = items[i].getAsFile();
+        if (file) { e.preventDefault(); this._fbReadImageFile(file); return; }
+      }
+    }
+  }
+  _fbReadImageFile(file) {
+    const self = this, reader = new FileReader();
+    reader.onload = function () {
+      const img = new Image();
+      img.onload = function () {
+        const c = document.createElement("canvas"); c.width = img.width; c.height = img.height;
+        c.getContext("2d").drawImage(img, 0, 0);
+        self.setState({ fbShot: self._downscaleCanvas(c, 1600, 0.72), fbCapturing: false });
+      };
+      img.onerror = function () { self.setState({ fbShot: reader.result, fbCapturing: false }); };
+      img.src = reader.result;
+    };
+    reader.readAsDataURL(file);
+  }
+  fbUpload() {
+    const self = this, input = document.createElement("input");
+    input.type = "file"; input.accept = "image/*";
+    input.onchange = function (e) { const f = e.target.files && e.target.files[0]; if (f) self._fbReadImageFile(f); };
+    input.click();
+  }
+  _fbContext() {
+    const S = this.state;
+    const diag = (typeof window !== "undefined" && window.__atlasDiag) ? window.__atlasDiag : null;
+    return {
+      surface: S.view, phase: S.phase,
+      workflowId: S.workflowId || null, consoleWfId: S.consoleWfId || null,
+      url: (typeof location !== "undefined") ? location.href : null,
+      viewport: (typeof window !== "undefined") ? (window.innerWidth + "x" + window.innerHeight) : null,
+      userAgent: (typeof navigator !== "undefined") ? navigator.userAgent : null,
+      tenantName: S.tenantName || null, tenantId: S.tenantId || null,
+      capturedAt: new Date().toISOString(),
+      consoleErrors: diag ? diag.errors() : [],
+      networkErrors: diag ? diag.network() : [],
+    };
+  }
+  _fbTechSummary() {
+    const c = this._fbContext();
+    return [
+      "Surface: " + (c.surface || "—") + (c.phase ? " · " + c.phase : ""),
+      "Page: " + (c.url || "—"),
+      "Screen: " + (c.viewport || "—"),
+      "Workspace: " + (c.tenantName || c.tenantId || "—"),
+      "Console errors captured: " + (c.consoleErrors ? c.consoleErrors.length : 0),
+      "Failed requests captured: " + (c.networkErrors ? c.networkErrors.length : 0),
+      "App version + your account are added automatically.",
+    ].join("\n");
+  }
+  submitFeedback() {
+    const S = this.state;
+    if (S.fbSubmitting) return;
+    const title = (S.fbTitle || "").trim(), desc = (S.fbDescription || "").trim();
+    if (!title) { this.setState({ fbError: "Please add a short title." }); return; }
+    if (!desc) { this.setState({ fbError: "Please add a description." }); return; }
+    const isBug = (S.fbType || "bug") === "bug";
+    this.setState({ fbSubmitting: true, fbError: "" });
+    const self = this;
+    fetch("/api/tickets", {
+      method: "POST", headers: this._H(),
+      body: JSON.stringify({
+        type: S.fbType || "bug",
+        severity: isBug ? S.fbSeverity : null,
+        title: title, description: desc,
+        steps: isBug ? (S.fbSteps || null) : null,
+        expected: isBug ? (S.fbExpected || null) : null,
+        actual: isBug ? (S.fbActual || null) : null,
+        context: self._fbContext(),
+        screenshot: S.fbShot || null,
+      }),
+    })
+      .then((r) => r.json().then((d) => ({ ok: r.ok, d })))
+      .then((res) => {
+        if (!res.ok) throw new Error((res.d && res.d.error) || "Submission failed");
+        self.setState({ fbSubmitting: false, fbDone: true, fbTicketId: (res.d && res.d.id) || null });
+      })
+      .catch((e) => self.setState({ fbSubmitting: false, fbError: String(e.message || e) }));
+  }
   signOut() {
     const tok = this.state.authToken;
     const done = () => { try { localStorage.removeItem("atlas_token"); } catch (e) {} window.location.reload(); };
@@ -5105,6 +5357,68 @@ class Component extends DCLogic {
       profBg: S.profileOpen ? "rgba(255,255,255,.06)" : "none",
       profBorder: S.profileOpen ? "rgba(255,255,255,.16)" : "transparent",
       profShadow: S.profileOpen ? "0 1px 3px rgba(0,0,0,.3)" : "none",
+      // ── Feedback / bug-report widget ──
+      fbShow: !!S.authToken,
+      fbOpen: S.fbOpen,
+      fbDone: S.fbDone,
+      fbShowForm: S.fbOpen && !S.fbDone,
+      fbIsBug: (S.fbType || 'bug') === 'bug',
+      fbHeading: S.fbDone ? 'Submitted' : ((S.fbType || 'bug') === 'bug' ? 'Report a bug' : (S.fbType === 'idea' ? 'Share an idea' : 'Make a request')),
+      fbTypeLabel: S.fbType === 'idea' ? 'idea' : (S.fbType === 'request' ? 'request' : 'bug report'),
+      fbTicketRef: S.fbTicketId ? (' (' + S.fbTicketId + ')') : '',
+      fbTitle: S.fbTitle, fbDescription: S.fbDescription, fbSteps: S.fbSteps, fbExpected: S.fbExpected, fbActual: S.fbActual,
+      fbTitlePlaceholder: (S.fbType || 'bug') === 'bug' ? 'Briefly, what went wrong?' : (S.fbType === 'idea' ? "What's your idea?" : 'What do you need?'),
+      fbDescPlaceholder: (S.fbType || 'bug') === 'bug' ? 'Describe the problem in your own words.' : 'Tell us more.',
+      fbSeverity: S.fbSeverity,
+      fbCapturing: S.fbCapturing,
+      fbHasShot: !!S.fbShot,
+      fbShot: S.fbShot || '',
+      fbShotEmpty: !S.fbCapturing && !S.fbShot,
+      fbRetakeLabel: S.fbShot ? 'Recapture' : 'Capture screen',
+      fbTechOpen: S.fbTechOpen,
+      fbTechToggleLabel: (S.fbTechOpen ? '▾ ' : '▸ ') + "Technical details we'll include",
+      fbTechSummary: this._fbTechSummary(),
+      fbError: S.fbError,
+      fbSubmitLabel: S.fbSubmitting ? 'Sending…' : 'Submit',
+      fbSubmitBg: S.fbSubmitting ? 'rgba(255,255,255,.5)' : '#fff',
+      fbSubmitCursor: S.fbSubmitting ? 'default' : 'pointer',
+      fbTypes: [
+        { key: 'bug', icon: '🐞', label: 'Bug' },
+        { key: 'idea', icon: '💡', label: 'Idea' },
+        { key: 'request', icon: '✦', label: 'Request' },
+      ].map((t) => {
+        const active = (S.fbType || 'bug') === t.key;
+        return {
+          icon: t.icon, label: t.label,
+          color: active ? '#fff' : 'rgba(255,255,255,.55)',
+          bg: active ? 'rgba(255,255,255,.1)' : 'rgba(255,255,255,.03)',
+          border: active ? 'rgba(255,255,255,.28)' : 'rgba(255,255,255,.1)',
+          onSelect: () => this.setState({ fbType: t.key, fbError: '' }),
+        };
+      }),
+      fbSeverities: [['blocker', 'Blocker'], ['high', 'High'], ['medium', 'Medium'], ['low', 'Low']].map(([k, label]) => {
+        const active = S.fbSeverity === k;
+        const tint = (k === 'blocker' || k === 'high') ? '240,120,110' : (k === 'medium' ? '224,164,88' : '127,194,138');
+        return {
+          label,
+          color: active ? ('rgb(' + tint + ')') : 'rgba(255,255,255,.5)',
+          bg: active ? ('rgba(' + tint + ',.14)') : 'rgba(255,255,255,.03)',
+          border: active ? ('rgba(' + tint + ',.4)') : 'rgba(255,255,255,.1)',
+          onSelect: () => this.setState({ fbSeverity: k }),
+        };
+      }),
+      onOpenFeedback: () => this.openFeedback(),
+      onCloseFeedback: () => this.closeFeedback(),
+      onFbTitle: (e) => this.setState({ fbTitle: e.target.value }),
+      onFbDescription: (e) => this.setState({ fbDescription: e.target.value }),
+      onFbSteps: (e) => this.setState({ fbSteps: e.target.value }),
+      onFbExpected: (e) => this.setState({ fbExpected: e.target.value }),
+      onFbActual: (e) => this.setState({ fbActual: e.target.value }),
+      onFbToggleTech: () => this.setState({ fbTechOpen: !this.state.fbTechOpen }),
+      onFbRetake: () => this._fbCapture(),
+      onFbUpload: () => this.fbUpload(),
+      onFbRemoveShot: () => this.setState({ fbShot: null }),
+      onFbSubmit: () => this.submitFeedback(),
       onToggleConnections: () => this.toggleConnections(), onCloseConnections: () => this._closeFlyout('connectionsOpen', 'connectionsClosing'),
       onOpenAccount: () => this.openAccount(), onCloseAccount: () => this._closeFlyout('accountOpen', 'accountClosing'),
       onOpenKnowledge: () => this.openKnowledge(), onCloseKnowledge: () => this.setState({ knowledgeOpen: false }),
