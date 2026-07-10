@@ -19,9 +19,6 @@
 
 import { PUBLIC_PLANS } from '../entitlements/index.js';
 
-/** Floor a cancelled/expired subscription drops back to. */
-const CANCEL_FLOOR_PLAN = 'solo';
-
 export class BillingNotConfiguredError extends Error {
   constructor(msg = 'Billing is not configured (STRIPE_SECRET_KEY unset).') {
     super(msg);
@@ -74,15 +71,23 @@ async function getStripe() {
   return _stripe;
 }
 
+// Stripe Tax params (off unless STRIPE_AUTOMATIC_TAX=true). When on, Stripe computes
+// sales tax/VAT from the buyer's address (which Checkout then requires) against the
+// account's registrations; B2B customers can enter a tax ID for reverse-charge.
+function taxParams() {
+  return isAutomaticTaxEnabled()
+    ? { automatic_tax: { enabled: true }, tax_id_collection: { enabled: true }, billing_address_collection: 'required' }
+    : {};
+}
+
 /**
- * Create a subscription Checkout session for a tenant upgrading to `plan`.
- * Returns the session (caller redirects the browser to `session.url`).
- *
- * `tenantId` is stamped on both `client_reference_id` and metadata so the webhook
- * can reconcile the payment back to the tenant; `plan` is carried in metadata so
- * we don't have to re-derive it from the price at fulfillment time.
+ * Create a subscription Checkout session for an EXISTING tenant — an upgrade, or a
+ * resubscribe from a suspended tenant. `tenantId` is stamped on `client_reference_id`
+ * + metadata so the webhook reconciles the payment back to it; `plan` in metadata so
+ * we don't re-derive it from the price. On resubscribe pass `customerId` to reuse the
+ * tenant's existing Stripe customer (so it stays one customer, not two).
  */
-export async function createCheckoutSession({ tenantId, plan, email = null, baseUrl }) {
+export async function createCheckoutSession({ tenantId, plan, email = null, customerId = null, baseUrl, context = 'upgrade' }) {
   if (!tenantId) throw new Error('tenantId is required');
   if (!PUBLIC_PLANS.includes(plan)) throw new Error(`"${plan}" is not a purchasable plan`);
   const price = planToPrice(plan);
@@ -90,26 +95,77 @@ export async function createCheckoutSession({ tenantId, plan, email = null, base
 
   const stripe = await getStripe();
   const base = String(baseUrl || '').replace(/\/$/, '');
-  const taxOn = isAutomaticTaxEnabled();
+  const done = context === 'resubscribe' ? 'resubscribed' : 'upgraded';
   return stripe.checkout.sessions.create({
     mode: 'subscription',
     line_items: [{ price, quantity: 1 }],
     client_reference_id: tenantId,
-    ...(email ? { customer_email: email } : {}),
+    ...(customerId ? { customer: customerId } : (email ? { customer_email: email } : {})),
     metadata: { tenantId, plan },
     subscription_data: { metadata: { tenantId, plan } },
-    success_url: `${base}/?upgraded=${encodeURIComponent(plan)}`,
+    success_url: `${base}/?${done}=${encodeURIComponent(plan)}`,
     cancel_url: `${base}/?upgrade_cancelled=1`,
     allow_promotion_codes: true,
-    // Stripe Tax (off unless STRIPE_AUTOMATIC_TAX=true). When on, Stripe computes
-    // sales tax/VAT from the buyer's address (which Checkout then requires) against
-    // the account's registrations, and B2B customers can enter a tax ID for
-    // reverse-charge. Tax only applies where the account is registered.
-    ...(taxOn ? {
-      automatic_tax: { enabled: true },
-      tax_id_collection: { enabled: true },
-      billing_address_collection: 'required',
-    } : {}),
+    ...taxParams(),
+  });
+}
+
+/**
+ * Pre-tenant Checkout for a brand-new self-serve signup. No tenant exists yet — the
+ * webhook provisions tenant + admin on `checkout.session.completed` when it sees
+ * `metadata.intent==='signup'`. Carries the email/workspace/plan through metadata.
+ */
+export async function createSignupCheckoutSession({ email, workspaceName, plan, baseUrl }) {
+  if (!email) throw new Error('email is required');
+  if (!PUBLIC_PLANS.includes(plan)) throw new Error(`"${plan}" is not a purchasable plan`);
+  const price = planToPrice(plan);
+  if (!price) throw new BillingNotConfiguredError(`No Stripe price configured for the ${plan} plan (${priceEnvKey(plan)}).`);
+
+  const stripe = await getStripe();
+  const base = String(baseUrl || '').replace(/\/$/, '');
+  const meta = { intent: 'signup', email, plan, workspaceName: String(workspaceName ?? '').slice(0, 120) };
+  return stripe.checkout.sessions.create({
+    mode: 'subscription',
+    line_items: [{ price, quantity: 1 }],
+    customer_email: email,
+    metadata: meta,
+    subscription_data: { metadata: meta },
+    success_url: `${base}/?signup=complete`,
+    cancel_url: `${base}/?signup=cancelled`,
+    allow_promotion_codes: true,
+    ...taxParams(),
+  });
+}
+
+/** Retrieve a subscription (for current_period_end → next-charge / access-until). Null on error. */
+export async function getSubscription(subscriptionId) {
+  if (!subscriptionId) return null;
+  try { const stripe = await getStripe(); return await stripe.subscriptions.retrieve(subscriptionId); }
+  catch { return null; }
+}
+
+/**
+ * Change an EXISTING subscription to a new plan's price IN PLACE — an upgrade for a
+ * tenant that already subscribed. This is the fix for the double-subscription bug:
+ * upgrading swaps the price on the current subscription rather than starting a second
+ * one (no double charge). The difference is prorated onto the next invoice, and the
+ * `customer.subscription.updated` webhook reconciles our plan (idempotent with the
+ * caller's optimistic setPlan). No Checkout redirect — the customer's card on file is
+ * used. Returns the updated subscription.
+ */
+export async function changeSubscriptionPlan({ subscriptionId, plan }) {
+  if (!subscriptionId) throw new Error('subscriptionId is required');
+  if (!PUBLIC_PLANS.includes(plan)) throw new Error(`"${plan}" is not a purchasable plan`);
+  const price = planToPrice(plan);
+  if (!price) throw new BillingNotConfiguredError(`No Stripe price configured for the ${plan} plan (${priceEnvKey(plan)}).`);
+  const stripe = await getStripe();
+  const sub = await stripe.subscriptions.retrieve(subscriptionId);
+  const itemId = sub?.items?.data?.[0]?.id;
+  if (!itemId) throw new Error('subscription has no line item to update');
+  return stripe.subscriptions.update(subscriptionId, {
+    items: [{ id: itemId, price }],
+    proration_behavior: 'create_prorations',
+    metadata: { ...(sub.metadata || {}), plan },
   });
 }
 
@@ -136,56 +192,50 @@ export async function constructWebhookEvent(rawBody, signature) {
 }
 
 /**
- * Apply a verified Stripe event to the tenant store. Pure reconciliation — resolves
- * the tenant, then flips `plan` and links Stripe ids. Unknown event types are
- * ignored. Returns `{ handled, tenantId, plan }` for logging.
+ * Pure classifier — turns a verified Stripe event into a normalized descriptor the
+ * webhook route acts on (provision / reactivate / suspend / notify). No store access,
+ * no side effects. The route resolves the tenant (metadata OR customer lookup) and
+ * performs the mutations, since only it has the auth stores + mailer.
+ *
+ * `kind`:
+ *   'signup'                 — checkout completed with metadata.intent==='signup' (no tenant yet)
+ *   'purchase'               — checkout completed for an existing tenant (upgrade/resubscribe)
+ *   'cancellation'           — subscription deleted (ended) → suspend
+ *   'cancellation_scheduled' — subscription set to cancel at period end → notify now
+ *   'plan_change'            — subscription updated (price change) → reconcile plan
+ *   'ignored'                — anything else
+ *
+ * @returns {{ kind, metaTenantId, intent, customerId, subscriptionId, plan, priceId,
+ *             email, workspaceName, amountCents, currency, accessUntil }}
  */
-export function handleWebhookEvent(event, { tenantStore }) {
+export function classifyWebhookEvent(event) {
   const obj = event?.data?.object ?? {};
-  const resolveTenant = () =>
-    obj.metadata?.tenantId
-    ?? obj.client_reference_id
-    ?? (obj.customer ? tenantStore.getByStripeCustomer(obj.customer)?.id : null)
-    ?? null;
+  const prev = event?.data?.previous_attributes ?? {};
+  const base = {
+    type: event?.type ?? null,
+    metaTenantId: obj.metadata?.tenantId ?? obj.client_reference_id ?? null,
+    intent: obj.metadata?.intent ?? null,
+    customerId: obj.customer ?? null,
+    subscriptionId: obj.subscription ?? obj.id ?? null, // session.subscription | subscription.id
+    email: obj.customer_details?.email ?? obj.customer_email ?? obj.metadata?.email ?? null,
+    workspaceName: obj.metadata?.workspaceName ?? null,
+    plan: obj.metadata?.plan ?? priceToPlan(obj.items?.data?.[0]?.price?.id) ?? null,
+    priceId: obj.items?.data?.[0]?.price?.id ?? null,
+    amountCents: obj.amount_total ?? null,
+    currency: obj.currency ?? null,
+    accessUntil: obj.current_period_end ? new Date(obj.current_period_end * 1000).toISOString() : null,
+  };
 
   switch (event.type) {
-    case 'checkout.session.completed': {
-      const tenantId = resolveTenant();
-      const plan = obj.metadata?.plan;
-      if (tenantId && PUBLIC_PLANS.includes(plan)) {
-        tenantStore.setStripeIds(tenantId, {
-          customerId: obj.customer ?? undefined,
-          subscriptionId: obj.subscription ?? undefined,
-        });
-        tenantStore.setPlan(tenantId, plan);
-        return { handled: true, tenantId, plan };
-      }
-      return { handled: false, tenantId, plan };
-    }
+    case 'checkout.session.completed':
+      return { ...base, kind: base.intent === 'signup' ? 'signup' : 'purchase' };
+    case 'customer.subscription.deleted':
+      return { ...base, kind: 'cancellation', subscriptionId: obj.id ?? null };
     case 'customer.subscription.updated': {
-      // Plan changes made in Stripe (or proration) — reconcile from the price.
-      const tenantId = resolveTenant();
-      const priceId = obj.items?.data?.[0]?.price?.id;
-      const plan = priceToPlan(priceId) ?? obj.metadata?.plan;
-      // A subscription set to cancel-at-period-end but still active keeps its plan.
-      if (tenantId && PUBLIC_PLANS.includes(plan)) {
-        tenantStore.setPlan(tenantId, plan);
-        return { handled: true, tenantId, plan };
-      }
-      return { handled: false, tenantId, plan };
-    }
-    case 'customer.subscription.deleted': {
-      const tenantId = resolveTenant();
-      if (tenantId) {
-        tenantStore.setPlan(tenantId, CANCEL_FLOOR_PLAN);
-        tenantStore.setStripeIds(tenantId, { subscriptionId: null });
-        return { handled: true, tenantId, plan: CANCEL_FLOOR_PLAN };
-      }
-      return { handled: false, tenantId };
+      const scheduledCancel = obj.cancel_at_period_end === true && prev.cancel_at_period_end === false;
+      return { ...base, kind: scheduledCancel ? 'cancellation_scheduled' : 'plan_change', subscriptionId: obj.id ?? null };
     }
     default:
-      return { handled: false, ignored: event.type };
+      return { ...base, kind: 'ignored' };
   }
 }
-
-export { CANCEL_FLOOR_PLAN };

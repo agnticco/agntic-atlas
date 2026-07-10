@@ -30,11 +30,22 @@ function planSummary(meta) {
   return `${wf} · ${runs} · ${users}`;
 }
 
+/** ISO → "Aug 21, 2026" (null-safe). */
+function fmtDate(iso) {
+  if (!iso) return null;
+  try { return new Date(iso).toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric', timeZone: 'UTC' }); }
+  catch { return null; }
+}
+
 /** The branded plan callout row for the onboarding email (empty string when no plan). */
-function planBlockHtml(plan) {
+function planBlockHtml(plan, nextChargeIso = null) {
   const meta = PLAN_META[plan];
   if (!meta) return '';
   const summary = planSummary(meta);
+  const next = fmtDate(nextChargeIso);
+  const billing = next
+    ? `Billed $${meta.price}/mo — renews ${esc(next)}. Cancel anytime in Account → Manage billing.`
+    : `Billed $${meta.price}/mo — cancel anytime in Account → Manage billing.`;
   return `<tr>
             <td class="px" style="padding:28px 48px 0 48px;">
               <table role="presentation" class="panel" width="100%" cellpadding="0" cellspacing="0" border="0" bgcolor="#F6F6F6" style="background:#F6F6F6; border:1px solid #E6E6E6; border-radius:12px;">
@@ -42,7 +53,8 @@ function planBlockHtml(plan) {
                   <td style="padding:20px 22px;">
                     <p class="mono txt-3" style="margin:0 0 6px 0; font-size:10px; letter-spacing:2px; text-transform:uppercase; color:#767676;">Your plan</p>
                     <p class="sans txt-primary" style="margin:0 0 3px 0; font-size:17px; line-height:22px; font-weight:600; color:#0A0A0A;">${esc(meta.label)} <span class="txt-3" style="color:#767676; font-weight:400;">— $${meta.price}/mo</span></p>
-                    <p class="sans txt-2" style="margin:0; font-size:14px; line-height:21px; color:#444444;">${esc(summary)}</p>
+                    <p class="sans txt-2" style="margin:0 0 8px 0; font-size:14px; line-height:21px; color:#444444;">${esc(summary)}</p>
+                    <p class="sans txt-3" style="margin:0; font-size:12.5px; line-height:19px; color:#767676;">${billing}</p>
                   </td>
                 </tr>
               </table>
@@ -62,7 +74,7 @@ function planBlockHtml(plan) {
  *                                  teammate invites to an existing workspace.
  * @returns {{ subject: string, html: string, text: string }}
  */
-export function renderInviteEmail({ inviteLink, userEmail, workspaceName, base, plan = null }) {
+export function renderInviteEmail({ inviteLink, userEmail, workspaceName, base, plan = null, nextChargeIso = null }) {
   const ws = workspaceName || 'your workspace';
   const assetsBase = `${String(base).replace(/\/+$/, '')}/assets`;
   const meta = plan ? PLAN_META[plan] : null;
@@ -72,7 +84,7 @@ export function renderInviteEmail({ inviteLink, userEmail, workspaceName, base, 
     .split('{{invite_link}}').join(esc(inviteLink))
     .split('{{user_email}}').join(esc(userEmail))
     .split('{{workspace_name}}').join(esc(ws))
-    .split('{{plan_block}}').join(planBlockHtml(plan));
+    .split('{{plan_block}}').join(planBlockHtml(plan, nextChargeIso));
 
   const text = [
     `You're invited to ${ws} on Atlas`,
