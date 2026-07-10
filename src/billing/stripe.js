@@ -145,6 +145,31 @@ export async function getSubscription(subscriptionId) {
 }
 
 /**
+ * Change an EXISTING subscription to a new plan's price IN PLACE — an upgrade for a
+ * tenant that already subscribed. This is the fix for the double-subscription bug:
+ * upgrading swaps the price on the current subscription rather than starting a second
+ * one (no double charge). The difference is prorated onto the next invoice, and the
+ * `customer.subscription.updated` webhook reconciles our plan (idempotent with the
+ * caller's optimistic setPlan). No Checkout redirect — the customer's card on file is
+ * used. Returns the updated subscription.
+ */
+export async function changeSubscriptionPlan({ subscriptionId, plan }) {
+  if (!subscriptionId) throw new Error('subscriptionId is required');
+  if (!PUBLIC_PLANS.includes(plan)) throw new Error(`"${plan}" is not a purchasable plan`);
+  const price = planToPrice(plan);
+  if (!price) throw new BillingNotConfiguredError(`No Stripe price configured for the ${plan} plan (${priceEnvKey(plan)}).`);
+  const stripe = await getStripe();
+  const sub = await stripe.subscriptions.retrieve(subscriptionId);
+  const itemId = sub?.items?.data?.[0]?.id;
+  if (!itemId) throw new Error('subscription has no line item to update');
+  return stripe.subscriptions.update(subscriptionId, {
+    items: [{ id: itemId, price }],
+    proration_behavior: 'create_prorations',
+    metadata: { ...(sub.metadata || {}), plan },
+  });
+}
+
+/**
  * Create a Billing Portal session so a tenant can manage/cancel their subscription.
  * Requires a linked Stripe customer id. Returns the portal session (redirect to url).
  */
