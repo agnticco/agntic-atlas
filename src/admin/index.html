@@ -4,6 +4,8 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Atlas Admin</title>
+  <link rel="icon" type="image/svg+xml" href="/assets/favicon.svg">
+  <link rel="icon" type="image/png" href="/assets/atlas-globe-white-on-black.png">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
   <style>
@@ -169,6 +171,10 @@
     .plan-badge { padding: 2px 8px; border-radius: 5px; font-size: 10.5px; font-weight: 700; letter-spacing: .02em; text-transform: uppercase; flex-shrink: 0; }
     .plan-founding { color: var(--amber); background: rgba(224,164,88,.14); }
     .plan-team     { color: var(--accent); background: rgba(107,123,255,.15); }
+    .plan-solo     { color: var(--muted);  background: rgba(139,144,163,.12); }
+    .plan-professional { color: var(--teal); background: rgba(56,198,192,.14); }
+    .plan-business { color: #c8f0ce; background: rgba(127,194,138,.14); }
+    /* legacy plan names (pre-2026-07 tenants, until re-badged) */
     .plan-starter  { color: var(--muted);  background: rgba(139,144,163,.12); }
     .plan-enterprise { color: var(--teal); background: rgba(56,198,192,.14); }
     .cw-overlay { position: fixed; inset: 0; background: rgba(9,10,15,.66); backdrop-filter: blur(3px); display: flex; align-items: center; justify-content: center; padding: 24px; z-index: 100; animation: fadein .16s ease; }
@@ -1485,10 +1491,11 @@ function renderCreateModal() {
       <div class="cw-field">
         <label class="form-label" for="cw-plan">Plan</label>
         <select class="form-select" id="cw-plan">
-          <option value="founding">Founding — $149/mo, full access</option>
-          <option value="starter">Starter — $149/mo</option>
-          <option value="team">Team — $300/mo</option>
-          <option value="enterprise">Enterprise — from $500/mo</option>
+          <option value="solo">Solo — $20/mo · 1 workflow · 30 runs</option>
+          <option value="professional">Professional — $50/mo · 10 workflows · 200 runs</option>
+          <option value="team">Team — $200/mo · 50 workflows · 1,000 runs</option>
+          <option value="business">Business — $600/mo · unlimited · 5,000 runs</option>
+          <option value="founding">Founding — grandfathered, unlimited</option>
         </select>
       </div>
       <div class="cw-note"><span>›</span><span>We email them a secure link to set their password (valid 7 days). They sign in at atlas.agntic.co and can start building right away.</span></div>

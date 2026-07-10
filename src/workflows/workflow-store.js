@@ -194,6 +194,19 @@ export class WorkflowStore {
     this.db.exec(`CREATE INDEX IF NOT EXISTS idx_cost_log_tenant ON llm_cost_log(tenant_id, ts)`);
     this.db.exec(`CREATE INDEX IF NOT EXISTS idx_cost_log_session ON llm_cost_log(session_id)`);
 
+    // Per-tenant monthly run counter — the hard `monthlyRuns` cap (pilot pricing,
+    // 2026-07-09). One row per (tenant, calendar month); a new month is a fresh
+    // row, so the budget resets automatically with no cron. Test runs are NOT
+    // counted (they never call the increment path). See src/entitlements/index.js.
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS tenant_run_counter (
+        tenant_id TEXT NOT NULL,
+        yyyymm    TEXT NOT NULL,
+        count     INTEGER NOT NULL DEFAULT 0,
+        PRIMARY KEY (tenant_id, yyyymm)
+      )
+    `);
+
     // Runs table additive columns
     const runsCols = new Set(this.db.prepare("PRAGMA table_info(workflow_runs)").all().map(r => r.name));
     if (!runsCols.has('is_test'))      { try { this.db.exec(`ALTER TABLE workflow_runs ADD COLUMN is_test INTEGER NOT NULL DEFAULT 0`); } catch {} }
@@ -651,10 +664,40 @@ export class WorkflowStore {
       // Update last_run on the workflow only for non-test runs
       if (!isTest) {
         this.db.prepare('UPDATE workflows SET last_run = ?, updated_at = ? WHERE id = ?').run(now, now, workflowId);
+        // Charge the tenant's monthly run budget. Same transaction as the run
+        // insert so the counter can never drift from the runs it meters.
+        this.db.prepare(`
+          INSERT INTO tenant_run_counter (tenant_id, yyyymm, count) VALUES (?, ?, 1)
+          ON CONFLICT(tenant_id, yyyymm) DO UPDATE SET count = count + 1
+        `).run(tenantId, this.currentRunPeriod(now));
       }
     })();
 
     return { id, workflow_id: workflowId, user_id: userId, started_at: started, status: 'running', output: null, error: null, is_test: isTest };
+  }
+
+  /** Calendar-month bucket key for the run counter, e.g. "2026-07". */
+  currentRunPeriod(nowIso = null) {
+    return (nowIso ?? new Date().toISOString()).slice(0, 7);
+  }
+
+  /** Count a tenant's non-test runs in a given month (defaults to the current month). */
+  getRunCount(tenantId, yyyymm = null) {
+    const period = yyyymm ?? this.currentRunPeriod();
+    const row = this.db.prepare('SELECT count FROM tenant_run_counter WHERE tenant_id = ? AND yyyymm = ?')
+      .get(tenantId, period);
+    return row?.count ?? 0;
+  }
+
+  /**
+   * Number of currently-live (published, non-deleted) workflows for a tenant —
+   * the value the `activeWorkflows` cap is checked against. Drafts do not count.
+   */
+  countActiveForTenant(tenantId) {
+    const row = this.db.prepare(
+      "SELECT COUNT(*) AS n FROM workflows WHERE status = 'active' AND deleted_at IS NULL AND tenant_id IS ?"
+    ).get(tenantId);
+    return row?.n ?? 0;
   }
 
   /** Append a step record to an in-progress run. */

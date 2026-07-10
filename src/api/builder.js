@@ -32,7 +32,8 @@ import { notesSince } from '../release-notes.js';
 import { sendMail } from '../utils/mailer.js';
 import { renderInviteEmail } from '../auth/invite-email.js';
 import { oauthRedirectBase } from '../connectors/oauth-redirect.js';
-import { seatLimit } from '../entitlements/index.js';
+import { seatLimit, entitlement, entitlementsFor, nextPlan, PLAN_META } from '../entitlements/index.js';
+import { isBillingConfigured } from '../billing/stripe.js';
 import { randomBytes } from 'node:crypto';
 
 // Retry an LLM call up to maxRetries times on transient provider errors (500/529/503).
@@ -498,8 +499,31 @@ export function mountBuilderRoutes(app, { spine, requireActiveTenant, requireAut
         pending: !u.last_login_at, is_you: u.id === req.user.id,
       }));
       res.json({
-        members, plan: tenant?.plan ?? 'starter', isAdmin: req.user.role === 'admin',
+        members, plan: tenant?.plan ?? 'solo', isAdmin: req.user.role === 'admin',
         seats: { used: members.length, limit: limit === Infinity ? null : limit },
+      });
+    } catch (err) { res.status(500).json({ error: err.message ?? String(err) }); }
+  });
+
+  // Live plan + usage snapshot for the sidebar meter / account flyout. The
+  // workflows meter is the loud adoption constraint; runs is the hard monthly cap.
+  // `limit: null` means unlimited (∞ plans).
+  app.get('/api/builder/usage', requireActiveTenant, (req, res) => {
+    try {
+      const ent = entitlementsFor(spine.auth.tenantStore, req.tenant.id);
+      const store = spine.engine.workflowStore;
+      const cap = (v) => (v === Infinity ? null : v);
+      // First day of next calendar month — when the run budget resets.
+      const [y, m] = store.currentRunPeriod().split('-').map(Number);
+      const resetsOn = new Date(Date.UTC(m === 12 ? y + 1 : y, m === 12 ? 0 : m, 1)).toISOString().slice(0, 10);
+      res.json({
+        plan: ent.plan,
+        planLabel: PLAN_META[ent.plan]?.label ?? ent.plan,
+        upgradeTo: nextPlan(ent.plan),
+        billingConfigured: isBillingConfigured(),
+        workflows: { used: store.countActiveForTenant(req.tenant.id), limit: cap(ent.activeWorkflows) },
+        runs:      { used: store.getRunCount(req.tenant.id), limit: cap(ent.monthlyRuns), resetsOn },
+        seats:     { used: activeMembers(req.tenant.id).length, limit: cap(ent.seats) },
       });
     } catch (err) { res.status(500).json({ error: err.message ?? String(err) }); }
   });
@@ -1756,6 +1780,23 @@ Rules:
   app.post('/api/builder/workflows', requireActiveTenant, async (req, res) => {
     const { spec, intent, testRun } = req.body ?? {};
     if (!spec?.nodes) return res.status(400).json({ error: 'spec with nodes[] is required' });
+
+    // ── activeWorkflows gate — the loud adoption constraint ──────────────────
+    // Only PUBLISHED (active) workflows count; drafts are unlimited. This route
+    // always creates a NEW workflow (edits go through PUT), so being at the cap
+    // blocks the next publish. Existing live workflows keep running untouched.
+    const ent = entitlementsFor(spine.auth.tenantStore, req.tenant.id);
+    const wfLimit = ent.activeWorkflows;
+    if (wfLimit !== Infinity && spine.engine.workflowStore.countActiveForTenant(req.tenant.id) >= wfLimit) {
+      const planLabel = PLAN_META[ent.plan]?.label ?? ent.plan;
+      logEvent('persist.plan_limit', { tenant: req.tenant.id, feature: 'activeWorkflows', plan: ent.plan });
+      return res.status(402).json({
+        ok: false, code: 'PLAN_LIMIT', feature: 'activeWorkflows', plan: ent.plan, upgradeTo: nextPlan(ent.plan),
+        error: wfLimit === 1
+          ? `Your ${planLabel} plan runs 1 live automation at a time. Upgrade to run more in parallel.`
+          : `Your ${planLabel} plan includes ${wfLimit} live automations. Upgrade to publish more.`,
+      });
+    }
 
     let result;
     try {
