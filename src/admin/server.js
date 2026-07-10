@@ -23,6 +23,7 @@ import { sendMail } from '../utils/mailer.js';
 import { oauthRedirectBase } from '../connectors/oauth-redirect.js';
 import { screenshotToDataUrl } from '../api/tickets.js';
 import { renderTicketBrief, ticketGithubTitle, ticketGithubLabels } from '../support/ticket-brief.js';
+import { PLAN_META, PUBLIC_PLANS } from '../entitlements/index.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -316,6 +317,46 @@ export function mountAdminRoutes(app, { spine, requireAuth, requirePlatformAdmin
 
   const tickets = spine.tickets ?? null;
   const ticketsUnavailable = (res) => res.status(503).json({ error: 'ticketing unavailable' });
+
+  // ── Sales — subscription lifecycle feed + MRR (mirrors the Tickets section) ──
+  const billingEvents = spine.billingEvents ?? null;
+
+  app.get('/admin/sales', adminOnly, (req, res) => {
+    try {
+      if (!billingEvents) return res.status(503).json({ error: 'sales unavailable' });
+      const nameCache = new Map();
+      const tenantName = (id) => {
+        if (!nameCache.has(id)) { let n = null; try { n = tenants.get(id)?.name ?? null; } catch { /* ignore */ } nameCache.set(id, n); }
+        return nameCache.get(id);
+      };
+      const events = billingEvents.list({ limit: Number(req.query?.limit) || 100 }).map((e) => ({
+        ...e,
+        tenantName: e.tenant_name ?? tenantName(e.tenant_id) ?? e.tenant_id,
+        planLabel: PLAN_META[e.plan]?.label ?? e.plan,
+      }));
+      // MRR + active-subscription count from the live roster: paid, active tenants only
+      // (suspended/cancelled and comped 'founding' tenants don't count).
+      let mrrCents = 0, activeSubs = 0;
+      for (const t of tenants.list()) {
+        if (t.id !== 'platform' && t.status === 'active' && !t.archived_at && PUBLIC_PLANS.includes(t.plan)) {
+          mrrCents += PLAN_META[t.plan].price * 100;
+          activeSubs++;
+        }
+      }
+      res.json({ events, counts: billingEvents.counts(), summary: { mrrCents, activeSubs } });
+    } catch (err) {
+      logEvent('admin.sales.list.error', errFields(err));
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Clear the unseen badge — called when the admin opens the Sales view.
+  app.post('/admin/sales/seen', adminOnly, (req, res) => {
+    try {
+      if (!billingEvents) return res.status(503).json({ error: 'sales unavailable' });
+      res.json({ ok: true, changed: billingEvents.markAllSeen() });
+    } catch (err) { res.status(500).json({ error: err.message }); }
+  });
 
   // List with optional status/type/tenant filters + headline counts.
   app.get('/admin/tickets', adminOnly, (req, res) => {

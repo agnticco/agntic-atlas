@@ -91,6 +91,22 @@ export class TokenService {
   }
 
   /**
+   * Sign a short-lived, scoped token that is NOT a session — it carries a tenant + a
+   * scope only (no user/session), so it can't authenticate against the middleware.
+   * Used for the resubscribe flow: a suspended user (who can't get a session) proves
+   * account ownership at login, gets one of these, and spends it at /api/billing/resubscribe.
+   * Verify with verify() then check `claims.scope`.
+   */
+  signScoped({ tenantId, scope, ttlMs }) {
+    if (!tenantId || !scope || !ttlMs) throw new Error('signScoped() requires tenantId, scope, ttlMs');
+    return jwt.sign(
+      { tid: tenantId, scope },
+      this._secret,
+      { algorithm: ALGO, expiresIn: Math.floor(ttlMs / 1000), issuer: ISSUER },
+    );
+  }
+
+  /**
    * Verify + decode a token. Returns the claims on success, null on any failure.
    * Swallows jsonwebtoken errors to a uniform null — callers should treat null
    * as "unauthorized" without needing to distinguish failure modes.

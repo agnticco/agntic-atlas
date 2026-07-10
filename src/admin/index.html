@@ -226,7 +226,7 @@ const RUN_META = {
 
 // ── State ──────────────────────────────────────────────────────────────────────
 let S = {
-  view: 'login', // login | dashboard | usage | tenants | tenant | tickets | ticket
+  view: 'login', // login | dashboard | usage | tenants | tenant | tickets | ticket | sales
   token: null, adminEmail: null,
   data: null, // { overall, tenants[], pdaily[], recent[] }
   selectedTenant: null,
@@ -236,6 +236,8 @@ let S = {
   tickets: null, ticketsCounts: null,
   ticketStatusFilter: 'open', ticketTypeFilter: '',
   selectedTicket: null, ticketDetail: null, ticketBusy: false, ticketMsg: '',
+  // sales / subscriptions
+  sales: null, salesCounts: { total: 0, unseen: 0 }, salesSummary: { mrrCents: 0, activeSubs: 0 },
 };
 
 function setState(patch) { Object.assign(S, patch); render(); }
@@ -374,6 +376,8 @@ async function fetchAndStore() {
 
   // Keep the sidebar Tickets badge fresh (cheap query; shown on next full render).
   try { const td = await apiGet('/admin/tickets?status=open'); if (td && td.counts) S.ticketsCounts = td.counts; } catch { /* optional */ }
+  // Keep the Sales badge + MRR summary fresh (GET does not clear the unseen count).
+  try { const sd = await apiGet('/admin/sales'); if (sd && sd.counts) S.salesCounts = sd.counts; if (sd && sd.summary) S.salesSummary = sd.summary; } catch { /* optional */ }
 }
 
 // Patch #main children in place — no sidebar re-render, scroll preserved.
@@ -1147,6 +1151,25 @@ const TICKET_STATUS_META = {
 };
 const TICKET_SEV_COLOR = { blocker: RED, high: RED, medium: AMBER, low: GREEN };
 
+const SALE_TYPE_META = {
+  signup:       { label: 'New',         icon: '🎉', color: GREEN },
+  reactivation: { label: 'Reactivated', icon: '♻️', color: GREEN },
+  cancellation: { label: 'Canceled',    icon: '🔻', color: RED },
+  plan_change:  { label: 'Plan change', icon: '⇄',  color: ACCENT },
+};
+
+async function loadSales() {
+  try {
+    const data = await apiGet('/admin/sales');
+    S.sales        = (data && data.events)  || [];
+    S.salesCounts  = (data && data.counts)  || S.salesCounts;
+    S.salesSummary = (data && data.summary) || S.salesSummary;
+  } catch { S.sales = []; }
+  // Opening the view clears the unseen badge.
+  try { await apiPost('/admin/sales/seen', {}); S.salesCounts = { ...(S.salesCounts || {}), unseen: 0 }; } catch { /* optional */ }
+  render();
+}
+
 async function loadTickets() {
   const q = new URLSearchParams();
   if (S.ticketStatusFilter) q.set('status', S.ticketStatusFilter);
@@ -1225,6 +1248,72 @@ function renderTicketsList() {
       <div>${sev}</div>
       <div>${ticketBadge(sm.label, sm.color)}</div>
       <div style="color:var(--dim);font-size:12px">${relTime(t.created_at)}</div>`;
+    table.appendChild(row);
+  });
+  card.appendChild(table);
+  main.appendChild(card);
+  return main;
+}
+
+function salesBadge(text, color) { return `<span class="badge" style="color:${color};background:${color}22">${esc(text)}</span>`; }
+
+function renderSalesList() {
+  const main = div('');
+  const sum = S.salesSummary || { mrrCents: 0, activeSubs: 0 };
+  const counts = S.salesCounts || { total: 0, unseen: 0 };
+
+  const head = div('');
+  head.style.cssText = 'display:flex;align-items:flex-start;justify-content:space-between;gap:16px;margin-bottom:22px;flex-wrap:wrap';
+  const titleWrap = div('');
+  titleWrap.innerHTML = `<h1 style="font-size:22px;font-weight:600;margin:0 0 4px">Sales</h1>
+    <div style="font-size:13px;color:var(--muted)">Subscription lifecycle — signups, reactivations, and cancellations</div>`;
+  head.appendChild(titleWrap);
+  const refresh = div('sb-logout'); refresh.textContent = 'Refresh ↺'; refresh.style.cssText = 'padding:8px 12px';
+  refresh.addEventListener('click', () => loadSales());
+  head.appendChild(refresh);
+  main.appendChild(head);
+
+  // MRR + active-subscription stat tiles.
+  const stats = div(''); stats.style.cssText = 'display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:14px;margin-bottom:22px';
+  const tile = (label, value, color) => {
+    const c = div('card'); c.style.cssText = 'padding:16px 18px';
+    c.innerHTML = `<div style="font-size:11px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;color:var(--dim);margin-bottom:6px">${label}</div>
+      <div style="font-size:26px;font-weight:600;color:${color || 'var(--text)'}">${value}</div>`;
+    return c;
+  };
+  stats.appendChild(tile('MRR', money((sum.mrrCents || 0) / 100, 0), GREEN));
+  stats.appendChild(tile('Active subscriptions', num(sum.activeSubs || 0)));
+  stats.appendChild(tile('Lifecycle events', num(counts.total || 0)));
+  main.appendChild(stats);
+
+  const rows = S.sales;
+  if (rows == null) { main.appendChild(div('empty', 'Loading…')); return main; }
+  if (!rows.length) { main.appendChild(div('empty', 'No sales activity yet.')); return main; }
+
+  const cols = '128px 1fr 130px 104px 84px';
+  const card = div('card'); card.style.cssText = 'padding:0;overflow:hidden';
+  const table = div(''); table.style.cssText = 'display:flex;flex-direction:column';
+  const header = div(''); header.style.cssText = `display:grid;grid-template-columns:${cols};gap:12px;padding:12px 18px;border-bottom:1px solid var(--border);font-size:11px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;color:var(--dim)`;
+  ['Event', 'Workspace', 'Plan', 'MRR Δ', 'When'].forEach(t => header.appendChild(h('div', {}, t)));
+  table.appendChild(header);
+
+  rows.forEach(e => {
+    const m = SALE_TYPE_META[e.type] || { label: e.type, icon: '•', color: MUTED };
+    const row = div(''); row.style.cssText = `display:grid;grid-template-columns:${cols};gap:12px;padding:13px 18px;border-bottom:1px solid var(--border);align-items:center;font-size:13px${e.tenant_id ? ';cursor:pointer' : ''}`;
+    if (e.tenant_id) {
+      row.addEventListener('mouseenter', () => row.style.background = 'rgba(255,255,255,.02)');
+      row.addEventListener('mouseleave', () => row.style.background = 'transparent');
+      row.addEventListener('click', () => setState({ view: 'tenant', selectedTenant: e.tenant_id }));
+    }
+    const d = e.mrr_delta_cents;
+    const deltaStr = (d == null) ? '<span style="color:var(--dim)">—</span>'
+      : `<span style="color:${d < 0 ? RED : GREEN};font-weight:600">${d < 0 ? '−' : '+'}${money(Math.abs(d) / 100, 0)}</span>`;
+    row.innerHTML = `
+      <div>${salesBadge(m.icon + ' ' + m.label, m.color)}</div>
+      <div style="min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text)">${esc(e.tenantName || e.tenant_id || '—')}${e.customer_email ? ` <span style="color:var(--dim);font-size:12px">· ${esc(e.customer_email)}</span>` : ''}</div>
+      <div style="color:var(--muted)">${esc(e.planLabel || e.plan || '—')}</div>
+      <div>${deltaStr}</div>
+      <div style="color:var(--dim);font-size:12px">${relTime(e.created_at)}</div>`;
     table.appendChild(row);
   });
   card.appendChild(table);
@@ -1417,6 +1506,15 @@ function renderSidebar() {
   tItem.addEventListener('click', () => { setState({ view: 'tickets' }); loadTickets(); });
   nav.appendChild(tItem);
 
+  // Sales section — subscription lifecycle, with an unseen-count badge.
+  const salesHead = div('sb-section'); salesHead.textContent = 'Sales'; nav.appendChild(salesHead);
+  const sItem = div('nav-item' + (S.view === 'sales' ? ' active' : ''));
+  sItem.style.cssText = 'display:flex;align-items:center;justify-content:space-between';
+  const unseenN = (S.salesCounts && S.salesCounts.unseen) || 0;
+  sItem.innerHTML = '<span>Sales</span>' + (unseenN > 0 ? `<span style="font-size:11px;font-weight:600;color:${GREEN};background:${GREEN}22;border-radius:999px;padding:1px 8px">${unseenN}</span>` : '');
+  sItem.addEventListener('click', () => { setState({ view: 'sales' }); loadSales(); });
+  nav.appendChild(sItem);
+
   // Active tenant label
   if (S.view === 'tenant' && S.data) {
     const t = S.data.tenants.find(x => x.id === S.selectedTenant);
@@ -1467,6 +1565,7 @@ function buildMainContent() {
     case 'tenant':    return renderTenantDetail(S.selectedTenant, db);
     case 'tickets':   return renderTicketsList();
     case 'ticket':    return renderTicketDetail();
+    case 'sales':     return renderSalesList();
     default:          return null;
   }
 }
