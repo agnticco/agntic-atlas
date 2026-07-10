@@ -86,7 +86,8 @@ import { FileCheckpointer } from '../graph/checkpointer/index.js';
 import { sendMail } from '../utils/mailer.js';
 import { renderResetEmail } from '../auth/reset-email.js';
 import { oauthRedirectBase } from '../connectors/oauth-redirect.js';
-import { entitlementsFor, PUBLIC_PLANS } from '../entitlements/index.js';
+import { entitlementsFor, PUBLIC_PLANS, PLAN_META } from '../entitlements/index.js';
+import { notifyPurchase } from '../billing/purchase-notify.js';
 import {
   isBillingConfigured, createCheckoutSession, createPortalSession,
   constructWebhookEvent, handleWebhookEvent, BillingNotConfiguredError,
@@ -1997,6 +1998,20 @@ export function createApp(spine) {
     try {
       const result = handleWebhookEvent(event, { tenantStore: spine.auth.tenantStore });
       logEvent('billing.webhook', { type: event.type, ...result });
+      // Team alert on a completed purchase (same shape/destination as feedback).
+      // Fire-and-forget so the webhook acks fast; notifyPurchase never throws.
+      if (event.type === 'checkout.session.completed' && result.handled) {
+        const s = event.data.object ?? {};
+        const tenant = spine.auth.tenantStore.get(result.tenantId);
+        notifyPurchase({
+          tenantName: tenant?.name, tenantId: result.tenantId,
+          plan: result.plan, planLabel: PLAN_META[result.plan]?.label ?? result.plan,
+          amountCents: s.amount_total, currency: s.currency,
+          email: s.customer_details?.email ?? s.customer_email ?? null,
+          subscriptionId: s.subscription ?? null,
+          adminBase: oauthRedirectBase(),
+        });
+      }
       res.json({ received: true });
     } catch (err) {
       logEvent('billing.webhook.error', { type: event?.type, error: err.message });
