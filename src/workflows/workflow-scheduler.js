@@ -164,6 +164,18 @@ export class WorkflowScheduler {
   }
 
   /**
+   * Register a run-budget predicate — the hard `monthlyRuns` plan cap. Before any
+   * real flow run (scheduled, connector-event, or manual "run now" — all funnel
+   * through _executeFlow), the scheduler asks whether the owning tenant is under
+   * its monthly run budget. Returning `false` skips the run. Fails OPEN: if the
+   * hook throws or returns anything other than `false`, the run proceeds.
+   * @param {(workflow: object) => boolean} fn
+   */
+  registerRunBudgetCheck(fn) {
+    this._runBudgetCheck = fn;
+  }
+
+  /**
    * Execute a single workflow (dispatch by kind).
    * @param {object} workflow
    * @param {object} [options]
@@ -221,6 +233,19 @@ export class WorkflowScheduler {
    *   notify.channel      — target for the notification
    */
   async _executeFlow(workflow, opts = {}) {
+    // Hard monthly-run cap (plan gate). The single choke point for every real
+    // run — scheduled, connector-event, and console "run now" all reach here.
+    // Fails open (only an explicit `false` skips the run). Test runs never enter
+    // this path, so they're inherently exempt from the budget.
+    if (this._runBudgetCheck) {
+      let allowed = true;
+      try { allowed = this._runBudgetCheck(workflow); } catch { allowed = true; }
+      if (allowed === false) {
+        log.warn(`[workflow-scheduler] "${workflow.slug}" skipped — tenant over monthly run budget`);
+        return;
+      }
+    }
+
     const eh = workflow.error_handling ?? {};
     const maxAttempts = Math.max(1, 1 + (parseInt(eh.retry?.attempts, 10) || 0));
     const retryDelayMs = Math.max(0, (parseInt(eh.retry?.delay_seconds, 10) || 0)) * 1_000;
