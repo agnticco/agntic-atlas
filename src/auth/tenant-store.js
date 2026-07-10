@@ -19,7 +19,7 @@ CREATE TABLE IF NOT EXISTS tenants (
   name        TEXT NOT NULL,
   slug        TEXT UNIQUE NOT NULL,
   status      TEXT NOT NULL CHECK(status IN ('active','suspended')) DEFAULT 'active',
-  plan        TEXT NOT NULL DEFAULT 'starter',
+  plan        TEXT NOT NULL DEFAULT 'solo',
   archived_at TEXT,
   created_at  TEXT NOT NULL,
   updated_at  TEXT NOT NULL
@@ -27,7 +27,10 @@ CREATE TABLE IF NOT EXISTS tenants (
 `;
 
 const SLUG_RE = /^[a-z0-9][a-z0-9-]{1,62}$/;
-export const VALID_PLANS = ['founding', 'starter', 'team', 'enterprise'];
+// Sellable adoption ladder + the internal grandfathered `founding` plan. See
+// src/entitlements/index.js and docs/architecture/tier-gating.md.
+export const VALID_PLANS = ['solo', 'professional', 'team', 'business', 'founding'];
+const DEFAULT_PLAN = 'solo';
 
 export class TenantStore {
   constructor({ db = null, dbPath = null } = {}) {
@@ -45,10 +48,39 @@ export class TenantStore {
     // Additive migration: plan column for tier gating (pre-existing DBs).
     const cols = this.db.prepare('PRAGMA table_info(tenants)').all().map((c) => c.name);
     if (!cols.includes('plan')) {
-      this.db.exec("ALTER TABLE tenants ADD COLUMN plan TEXT NOT NULL DEFAULT 'starter'");
+      this.db.exec("ALTER TABLE tenants ADD COLUMN plan TEXT NOT NULL DEFAULT 'solo'");
     }
     if (!cols.includes('archived_at')) {
       this.db.exec('ALTER TABLE tenants ADD COLUMN archived_at TEXT');
+    }
+    // Additive migration: Stripe subscription linkage (pilot pricing, 2026-07-09).
+    if (!cols.includes('stripe_customer_id')) {
+      this.db.exec('ALTER TABLE tenants ADD COLUMN stripe_customer_id TEXT');
+    }
+    if (!cols.includes('stripe_subscription_id')) {
+      this.db.exec('ALTER TABLE tenants ADD COLUMN stripe_subscription_id TEXT');
+    }
+
+    // One-time grandfather migration: the pilot pricing rework introduces hard
+    // adoption caps (Solo = 1 workflow / 30 runs). Every tenant that already
+    // existed when this shipped is moved to the unlimited `founding` plan so the
+    // new caps only bind NEW signups. Guarded by a marker row — a name-based
+    // guard is unsafe because `team` is both an old and a new plan name, so a
+    // real Team customer would be wrongly re-upgraded on every restart.
+    this.db.exec(`CREATE TABLE IF NOT EXISTS tenant_store_migrations (
+      name TEXT PRIMARY KEY,
+      applied_at TEXT NOT NULL
+    )`);
+    const GRANDFATHER = 'grandfather_pilot_2026_07';
+    const already = this.db.prepare('SELECT 1 FROM tenant_store_migrations WHERE name = ?').get(GRANDFATHER);
+    if (!already) {
+      const now = new Date().toISOString();
+      this.db.transaction(() => {
+        this.db.prepare(
+          "UPDATE tenants SET plan = 'founding', updated_at = ? WHERE id != ? AND plan != 'founding'"
+        ).run(now, PLATFORM_TENANT_ID);
+        this.db.prepare('INSERT INTO tenant_store_migrations (name, applied_at) VALUES (?, ?)').run(GRANDFATHER, now);
+      })();
     }
   }
 
@@ -76,11 +108,11 @@ export class TenantStore {
    * Create a tenant. `id` defaults to the slug (stable, human-readable). Throws
    * on a duplicate slug or a malformed slug.
    */
-  create({ name, slug, id = null, plan = 'starter' }) {
+  create({ name, slug, id = null, plan = DEFAULT_PLAN }) {
     const cleanSlug = String(slug ?? '').trim().toLowerCase();
     if (!SLUG_RE.test(cleanSlug)) throw new Error('slug must be 2-63 chars, [a-z0-9-], starting alphanumeric');
     if (cleanSlug === PLATFORM_TENANT_ID) throw new Error('"platform" is reserved');
-    const cleanPlan = VALID_PLANS.includes(String(plan)) ? String(plan) : 'starter';
+    const cleanPlan = VALID_PLANS.includes(String(plan)) ? String(plan) : DEFAULT_PLAN;
     const tid = id ?? cleanSlug;
     if (this.get(tid) || this.getBySlug(cleanSlug)) throw new Error('A tenant with that slug already exists.');
     const now = new Date().toISOString();
@@ -95,6 +127,29 @@ export class TenantStore {
     this.db.prepare('UPDATE tenants SET plan = ?, updated_at = ? WHERE id = ?')
       .run(String(plan), new Date().toISOString(), id);
     return this.get(id);
+  }
+
+  /**
+   * Link (or clear) a tenant's Stripe customer/subscription ids. Called by the
+   * Stripe webhook handler so cancellations/updates can be reconciled back to a
+   * tenant. Pass `null` for either id to leave it unchanged.
+   */
+  setStripeIds(id, { customerId = undefined, subscriptionId = undefined } = {}) {
+    const sets = [];
+    const vals = [];
+    if (customerId !== undefined) { sets.push('stripe_customer_id = ?'); vals.push(customerId); }
+    if (subscriptionId !== undefined) { sets.push('stripe_subscription_id = ?'); vals.push(subscriptionId); }
+    if (!sets.length) return this.get(id);
+    sets.push('updated_at = ?'); vals.push(new Date().toISOString());
+    vals.push(id);
+    this.db.prepare(`UPDATE tenants SET ${sets.join(', ')} WHERE id = ?`).run(...vals);
+    return this.get(id);
+  }
+
+  /** Find a tenant by its Stripe customer id (webhook reconciliation). */
+  getByStripeCustomer(customerId) {
+    if (!customerId) return null;
+    return this.db.prepare('SELECT * FROM tenants WHERE stripe_customer_id = ?').get(String(customerId)) ?? null;
   }
 
   get(id) {

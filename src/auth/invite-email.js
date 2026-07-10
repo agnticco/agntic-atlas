@@ -11,6 +11,7 @@
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
+import { PLAN_META } from '../entitlements/index.js';
 
 const TEMPLATE_PATH = join(dirname(fileURLToPath(import.meta.url)), 'templates', 'invite-email.template.html');
 
@@ -21,23 +22,57 @@ function esc(s) {
   return String(s ?? '').replace(/[&<>"]/g, (m) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[m]));
 }
 
+/** Human-readable one-liner of what a plan includes, e.g. "1 live automation · 30 runs/month · 1 user". */
+function planSummary(meta) {
+  const wf = meta.workflows === Infinity ? 'Unlimited automations' : `${meta.workflows} live automation${meta.workflows === 1 ? '' : 's'}`;
+  const runs = `${Number(meta.runs).toLocaleString('en-US')} runs/month`;
+  const users = meta.users === Infinity ? 'Unlimited users' : `${meta.users} user${meta.users === 1 ? '' : 's'}`;
+  return `${wf} · ${runs} · ${users}`;
+}
+
+/** The branded plan callout row for the onboarding email (empty string when no plan). */
+function planBlockHtml(plan) {
+  const meta = PLAN_META[plan];
+  if (!meta) return '';
+  const summary = planSummary(meta);
+  return `<tr>
+            <td class="px" style="padding:28px 48px 0 48px;">
+              <table role="presentation" class="panel" width="100%" cellpadding="0" cellspacing="0" border="0" bgcolor="#F6F6F6" style="background:#F6F6F6; border:1px solid #E6E6E6; border-radius:12px;">
+                <tr>
+                  <td style="padding:20px 22px;">
+                    <p class="mono txt-3" style="margin:0 0 6px 0; font-size:10px; letter-spacing:2px; text-transform:uppercase; color:#767676;">Your plan</p>
+                    <p class="sans txt-primary" style="margin:0 0 3px 0; font-size:17px; line-height:22px; font-weight:600; color:#0A0A0A;">${esc(meta.label)} <span class="txt-3" style="color:#767676; font-weight:400;">— $${meta.price}/mo</span></p>
+                    <p class="sans txt-2" style="margin:0; font-size:14px; line-height:21px; color:#444444;">${esc(summary)}</p>
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>`;
+}
+
 /**
  * @param {object} p
  * @param {string} p.inviteLink     full set-password URL (already includes the token)
  * @param {string} p.userEmail      recipient (shown in the header)
  * @param {string} p.workspaceName  the tenant they've been added to
  * @param {string} p.base           public base URL, e.g. https://atlas.agntic.co
+ * @param {string} [p.plan]         plan id (solo/professional/team/business/…) — when
+ *                                  set, the email names the plan they're onboarding into.
+ *                                  Passed for new-workspace onboarding; omitted for
+ *                                  teammate invites to an existing workspace.
  * @returns {{ subject: string, html: string, text: string }}
  */
-export function renderInviteEmail({ inviteLink, userEmail, workspaceName, base }) {
+export function renderInviteEmail({ inviteLink, userEmail, workspaceName, base, plan = null }) {
   const ws = workspaceName || 'your workspace';
   const assetsBase = `${String(base).replace(/\/+$/, '')}/assets`;
+  const meta = plan ? PLAN_META[plan] : null;
 
   const html = template()
     .split('{{assets_base}}').join(esc(assetsBase))
     .split('{{invite_link}}').join(esc(inviteLink))
     .split('{{user_email}}').join(esc(userEmail))
-    .split('{{workspace_name}}').join(esc(ws));
+    .split('{{workspace_name}}').join(esc(ws))
+    .split('{{plan_block}}').join(planBlockHtml(plan));
 
   const text = [
     `You're invited to ${ws} on Atlas`,
@@ -45,6 +80,7 @@ export function renderInviteEmail({ inviteLink, userEmail, workspaceName, base }
     `You've been added to ${ws} on Atlas. Atlas builds your automations from`,
     'plain-language descriptions — you say what you want to happen, and it builds a',
     'workflow that runs it.',
+    ...(meta ? ['', `Your plan: ${meta.label} — $${meta.price}/mo (${planSummary(meta)}).`] : []),
     '',
     'Set your password to get started (this link is valid for 7 days):',
     inviteLink,

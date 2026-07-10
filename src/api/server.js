@@ -86,6 +86,11 @@ import { FileCheckpointer } from '../graph/checkpointer/index.js';
 import { sendMail } from '../utils/mailer.js';
 import { renderResetEmail } from '../auth/reset-email.js';
 import { oauthRedirectBase } from '../connectors/oauth-redirect.js';
+import { entitlementsFor, PUBLIC_PLANS } from '../entitlements/index.js';
+import {
+  isBillingConfigured, createCheckoutSession, createPortalSession,
+  constructWebhookEvent, handleWebhookEvent, BillingNotConfiguredError,
+} from '../billing/stripe.js';
 
 const PORT = numEnv('PORT', 3000);
 // Cookies are Secure by default (the app runs behind Cloudflare HTTPS); only a
@@ -376,6 +381,23 @@ async function unconnectedConnector(spec, tenantId, deps) {
 // isolation is hard: the event's team_id must resolve to exactly one tenant's
 // stored Slack install, and only THAT tenant's active flows are considered — and
 // each runs with that tenant's OWN Slack token.
+/**
+ * Resolve a tenant's monthly-run budget status. Used both by the scheduler's
+ * run-budget gate (background runs) and could back a REST check. Fails OPEN — any
+ * error resolves to `allowed:true` so a bookkeeping fault never halts automations.
+ * @returns {{ allowed: boolean, used: number, limit: number|null, plan: string|null }}
+ */
+function checkRunBudget(spine, tenantId) {
+  try {
+    const ent = entitlementsFor(spine.auth.tenantStore, tenantId);
+    if (ent.monthlyRuns === Infinity) return { allowed: true, used: 0, limit: null, plan: ent.plan };
+    const used = spine.engine.workflowStore.getRunCount(tenantId);
+    return { allowed: used < ent.monthlyRuns, used, limit: ent.monthlyRuns, plan: ent.plan };
+  } catch {
+    return { allowed: true, used: 0, limit: null, plan: null };
+  }
+}
+
 async function dispatchSlackEvent(spine, body) {
   const teamId = body?.team_id;
   const ev = body?.event ?? {};
@@ -796,6 +818,20 @@ export async function bootSpine() {
       const t = auth.tenantStore.get(tenantId);
       return !t || (t.status === 'active' && !t.archived_at);
     } catch { return true; }
+  });
+
+  // Hard monthly-run cap (plan gate). Skips real runs for tenants who have spent
+  // their plan's run budget this month; the budget resets on the 1st. Logs each
+  // block so it's visible in the event log. Fails open on any error.
+  engine.workflowScheduler.registerRunBudgetCheck((workflow) => {
+    const budget = checkRunBudget({ auth, engine }, workflow.tenant_id);
+    if (!budget.allowed) {
+      logEvent('run.blocked.plan_limit', {
+        tenant: workflow.tenant_id, workflow: workflow.id,
+        plan: budget.plan, used: budget.used, limit: budget.limit,
+      });
+    }
+    return budget.allowed;
   });
 
   // Reconcile runs orphaned in 'running' by a prior crash/restart BEFORE the
@@ -1911,6 +1947,61 @@ export function createApp(spine) {
     }
     res.status(200).end(); // ack immediately — Airtable requires <30s response
     dispatchAirtableEvent(spine, body).catch((err) => logEvent('airtable.event.error', errFields(err)));
+  });
+
+  // ── Billing (Stripe) ───────────────────────────────────────────────────────
+  // Self-serve upgrade: the in-app Upgrade modal POSTs the target plan, we mint a
+  // Stripe Checkout session and hand back its URL for the browser to redirect to.
+  // Payment confirmation arrives asynchronously at /webhooks/stripe, which flips
+  // the tenant's plan. Fails soft when Stripe isn't configured (clean 503).
+  app.post('/api/billing/checkout', requireActiveTenant, async (req, res) => {
+    try {
+      if (!isBillingConfigured()) throw new BillingNotConfiguredError();
+      const plan = String(req.body?.plan ?? '');
+      if (!PUBLIC_PLANS.includes(plan)) return res.status(400).json({ error: 'Unknown plan.' });
+      const session = await createCheckoutSession({
+        tenantId: req.tenant.id, plan, email: req.user?.email ?? null, baseUrl: oauthRedirectBase(),
+      });
+      res.json({ ok: true, url: session.url });
+    } catch (err) {
+      logEvent('billing.checkout.error', { tenant: req.tenant?.id ?? null, code: err.code, error: err.message });
+      res.status(err.status ?? 500).json({ error: err.message, code: err.code });
+    }
+  });
+
+  // Stripe Billing Portal — manage/cancel an existing subscription.
+  app.post('/api/billing/portal', requireActiveTenant, async (req, res) => {
+    try {
+      if (!isBillingConfigured()) throw new BillingNotConfiguredError();
+      const tenant = spine.auth.tenantStore.get(req.tenant.id);
+      if (!tenant?.stripe_customer_id) return res.status(400).json({ error: 'No billing account is linked to this workspace yet.' });
+      const session = await createPortalSession({ customerId: tenant.stripe_customer_id, baseUrl: oauthRedirectBase() });
+      res.json({ ok: true, url: session.url });
+    } catch (err) {
+      res.status(err.status ?? 500).json({ error: err.message, code: err.code });
+    }
+  });
+
+  // Stripe webhook — no auth; verified by signature over the RAW body. The global
+  // express.json verify hook captured the untouched bytes as req.rawBody, which is
+  // exactly what constructEvent needs. Handler flips tenant plans on payment /
+  // subscription changes and reconciles cancellations back to the adoption floor.
+  app.post('/webhooks/stripe', async (req, res) => {
+    let event;
+    try {
+      event = await constructWebhookEvent(req.rawBody, req.headers['stripe-signature']);
+    } catch (err) {
+      logEvent('billing.webhook.bad_signature', { error: err.message });
+      return res.status(400).send(`Webhook Error: ${err.message}`);
+    }
+    try {
+      const result = handleWebhookEvent(event, { tenantStore: spine.auth.tenantStore });
+      logEvent('billing.webhook', { type: event.type, ...result });
+      res.json({ received: true });
+    } catch (err) {
+      logEvent('billing.webhook.error', { type: event?.type, error: err.message });
+      res.status(500).json({ error: 'webhook handler failed' });
+    }
   });
 
   mountBuilderRoutes(app, { spine, requireActiveTenant, requireAuth, readSources, tenantGuard });

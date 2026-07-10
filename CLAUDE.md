@@ -224,6 +224,29 @@ gated). Optional env (`SUPPORT_EMAIL`, `SUPPORT_SLACK_CHANNEL`, `GITHUB_REPO`,
 [`docs/support-tickets.md`](docs/support-tickets.md). NOT the same as the dead-wired
 `src/workflows/feedback-store.js` (per-run feedback).
 
+## Pilot pricing / tier gating — reworked 2026-07-09
+
+The flat $149/mo pilot price is replaced by a **volume-based adoption ladder** —
+**Solo $20 (1 workflow / 30 runs)** → Professional $50 (10 / 200) → Team $200 (50 / 1,000)
+→ Business $600 (∞ / 5,000). The **loud constraint is `activeWorkflows`** (1 on Solo): the
+publish gate (`POST /api/builder/workflows`) blocks the 2nd live workflow with a 402
+`PLAN_LIMIT`, which the UI turns into an immediate Upgrade modal. `monthlyRuns` is a **hard**
+per-tenant/month cap enforced at the single `WorkflowScheduler._executeFlow` choke point
+(`registerRunBudgetCheck`, fail-open); **test runs are exempt** (they never count or block).
+Tiering is **volume-only — no feature-matrix gating** (every feature on every plan). Upgrade is
+**real Stripe Checkout** (`src/billing/stripe.js`, routes `/api/billing/checkout|portal` +
+`/webhooks/stripe`), env-driven and **fails soft with no keys** (app boots; checkout 503s).
+
+Salvage/engine files touched (recorded intentional edits): `src/entitlements/index.js` (new
+`PLANS`/`PLAN_META`/`nextPlan`/`entitlementsFor`), `src/auth/tenant-store.js` (new plan enum,
+default `solo`, `stripe_*` columns, `setStripeIds`/`getByStripeCustomer`, **one-time grandfather
+migration** → existing tenants become unlimited `founding`, marker-guarded), and
+`src/workflows/workflow-store.js` (`countActiveForTenant`, `tenant_run_counter` +
+increment in `startRun` non-test, `getRunCount`), `src/workflows/workflow-scheduler.js`
+(`registerRunBudgetCheck`). New tenants default to `solo`; existing pilots are grandfathered.
+Full design + acceptance tests: [`docs/architecture/tier-gating.md`](docs/architecture/tier-gating.md).
+Stripe env vars in `.env.example`; set them on the box to enable checkout.
+
 ## The frozen canonical spec
 
 Phase 3's correctness criterion is "the converger reproduces *this exact*
