@@ -77,7 +77,7 @@ export function mountAdminRoutes(app, { spine, requireAuth, requirePlatformAdmin
     try {
       const name  = String(req.body?.name ?? '').trim();
       const email = String(req.body?.admin?.email ?? req.body?.email ?? '').trim().toLowerCase();
-      const plan  = String(req.body?.plan ?? 'starter');
+      const plan  = String(req.body?.plan ?? 'solo');
       if (!name) return res.status(400).json({ error: 'Workspace name is required.' });
       if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) return res.status(400).json({ error: 'A valid admin email is required.' });
 
@@ -103,7 +103,7 @@ export function mountAdminRoutes(app, { spine, requireAuth, requirePlatformAdmin
         });
         const base = oauthRedirectBase();
         inviteLink = `${base}/?reset=${encodeURIComponent(token)}`;
-        const mail = renderInviteEmail({ inviteLink, userEmail: email, workspaceName: name, base });
+        const mail = renderInviteEmail({ inviteLink, userEmail: email, workspaceName: name, base, plan: tenant.plan });
         const r = await sendMail({ to: email, subject: mail.subject, text: mail.text, html: mail.html });
         invited = !!r?.delivered;
       } catch (mailErr) {
