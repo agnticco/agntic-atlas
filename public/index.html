@@ -6309,21 +6309,26 @@ class Component extends DCLogic {
       })
       .catch(function () { clearResetParam(); showLogin(); show(); });
   } else {
-    // Messages after returning from a Stripe redirect (signup / resubscribe / cancel).
-    var _rmsg = null, _rgood = true;
+    // Messages after returning from a Stripe redirect (signup / resubscribe / cancel),
+    // plus deep-link signup: marketing pricing cards link to /?plan=<tier> to open the
+    // Create-account form with that tier pre-selected.
+    var _rmsg = null, _rgood = true, _signupPlan = null;
+    var _PLANS = { solo: 1, professional: 1, team: 1, business: 1 };
     try {
       var _p = new URLSearchParams(location.search);
       if (_p.get("signup") === "complete") _rmsg = "Payment received — check your email to set your password and finish setting up your workspace.";
       else if (_p.get("signup") === "cancelled") { _rmsg = "Signup cancelled — you weren't charged."; _rgood = false; }
       else if (_p.has("resubscribed")) _rmsg = "Welcome back — sign in to pick up right where you left off.";
-      if (_rmsg) { var _u = new URL(location.href); ["signup", "resubscribed", "upgrade_cancelled"].forEach(function (k) { _u.searchParams.delete(k); }); history.replaceState({}, "", _u.pathname + (_u.search || "") + _u.hash); }
+      if (_PLANS[_p.get("plan")]) _signupPlan = _p.get("plan");
+      if (_rmsg || _signupPlan) { var _u = new URL(location.href); ["signup", "resubscribed", "upgrade_cancelled", "plan"].forEach(function (k) { _u.searchParams.delete(k); }); history.replaceState({}, "", _u.pathname + (_u.search || "") + _u.hash); }
     } catch (e) {}
     function _afterLogin() { if (_rmsg) { loginErr.style.color = _rgood ? "rgba(159,214,168,.95)" : "#e87461"; err(loginErr, _rmsg); } }
+    function _openSignup() { try { document.getElementById("signup-plan").value = _signupPlan; } catch (e) {} showSignup(); show(); }
     fetch("/setup/status").then(function (r) { return r.ok ? r.json() : {}; }).then(function (s) {
       if (s && s.required) { showSetup(); show(); }
       else if (_rmsg) { showLogin(); show(); _afterLogin(); }
-      else { showLogin(); var saved = null; try { saved = localStorage.getItem(TOKEN_KEY); } catch (e) {} if (saved) applyToken(saved); else show(); }
-    }).catch(function () { showLogin(); var saved = null; try { saved = localStorage.getItem(TOKEN_KEY); } catch (e) {} if (saved) applyToken(saved); else show(); });
+      else { var saved = null; try { saved = localStorage.getItem(TOKEN_KEY); } catch (e) {} if (saved) { showLogin(); applyToken(saved); } else if (_signupPlan) { _openSignup(); } else { showLogin(); show(); } }
+    }).catch(function () { var saved = null; try { saved = localStorage.getItem(TOKEN_KEY); } catch (e) {} if (saved) { showLogin(); applyToken(saved); } else if (_signupPlan) { _openSignup(); } else { showLogin(); show(); } });
   }
 
   loginForm.addEventListener("submit", function (e) {
