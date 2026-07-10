@@ -1998,6 +1998,9 @@
             <sc-if value="{{ showUpgradeEntry }}" hint-placeholder-val="{{ false }}">
               <button onClick="{{ onOpenUpgrade }}" style="width:100%;margin-top:13px;border:none;background:linear-gradient(135deg,#7fc28a,#5aa06a);color:#0a0a0a;font-family:inherit;font-weight:600;font-size:13px;padding:9px;border-radius:10px;cursor:pointer" style-hover="filter:brightness(1.08)">Upgrade plan</button>
             </sc-if>
+            <sc-if value="{{ manageBilling }}" hint-placeholder-val="{{ false }}">
+              <div onClick="{{ onManageBilling }}" style="margin-top:10px;text-align:center;font-size:12px;color:rgba(255,255,255,.5);cursor:pointer" style-hover="color:rgba(255,255,255,.8)">Manage billing · cancel →</div>
+            </sc-if>
           </div>
           <div style="padding:8px 16px 4px;font-size:10px;font-weight:600;letter-spacing:.16em;text-transform:uppercase;color:rgba(255,255,255,.25)">Appearance</div>
           <div style="padding:4px 16px 12px">
@@ -3342,6 +3345,21 @@ class Component extends DCLogic {
         self.setState({ upgradeBusy: "", upgradeErr: (r.data && r.data.error) || "Couldn't start checkout. Please try again." });
       })
       .catch(function(e) { self.setState({ upgradeBusy: "", upgradeErr: "Couldn't start checkout: " + String(e) }); });
+  }
+  // Open the Stripe billing portal (update card / cancel). Available once the
+  // tenant has a Stripe customer (i.e. after their first purchase).
+  startPortal() {
+    const self = this;
+    if (this.state.portalBusy) return;
+    this.setState({ portalBusy: true });
+    fetch("/api/billing/portal", { method: "POST", headers: this._H(), body: "{}" })
+      .then(r => self._readJson(r))
+      .then(function(r) {
+        self.setState({ portalBusy: false });
+        if (r.ok && r.data && r.data.url) { window.location = r.data.url; return; }
+        alert((r.data && r.data.error) || "Couldn't open billing management. Please try again.");
+      })
+      .catch(function(e) { self.setState({ portalBusy: false }); alert("Couldn't open billing management: " + String(e)); });
   }
 
   _loadConnections() {
@@ -5690,6 +5708,7 @@ class Component extends DCLogic {
           usageRunsBarColor: rnAtLimit ? "#e0705a" : "rgba(255,255,255,.55)",
           usageRunsResetLabel: (rn && rn.resetsOn) ? ("Resets " + rn.resetsOn) : "",
           showUpgradeEntry: !!upTo,
+          manageBilling: !!(U && U.manageable),
           upgradeEntryLabel: "Upgrade",
           upgradeEntryColor: wfAtLimit ? "#e8b56a" : "rgba(255,255,255,.85)",
           upgradeEntryBg: wfAtLimit ? "rgba(224,164,88,.08)" : "transparent",
@@ -5708,6 +5727,7 @@ class Component extends DCLogic {
           })),
           onOpenUpgrade: () => this.openUpgrade(),
           onCloseUpgrade: () => this.closeUpgrade(),
+          onManageBilling: () => this.startPortal(),
         };
       })(),
       onTeamInviteInput: (e) => this.setState({ teamInviteEmail: e.target.value }),

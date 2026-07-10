@@ -87,7 +87,7 @@ import { sendMail } from '../utils/mailer.js';
 import { renderResetEmail } from '../auth/reset-email.js';
 import { oauthRedirectBase } from '../connectors/oauth-redirect.js';
 import { entitlementsFor, PUBLIC_PLANS, PLAN_META } from '../entitlements/index.js';
-import { notifyPurchase } from '../billing/purchase-notify.js';
+import { notifyPurchase, sendPurchaseConfirmation } from '../billing/purchase-notify.js';
 import {
   isBillingConfigured, createCheckoutSession, createPortalSession,
   constructWebhookEvent, handleWebhookEvent, BillingNotConfiguredError,
@@ -2003,14 +2003,25 @@ export function createApp(spine) {
       if (event.type === 'checkout.session.completed' && result.handled) {
         const s = event.data.object ?? {};
         const tenant = spine.auth.tenantStore.get(result.tenantId);
+        const custEmail = s.customer_details?.email ?? s.customer_email ?? null;
+        const planLabel = PLAN_META[result.plan]?.label ?? result.plan;
+        // Internal team alert (same shape/destination as feedback).
         notifyPurchase({
           tenantName: tenant?.name, tenantId: result.tenantId,
-          plan: result.plan, planLabel: PLAN_META[result.plan]?.label ?? result.plan,
+          plan: result.plan, planLabel,
           amountCents: s.amount_total, currency: s.currency,
-          email: s.customer_details?.email ?? s.customer_email ?? null,
-          subscriptionId: s.subscription ?? null,
+          email: custEmail, subscriptionId: s.subscription ?? null,
           adminBase: oauthRedirectBase(),
         });
+        // Customer confirmation — what they bought + how to cancel.
+        if (custEmail) {
+          sendPurchaseConfirmation({
+            to: custEmail, name: s.customer_details?.name ?? null,
+            plan: result.plan, planLabel,
+            amountCents: s.amount_total, currency: s.currency,
+            appBase: oauthRedirectBase(),
+          });
+        }
       }
       res.json({ received: true });
     } catch (err) {
