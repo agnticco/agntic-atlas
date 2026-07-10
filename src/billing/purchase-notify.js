@@ -106,3 +106,57 @@ export async function notifyPurchase(p) {
     } catch (err) { logEvent('billing.notify.email_error', errFields(err)); }
   }
 }
+
+/**
+ * Customer-facing purchase confirmation — sent to the buyer so they know what they
+ * bought and how to cancel. Best-effort, never throws.
+ * @param {object} c { to, name, plan, planLabel, amountCents, currency, appBase }
+ */
+export async function sendPurchaseConfirmation(c) {
+  if (!c.to) return;
+  const amount = money(c.amountCents, c.currency);
+  const app = c.appBase ? String(c.appBase).replace(/\/+$/, '') : null;
+  const hi = c.name ? `Hi ${c.name},` : 'Hi,';
+
+  const text = [
+    hi,
+    '',
+    'Thanks for subscribing to Atlas — your plan is active.',
+    '',
+    `  Plan:    ${c.planLabel}`,
+    `  Price:   ${amount} / month`,
+    '  Renews:  Monthly, until you cancel',
+    '',
+    'Manage or cancel anytime:',
+    'Sign in to Atlas, open Account settings, and click "Manage billing" to update',
+    'your payment method or cancel. If you cancel, you keep access through the end of',
+    'the period you\'ve already paid for.',
+    ...(app ? ['', `  ${app}`] : []),
+    '',
+    'Questions or need a hand? Just reply to this email, or reach us at hello@agntic.co.',
+    '',
+    '— The Atlas team',
+  ].join('\n');
+
+  const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (m) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[m]));
+  const html = `<div style="font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;max-width:520px;margin:0 auto;color:#1a1a1a;line-height:1.55">
+  <p style="margin:0 0 14px">${esc(hi)}</p>
+  <p style="margin:0 0 16px">Thanks for subscribing to Atlas — your plan is active.</p>
+  <table role="presentation" cellpadding="0" cellspacing="0" style="width:100%;border:1px solid #e6e6e6;border-radius:10px;background:#f7f7f8;margin:0 0 18px">
+    <tr><td style="padding:16px 18px;font-size:14px">
+      <div style="margin:0 0 6px"><strong>Plan</strong> &nbsp; ${esc(c.planLabel)}</div>
+      <div style="margin:0 0 6px"><strong>Price</strong> &nbsp; ${esc(amount)} / month</div>
+      <div><strong>Renews</strong> &nbsp; Monthly, until you cancel</div>
+    </td></tr>
+  </table>
+  <p style="margin:0 0 6px;font-weight:600">Manage or cancel anytime</p>
+  <p style="margin:0 0 16px;font-size:14px">Sign in to Atlas, open <strong>Account settings</strong>, and click <strong>Manage billing</strong> to update your payment method or cancel. If you cancel, you keep access through the end of the period you've already paid for.</p>
+  ${app ? `<p style="margin:0 0 20px"><a href="${esc(app)}" style="display:inline-block;background:#0A0A0C;color:#fff;text-decoration:none;font-weight:600;font-size:14px;padding:11px 20px;border-radius:9px">Open Atlas</a></p>` : ''}
+  <p style="margin:0;font-size:13px;color:#666">Questions? Reply to this email, or reach us at <a href="mailto:hello@agntic.co" style="color:#666">hello@agntic.co</a>.</p>
+  <p style="margin:14px 0 0;font-size:13px;color:#666">— The Atlas team</p>
+</div>`;
+
+  try {
+    await sendMail({ to: c.to, subject: `Your Atlas subscription — ${c.planLabel}`, text, html });
+  } catch (err) { logEvent('billing.confirm.email_error', errFields(err)); }
+}
