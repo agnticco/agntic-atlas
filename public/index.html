@@ -1998,6 +1998,9 @@
             <sc-if value="{{ showUpgradeEntry }}" hint-placeholder-val="{{ false }}">
               <button onClick="{{ onOpenUpgrade }}" style="width:100%;margin-top:13px;border:none;background:linear-gradient(135deg,#7fc28a,#5aa06a);color:#0a0a0a;font-family:inherit;font-weight:600;font-size:13px;padding:9px;border-radius:10px;cursor:pointer" style-hover="filter:brightness(1.08)">Upgrade plan</button>
             </sc-if>
+            <sc-if value="{{ manageBilling }}" hint-placeholder-val="{{ false }}">
+              <div onClick="{{ onManageBilling }}" style="margin-top:10px;text-align:center;font-size:12px;color:rgba(255,255,255,.5);cursor:pointer" style-hover="color:rgba(255,255,255,.8)">Manage billing · cancel →</div>
+            </sc-if>
           </div>
           <div style="padding:8px 16px 4px;font-size:10px;font-weight:600;letter-spacing:.16em;text-transform:uppercase;color:rgba(255,255,255,.25)">Appearance</div>
           <div style="padding:4px 16px 12px">
@@ -3316,7 +3319,12 @@ class Component extends DCLogic {
     const self = this;
     if (!this.state.authToken) return;
     fetch("/api/builder/usage", { headers: { "Authorization": "Bearer " + this.state.authToken } })
-      .then(r => r.ok ? r.json() : null)
+      .then(r => {
+        // Suspended mid-session (subscription cancelled while the tab was open) → drop
+        // to the sign-in screen; re-authenticating routes them to the resubscribe flow.
+        if (r.status === 403) { try { localStorage.removeItem("atlas_token"); } catch (e) {} window.location.reload(); return null; }
+        return r.ok ? r.json() : null;
+      })
       .then(d => { if (d) self.setState({ usage: d }); })
       .catch(() => {});
   }
@@ -3338,10 +3346,31 @@ class Component extends DCLogic {
     fetch("/api/billing/checkout", { method: "POST", headers: this._H(), body: JSON.stringify({ plan: plan }) })
       .then(r => self._readJson(r))
       .then(function(r) {
-        if (r.ok && r.data && r.data.url) { window.location = r.data.url; return; }
+        if (r.ok && r.data && r.data.url) { window.location = r.data.url; return; }   // new subscription → Stripe
+        if (r.ok && r.data && r.data.ok) {                                            // in-place upgrade — no redirect
+          self.setState({ upgradeBusy: "", upgradeOpen: false });
+          self._loadUsage();
+          setTimeout(function () { self._loadUsage(); self._loadWorkflows(); }, 2500); // after the webhook reconciles
+          return;
+        }
         self.setState({ upgradeBusy: "", upgradeErr: (r.data && r.data.error) || "Couldn't start checkout. Please try again." });
       })
       .catch(function(e) { self.setState({ upgradeBusy: "", upgradeErr: "Couldn't start checkout: " + String(e) }); });
+  }
+  // Open the Stripe billing portal (update card / cancel). Available once the
+  // tenant has a Stripe customer (i.e. after their first purchase).
+  startPortal() {
+    const self = this;
+    if (this.state.portalBusy) return;
+    this.setState({ portalBusy: true });
+    fetch("/api/billing/portal", { method: "POST", headers: this._H(), body: "{}" })
+      .then(r => self._readJson(r))
+      .then(function(r) {
+        self.setState({ portalBusy: false });
+        if (r.ok && r.data && r.data.url) { window.location = r.data.url; return; }
+        alert((r.data && r.data.error) || "Couldn't open billing management. Please try again.");
+      })
+      .catch(function(e) { self.setState({ portalBusy: false }); alert("Couldn't open billing management: " + String(e)); });
   }
 
   _loadConnections() {
@@ -5690,6 +5719,7 @@ class Component extends DCLogic {
           usageRunsBarColor: rnAtLimit ? "#e0705a" : "rgba(255,255,255,.55)",
           usageRunsResetLabel: (rn && rn.resetsOn) ? ("Resets " + rn.resetsOn) : "",
           showUpgradeEntry: !!upTo,
+          manageBilling: !!(U && U.manageable),
           upgradeEntryLabel: "Upgrade",
           upgradeEntryColor: wfAtLimit ? "#e8b56a" : "rgba(255,255,255,.85)",
           upgradeEntryBg: wfAtLimit ? "rgba(224,164,88,.08)" : "transparent",
@@ -5708,6 +5738,7 @@ class Component extends DCLogic {
           })),
           onOpenUpgrade: () => this.openUpgrade(),
           onCloseUpgrade: () => this.closeUpgrade(),
+          onManageBilling: () => this.startPortal(),
         };
       })(),
       onTeamInviteInput: (e) => this.setState({ teamInviteEmail: e.target.value }),
@@ -6158,6 +6189,7 @@ class Component extends DCLogic {
       <div id="login-err" style="display:none;color:#e87461;font-size:12.5px;margin:6px 2px 0"></div>
       <button type="submit" style="margin-top:14px;width:100%;border:none;cursor:pointer;background:#fff;color:#0a0a0a;font-family:inherit;font-weight:500;font-size:14.5px;padding:13px;border-radius:999px">Sign in</button>
       <div style="text-align:center;margin-top:14px"><span id="forgot-link" style="font-size:12.5px;color:rgba(255,255,255,.5);cursor:pointer;text-decoration:underline;text-decoration-color:rgba(255,255,255,.22);text-underline-offset:2px">Forgot password?</span></div>
+      <div style="text-align:center;margin-top:9px"><span id="signup-link" style="font-size:12.5px;color:rgba(255,255,255,.55);cursor:pointer">New to Atlas? <span style="color:#fff;text-decoration:underline;text-decoration-color:rgba(255,255,255,.3);text-underline-offset:2px">Create an account</span></span></div>
     </form>
 
     <form id="forgot-form" style="display:none">
@@ -6186,6 +6218,29 @@ class Component extends DCLogic {
       <div id="setup-err" style="display:none;color:#e87461;font-size:12.5px;margin:6px 2px 0"></div>
       <button type="submit" style="margin-top:14px;width:100%;border:none;cursor:pointer;background:#7fc28a;color:#06210d;font-family:inherit;font-weight:600;font-size:14.5px;padding:13px;border-radius:999px">Create admin &amp; continue</button>
     </form>
+
+    <div id="resubscribe-form" style="display:none">
+      <div style="font-size:16px;font-weight:600;color:#fff;margin:14px 0 6px">Your subscription has ended</div>
+      <div id="resub-msg" style="font-size:13px;color:rgba(255,255,255,.6);margin:0 0 16px;line-height:1.55">Resubscribe to restore access. Nothing was deleted — your workspaces and automations are exactly where you left them.</div>
+      <div id="resub-err" style="display:none;color:#e87461;font-size:12.5px;margin:0 2px 10px"></div>
+      <button id="resub-btn" type="button" style="width:100%;border:none;cursor:pointer;background:#7fc28a;color:#06210d;font-family:inherit;font-weight:600;font-size:14.5px;padding:13px;border-radius:999px">Resubscribe</button>
+      <div style="text-align:center;margin-top:14px"><span id="resub-back" style="font-size:12.5px;color:rgba(255,255,255,.5);cursor:pointer">Back to sign in</span></div>
+    </div>
+
+    <form id="signup-form" style="display:none">
+      <div style="font-size:13px;color:rgba(255,255,255,.55);margin:14px 0 16px;line-height:1.5">Create your Atlas workspace — pick a plan and check out, then set your password.</div>
+      <input id="signup-workspace" type="text" placeholder="Workspace name" required style="display:block;width:100%;margin-bottom:10px;background:rgba(0,0,0,.3);border:1px solid rgba(255,255,255,.14);border-radius:11px;padding:12px 14px;color:#fff;font-family:inherit;font-size:14px;outline:none"/>
+      <input id="signup-email" type="email" autocomplete="email" placeholder="Work email" required style="display:block;width:100%;margin-bottom:10px;background:rgba(0,0,0,.3);border:1px solid rgba(255,255,255,.14);border-radius:11px;padding:12px 14px;color:#fff;font-family:inherit;font-size:14px;outline:none"/>
+      <select id="signup-plan" style="display:block;width:100%;margin-bottom:6px;background:rgba(0,0,0,.3);border:1px solid rgba(255,255,255,.14);border-radius:11px;padding:12px 14px;color:#fff;font-family:inherit;font-size:14px;outline:none;appearance:none;-webkit-appearance:none">
+        <option value="solo" style="color:#000">Solo — $20/mo · 1 automation · 30 runs</option>
+        <option value="professional" style="color:#000">Professional — $50/mo · 10 automations · 200 runs</option>
+        <option value="team" style="color:#000">Team — $200/mo · 50 automations · 1,000 runs</option>
+        <option value="business" style="color:#000">Business — $600/mo · unlimited · 5,000 runs</option>
+      </select>
+      <div id="signup-err" style="display:none;color:#e87461;font-size:12.5px;margin:6px 2px 0"></div>
+      <button type="submit" style="margin-top:14px;width:100%;border:none;cursor:pointer;background:#fff;color:#0a0a0a;font-family:inherit;font-weight:500;font-size:14.5px;padding:13px;border-radius:999px">Continue to checkout</button>
+      <div style="text-align:center;margin-top:14px"><span id="signup-back" style="font-size:12.5px;color:rgba(255,255,255,.5);cursor:pointer">Back to sign in</span></div>
+    </form>
   </div>
 </div>
 
@@ -6198,6 +6253,9 @@ class Component extends DCLogic {
   var setupForm = document.getElementById("setup-form");
   var forgotForm = document.getElementById("forgot-form");
   var resetForm = document.getElementById("reset-form");
+  var resubscribeForm = document.getElementById("resubscribe-form");
+  var signupForm = document.getElementById("signup-form");
+  var reactivationToken = null;
   var loginErr = document.getElementById("login-err");
   var setupErr = document.getElementById("setup-err");
   var forgotMsg = document.getElementById("forgot-msg");
@@ -6206,11 +6264,13 @@ class Component extends DCLogic {
   var reduceMotion = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
   function show() { ov.style.display = "flex"; if (bgVideo && !reduceMotion) { try { var p = bgVideo.play(); if (p && p.catch) p.catch(function () {}); } catch (e) {} } }
   function hide() { ov.style.display = "none"; if (bgVideo) { try { bgVideo.pause(); } catch (e) {} } }
-  function only(f) { [loginForm, setupForm, forgotForm, resetForm].forEach(function (x) { if (x) x.style.display = x === f ? "block" : "none"; }); }
+  function only(f) { [loginForm, setupForm, forgotForm, resetForm, resubscribeForm, signupForm].forEach(function (x) { if (x) x.style.display = x === f ? "block" : "none"; }); }
   function showLogin() { loginErr.style.color = "#e87461"; only(loginForm); }
   function showSetup() { only(setupForm); }
   function showForgot() { only(forgotForm); }
   function showReset() { only(resetForm); }
+  function showResubscribe() { only(resubscribeForm); }
+  function showSignup() { only(signupForm); }
   function err(el, msg) { if (el) { el.textContent = msg || ""; el.style.display = msg ? "block" : "none"; } }
   function getResetParam() { try { return new URLSearchParams(location.search).get("reset"); } catch (e) { return null; } }
   function clearResetParam() { try { var u = new URL(location.href); u.searchParams.delete("reset"); history.replaceState({}, "", u.pathname + (u.search || "") + u.hash); } catch (e) {} }
@@ -6249,8 +6309,19 @@ class Component extends DCLogic {
       })
       .catch(function () { clearResetParam(); showLogin(); show(); });
   } else {
+    // Messages after returning from a Stripe redirect (signup / resubscribe / cancel).
+    var _rmsg = null, _rgood = true;
+    try {
+      var _p = new URLSearchParams(location.search);
+      if (_p.get("signup") === "complete") _rmsg = "Payment received — check your email to set your password and finish setting up your workspace.";
+      else if (_p.get("signup") === "cancelled") { _rmsg = "Signup cancelled — you weren't charged."; _rgood = false; }
+      else if (_p.has("resubscribed")) _rmsg = "Welcome back — sign in to pick up right where you left off.";
+      if (_rmsg) { var _u = new URL(location.href); ["signup", "resubscribed", "upgrade_cancelled"].forEach(function (k) { _u.searchParams.delete(k); }); history.replaceState({}, "", _u.pathname + (_u.search || "") + _u.hash); }
+    } catch (e) {}
+    function _afterLogin() { if (_rmsg) { loginErr.style.color = _rgood ? "rgba(159,214,168,.95)" : "#e87461"; err(loginErr, _rmsg); } }
     fetch("/setup/status").then(function (r) { return r.ok ? r.json() : {}; }).then(function (s) {
       if (s && s.required) { showSetup(); show(); }
+      else if (_rmsg) { showLogin(); show(); _afterLogin(); }
       else { showLogin(); var saved = null; try { saved = localStorage.getItem(TOKEN_KEY); } catch (e) {} if (saved) applyToken(saved); else show(); }
     }).catch(function () { showLogin(); var saved = null; try { saved = localStorage.getItem(TOKEN_KEY); } catch (e) {} if (saved) applyToken(saved); else show(); });
   }
@@ -6262,8 +6333,52 @@ class Component extends DCLogic {
     var btn = loginForm.querySelector("button[type=submit]"); btn.disabled = true; var ot = btn.textContent; btn.textContent = "Signing in…";
     fetch("/auth/login", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ email: email, password: pass }) })
       .then(function (r) { return r.json().then(function (d) { return { ok: r.ok, data: d }; }); })
-      .then(function (r) { if (!r.ok || !r.data.token) throw new Error(r.data.error || "Login failed"); try { localStorage.setItem(TOKEN_KEY, r.data.token); } catch (e) {} applyToken(r.data.token, r.data.user, r.data.tenant); })
+      .then(function (r) {
+        // Valid credentials into a cancelled (suspended) workspace → resubscribe screen.
+        if (r.data && r.data.code === "TENANT_SUSPENDED") {
+          btn.disabled = false; btn.textContent = ot;
+          reactivationToken = r.data.reactivationToken || null;
+          var m = document.getElementById("resub-msg");
+          if (r.data.workspaceName) m.textContent = "Resubscribe to restore access to " + r.data.workspaceName + ". Nothing was deleted — your workspaces and automations are exactly where you left them.";
+          err(document.getElementById("resub-err"), "");
+          var rb = document.getElementById("resub-btn");
+          rb.disabled = !reactivationToken; rb.textContent = reactivationToken ? "Resubscribe" : "Contact hello@agntic.co to reactivate";
+          showResubscribe();
+          return;
+        }
+        if (!r.ok || !r.data.token) throw new Error(r.data.error || "Login failed");
+        try { localStorage.setItem(TOKEN_KEY, r.data.token); } catch (e) {}
+        applyToken(r.data.token, r.data.user, r.data.tenant);
+      })
       .catch(function (x) { btn.disabled = false; btn.textContent = ot; err(loginErr, String(x.message || x)); });
+  });
+
+  // Resubscribe (suspended tenant) → checkout with the reactivation token → Stripe.
+  document.getElementById("resub-btn").addEventListener("click", function () {
+    if (!reactivationToken) return;
+    var rb = this; rb.disabled = true; var ot = rb.textContent; rb.textContent = "Starting…";
+    err(document.getElementById("resub-err"), "");
+    fetch("/api/billing/resubscribe", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ reactivationToken: reactivationToken }) })
+      .then(function (r) { return r.json().then(function (d) { return { ok: r.ok, data: d }; }); })
+      .then(function (r) { if (r.ok && r.data && r.data.url) { window.location = r.data.url; return; } throw new Error(r.data && r.data.error || "Couldn't start checkout."); })
+      .catch(function (x) { rb.disabled = false; rb.textContent = ot; err(document.getElementById("resub-err"), String(x.message || x)); });
+  });
+  document.getElementById("resub-back").addEventListener("click", function () { reactivationToken = null; showLogin(); });
+
+  // Sign up (self-serve) → signup checkout → Stripe.
+  document.getElementById("signup-link").addEventListener("click", function () { err(loginErr, ""); err(document.getElementById("signup-err"), ""); showSignup(); });
+  document.getElementById("signup-back").addEventListener("click", function () { showLogin(); });
+  signupForm.addEventListener("submit", function (e) {
+    e.preventDefault();
+    var signupErr = document.getElementById("signup-err"); err(signupErr, "");
+    var workspaceName = document.getElementById("signup-workspace").value.trim();
+    var email = document.getElementById("signup-email").value.trim();
+    var plan = document.getElementById("signup-plan").value;
+    var btn = signupForm.querySelector("button[type=submit]"); btn.disabled = true; var ot = btn.textContent; btn.textContent = "Starting…";
+    fetch("/api/signup/checkout", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ email: email, workspaceName: workspaceName, plan: plan }) })
+      .then(function (r) { return r.json().then(function (d) { return { ok: r.ok, data: d }; }); })
+      .then(function (r) { if (r.ok && r.data && r.data.url) { window.location = r.data.url; return; } throw new Error(r.data && r.data.error || "Couldn't start checkout."); })
+      .catch(function (x) { btn.disabled = false; btn.textContent = ot; err(signupErr, String(x.message || x)); });
   });
 
   setupForm.addEventListener("submit", function (e) {

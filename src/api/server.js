@@ -86,10 +86,12 @@ import { FileCheckpointer } from '../graph/checkpointer/index.js';
 import { sendMail } from '../utils/mailer.js';
 import { renderResetEmail } from '../auth/reset-email.js';
 import { oauthRedirectBase } from '../connectors/oauth-redirect.js';
-import { entitlementsFor, PUBLIC_PLANS } from '../entitlements/index.js';
+import { entitlementsFor, PUBLIC_PLANS, PLAN_META } from '../entitlements/index.js';
+import { BillingEventStore } from '../billing/billing-event-store.js';
+import { handleStripeLifecycle } from '../billing/lifecycle.js';
 import {
-  isBillingConfigured, createCheckoutSession, createPortalSession,
-  constructWebhookEvent, handleWebhookEvent, BillingNotConfiguredError,
+  isBillingConfigured, createCheckoutSession, createSignupCheckoutSession, createPortalSession,
+  changeSubscriptionPlan, constructWebhookEvent, classifyWebhookEvent, BillingNotConfiguredError,
 } from '../billing/stripe.js';
 
 const PORT = numEnv('PORT', 3000);
@@ -208,6 +210,7 @@ const INTERACTIONS_DB       = process.env.INTERACTIONS_DB       ?? './memory/int
 const AIRTABLE_WEBHOOKS_FILE = process.env.AIRTABLE_WEBHOOKS_FILE ?? './memory/airtable-webhooks.json';
 const INBOX_DB               = process.env.INBOX_DB               ?? './memory/inbox.sqlite';
 const TICKETS_DB             = process.env.TICKETS_DB             ?? './memory/tickets/tickets.sqlite';
+const BILLING_EVENTS_DB      = process.env.BILLING_EVENTS_DB      ?? './memory/billing/events.sqlite';
 const AUTH_DB     = process.env.AUTH_DB     ?? './memory/auth.sqlite';
 const AUTH_SECRET = process.env.AUTH_SECRET ?? './memory/.jwt-secret';
 const OAUTH_DB    = process.env.OAUTH_DB    ?? './memory/oauth.sqlite';
@@ -387,6 +390,19 @@ async function unconnectedConnector(spec, tenantId, deps) {
  * error resolves to `allowed:true` so a bookkeeping fault never halts automations.
  * @returns {{ allowed: boolean, used: number, limit: number|null, plan: string|null }}
  */
+// Light per-IP throttle for the public signup-checkout endpoint (>8/min → 429). A
+// tenant is only ever created on real payment, so this just curbs Stripe-session spam.
+const _signupHits = new Map();
+function signupThrottled(req) {
+  const ip = req.ip || req.headers?.['x-forwarded-for'] || 'unknown';
+  const now = Date.now();
+  const recent = (_signupHits.get(ip) || []).filter((t) => now - t < 60_000);
+  recent.push(now);
+  _signupHits.set(ip, recent);
+  if (_signupHits.size > 5000) _signupHits.clear(); // crude bound
+  return recent.length > 8;
+}
+
 function checkRunBudget(spine, tenantId) {
   try {
     const ent = entitlementsFor(spine.auth.tenantStore, tenantId);
@@ -899,6 +915,11 @@ export async function bootSpine() {
   const ticketStore = new TicketStore({ dbPath: TICKETS_DB });
   await ticketStore.init();
 
+  // Billing lifecycle events (signup / cancel / reactivate) — powers the admin Sales feed.
+  ensureDir(BILLING_EVENTS_DB);
+  const billingEventStore = new BillingEventStore({ dbPath: BILLING_EVENTS_DB });
+  await billingEventStore.init();
+
   return {
     auth,
     engine,
@@ -906,6 +927,7 @@ export async function bootSpine() {
     ragInbox,
     inboxStore,
     tickets: ticketStore,
+    billingEvents: billingEventStore,
     slack,
     slackOAuth,
     google,
@@ -931,6 +953,7 @@ export async function bootSpine() {
       try { ragInbox.close?.(); } catch { /* ignore */ }
       try { inboxStore.close?.(); } catch { /* ignore */ }
       try { ticketStore.close?.(); } catch { /* ignore */ }
+      try { billingEventStore.close?.(); } catch { /* ignore */ }
       try { auth.close?.(); } catch { /* ignore */ }
     },
   };
@@ -1091,7 +1114,24 @@ export function createApp(spine) {
     try {
       const user = await spine.auth.authProvider.authenticate({ email: req.body?.email, password: req.body?.password });
       if (!user) { recordLoginFail(req); return res.status(401).json({ error: 'Invalid credentials' }); }
-      if (!spine.auth.tenantStore.isActive(user.tenant_id)) return res.status(403).json({ error: 'tenant suspended' });
+      if (!spine.auth.tenantStore.isActive(user.tenant_id)) {
+        clearLoginFails(req); // credentials were valid — not a failed attempt
+        const tenant = spine.auth.tenantStore.get(user.tenant_id);
+        // Only a soft-suspended tenant (cancelled) can self-resubscribe; an archived
+        // (operator hard-off) one cannot — no reactivation token for those.
+        const resubscribable = tenant?.status === 'suspended' && !tenant.archived_at;
+        const reactivationToken = resubscribable
+          ? spine.auth.tokenService.signScoped({ tenantId: user.tenant_id, scope: 'reactivate', ttlMs: 30 * 60 * 1000 })
+          : null;
+        return res.status(403).json({
+          error: 'tenant suspended',
+          code: 'TENANT_SUSPENDED',
+          reactivable: !!reactivationToken,
+          reactivationToken,
+          workspaceName: tenant?.name ?? null,
+          plan: tenant && PUBLIC_PLANS.includes(tenant.plan) ? tenant.plan : null,
+        });
+      }
       clearLoginFails(req);
       const { token } = spine.auth.issueSession({ user });
       setSessionCookie(res, token);
@@ -1959,6 +1999,30 @@ export function createApp(spine) {
       if (!isBillingConfigured()) throw new BillingNotConfiguredError();
       const plan = String(req.body?.plan ?? '');
       if (!PUBLIC_PLANS.includes(plan)) return res.status(400).json({ error: 'Unknown plan.' });
+      const tenant = spine.auth.tenantStore.get(req.tenant.id);
+
+      // Existing subscriber → change the plan IN PLACE (no second subscription, no
+      // double charge). Prorated onto the next invoice; card on file is used, so no
+      // Checkout redirect. We setPlan + record the change here; the subscription.updated
+      // webhook is then a no-op (its plan-already-matches guard prevents a double record).
+      if (tenant?.stripe_subscription_id) {
+        const before = tenant.plan;
+        if (before === plan) return res.json({ ok: true, changed: false }); // nothing to do
+        await changeSubscriptionPlan({ subscriptionId: tenant.stripe_subscription_id, plan });
+        spine.auth.tenantStore.setPlan(tenant.id, plan);
+        try {
+          const mrr = (p) => (PUBLIC_PLANS.includes(p) ? PLAN_META[p].price * 100 : 0);
+          spine.billingEvents.record({
+            type: 'plan_change', tenantId: tenant.id, tenantName: tenant.name, plan, prevPlan: before,
+            mrrDeltaCents: mrr(plan) - mrr(before), customerEmail: req.user?.email ?? null,
+            subscriptionId: tenant.stripe_subscription_id,
+          });
+        } catch { /* feed record is best-effort */ }
+        logEvent('billing.plan_change.inplace', { tenant: tenant.id, from: before, to: plan });
+        return res.json({ ok: true, changed: true, plan });
+      }
+
+      // No subscription yet (comped/founding opting in) → new Checkout (first subscription).
       const session = await createCheckoutSession({
         tenantId: req.tenant.id, plan, email: req.user?.email ?? null, baseUrl: oauthRedirectBase(),
       });
@@ -1982,10 +2046,61 @@ export function createApp(spine) {
     }
   });
 
-  // Stripe webhook — no auth; verified by signature over the RAW body. The global
-  // express.json verify hook captured the untouched bytes as req.rawBody, which is
-  // exactly what constructEvent needs. Handler flips tenant plans on payment /
-  // subscription changes and reconciles cancellations back to the adoption floor.
+  // Public, pre-tenant signup checkout — the marketing site (or the in-app signup
+  // form) POSTs {email, workspaceName, plan}; the tenant is provisioned by the webhook
+  // ONLY on real payment. No auth; lightly throttled. Rejects emails that already have
+  // an account (they should sign in / resubscribe instead).
+  app.post('/api/signup/checkout', async (req, res) => {
+    try {
+      if (!isBillingConfigured()) throw new BillingNotConfiguredError();
+      if (signupThrottled(req)) return res.status(429).json({ error: 'Too many attempts — try again in a minute.' });
+      const email = String(req.body?.email ?? '').trim().toLowerCase();
+      const plan = String(req.body?.plan ?? '');
+      const workspaceName = String(req.body?.workspaceName ?? '').trim();
+      if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) return res.status(400).json({ error: 'Enter a valid email address.' });
+      if (!PUBLIC_PLANS.includes(plan)) return res.status(400).json({ error: 'Choose a plan.' });
+      if (spine.auth.userStore.findByEmail(email)) {
+        return res.status(409).json({ error: 'An account with that email already exists — please sign in.', code: 'ACCOUNT_EXISTS' });
+      }
+      const session = await createSignupCheckoutSession({ email, workspaceName, plan, baseUrl: oauthRedirectBase() });
+      logEvent('billing.signup.checkout', { email, plan });
+      res.json({ ok: true, url: session.url });
+    } catch (err) {
+      logEvent('billing.signup.checkout_error', { code: err.code, error: err.message });
+      res.status(err.status ?? 500).json({ error: err.message, code: err.code });
+    }
+  });
+
+  // Resubscribe for a SUSPENDED tenant. The user has no session (login 403s), so this
+  // accepts the short-lived reactivation token minted by /auth/login and checks out for
+  // the tenant's plan, reusing its Stripe customer. Payment → webhook reactivates.
+  app.post('/api/billing/resubscribe', async (req, res) => {
+    try {
+      if (!isBillingConfigured()) throw new BillingNotConfiguredError();
+      const claims = spine.auth.tokenService.verify(String(req.body?.reactivationToken ?? ''));
+      if (!claims || claims.scope !== 'reactivate' || !claims.tid) {
+        return res.status(401).json({ error: 'This resubscribe link has expired — sign in again to restart.' });
+      }
+      const tenant = spine.auth.tenantStore.get(claims.tid);
+      if (!tenant) return res.status(404).json({ error: 'Workspace not found.' });
+      const requested = req.body?.plan;
+      const plan = PUBLIC_PLANS.includes(requested) ? requested
+        : (PUBLIC_PLANS.includes(tenant.plan) ? tenant.plan : 'solo');
+      const session = await createCheckoutSession({
+        tenantId: tenant.id, plan, customerId: tenant.stripe_customer_id ?? null,
+        baseUrl: oauthRedirectBase(), context: 'resubscribe',
+      });
+      res.json({ ok: true, url: session.url });
+    } catch (err) {
+      res.status(err.status ?? 500).json({ error: err.message, code: err.code });
+    }
+  });
+
+  // Stripe webhook — no auth; verified by signature over the RAW body (captured as
+  // req.rawBody by the global express.json verify hook). classifyWebhookEvent parses
+  // it; handleStripeLifecycle provisions/reactivates/suspends the tenant, records the
+  // billing event, and fires #sales + customer emails. A thrown critical error → 500
+  // so Stripe retries; notifications are best-effort and never throw.
   app.post('/webhooks/stripe', async (req, res) => {
     let event;
     try {
@@ -1995,11 +2110,10 @@ export function createApp(spine) {
       return res.status(400).send(`Webhook Error: ${err.message}`);
     }
     try {
-      const result = handleWebhookEvent(event, { tenantStore: spine.auth.tenantStore });
-      logEvent('billing.webhook', { type: event.type, ...result });
+      await handleStripeLifecycle(spine, classifyWebhookEvent(event), { base: oauthRedirectBase() });
       res.json({ received: true });
     } catch (err) {
-      logEvent('billing.webhook.error', { type: event?.type, error: err.message });
+      logEvent('billing.webhook.error', { type: event?.type, ...errFields(err) });
       res.status(500).json({ error: 'webhook handler failed' });
     }
   });

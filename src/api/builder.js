@@ -512,6 +512,7 @@ export function mountBuilderRoutes(app, { spine, requireActiveTenant, requireAut
     try {
       const ent = entitlementsFor(spine.auth.tenantStore, req.tenant.id);
       const store = spine.engine.workflowStore;
+      const tenantRow = spine.auth.tenantStore.get(req.tenant.id);
       const cap = (v) => (v === Infinity ? null : v);
       // First day of next calendar month — when the run budget resets.
       const [y, m] = store.currentRunPeriod().split('-').map(Number);
@@ -521,6 +522,7 @@ export function mountBuilderRoutes(app, { spine, requireActiveTenant, requireAut
         planLabel: PLAN_META[ent.plan]?.label ?? ent.plan,
         upgradeTo: nextPlan(ent.plan),
         billingConfigured: isBillingConfigured(),
+        manageable: !!tenantRow?.stripe_customer_id,
         workflows: { used: store.countActiveForTenant(req.tenant.id), limit: cap(ent.activeWorkflows) },
         runs:      { used: store.getRunCount(req.tenant.id), limit: cap(ent.monthlyRuns), resetsOn },
         seats:     { used: activeMembers(req.tenant.id).length, limit: cap(ent.seats) },
