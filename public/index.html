@@ -3346,7 +3346,13 @@ class Component extends DCLogic {
     fetch("/api/billing/checkout", { method: "POST", headers: this._H(), body: JSON.stringify({ plan: plan }) })
       .then(r => self._readJson(r))
       .then(function(r) {
-        if (r.ok && r.data && r.data.url) { window.location = r.data.url; return; }
+        if (r.ok && r.data && r.data.url) { window.location = r.data.url; return; }   // new subscription → Stripe
+        if (r.ok && r.data && r.data.ok) {                                            // in-place upgrade — no redirect
+          self.setState({ upgradeBusy: "", upgradeOpen: false });
+          self._loadUsage();
+          setTimeout(function () { self._loadUsage(); self._loadWorkflows(); }, 2500); // after the webhook reconciles
+          return;
+        }
         self.setState({ upgradeBusy: "", upgradeErr: (r.data && r.data.error) || "Couldn't start checkout. Please try again." });
       })
       .catch(function(e) { self.setState({ upgradeBusy: "", upgradeErr: "Couldn't start checkout: " + String(e) }); });

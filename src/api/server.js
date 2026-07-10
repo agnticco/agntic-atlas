@@ -91,7 +91,7 @@ import { BillingEventStore } from '../billing/billing-event-store.js';
 import { handleStripeLifecycle } from '../billing/lifecycle.js';
 import {
   isBillingConfigured, createCheckoutSession, createSignupCheckoutSession, createPortalSession,
-  constructWebhookEvent, classifyWebhookEvent, BillingNotConfiguredError,
+  changeSubscriptionPlan, constructWebhookEvent, classifyWebhookEvent, BillingNotConfiguredError,
 } from '../billing/stripe.js';
 
 const PORT = numEnv('PORT', 3000);
@@ -1999,6 +1999,30 @@ export function createApp(spine) {
       if (!isBillingConfigured()) throw new BillingNotConfiguredError();
       const plan = String(req.body?.plan ?? '');
       if (!PUBLIC_PLANS.includes(plan)) return res.status(400).json({ error: 'Unknown plan.' });
+      const tenant = spine.auth.tenantStore.get(req.tenant.id);
+
+      // Existing subscriber → change the plan IN PLACE (no second subscription, no
+      // double charge). Prorated onto the next invoice; card on file is used, so no
+      // Checkout redirect. We setPlan + record the change here; the subscription.updated
+      // webhook is then a no-op (its plan-already-matches guard prevents a double record).
+      if (tenant?.stripe_subscription_id) {
+        const before = tenant.plan;
+        if (before === plan) return res.json({ ok: true, changed: false }); // nothing to do
+        await changeSubscriptionPlan({ subscriptionId: tenant.stripe_subscription_id, plan });
+        spine.auth.tenantStore.setPlan(tenant.id, plan);
+        try {
+          const mrr = (p) => (PUBLIC_PLANS.includes(p) ? PLAN_META[p].price * 100 : 0);
+          spine.billingEvents.record({
+            type: 'plan_change', tenantId: tenant.id, tenantName: tenant.name, plan, prevPlan: before,
+            mrrDeltaCents: mrr(plan) - mrr(before), customerEmail: req.user?.email ?? null,
+            subscriptionId: tenant.stripe_subscription_id,
+          });
+        } catch { /* feed record is best-effort */ }
+        logEvent('billing.plan_change.inplace', { tenant: tenant.id, from: before, to: plan });
+        return res.json({ ok: true, changed: true, plan });
+      }
+
+      // No subscription yet (comped/founding opting in) → new Checkout (first subscription).
       const session = await createCheckoutSession({
         tenantId: req.tenant.id, plan, email: req.user?.email ?? null, baseUrl: oauthRedirectBase(),
       });
