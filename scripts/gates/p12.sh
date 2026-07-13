@@ -139,6 +139,17 @@ node scripts/checks/mutation-guard.mjs >/tmp/p12-mut.log 2>&1 \
 grep -q 'MUTATION-GUARD-PASS' /tmp/p12-mut.log \
   || fail "increment B — mutation guard did not report PASS"
 
+# The curated list above can only cover defects someone THOUGHT OF — and its author
+# is the person it grades. So also sweep GENERATED mutants across the engine: every
+# `if`, every `??`, every `throw`. You cannot omit a mutation you did not think of
+# when you are not the one choosing them. The floor is a RATCHET (raise it, never
+# lower it); the survivor list is the real coverage report.
+echo "p12: [B] mutation sweep — generated mutants, not a hand-picked list..."
+node scripts/checks/mutation-sweep.mjs >/tmp/p12-sweep.log 2>&1 \
+  || { tail -25 /tmp/p12-sweep.log >&2; fail "increment B — mutation sweep below its floor: the suite cannot detect changes to too much of the engine."; }
+grep -q 'MUTATION-SWEEP-PASS' /tmp/p12-sweep.log \
+  || fail "increment B — mutation sweep did not report PASS"
+
 # ─────────────────────────────────────────────────────────────────────────────
 # C. Converger v2 core — THE MOAT.
 # ─────────────────────────────────────────────────────────────────────────────

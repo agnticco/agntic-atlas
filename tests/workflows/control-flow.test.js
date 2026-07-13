@@ -1769,3 +1769,88 @@ test('validator: the branch/foreach/human MISSING_CONFIG rules all fire', () => 
     [{ from: 'l', to: 'd' }]));
   assert.ok(codesOf(routeToGhost).includes('ON_ERROR_IN_FOREACH'), 'route_to inside a loop');
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 14. Holes found by the GENERATED mutation sweep (scripts/checks/mutation-sweep.mjs)
+//     — not by the hand-written mutation list, which could only ever cover what
+//     the author already thought of. Every one of these is a line the suite could
+//     not tell had been changed.
+// ─────────────────────────────────────────────────────────────────────────────
+
+test('on_error: a failure WITHOUT escalate is not flagged escalated', async () => {
+  // The escalate test asserted `escalated === true` for escalate. Nothing asserted
+  // the converse, so `if (then === 'escalate')` → `if (true)` survived: every
+  // failure would have been marked as needing a person.
+  const events = await runAll(
+    new FlowTester({ nodeTypes, llm: { invoke: async () => { throw new Error('boom'); } }, channelRegistry: stubChannels() }),
+    { nodes: [{ id: 'x', type: 'llm', config: { prompt: 'go' } },
+              { id: 'd', type: 'deliver', config: { channel: 'in_app' } }],
+      edges: [{ from: 'x', to: 'd' }] });
+  const failed = one(events, 'run_failed');
+  assert.ok(failed);
+  assert.ok(!failed.escalated, 'a plain failure must NOT claim it needs a human — that would cry wolf on every error');
+});
+
+test('branch: no case matches and no catch-all exists — the engine fails, it does not guess', async () => {
+  // The validator rejects this (NON_EXHAUSTIVE_BRANCH) but specs in the DB predate
+  // the rule. Nothing pinned the engine's own guard.
+  const events = await runAll(
+    new FlowTester({ nodeTypes, llm: stubLlm('something-unexpected'), channelRegistry: stubChannels() }),
+    { nodes: [
+        { id: 'c', type: 'llm', config: { mode: 'freeform', prompt: 'x' } },
+        { id: 'r', type: 'branch', config: { on: 'c.output', cases: [{ when: 'urgent', to: 'd' }] } },  // no `*`
+        { id: 'd', type: 'deliver', config: { channel: 'in_app', body: 'D' } },
+      ],
+      edges: [{ from: 'c', to: 'r' }, { from: 'r', to: 'd' }] },
+    { initialContext: 'x' });
+  const failed = one(events, 'run_failed');
+  assert.ok(failed, 'a branch that matches nothing must fail, not silently do nothing');
+  assert.match(failed.error, /matched no case/i);
+});
+
+test('branch: cases given as a JSON string still route', async () => {
+  const tester = new FlowTester({ nodeTypes, llm: stubLlm('urgent'), channelRegistry: stubChannels() });
+  const events = await runAll(tester, {
+    nodes: [
+      { id: 'c', type: 'llm', config: { mode: 'classify', categories: 'urgent\nroutine' } },
+      { id: 'r', type: 'branch', config: { on: 'c.output',
+        cases: JSON.stringify([{ when: 'urgent', to: 'p' }, { when: '*', to: 'f' }]) } },
+      { id: 'p', type: 'deliver', config: { channel: 'in_app', body: 'P' } },
+      { id: 'f', type: 'deliver', config: { channel: 'in_app', body: 'F' } },
+    ],
+    edges: [{ from: 'c', to: 'r' }, { from: 'r', to: 'p' }, { from: 'r', to: 'f' }],
+  }, { initialContext: 'x' });
+  assert.ok(ids(events, 'step_completed').includes('p'), 'the builder textarea hands `cases` over as a string');
+});
+
+test('foreach: `over` that is not a list fails with a message that names the problem', async () => {
+  const events = await runAll(new FlowTester({ nodeTypes, llm: stubLlm(), channelRegistry: stubChannels() }), {
+    nodes: [{ id: 'loop', type: 'foreach', config: {
+      over: JSON.stringify({ not: 'a list' }),
+      steps: [{ id: 's', type: 'llm', config: { prompt: 'x' } }],
+    } }],
+    edges: [],
+  });
+  const failed = one(events, 'run_failed');
+  assert.ok(failed, 'looping over a non-list must fail loudly');
+  assert.match(failed.error, /expected a list/i);
+});
+
+test('foreach: no sub-executor wired is an error, not a silent empty loop', async () => {
+  const def = nodeTypes.get('foreach');
+  await assert.rejects(
+    () => def.run({ over: '[]', steps: [{ id: 's', type: 'llm', config: {} }] }, { outputs: new Map() }, {}),
+    /sub-node executor/i,
+    'a loop that silently runs zero items is worse than one that fails',
+  );
+});
+
+test('engine: an unregistered node type fails the run by name', async () => {
+  const events = await runAll(new FlowTester({ nodeTypes, llm: stubLlm(), channelRegistry: stubChannels() }), {
+    nodes: [{ id: 'x', type: 'teleport', config: {} }],
+    edges: [],
+  });
+  const failed = one(events, 'run_failed');
+  assert.ok(failed, 'an unknown step type must not be silently skipped');
+  assert.match(failed.error, /teleport/);
+});

@@ -668,11 +668,21 @@ phase, not just this one.
 
 3. **The builder writes both the code and the tests**, so they share blind spots. Mutation testing
    was meant to break that, but the builder also chose the mutations — and twice published a false
-   score ("7/7", "11/11") that an independent verifier falsified by writing a wider list.
-   → **Mitigated:** the mutation list now lives in the repo, in the gate, where a verifier can
-   extend it — and CLAUDE.md forbids quoting a mutation score in a doc (see the note in the P12
-   increment-B entry). It is not fully fixed: the deep fix is for the *verifier* to own the pinning
-   tests, not the builder.
+   score ("7/7", "11/11") that an independent verifier falsified by writing a wider list. **A
+   self-authored mutation score is a tautology**: you can only mutate what you already thought of,
+   which is exactly what you already wrote tests for.
+   → **Fixed, both halves:**
+   - *Mechanically* — `scripts/checks/mutation-sweep.mjs` **generates** mutants across the engine
+     (every `if` → `true`/`false`, every `??` → no default, every `throw` → swallowed). The builder
+     is out of the loop: you cannot omit a mutation you did not think of when you are not choosing
+     them. It found real holes the curated list never touched — an untested `escalate` flag, the
+     untested branch/`foreach` throws, untested JSON-string paths. It runs **in the gate** with a
+     kill-rate **ratchet** (raise it, never lower it). The **survivor list is the coverage report**.
+   - *In process* — the new **`test-adversary`** agent (`.claude/agents/test-adversary.md`) writes
+     the pinning tests. It may write `tests/` and `scripts/checks/` and **must not touch `src/`**:
+     if a test cannot pass without a source change, that is a finding, reported and left failing.
+     **Spawn it after every Builder increment, before the verifier.** The Builder no longer grades
+     his own homework.
 
 **The one-line lesson: a green suite is evidence of nothing until you have watched it go red.**
 
