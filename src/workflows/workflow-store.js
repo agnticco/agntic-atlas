@@ -106,9 +106,8 @@ const ADDITIVE_RUN_COLUMNS = [
   { col: 'time_saved_minutes', type: 'REAL' },
   // P12 Increment B — the durable pause (§7.4). When a `human` step stops a run,
   // `paused_node` is the step waiting and `pending_ask` is what the person is
-  // being asked. The already-completed steps live in `steps` (they always did),
-  // which IS the checkpoint — no StateGraph checkpointer is needed, because the
-  // DAG is deterministic and the store is already the record of what happened.
+  // being asked. The RESUME STATE is the `checkpoint` column below — NOT `steps`,
+  // which holds the display-shrunk event stream.
   { col: 'paused_node',       type: 'TEXT' },
   { col: 'pending_ask',       type: 'TEXT' },
   // The resume CHECKPOINT — full-fidelity node outputs, written once when the

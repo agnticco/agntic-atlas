@@ -357,6 +357,8 @@ export class FlowTester {
           costConfig: nodeCostConfig,
           ancestorOutputs,
           humanDecision: decisions[node.id] ?? null,
+          // `foreach` needs this to scope its sub-steps' idempotency keys.
+          workflowId: options.workflowId,
         };
 
         // ── on_error: retry ───────────────────────────────────────────────
@@ -476,7 +478,28 @@ export class FlowTester {
    * A node that declares idempotency with no store wired is an ERROR, not a
    * silent no-op — pretending to deduplicate is worse than not claiming to.
    */
-  async _executeNode(node, ctx, { workflowId } = {}) {
+  async _executeNode(node, ctx, { workflowId, parentId = null, inLoop = false } = {}) {
+    // Inside a `foreach` there is no event stream to yield `step_retry` into and
+    // no edges for `route_to` to light, so the run() loop's retry wrapper can't
+    // serve loop sub-steps. Honour `retry` here instead — silently ignoring a
+    // declared retry is the same class of lie as silently ignoring idempotency.
+    // `then` is meaningless without edges and the validator rejects it in a loop.
+    if (inLoop) {
+      const policy   = node.on_error ?? {};
+      const attempts = Math.max(0, Math.floor(Number(policy.retry ?? 0))) + 1;
+      let lastErr = null;
+      for (let attempt = 1; attempt <= attempts; attempt++) {
+        try {
+          return await this._executeNode(node, ctx, { workflowId, parentId });
+        } catch (err) {
+          lastErr = err;
+          const delayMs = Math.max(0, Number(policy.retry_delay_ms ?? 0));
+          if (attempt < attempts && delayMs) await new Promise(r => setTimeout(r, delayMs));
+        }
+      }
+      throw lastErr;
+    }
+
     const idem = node.idempotency;
     if (!idem?.key) return await this._runNode(node, ctx);
 
@@ -491,7 +514,9 @@ export class FlowTester {
     if (!key) {
       throw new Error(`step "${node.id}" has an idempotency key that resolved to nothing (${idem.key}).`);
     }
-    const scope      = `${workflowId ?? 'unscoped'}:${node.id}`;
+    // Scoped by the enclosing loop too, so the same sub-step id in two different
+    // `foreach` nodes cannot collide on a key.
+    const scope      = `${workflowId ?? 'unscoped'}:${parentId ? `${parentId}/` : ''}${node.id}`;
     const onConflict = idem.on_conflict ?? 'skip';
     const prior      = this.idempotencyStore.get(scope, key);
 
@@ -518,7 +543,25 @@ export class FlowTester {
     const type = node.type ?? 'noop';
     // Substitute template variables ({{prev}}, {{date}}, etc.) across the full
     // node config so every type's run() sees resolved strings.
-    const cfg  = this._substitute(node.config ?? {}, ctx);
+    //
+    // EXCEPT a `foreach`'s `steps`. Those are substituted PER ITEM, inside the
+    // loop, where {{item}} and {{index}} are actually bound. Substituting them
+    // here — with no item in scope — silently replaced {{item}} with an empty
+    // string before the loop ever ran, which meant:
+    //
+    //   • {{item}} never bound at all (the item only appeared in an `llm` prompt
+    //     by accident, via the auto-injection of lastOutput — so the test that
+    //     "proved" binding was passing for the wrong reason); and
+    //   • an idempotency key of {{item}} resolved to "", which is falsy, so
+    //     _executeNode skipped the dedupe check entirely and the loop wrote twice.
+    const rawCfg = node.config ?? {};
+    let cfg;
+    if (type === 'foreach') {
+      const { steps, ...rest } = rawCfg;
+      cfg = { ...this._substitute(rest, ctx), steps };   // `steps` stay RAW
+    } else {
+      cfg = this._substitute(rawCfg, ctx);
+    }
 
     if (!this.nodeTypes) throw new Error('FlowTester constructed without a NodeTypeRegistry');
     const def = this.nodeTypes.get(type);
@@ -534,11 +577,22 @@ export class FlowTester {
       sourceRegistry:  this.sourceRegistry,
       channelRegistry: this.channelRegistry,
       scheduler:       this.scheduler,
-      // `foreach` executes its per-item steps through this — the SAME dispatch
-      // every other node goes through (template substitution, the v1 lift, the
-      // node registry), so a step inside a loop behaves exactly like one
-      // outside it. A separate mini-executor would drift.
-      runSubNode:      (subNode, subCtx) => this._runNode(subNode, subCtx),
+      // `foreach` executes its per-item steps through this. It MUST go through
+      // the same POLICY path as a top-level node, not the raw dispatcher.
+      //
+      // It used to call _runNode directly, which silently skipped BOTH
+      // `idempotency` and `on_error.retry` for every step inside a loop — and
+      // that inverted the guarantee in the worst possible place. A write in a
+      // loop is N writes per fire: the highest-risk write shape the engine has,
+      // and the whole reason `foreach` exists ("create a record per row"). It was
+      // the ONLY shape where declaring an idempotency key did nothing at all. A
+      // sub-step declaring a key with NO store wired cheerfully wrote twice,
+      // while the identical node at top level refused to run.
+      runSubNode: (subNode, subCtx) => this._executeNode(subNode, subCtx, {
+        workflowId: ctx.workflowId,
+        parentId:   node.id,     // scopes the idempotency key to THIS loop
+        inLoop:     true,
+      }),
     };
     // Expose the RAW (pre-substitution) config so a node can tell a
     // templated field from a static one. deliver uses rawConfig.body to

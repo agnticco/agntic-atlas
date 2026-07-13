@@ -313,10 +313,12 @@ export class WorkflowScheduler {
         { nodes: wf.nodes, edges: wf.edges },
         runOpts,
       )) {
-        // step_skipped / step_retry / step_routed are new in P12 Increment B and
-        // MUST be persisted too: `steps` is what a paused run is rehydrated from
-        // (§7.4), so a skipped node that isn't recorded would be re-evaluated on
-        // resume and could run a path the branch had already ruled out.
+        // step_skipped / step_retry / step_routed are new in P12 Increment B.
+        // They are persisted for the run HISTORY (the console/SOP read `steps`).
+        // They are NOT the resume state — that is `evt.checkpoint`, stored in its
+        // own column below. `steps` carries the display-shrunk event stream, and
+        // resuming from it delivered the customer a truncated copy of what the
+        // person had approved. See converger-v2 §7.4.
         if (evt.type === 'step_started'  || evt.type === 'step_completed' ||
             evt.type === 'step_failed'   || evt.type === 'step_skipped'   ||
             evt.type === 'step_retry'    || evt.type === 'step_routed') {

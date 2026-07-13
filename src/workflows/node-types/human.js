@@ -3,7 +3,8 @@
  *
  * BPMN's User Task. The run stops, persists, and holds **no compute** while it
  * waits — a pending approval is free. When the decision arrives, the run is
- * rehydrated from the persisted steps and continues from the next node.
+ * rehydrated from the run's CHECKPOINT (not the persisted steps — those are
+ * display-shrunk) and continues from the next node.
  *
  * SCOPE — Increment B builds the ENGINE MECHANIC only (converger-v2 §7.4):
  * pause, persist, resume. It does NOT build the ask-delivery or the

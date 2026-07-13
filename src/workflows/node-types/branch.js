@@ -97,8 +97,19 @@ function resolveOn(on, ctx) {
   const raw = String(on).trim();
   const inner = raw.replace(/^\{\{\s*|\s*\}\}$/g, '').trim();
   const m = /^([a-z0-9_-]+)(?:\.output)?$/i.exec(inner);
-  if (m && ctx?.outputs?.has(m[1])) return ctx.outputs.get(m[1]);
-  // Not a node reference — it is a literal (already substituted).
+  if (m) {
+    if (ctx?.outputs?.has(m[1])) return ctx.outputs.get(m[1]);
+    // It NAMES a step, and that step produced nothing. Treating it as a literal
+    // here is what let a one-letter typo route 100% of traffic to the catch-all,
+    // silently, forever. Fail loudly instead. (The validator rejects this shape
+    // as BRANCH_BAD_ON — but the engine must not depend on the validator having
+    // run: specs already in the database predate the rule.)
+    throw new Error(
+      `branch routes on "${raw}", but no step "${m[1]}" produced a value. ` +
+      'Refusing to fall through to the catch-all — that would silently misroute every run.',
+    );
+  }
+  // Not a step reference — a literal (already substituted).
   return raw;
 }
 

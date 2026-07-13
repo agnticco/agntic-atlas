@@ -358,8 +358,35 @@ refactor them without an explicit decision recorded here:
     (`NON_CONTENT_TYPES`, the `doneSkipped` split) could be **deleted entirely with the suite still
     green**. So: **every validator rule needs a POSITIVE case** (the good shape is *accepted*), and
     **every guard must be mutation-tested** — re-introduce the bug and confirm a test actually
-    fails. `tests/workflows/control-flow.test.js` now kills 7/7 mutations; the two that survived
-    are what exposed the liveness bug above.
+    fails. `tests/workflows/control-flow.test.js` kills **11/11 mutations**.
+    **And mutation-test the guards you add in the FIX, not just the ones you started with** — a
+    round-4 claim here of "7/7 killed" was false: it never re-tested the two guards that same fix
+    introduced (`checkpoint.ruledOut`, and not recomputing `lastOutput` on replay), and **both
+    survived deletion with the whole suite green**. Dropping `ruledOut` let a ruled-out branch run
+    and deliver on resume — verbatim the bug the commit was written to kill.
+  - **`foreach` sub-steps must go through the same POLICY path as any other node.** They called the
+    raw dispatcher, which silently skipped **`idempotency` and `on_error.retry` for every step
+    inside a loop** — inverting the guarantee in the worst possible place. A write in a loop is N
+    writes per fire (the highest-risk write shape the engine has, and the whole reason `foreach`
+    exists), and it was the *only* shape where declaring an idempotency key did nothing: a sub-step
+    with a key and **no store wired wrote twice and reported success**, while the identical
+    top-level node refused to run.
+  - **A `foreach`'s `steps` must NOT be template-substituted before the loop.** They were, with no
+    item in scope, so `{{item}}` was replaced by an **empty string** before the first iteration —
+    meaning `{{item}}` never bound at all, and an idempotency key of `{{item}}` resolved to `""`
+    (falsy), skipping the dedupe check entirely. The test that "proved" `{{item}}` worked was
+    passing for the wrong reason: the item reached the prompt only via `llm`'s auto-injection of
+    `lastOutput`.
+  - **`BRANCH_BAD_ON`** — the value a branch routes on is the one thing the node exists to read, and
+    it was the one thing never checked. A one-letter typo (`clasify.output`) is not a template, so
+    `BAD_TEMPLATE_REF` never fired; the engine took it as a literal, nothing matched, and the
+    **mandatory catch-all then swallowed 100% of traffic — forever, silently, with
+    `run_completed`**. The catch-all that exists to prevent a silent misroute was *masking* one.
+    Rejected at build time, and the engine now fails loudly rather than falling through.
+  - **`scripts/gates/p12.sh` — one DESCRIPTION string changed** ("resumes from persisted steps" →
+    "resumes from its checkpoint"). **No check was altered.** Recorded here because a diff against
+    `scripts/` is exactly how a verifier detects a builder weakening their own gate — so it must
+    never be silent. Left as-is, the gate itself would have taught the next agent the lie.
   - **`{{item}}` / `{{index}}` are bound ONLY inside a `foreach`.** Used anywhere else they are a
     `BAD_TEMPLATE_REF` at build time, rather than an empty string at run time.
   - **A `human` node is unreachable by design until increment D.** The engine pauses correctly, but

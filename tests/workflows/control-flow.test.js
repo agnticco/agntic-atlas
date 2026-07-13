@@ -1075,3 +1075,229 @@ test('no source file contains a NUL byte', async () => {
   assert.deepEqual(offenders, [],
     `NUL bytes break grep and hide bugs — see CLAUDE.md, "server.js encoding". Found in: ${offenders.join(', ')}`);
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 9. Round-5 findings. Every one of these was GREEN at 40/40 while broken.
+// ─────────────────────────────────────────────────────────────────────────────
+
+test('foreach: a sub-step declaring idempotency with NO store REFUSES to run', async () => {
+  // The guarantee was inverted in the one place it matters most. A write in a
+  // loop is N writes per fire — the highest-risk write shape the engine has, and
+  // the whole reason foreach exists — and it was the ONLY shape where declaring
+  // an idempotency key did nothing: `foreach` called the RAW dispatcher, skipping
+  // the policy path entirely. It wrote twice and reported success, while the
+  // identical node at top level refused to run.
+  let writes = 0;
+  const channels = stubChannels(() => { writes++; return { id: writes }; }, { actionOnly: true });
+  const tester = new FlowTester({ nodeTypes, llm: stubLlm(), channelRegistry: channels });  // NO store
+
+  const events = await runAll(tester, {
+    nodes: [{ id: 'loop', type: 'foreach', config: {
+      over: JSON.stringify(['a', 'b']),
+      steps: [{ id: 'create', type: 'connector-action', config: { action: 'airtable_create_record' },
+                idempotency: { key: '{{item}}', on_conflict: 'skip' } }],
+    } }],
+    edges: [],
+  }, { workflowId: 'wf1' });
+
+  assert.ok(one(events, 'run_failed'), 'it must fail loudly, exactly as a top-level node does');
+  assert.equal(writes, 0, 'and it must NOT have written anything');
+});
+
+test('foreach: a re-fired trigger does not re-write the same items', async () => {
+  const store = new IdempotencyStore({ dbPath: ':memory:' }).init();
+  let writes = 0;
+  const channels = stubChannels(() => { writes++; return { id: writes }; }, { actionOnly: true });
+  const tester = new FlowTester({ nodeTypes, llm: stubLlm(), channelRegistry: channels, idempotencyStore: store });
+
+  const flow = {
+    nodes: [{ id: 'loop', type: 'foreach', config: {
+      over: JSON.stringify(['alice@acme.com', 'bob@acme.com']),
+      steps: [{ id: 'create', type: 'connector-action', config: { action: 'airtable_create_record' },
+                idempotency: { key: '{{item}}', on_conflict: 'skip' } }],
+    } }],
+    edges: [],
+  };
+
+  await runAll(tester, flow, { workflowId: 'wf1' });
+  assert.equal(writes, 2, 'first fire writes both rows');
+  await runAll(tester, flow, { workflowId: 'wf1' });   // the trigger re-fires
+  assert.equal(writes, 2, 'the re-fire must write NOTHING — not 2 more rows');
+  store.close();
+});
+
+test('foreach: {{item}} REALLY binds — not by accident via lastOutput', async () => {
+  // The old test asserted the item appeared in the prompt. It did — but via
+  // `llm`'s auto-injection of lastOutput, NOT via {{item}}, which was being
+  // substituted to an empty string before the loop even started. A marker the
+  // auto-injection cannot produce is the only way to tell the two apart.
+  const seen = [];
+  const spy = { invoke: async (msgs) => { seen.push(String(msgs[1].content)); return { content: 'ok' }; } };
+  const tester = new FlowTester({ nodeTypes, llm: spy, channelRegistry: stubChannels() });
+
+  await runAll(tester, {
+    nodes: [{ id: 'loop', type: 'foreach', config: {
+      over: JSON.stringify(['alpha', 'beta']),
+      steps: [{ id: 's', type: 'llm', config: { prompt: 'Handle ITEM=[{{item}}] IDX=[{{index}}]' } }],
+    } }],
+    edges: [],
+  });
+
+  assert.ok(seen.some(p => p.includes('ITEM=[alpha]') && p.includes('IDX=[0]')),
+    `{{item}}/{{index}} must actually bind; prompts were: ${JSON.stringify(seen)}`);
+  assert.ok(seen.some(p => p.includes('ITEM=[beta]') && p.includes('IDX=[1]')));
+});
+
+test('BRANCH_BAD_ON: a typo in what a branch routes on is rejected', () => {
+  // One letter. Not a template, so BAD_TEMPLATE_REF never fires. The engine took
+  // it as a literal, nothing matched, and the MANDATORY catch-all then swallowed
+  // 100% of traffic forever — run_completed, no warning. The catch-all that
+  // exists to prevent a silent misroute was masking one.
+  const res = validator.validate(spec(
+    [
+      { id: 'classify', type: 'llm', config: { mode: 'classify', categories: 'urgent\nroutine' } },
+      { id: 'route', type: 'branch', config: {
+        on: 'clasify.output',                                   // ← typo
+        cases: [{ when: 'urgent', to: 'page' }, { when: '*', to: 'file_it' }] } },
+      { id: 'page',    type: 'deliver', config: { channel: 'in_app', body: 'P' } },
+      { id: 'file_it', type: 'deliver', config: { channel: 'in_app', body: 'F' } },
+    ],
+    [{ from: 'classify', to: 'route' }, { from: 'route', to: 'page' }, { from: 'route', to: 'file_it' }],
+  ));
+  assert.ok(codesOf(res).includes('BRANCH_BAD_ON'), `got: ${codesOf(res).join(', ') || '(none)'}`);
+});
+
+test('positive: a branch routing on a real step validates (BRANCH_BAD_ON is not `if (true)`)', () => {
+  const res = validator.validate(spec(
+    [
+      { id: 'classify', type: 'llm', config: { mode: 'classify', categories: 'urgent\nroutine' } },
+      { id: 'route', type: 'branch', config: {
+        on: 'classify.output',
+        cases: [{ when: 'urgent', to: 'page' }, { when: '*', to: 'file_it' }] } },
+      { id: 'page',    type: 'deliver', config: { channel: 'in_app', body: 'P' } },
+      { id: 'file_it', type: 'deliver', config: { channel: 'in_app', body: 'F' } },
+    ],
+    [{ from: 'classify', to: 'route' }, { from: 'route', to: 'page' }, { from: 'route', to: 'file_it' }],
+  ));
+  assert.ok(res.ok, `a correct branch must validate; got: ${codesOf(res).join(', ')}`);
+});
+
+test('WRITE_WITHOUT_IDEMPOTENCY also warns for a write INSIDE a loop', () => {
+  const res = validator.validate(spec(
+    [
+      { id: 'loop', type: 'foreach', config: {
+        over: 'rows.output',
+        steps: [{ id: 'c', type: 'connector-action', config: { action: 'airtable_create_record' } }],
+      } },
+      { id: 'rows', type: 'connector-action', config: { action: 'airtable_search_records' } },
+      { id: 'd', type: 'deliver', config: { channel: 'in_app' } },
+    ],
+    [{ from: 'rows', to: 'loop' }, { from: 'loop', to: 'd' }],
+  ));
+  assert.ok(res.warnings.some(w => w.code === 'WRITE_WITHOUT_IDEMPOTENCY'),
+    'N writes per fire is the riskiest write shape there is — it must not be the only unwarned one');
+});
+
+// ── The two guards I claimed to have mutation-tested, and had not ────────────
+
+test('resume: dropping checkpoint.ruledOut would revive a ruled-out branch (pinned)', async () => {
+  // The ruled-out target sorts AFTER the pause (so it is NOT in skipped[]) and has
+  // a SECOND parent downstream of the pause (so restored liveness alone does not
+  // keep it dark). Only `ruledOut` does. Without this test, ruledOut could be
+  // deleted from the checkpoint with the whole suite still green.
+  const flow = {
+    nodes: [
+      { id: 'c',     type: 'llm', config: { mode: 'classify', categories: 'urgent\nroutine' } },
+      { id: 'r',     type: 'branch', config: { on: 'c.output',
+        cases: [{ when: 'urgent', to: 'ask' }, { when: '*', to: 'B' }] } },
+      { id: 'ask',   type: 'human', config: { prompt: 'ok?', decisions: ['approve', 'reject'] } },
+      { id: 'extra', type: 'llm', config: { prompt: 'more' } },
+      { id: 'B',     type: 'deliver', config: { channel: 'in_app', body: 'RULED-OUT' } },
+    ],
+    edges: [
+      { from: 'c', to: 'r' }, { from: 'r', to: 'ask' }, { from: 'r', to: 'B' },
+      { from: 'ask', to: 'extra' }, { from: 'extra', to: 'B' },   // B's second parent
+    ],
+  };
+  const delivered = [];
+  const channels = stubChannels((a) => { delivered.push(a.body); return { delivered: true }; });
+  const tester = new FlowTester({ nodeTypes, llm: stubLlm('urgent'), channelRegistry: channels });
+
+  const first = await runAll(tester, flow, { initialContext: 'alert' });
+  const ckpt = one(first, 'run_paused').checkpoint;
+  assert.ok(ckpt.ruledOut.includes('B'), 'the fixture must exercise ruledOut, or it proves nothing');
+  assert.ok(!ckpt.skipped.includes('B'), 'and must NOT be leaning on skipped[]');
+
+  const second = await runAll(tester, flow, {
+    initialContext: 'alert', checkpoint: ckpt,
+    decisions: { ask: { decision: 'approve', by: 'u' } },
+  });
+
+  assert.ok(!ids(second, 'step_completed').includes('B'),
+    'the ruled-out branch must NOT run on resume');
+  assert.equal(delivered.length, 0, 'and must NOT deliver');
+});
+
+test('resume: recomputing lastOutput on replay would deliver a failed step\'s error blob (pinned)', async () => {
+  // Asserts the DELIVERED BODY, not that the node ran. Asserting it ran is what
+  // let this ship: `deliver` sends ctx.lastOutput, and a failed step's
+  // {error, failed:true} sentinel was being promoted to it on replay.
+  const bodies = [];
+  const channels = stubChannels((a) => { bodies.push(a.body); return { delivered: true }; });
+  let calls = 0;
+  const llm = { invoke: async () => {
+    calls++;
+    if (calls === 1) throw new Error('card declined');
+    return { content: 'Dear customer, here is the reply you approved.' };
+  } };
+  const tester = new FlowTester({ nodeTypes, llm, channelRegistry: channels });
+
+  const flow = {
+    nodes: [
+      { id: 'charge', type: 'llm', config: { prompt: 'charge' }, on_error: { then: 'route_to:ask' } },
+      { id: 'ask',    type: 'human', config: { prompt: 'Reply anyway?', decisions: ['approve', 'reject'] } },
+      { id: 'draft',  type: 'llm', config: { prompt: 'draft a reply' } },
+      { id: 'notify', type: 'deliver', config: { channel: 'in_app' } },
+    ],
+    edges: [{ from: 'charge', to: 'ask' }, { from: 'ask', to: 'draft' }, { from: 'draft', to: 'notify' }],
+  };
+
+  const first = await runAll(tester, flow, { initialContext: 'ORDER' });
+  bodies.length = 0;
+  await runAll(tester, flow, {
+    initialContext: 'ORDER',
+    checkpoint: one(first, 'run_paused').checkpoint,
+    decisions: { ask: { decision: 'approve', by: 'u' } },
+  });
+
+  assert.equal(bodies.length, 1, 'one delivery');
+  assert.ok(!String(bodies[0]).includes('"failed":true'),
+    `a delivery must never carry a failed step's error sentinel — got: ${bodies[0]}`);
+  assert.match(String(bodies[0]), /reply you approved/, 'it must carry the actual work product');
+});
+
+test('engine: a branch routing on a step that produced nothing FAILS, not falls through', async () => {
+  // The validator rejects this shape (BRANCH_BAD_ON) — but the engine must not
+  // depend on the validator having run: specs already in the database predate
+  // the rule. Falling through to the catch-all would silently misroute every run.
+  const delivered = [];
+  const channels = stubChannels((a) => { delivered.push(a.body); return { delivered: true }; });
+  const tester = new FlowTester({ nodeTypes, llm: stubLlm('urgent'), channelRegistry: channels });
+
+  const events = await runAll(tester, {
+    nodes: [
+      { id: 'classify', type: 'llm', config: { mode: 'classify', categories: 'urgent\nroutine' } },
+      { id: 'route', type: 'branch', config: {
+        on: 'clasify.output',                                   // ← typo: no such step
+        cases: [{ when: 'urgent', to: 'page' }, { when: '*', to: 'file_it' }] } },
+      { id: 'page',    type: 'deliver', config: { channel: 'in_app', body: 'P' } },
+      { id: 'file_it', type: 'deliver', config: { channel: 'in_app', body: 'F' } },
+    ],
+    edges: [{ from: 'classify', to: 'route' }, { from: 'route', to: 'page' }, { from: 'route', to: 'file_it' }],
+  }, { initialContext: 'an alert' });
+
+  const failed = one(events, 'run_failed');
+  assert.ok(failed, 'it must fail loudly rather than quietly take the catch-all');
+  assert.match(failed.error, /no step "clasify" produced a value/i);
+  assert.equal(delivered.length, 0, 'and must deliver nothing down a misrouted path');
+});

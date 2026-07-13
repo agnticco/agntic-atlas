@@ -670,7 +670,8 @@ deterministic and topologically ordered, so the checkpoint is a plain object.
 > exceeds it, so *every* real approval would have resumed on corrupt state.
 >
 > The run therefore emits an explicit **`checkpoint`** on `run_paused` —
-> `{ outputs, skipped, lastOutput }`, **full fidelity, un-shrunk** — which the scheduler stores in
+> `{ outputs, skipped, live, ruledOut, lastOutput }`, **full fidelity, un-shrunk** — which the
+> scheduler stores in
 > `workflow_runs.checkpoint`. It is written only on a pause, so it costs nothing on runs that never
 > pause. `steps` remains the UI/history record and is **not** resume state.
 >
@@ -793,7 +794,16 @@ gaps) and a shape-derivation call.
   re-fired trigger with `idempotency` does not write twice; ✅ `human` pauses and resumes from the
   **checkpoint** without re-running — or re-paying for — earlier work, and what it delivers is
   byte-identical to what the person approved.
-  All in `tests/workflows/control-flow.test.js` (23 tests).
+  All in `tests/workflows/control-flow.test.js` (49 tests, and **every guard is mutation-tested**:
+  11 mutations, 11 caught — see the CLAUDE.md note; a green suite proved nothing five times running).
+
+  **`live` and `ruledOut` are load-bearing checkpoint fields, not bookkeeping.** The edge liveness
+  is RESTORED from the checkpoint and never re-derived: replaying `propagate()` for an already-done
+  node lights ALL of its outgoing edges, while the original leg may have lit only SOME (a `branch`
+  lights one case; an `on_error: route_to` lights only the error target). Re-deriving revived the
+  ruled-out branch *and* revived the happy path of a step that had FAILED — a declined charge still
+  sent the receipt. If you build a `{outputs, skipped, lastOutput}` checkpoint from an older draft
+  of this section, you will re-create exactly that bug.
 - **Also landed, because the pause is worthless without them:** `workflow_runs.status` gains
   `awaiting_human` (CHECK-constraint rebuild, mirroring the existing `_migrateStatusCheckIfNeeded`
   precedent; 653 production run rows preserved), plus `paused_node` / `pending_ask` columns, and

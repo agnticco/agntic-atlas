@@ -332,6 +332,32 @@ export class WorkflowValidator {
           continue;
         }
 
+        // ── BRANCH_BAD_ON ─────────────────────────────────────────────────
+        // The value a branch routes on is the ONE thing the node exists to read,
+        // and it was the one thing never checked. A single-letter typo
+        // ("clasify.output") is not a template, so BAD_TEMPLATE_REF never fires;
+        // the engine treats it as a literal, it matches no case, and the
+        // MANDATORY catch-all then swallows 100% of traffic — forever, silently,
+        // with run_completed and no warning. The catch-all that exists to prevent
+        // a silent misroute ends up MASKING one.
+        const onRef = String(node.config?.on ?? '').trim().replace(/^\{\{\s*|\s*\}\}$/g, '').trim();
+        const onId  = /^([a-z0-9_-]+)(?:\.output)?$/i.exec(onRef)?.[1] ?? null;
+        if (!onRef) {
+          issues.push({
+            severity: 'error', code: 'MISSING_CONFIG',
+            message: `"${node.label || node.id}" is a branch but doesn't say what to route on.`,
+            nodeId: node.id, field: 'config.on',
+            hint: 'Point it at an earlier step, e.g. "classify.output".',
+          });
+        } else if (!onId || !seenIds.has(onId)) {
+          issues.push({
+            severity: 'error', code: 'BRANCH_BAD_ON',
+            message: `"${node.label || node.id}" routes on "${node.config.on}", which is not a step in this workflow — so nothing would ever match and every run would fall through to the catch-all.`,
+            nodeId: node.id, field: 'config.on',
+            hint: `Use "<stepId>.output" — one of: ${[...seenIds].join(', ')}.`,
+          });
+        }
+
         // ── NON_EXHAUSTIVE_BRANCH ─────────────────────────────────────────
         // Every branch needs a `*` catch-all. Without one, a value nobody
         // anticipated matches no case, the run falls off the end of the branch,
@@ -422,6 +448,32 @@ export class WorkflowValidator {
             nodeId: node.id, field: 'edges',
             hint: `Add an edge { "from": "${node.id}", "to": "${target}" }.`,
           });
+        }
+      }
+
+      // A `foreach` sub-step is a real step: it writes, and it can be retried.
+      // The checks below must see it, or the highest-risk write shape in the
+      // engine (N writes per fire) is the only one nobody warns about.
+      if (node?.type === 'foreach') {
+        for (const sub of normalizeSteps(node.config?.steps)) {
+          if (sub?.on_error?.then) {
+            issues.push({
+              severity: 'error', code: 'ON_ERROR_IN_FOREACH',
+              message: `"${sub.id || 'a step'}" inside "${node.label || node.id}" declares an error route, but there are no connections inside a loop for it to follow.`,
+              nodeId: node.id, field: 'config.steps',
+              hint: 'Inside a loop only `retry` is meaningful. Handle the failure after the loop.',
+            });
+          }
+          const act = String(sub?.config?.action ?? '');
+          if (sub?.type === 'connector-action' && !sub.idempotency?.key
+              && /(^|_)(create|append|send|post|add|insert)(_|$)/i.test(act)) {
+            issues.push({
+              severity: 'warning', code: 'WRITE_WITHOUT_IDEMPOTENCY',
+              message: `"${sub.id || act}" writes ("${act}") inside a loop and has no idempotency key — if the trigger fires twice it writes every row twice.`,
+              nodeId: node.id, field: 'config.steps',
+              hint: 'Add idempotency: { "key": "{{item}}", "on_conflict": "skip" } to the step inside the loop.',
+            });
+          }
         }
       }
 

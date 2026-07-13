@@ -109,7 +109,7 @@ grep -q "mode" src/workflows/node-types/llm.js \
 CF_TEST="tests/workflows/control-flow.test.js"
 [ -f "$CF_TEST" ] \
   || next "B — engine control flow" \
-          "$CF_TEST missing. Must prove: branch skips the non-selected subtree; foreach bounds at maxItems; human pauses and resumes from persisted steps; and §11.2 — a spec WITHOUT a branch executes byte-identically to today."
+          "$CF_TEST missing. Must prove: branch skips the non-selected subtree; foreach bounds at maxItems; human pauses and resumes from its checkpoint; and §11.2 — a spec WITHOUT a branch executes byte-identically to today."
 echo "p12: [B] engine control flow..."
 run_test "$CF_TEST" "increment B"
 
