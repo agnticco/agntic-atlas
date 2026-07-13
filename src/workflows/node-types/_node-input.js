@@ -26,8 +26,18 @@
  * @module src/workflows/node-types/_node-input.js
  */
 
-/** Node types that don't produce deliverable content — never fed to a transform. */
-const NON_CONTENT_TYPES = new Set(['trigger', 'deliver']);
+/**
+ * Node types that don't produce deliverable content — never fed to a transform
+ * or delivered as a body.
+ *
+ * `branch` and `human` (P12 Increment B) are CONTROL nodes: a branch's output is
+ * `{value, matched, to}` and a human's is `{decision, by, at, channel}`. Those
+ * are routing and audit metadata, not the work product. Left in, the immediate
+ * upstream of a delivery after an approval is the `human` node — so the customer
+ * would receive the literal string {"decision":"approve","by":"user:1",…} instead
+ * of the reply that was approved. The content is the draft ABOVE the approval.
+ */
+const NON_CONTENT_TYPES = new Set(['trigger', 'deliver', 'branch', 'human']);
 
 /**
  * Stringify a node output for use as text input / delivered body.

@@ -338,7 +338,7 @@ export class WorkflowScheduler {
         // emit one and the builder cannot add one, so no user workflow can park
         // itself here waiting for a question nobody will ever be asked.
         if (evt.type === 'run_paused') {
-          this.workflowStore.pauseRun(run.id, evt.nodeId, evt.ask);
+          this.workflowStore.pauseRun(run.id, evt.nodeId, evt.ask, evt.checkpoint);
           log.info(`[workflow-scheduler] flow "${workflow.slug}" paused at "${evt.nodeId}" awaiting a person`);
           return null;   // not an error — there is simply nothing more to do yet
         }

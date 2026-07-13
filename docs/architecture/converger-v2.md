@@ -657,26 +657,42 @@ mirrors it exactly:
 
 ### 7.4 Durable pause — the engine mechanics
 
-**No StateGraph checkpointer is needed, and adding one would be a mistake.**
-`WorkflowStore.appendStep()` (`src/workflows/workflow-store.js:738`) already persists every
-node's result to `workflow_runs.steps`. The DAG is deterministic and topologically ordered.
+**No StateGraph checkpointer is needed, and adding one would be a mistake.** The DAG is
+deterministic and topologically ordered, so the checkpoint is a plain object.
+
+> ⚠️ **CORRECTED (Increment B).** This section used to say the checkpoint *was*
+> `workflow_runs.steps` — "appendStep already persists every node's result". **That is false, and
+> it silently corrupted the work product.** `steps` holds the **display-shrunk event stream**:
+> `_shrinkOutput` truncates at 2000 chars, appends a literal `…(truncated)`, and JSON-encodes
+> objects, so the UI isn't flooded. Resuming from it meant a 3363-char drafted email came back as
+> 2013 chars — **the person approved one thing and the customer received a different, mutilated
+> one**, with no error and `run_completed`. 2000 chars is ~400 words; a routine drafted reply
+> exceeds it, so *every* real approval would have resumed on corrupt state.
+>
+> The run therefore emits an explicit **`checkpoint`** on `run_paused` —
+> `{ outputs, skipped, lastOutput }`, **full fidelity, un-shrunk** — which the scheduler stores in
+> `workflow_runs.checkpoint`. It is written only on a pause, so it costs nothing on runs that never
+> pause. `steps` remains the UI/history record and is **not** resume state.
+>
+> **The rule: anything that reads back a persisted step gets a display copy, not the live value.**
+
 Therefore:
 
 - Run status **`awaiting_human`** (new).
 - **On pause:** persist, emit the asks, return. The run holds **no compute** while it waits —
   a pending approval is free.
-- **On resume:** rehydrate `ctx.outputs` from the persisted steps, inject the decision as the
-  `human` node's output, and continue the topological order from the next node.
-  - ⚠️ **A persisted step's output is a JSON STRING, not the live object.** `_shrinkOutput` always
-    encodes (so the event stream never carries megabytes). A `branch` that ran *before* the pause
-    therefore comes back as a string, and reading `output.to` off it yields `undefined` — which,
-    in the first implementation, lit **every** outgoing edge, so **the path the branch had ruled
-    out ran on resume and delivered.** Branch outputs are decoded on rehydration, and `propagate()`
-    now **fails the run** rather than guessing if it still cannot read a route. Anything else that
-    reads back a persisted step must expect the same.
-  - ⚠️ Nodes **skipped** before the pause must be tracked separately from **completed** ones. Lump
-    them together and a skipped node relights its own children on the way back through, reviving a
-    dead subtree.
+- **On resume:** rehydrate `ctx.outputs` from the **checkpoint** (not the steps — see the box
+  above), inject the decision as the `human` node's output, and continue the topological order from
+  the next node.
+  - ⚠️ Nodes **skipped** before the pause must be tracked separately from **completed** ones
+    (`skipped[]` in the checkpoint). Lump them together and a skipped node relights its own
+    children on the way back through, reviving a dead subtree the branch had ruled out.
+  - ⚠️ **A `branch` and a `human` are CONTROL nodes: their output is never `lastOutput`.** A
+    branch's output is `{value, matched, to}` and a human's is `{decision, by, at, channel}` —
+    routing and audit metadata, not the work product. `deliver` sends `ctx.lastOutput`, so leaving
+    them in means the delivery after an approval sends the literal
+    `{"decision":"approve","by":"user:1",…}` to the customer instead of the reply that was
+    approved. The content is the draft **above** the approval.
 - **The scheduler must skip `awaiting_human` runs** — it must not re-fire them.
 - A **timeout sweeper** (on the existing 60 s scheduler tick) fires `timeout.then` when
   `now > expires_at`.

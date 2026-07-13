@@ -282,12 +282,22 @@ refactor them without an explicit decision recorded here:
     its source completes, nothing is skipped, and the loop is the old one. The test asserts the
     exact event sequence is unchanged — that is what protects the workflows already in production,
     none of which use control flow.
-  - **The durable pause needs no checkpointer** (converger-v2 §7.4). `WorkflowStore.appendStep`
-    already persists every step as it happens — **the persisted steps ARE the checkpoint**. On
-    resume, `ctx.outputs` is rehydrated from them and the topological order continues. Therefore
-    `WorkflowScheduler` now also persists `step_skipped` / `step_retry` / `step_routed`: a skipped
-    node that isn't recorded would be re-evaluated on resume and could run a path the branch had
-    already ruled out.
+  - **THE PERSISTED STEPS ARE NOT THE CHECKPOINT.** `workflow_runs.steps` holds the
+    **display-shrunk event stream**: `_shrinkOutput` truncates at 2000 chars, appends a literal
+    `…(truncated)`, and JSON-encodes objects, so the UI isn't flooded. The first design resumed
+    from it — and a 3363-char drafted email came back as 2013 chars, so **the person approved one
+    thing and the customer received a different, mutilated one**, ending in `…(truncated)`, with no
+    error and a `run_completed`. ~400 words is nothing for a drafted reply, so every real approval
+    would have resumed on corrupt state. The run now emits an explicit **`checkpoint`** on
+    `run_paused` (`{outputs, skipped, lastOutput}`, full fidelity), persisted to
+    `workflow_runs.checkpoint`; it is written only on a pause, so it costs nothing on runs that
+    never pause. **Rule: anything reading back a persisted step gets a DISPLAY COPY, not the live
+    value.** (Found by the independent verifier. converger-v2 §7.4 asserted the opposite and is
+    corrected.)
+  - **`branch` and `human` are CONTROL nodes — their output never becomes `lastOutput`.** A
+    branch's output is `{value, matched, to}`, a human's is `{decision, by, at, channel}`. `deliver`
+    sends `ctx.lastOutput`, so leaving them in meant the step after an approval delivered the
+    literal `{"decision":"approve",…}` to the customer instead of the approved reply.
   - `src/workflows/workflow-store.js` — `workflow_runs.status` CHECK widened to include
     **`awaiting_human`** (a run waiting on a person is not running, not a success, and not an
     error; leaving it `running` gets it swept as stale). SQLite can't alter a CHECK in place, so

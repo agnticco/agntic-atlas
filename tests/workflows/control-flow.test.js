@@ -229,13 +229,14 @@ test('human: resuming from the PERSISTED steps continues without re-running earl
   // ── First leg: run until the pause. These are exactly the events the
   //    scheduler hands to WorkflowStore.appendStep() — the persisted record.
   const first = await runAll(tester, approvalFlow, { initialContext: 'the inbound email' });
-  const persisted = first.filter(e => ['step_completed', 'step_skipped'].includes(e.type));
+  const checkpoint = one(first, 'run_paused').checkpoint;
   assert.equal(llmCalls, 1, 'draft ran once');
 
-  // ── Second leg: a person approved. Resume from what was persisted.
+  // ── Second leg: a person approved. Resume from the CHECKPOINT the pause
+  //    emitted — which is exactly what the scheduler persists.
   const second = await runAll(tester, approvalFlow, {
     initialContext: 'the inbound email',
-    resumeSteps: persisted,
+    checkpoint,
     decisions: { approve: { decision: 'approve', by: 'user:abc', channel: 'inbox' } },
   });
 
@@ -248,14 +249,65 @@ test('human: resuming from the PERSISTED steps continues without re-running earl
   assert.ok(one(second, 'run_completed'), 'the resumed run completes');
 });
 
+test('resume: what gets SENT is byte-identical to what the person APPROVED', async () => {
+  // THE test the 30/30 suite was missing. The resume test above used a 16-char
+  // stub LLM output, so it never crossed _shrinkOutput's 2000-char cap — and the
+  // lossy checkpoint was invisible to it.
+  //
+  // The bug: the checkpoint used to BE the persisted step events, which carry the
+  // DISPLAY-SHRUNK output (truncated at 2000 chars, with a literal "…(truncated)"
+  // appended, objects JSON-encoded). So a 3363-char drafted reply resumed as 2013
+  // chars, and the customer received a mutilated message ending in "…(truncated)"
+  // — while the person had approved the whole thing. No error. run_completed.
+  //
+  // ~400 words is nothing for a drafted email. This was not an edge case.
+  const LONG_DRAFT = 'Dear customer, thank you for your detailed enquiry. '.repeat(70);
+  assert.ok(LONG_DRAFT.length > 2000, 'the fixture must exceed the shrink cap, or it proves nothing');
+
+  let sentBody = null;
+  const channels = stubChannels((args) => { sentBody = args.body; return { delivered: true }; });
+  const tester = new FlowTester({ nodeTypes, llm: stubLlm(LONG_DRAFT), channelRegistry: channels });
+
+  const flow = {
+    nodes: [
+      { id: 'draft',   type: 'llm', config: { prompt: 'Draft a reply.' } },
+      { id: 'approve', type: 'human', config: { prompt: 'Send?', preview: '{{draft.output}}', decisions: ['approve', 'reject'] } },
+      { id: 'send',    type: 'deliver', config: { channel: 'in_app' } },
+    ],
+    edges: [{ from: 'draft', to: 'approve' }, { from: 'approve', to: 'send' }],
+  };
+
+  const first  = await runAll(tester, flow, { initialContext: 'an enquiry' });
+  const paused = one(first, 'run_paused');
+  assert.ok(paused, 'must pause');
+
+  // The step EVENT is allowed to be shrunk — that is what the UI reads.
+  const shrunkEvent = first.find(e => e.type === 'step_completed' && e.nodeId === 'draft').output;
+  assert.ok(shrunkEvent.length < LONG_DRAFT.length, 'the UI event is still shrunk (that is fine)');
+
+  // The CHECKPOINT must not be.
+  assert.equal(paused.checkpoint.outputs.draft, LONG_DRAFT,
+    'the checkpoint must carry the FULL output — it is what the run resumes on');
+
+  const second = await runAll(tester, flow, {
+    initialContext: 'an enquiry',
+    checkpoint: paused.checkpoint,
+    decisions: { approve: { decision: 'approve', by: 'user:1' } },
+  });
+  assert.ok(one(second, 'run_completed'), 'the resumed run completes');
+
+  assert.equal(sentBody, LONG_DRAFT,
+    'the customer must receive EXACTLY what the person approved — not a truncated copy');
+  assert.ok(!String(sentBody).includes('(truncated)'),
+    'a delivered message must never contain the shrink marker');
+});
+
 test('human: a REJECT resumes down the other path', async () => {
   const tester = new FlowTester({ nodeTypes, llm: stubLlm('draft'), channelRegistry: stubChannels() });
   const first = await runAll(tester, approvalFlow, { initialContext: 'the inbound email' });
-  const persisted = first.filter(e => e.type === 'step_completed');
-
   const second = await runAll(tester, approvalFlow, {
     initialContext: 'the inbound email',
-    resumeSteps: persisted,
+    checkpoint: one(first, 'run_paused').checkpoint,
     decisions: { approve: { decision: 'reject', by: 'user:abc' } },
   });
 
@@ -308,12 +360,10 @@ test('resume: a branch ruled out BEFORE the pause stays ruled out after it', asy
   // has to survive the round-trip through the shrunk event on its own.
   assert.ok(!ids(first, 'step_completed').includes('auto_file'), 'the untaken path did not run in leg 1');
 
-  const persisted = first.filter(e => ['step_completed', 'step_skipped'].includes(e.type));
-
   // Leg 2: the person approves. `auto_file` was RULED OUT and must stay dead.
   const second = await runAll(tester, branchThenHumanFlow, {
     initialContext: 'an alert',
-    resumeSteps: persisted,
+    checkpoint: one(first, 'run_paused').checkpoint,
     decisions: { escalate: { decision: 'approve', by: 'user:1' } },
   });
 
@@ -350,12 +400,9 @@ test('resume: a rehydrated branch relights ONLY the case it originally picked', 
   const tester = new FlowTester({ nodeTypes, llm: stubLlm('urgent'), channelRegistry: channels });
 
   const first = await runAll(tester, flow, { initialContext: 'x' });
-  // Persist ONLY the completed steps — the harsher case: no step_skipped to lean on.
-  const persisted = first.filter(e => e.type === 'step_completed');
-
   const second = await runAll(tester, flow, {
     initialContext: 'x',
-    resumeSteps: persisted,
+    checkpoint: one(first, 'run_paused').checkpoint,
     decisions: { ask: { decision: 'approve', by: 'u' } },
   });
 
@@ -370,11 +417,11 @@ test('resume: an unrecoverable branch decision FAILS the run rather than taking 
   const tester = new FlowTester({ nodeTypes, llm: stubLlm('urgent'), channelRegistry: stubChannels() });
   const events = await runAll(tester, branchThenHumanFlow, {
     initialContext: 'an alert',
-    // A corrupt persisted branch output — not decodable to a route.
-    resumeSteps: [
-      { type: 'step_completed', nodeId: 'classify', output: 'urgent' },
-      { type: 'step_completed', nodeId: 'route', output: 'not-json-and-not-a-route' },
-    ],
+    // A corrupt checkpoint — the branch's route is unreadable.
+    checkpoint: {
+      outputs: { classify: 'urgent', route: 'not-json-and-not-a-route' },
+      skipped: [], lastOutput: 'urgent',
+    },
     decisions: { escalate: { decision: 'approve', by: 'u' } },
   });
   const failed = one(events, 'run_failed');

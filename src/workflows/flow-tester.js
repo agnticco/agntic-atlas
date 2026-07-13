@@ -23,6 +23,12 @@ import { numEnv } from '../utils/env.js';
 import { liftV1Node } from './node-types/compat-v1.js';
 import { buildAsk } from './node-types/human.js';
 
+/**
+ * Control nodes. Their output is routing/audit metadata, not the work product,
+ * so they never become `lastOutput` — which is what `deliver` sends.
+ */
+const CONTROL_TYPES = new Set(['branch', 'human']);
+
 export class FlowTester {
   /**
    * @param {object} options
@@ -78,45 +84,42 @@ export class FlowTester {
     const outputs = new Map();
 
     // ── Resume (§7.4) ────────────────────────────────────────────────────────
-    // A paused run holds no compute. To continue it we rehydrate ctx.outputs
-    // from the steps WorkflowStore already persisted, then carry on in the same
-    // topological order — no StateGraph checkpointer, because the DAG is
-    // deterministic and the store is already the record of what happened.
+    // A paused run holds no compute. To continue it, we rehydrate from a
+    // CHECKPOINT the run emitted when it paused — no StateGraph checkpointer,
+    // because the DAG is deterministic and the checkpoint is a plain object.
     //
-    // Two things here are easy to get wrong, and both let a RULED-OUT branch path
-    // execute after a resume — which would make a rejected draft get sent:
+    // THE CHECKPOINT IS NOT THE PERSISTED STEP EVENTS. That was the original
+    // design, and it was wrong in a way that quietly corrupted the work product:
+    // `step_completed` carries a DISPLAY-SHRUNK output (_shrinkOutput truncates
+    // at 2000 chars and appends "…(truncated)", and JSON-encodes objects) so the
+    // event stream doesn't flood the UI. Resuming from that meant:
     //
-    //  1. `step_completed` carries a SHRUNK output (_shrinkOutput JSON-encodes
-    //     objects, so the event stream doesn't carry megabytes). A `branch`
-    //     therefore comes back as a STRING, `output.to` reads `undefined`,
-    //     propagate() sees no selection and lights EVERY outgoing edge. Decode
-    //     branch outputs on the way back in.
-    //  2. A node that was SKIPPED before the pause must stay dark and must NOT
-    //     relight its children. Lumping skipped and completed nodes into one
-    //     "done" set does exactly that.
+    //   • a 3363-char drafted email came back as 2013 chars ending in
+    //     "…(truncated)" — the person approved one thing and the CUSTOMER GOT A
+    //     DIFFERENT, MUTILATED ONE, with no error and no warning; and
+    //   • every object output came back as a JSON string, so a downstream
+    //     {{step.output}} or a channel handler reading `.text` got a blob.
+    //
+    // 2000 characters is about 400 words. A routine drafted reply exceeds it. So
+    // the shrink stays where it belongs — the event stream, for the UI — and the
+    // checkpoint carries the FULL, un-shrunk values. It is written once, on
+    // pause, so it costs nothing on the runs that never pause.
     const decisions   = options.decisions ?? {};
     const doneOutputs = new Set();   // ran before the pause — don't re-run, DO relight
     const doneSkipped = new Set();   // ruled out before the pause — stay dark, relight NOTHING
-    {
-      const typeById = new Map(nodes.map(n => [n.id, n.type]));
-      for (const s of (options.resumeSteps ?? [])) {
-        if (s?.type === 'step_completed' && s.nodeId) {
-          let out = s.output;
-          if (typeById.get(s.nodeId) === 'branch' && typeof out === 'string') {
-            try { out = JSON.parse(out); } catch { /* leave as-is; propagate guards */ }
-          }
-          outputs.set(s.nodeId, out);
-          doneOutputs.add(s.nodeId);
-        } else if (s?.type === 'step_skipped' && s.nodeId) {
-          doneSkipped.add(s.nodeId);
-        }
+    const ckpt = options.checkpoint ?? null;
+    if (ckpt) {
+      for (const [id, out] of Object.entries(ckpt.outputs ?? {})) {
+        outputs.set(id, out);
+        doneOutputs.add(id);
       }
+      for (const id of (ckpt.skipped ?? [])) doneSkipped.add(id);
     }
     // Allow a caller (e.g. the scheduler's email-trigger path) to inject an
     // initial value that downstream nodes see as ctx.lastOutput before any
     // node has run. This is how a fetched email becomes the input to a
     // summarize or deliver node without a separate fetch step in the spec.
-    let lastOutput = options.initialContext ?? null;
+    let lastOutput = ckpt?.lastOutput ?? options.initialContext ?? null;
 
     // Reverse adjacency + transitive-ancestor resolver. Transform nodes
     // (summarize/rewrite/extract) and deliver use this so they can gather
@@ -229,6 +232,7 @@ export class FlowTester {
 
       // Not selected by an upstream branch (or every path into it died).
       if (ruledOut.has(node.id) || (hasIncoming.has(node.id) && (liveInto.get(node.id) ?? 0) === 0)) {
+        doneSkipped.add(node.id);
         yield { type: 'step_skipped', nodeId: node.id, reason: 'not on the selected branch' };
         continue;   // its own outgoing edges stay dark
       }
@@ -248,7 +252,7 @@ export class FlowTester {
           yield { type: 'run_failed', error: err.message ?? String(err) };
           return;
         }
-        if (prior !== undefined) lastOutput = prior;
+        if (prior !== undefined && !CONTROL_TYPES.has(node.type)) lastOutput = prior;
         continue;
       }
 
@@ -258,7 +262,19 @@ export class FlowTester {
       // and the run holds NO compute while it waits — a pending approval is free.
       if (node.type === 'human' && !decisions[node.id]) {
         const askCfg = this._substitute(node.config ?? {}, { outputs, lastOutput });
-        yield { type: 'run_paused', nodeId: node.id, ask: buildAsk(node, askCfg) };
+        yield {
+          type: 'run_paused',
+          nodeId: node.id,
+          ask: buildAsk(node, askCfg),
+          // THE CHECKPOINT — full fidelity, NOT the shrunk step events. This is
+          // what the run resumes on, so the content the person approves is the
+          // content that actually gets sent. See the note at the top of run().
+          checkpoint: {
+            outputs: Object.fromEntries(outputs),
+            skipped: [...doneSkipped],
+            lastOutput,
+          },
+        };
         return;
       }
 
@@ -343,7 +359,15 @@ export class FlowTester {
         if (lastErr) throw lastErr;
 
         outputs.set(node.id, output);
-        lastOutput = output;
+        // A CONTROL node must not become `lastOutput`. A branch's output is
+        // {value, matched, to} and a human's is {decision, by, at, channel} —
+        // routing and audit metadata, not the work product. `deliver` sends
+        // `ctx.lastOutput`, so leaving them in means the step after an approval
+        // delivers the literal {"decision":"approve",…} to the customer instead
+        // of the reply they approved. `lastOutput` means "the last CONTENT".
+        // Restricted to the two types added in this increment, so no existing
+        // spec's behaviour can change (§11.2).
+        if (!CONTROL_TYPES.has(node.type)) lastOutput = output;
         propagate(node.id, output);
         yield {
           type: 'step_completed',

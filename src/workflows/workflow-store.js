@@ -111,6 +111,12 @@ const ADDITIVE_RUN_COLUMNS = [
   // DAG is deterministic and the store is already the record of what happened.
   { col: 'paused_node',       type: 'TEXT' },
   { col: 'pending_ask',       type: 'TEXT' },
+  // The resume CHECKPOINT — full-fidelity node outputs, written once when the
+  // run pauses. Deliberately NOT the `steps` blob: that carries the
+  // display-shrunk event stream (truncated at 2000 chars, objects JSON-encoded),
+  // and resuming from it silently delivered mutilated content. See
+  // flow-tester.js, run().
+  { col: 'checkpoint',        type: 'TEXT' },
 ];
 
 export class WorkflowStore {
@@ -436,7 +442,8 @@ export class WorkflowStore {
           error_explanation TEXT,
           time_saved_minutes REAL,
           paused_node    TEXT,
-          pending_ask    TEXT
+          pending_ask    TEXT,
+          checkpoint     TEXT
         );
       `);
       // ── Carry over EVERY column the old table had ─────────────────────────
@@ -477,12 +484,12 @@ export class WorkflowStore {
    * Park a run on a `human` step. The steps completed so far are already in
    * `steps` (appendStep wrote them as they happened) — that is the checkpoint.
    */
-  pauseRun(runId, nodeId, ask) {
+  pauseRun(runId, nodeId, ask, checkpoint = null) {
     this.db.prepare(
       `UPDATE workflow_runs
-          SET status = 'awaiting_human', paused_node = ?, pending_ask = ?
+          SET status = 'awaiting_human', paused_node = ?, pending_ask = ?, checkpoint = ?
         WHERE id = ?`,
-    ).run(nodeId, JSON.stringify(ask ?? null), runId);
+    ).run(nodeId, JSON.stringify(ask ?? null), JSON.stringify(checkpoint ?? null), runId);
   }
 
   /** Runs waiting on a person. Increment D's Approvals inbox reads this. */
@@ -498,13 +505,14 @@ export class WorkflowStore {
         ...r,
         steps: r.steps ? JSON.parse(r.steps) : [],
         pending_ask: r.pending_ask ? JSON.parse(r.pending_ask) : null,
+        checkpoint:  r.checkpoint  ? JSON.parse(r.checkpoint)  : null,
       }));
   }
 
   /** Flip a paused run back to running once a decision has been captured. */
   markRunResumed(runId) {
     this.db.prepare(
-      `UPDATE workflow_runs SET status = 'running', paused_node = NULL, pending_ask = NULL WHERE id = ?`,
+      `UPDATE workflow_runs SET status = 'running', paused_node = NULL, pending_ask = NULL, checkpoint = NULL WHERE id = ?`,
     ).run(runId);
   }
 
