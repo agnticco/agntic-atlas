@@ -214,14 +214,16 @@ export class FlowTester {
       const isBranch = byId.get(nodeId)?.type === 'branch';
       let selected = null;
       if (isBranch) {
-        // Be robust to a stringified output (a resumed run rehydrates from the
-        // SHRUNK step events). If we cannot read the selection we must NOT fall
-        // back to "light everything" — that would run the path the branch ruled
-        // out. Fail the run instead: a branch whose decision we cannot recover is
-        // not a branch, and silently taking every path is the worst possible
-        // answer to "which way did it go?".
-        const decoded = typeof output === 'string' ? tryParseJson(output) : output;
-        selected = decoded?.to ?? null;
+        // If we cannot read the selection we must NOT fall back to "light
+        // everything" — that would run the path the branch ruled out. Fail the run
+        // instead: silently taking every path is the worst possible answer to
+        // "which way did it go?".
+        //
+        // (A resumed run never reaches here for a done node — the checkpoint
+        // RESTORES the liveness and replayed nodes propagate nothing. An earlier
+        // version decoded a stringified output here, which was a patch on the
+        // symptom of a lossy checkpoint. That decode is gone with the disease.)
+        selected = output?.to ?? null;
         if (!selected) {
           throw new Error(
             `branch "${nodeId}" produced no route (got: ${JSON.stringify(output)?.slice(0, 120)}). ` +
@@ -357,7 +359,8 @@ export class FlowTester {
           costConfig: nodeCostConfig,
           ancestorOutputs,
           humanDecision: decisions[node.id] ?? null,
-          // `foreach` needs this to scope its sub-steps' idempotency keys.
+          // `foreach` needs these to scope its sub-steps' idempotency keys.
+          tenantId:   options.tenantId,
           workflowId: options.workflowId,
           // `branch` needs this to tell "no such step" (a typo — fail loudly)
           // from "a real step that didn't run on this leg" (it was skipped —
@@ -376,7 +379,11 @@ export class FlowTester {
         for (let attempt = 1; attempt <= attempts; attempt++) {
           try {
             output = await withTimeout(
-              this._executeNode(node, nodeCtx, { runId, workflowId: options.workflowId }),
+              this._executeNode(node, nodeCtx, {
+                runId,
+                tenantId:   options.tenantId,
+                workflowId: options.workflowId,
+              }),
               nodeTimeout,
               `node ${node.id} (${node.type})`,
             );
@@ -482,7 +489,7 @@ export class FlowTester {
    * A node that declares idempotency with no store wired is an ERROR, not a
    * silent no-op — pretending to deduplicate is worse than not claiming to.
    */
-  async _executeNode(node, ctx, { workflowId, parentId = null, inLoop = false } = {}) {
+  async _executeNode(node, ctx, { tenantId, workflowId, parentId = null, inLoop = false } = {}) {
     // Inside a `foreach` there is no event stream to yield `step_retry` into and
     // no edges for `route_to` to light, so the run() loop's retry wrapper can't
     // serve loop sub-steps. Honour `retry` here instead — silently ignoring a
@@ -494,7 +501,7 @@ export class FlowTester {
       let lastErr = null;
       for (let attempt = 1; attempt <= attempts; attempt++) {
         try {
-          return await this._executeNode(node, ctx, { workflowId, parentId });
+          return await this._executeNode(node, ctx, { tenantId, workflowId, parentId });
         } catch (err) {
           lastErr = err;
           const delayMs = Math.max(0, Number(policy.retry_delay_ms ?? 0));
@@ -518,9 +525,26 @@ export class FlowTester {
     if (!key) {
       throw new Error(`step "${node.id}" has an idempotency key that resolved to nothing (${idem.key}).`);
     }
-    // Scoped by the enclosing loop too, so the same sub-step id in two different
-    // `foreach` nodes cannot collide on a key.
-    const scope      = `${workflowId ?? 'unscoped'}:${parentId ? `${parentId}/` : ''}${node.id}`;
+
+    // ── The scope MUST identify the tenant. FAIL CLOSED. ──────────────────
+    // This used to be `${workflowId ?? 'unscoped'}:${node.id}` — and NEITHER
+    // production caller passed workflowId, so every tenant's keys collapsed into
+    // ONE namespace, `unscoped:<nodeId>`, in a store with no tenant column. Node
+    // ids are generic ("create_record"), so tenant B's write was silently skipped
+    // and tenant B's step was handed TENANT A'S OUTPUT — which then becomes
+    // lastOutput and is delivered. A cross-tenant data leak, from a `??` default.
+    //
+    // The tests never saw it because every one of them hand-passed `workflowId`,
+    // an option no real caller sets. So: no default. A step that cannot be scoped
+    // REFUSES TO RUN, exactly as one with no store wired does. A silent fallback
+    // is not a safety net — it is the bug.
+    if (!tenantId || !workflowId) {
+      throw new Error(
+        `step "${node.id}" declares idempotency but the run has no ${!tenantId ? 'tenantId' : 'workflowId'}. ` +
+        'Refusing to run — an unscoped idempotency key is shared across tenants.',
+      );
+    }
+    const scope = `${tenantId}:${workflowId}:${parentId ? `${parentId}/` : ''}${node.id}`;
     const onConflict = idem.on_conflict ?? 'skip';
     const prior      = this.idempotencyStore.get(scope, key);
 
@@ -603,6 +627,7 @@ export class FlowTester {
       // sub-step declaring a key with NO store wired cheerfully wrote twice,
       // while the identical node at top level refused to run.
       runSubNode: (subNode, subCtx) => this._executeNode(subNode, subCtx, {
+        tenantId:   ctx.tenantId,
         workflowId: ctx.workflowId,
         parentId:   node.id,     // scopes the idempotency key to THIS loop
         inLoop:     true,
@@ -711,11 +736,3 @@ export class FlowTester {
   }
 }
 
-/**
- * Decode a JSON string, or return undefined. Used to recover a `branch`'s
- * routing decision from a resumed run, where the persisted step_completed event
- * carries the SHRUNK (JSON-encoded) output rather than the live object.
- */
-function tryParseJson(s) {
-  try { return JSON.parse(s); } catch { return undefined; }
-}

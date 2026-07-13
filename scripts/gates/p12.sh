@@ -116,6 +116,29 @@ run_test "$CF_TEST" "increment B"
 grep -q 'NON_EXHAUSTIVE_BRANCH' "$VALIDATOR" \
   || next "B — engine control flow" "NON_EXHAUSTIVE_BRANCH not in the validator — every branch needs a \`*\` case."
 
+# ── DOES THE SUITE ACTUALLY HAVE TEETH? ──────────────────────────────────────
+# Increment B failed independent verification SEVEN times, and every one of ~20
+# defects — a cross-tenant data leak, a resumed approval delivering truncated
+# content, a ruled-out branch that ran and delivered, a declined charge that
+# still sent the receipt — reached candidate state BEHIND A FULLY GREEN SUITE,
+# because a test passed for the wrong reason.
+#
+# This gate could not see any of it: it checked that the test file EXISTS and
+# PASSES, and grepped the validator for symbol names. A suite of 70 tests that
+# cannot fail satisfies that perfectly. THE GATE MEASURED THE EXISTENCE OF TESTS,
+# NOT THEIR POWER — which is why "gate green" and "correct" kept diverging.
+#
+# mutation-guard re-introduces each historical defect and requires the suite to
+# FAIL. A guard whose mutation survives is a guard nothing pins, and the next
+# person to touch it can delete it with the gate still smiling.
+#
+# Adding a check, never weakening one (CLAUDE.md, Gates).
+echo "p12: [B] mutation guard — do the tests actually fail when the bugs come back?"
+node scripts/checks/mutation-guard.mjs >/tmp/p12-mut.log 2>&1 \
+  || { tail -30 /tmp/p12-mut.log >&2; fail "increment B — mutation guard failed: a guard survived deletion with the suite still green. A test that cannot fail is not a test."; }
+grep -q 'MUTATION-GUARD-PASS' /tmp/p12-mut.log \
+  || fail "increment B — mutation guard did not report PASS"
+
 # ─────────────────────────────────────────────────────────────────────────────
 # C. Converger v2 core — THE MOAT.
 # ─────────────────────────────────────────────────────────────────────────────

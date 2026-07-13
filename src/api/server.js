@@ -1824,7 +1824,16 @@ export function createApp(spine) {
       }
       let runId = null, completed = false, output = null;
       const steps = [];
-      const flowOpts = { ...(initialContext != null ? { initialContext } : {}), ...(dbRun ? { runId: dbRun.id } : {}) };
+      // tenantId/workflowId are LOAD-BEARING: they scope the idempotency keys.
+      // Omitting them used to collapse every tenant into one shared namespace
+      // (`unscoped:<nodeId>`), so one tenant's step could be handed another
+      // tenant's output. A step that cannot be scoped now refuses to run.
+      const flowOpts = {
+        ...(initialContext != null ? { initialContext } : {}),
+        ...(dbRun ? { runId: dbRun.id } : {}),
+        ...(req.tenant ? { tenantId: req.tenant.id } : {}),
+        ...(spec.id ? { workflowId: spec.id } : {}),
+      };
       for await (const ev of spine.engine.flowTester.run(spec, flowOpts)) {
         if (ev.type === 'run_started') {
           runId = ev.runId;

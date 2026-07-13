@@ -307,7 +307,14 @@ export class WorkflowScheduler {
       const wf = this._injectTokens ? await this._injectTokens(workflow) : workflow;
       // For email-triggered flows, inject the fetched email as the initial
       // lastOutput so summarize/llm nodes see it without a separate fetch step.
-      const runOpts = { runId: run.id, costContext: `workflow:${workflow.slug}` };
+      // tenantId/workflowId are LOAD-BEARING: they scope the idempotency keys.
+      // Omitting them used to collapse every tenant into one shared namespace.
+      const runOpts = {
+        runId: run.id,
+        costContext: `workflow:${workflow.slug}`,
+        tenantId:   workflow.tenant_id,
+        workflowId: workflow.id,
+      };
       if (emailContext) runOpts.initialContext = emailContext;
       for await (const evt of this.flowTester.run(
         { nodes: wf.nodes, edges: wf.edges },

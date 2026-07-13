@@ -1,0 +1,213 @@
+#!/usr/bin/env node
+/**
+ * mutation-guard — does the test suite actually have teeth?
+ *
+ * WHY THIS EXISTS. P12 Increment B failed independent verification SEVEN times.
+ * Every single defect — a cross-tenant data leak, a resumed approval delivering
+ * truncated content, a ruled-out branch that ran and delivered, a declined charge
+ * that still sent the receipt — reached candidate state **behind a fully green
+ * suite**, because a test passed for the wrong reason:
+ *
+ *   · a validator test that only asserted the REJECTION (it would have passed if
+ *     the rule were `if (true)` — and the rule was, in fact, rejecting every
+ *     valid spec);
+ *   · a resume test whose stub LLM returned 16 characters, so it never crossed
+ *     the 2000-char truncation cap it existed to catch;
+ *   · a test that asserted a delivery RAN, never WHAT IT SENT;
+ *   · idempotency tests that hand-passed an option no production caller passes.
+ *
+ * The gate could not see any of it. `p12.sh` checked that the test file EXISTS
+ * and PASSES, and grepped the validator for symbol names. A suite of 70 tests
+ * that cannot fail satisfies that perfectly. **The gate measured the existence of
+ * tests, not their power.**
+ *
+ * So this closes that hole mechanically: it re-introduces each bug and requires
+ * the suite to FAIL. A guard whose mutation survives is a guard nothing pins —
+ * which means the next person to touch it can delete it and the gate will smile.
+ *
+ * Adding a check, never weakening one (CLAUDE.md, Gates).
+ *
+ * Usage:  node scripts/checks/mutation-guard.mjs
+ * Output: MUTATION-GUARD-PASS on success; non-zero exit + the survivors on failure.
+ */
+
+import { readFileSync, writeFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+
+/**
+ * ALL suites that could pin a guard — not just the one you have in mind.
+ * On its first run this harness reported UNKNOWN_CONFIG_KEY as unpinned, because
+ * it only ran control-flow.test.js while that guard is pinned by
+ * validator-config-keys.test.js. A mutation harness that runs too few suites
+ * manufactures false survivors, which is its own kind of lie.
+ */
+const SUITES = [
+  'tests/workflows/control-flow.test.js',
+  'tests/workflows/validator-config-keys.test.js',
+];
+
+/**
+ * Each entry re-introduces one real, historical defect. `find` MUST match the
+ * current source — a mutation that silently fails to apply is a mutation that
+ * proves nothing, and that mistake was itself made here once.
+ */
+const MUTATIONS = [
+  // ── the cross-tenant leak (round 7) ──────────────────────────────────────
+  { file: 'src/workflows/flow-tester.js',
+    name: 'idempotency scope falls back to "unscoped" (cross-tenant leak)',
+    find: '    if (!tenantId || !workflowId) {', repl: '    if (false) {' },
+  { file: 'src/workflows/flow-tester.js',
+    name: 'tenantId dropped from the idempotency scope',
+    find: '    const scope = `${tenantId}:${workflowId}:', repl: '    const scope = `${workflowId}:' },
+  { file: 'src/workflows/workflow-scheduler.js',
+    name: 'the scheduler stops passing tenantId',
+    find: '        tenantId:   workflow.tenant_id,', repl: '' },
+
+  // ── the lossy checkpoint (round 3/4) ─────────────────────────────────────
+  { file: 'src/workflows/flow-tester.js',
+    name: 'checkpoint carries the display-SHRUNK outputs (truncates the work product)',
+    find: '            outputs:  Object.fromEntries(outputs),',
+    repl: '            outputs:  Object.fromEntries([...outputs].map(([k,v]) => [k, this._shrinkOutput(v)])),' },
+  { file: 'src/workflows/flow-tester.js',
+    name: 'checkpoint drops `live` (edge liveness re-derived)',
+    find: '            live:     Object.fromEntries(liveInto),', repl: '            live:     {},' },
+  { file: 'src/workflows/flow-tester.js',
+    name: 'checkpoint drops `ruledOut` (ruled-out branch revives on resume)',
+    find: '            ruledOut: [...ruledOut],', repl: '            ruledOut: [],' },
+  { file: 'src/workflows/flow-tester.js',
+    name: 'lastOutput recomputed on replay (delivers a failed step\'s error blob)',
+    find: '        continue;\n      }\n\n      // ── The durable pause',
+    repl: '        if (prior !== undefined && !CONTROL_TYPES.has(node.type)) lastOutput = prior;\n        continue;\n      }\n\n      // ── The durable pause' },
+
+  // ── control nodes leaking into the work product (round 4/7) ──────────────
+  { file: 'src/workflows/flow-tester.js',
+    name: 'CONTROL_TYPES loses `branch` (router bookkeeping delivered to the customer)',
+    find: "const CONTROL_TYPES = new Set(['branch', 'human']);",
+    repl: "const CONTROL_TYPES = new Set(['human']);" },
+  { file: 'src/workflows/flow-tester.js',
+    name: 'CONTROL_TYPES loses `human` (approval record delivered to the customer)',
+    find: "const CONTROL_TYPES = new Set(['branch', 'human']);",
+    repl: "const CONTROL_TYPES = new Set(['branch']);" },
+  { file: 'src/workflows/node-types/_node-input.js',
+    name: 'NON_CONTENT_TYPES loses `branch`/`human` (control output fed to an AI step)',
+    find: "new Set(['trigger', 'deliver', 'branch', 'human'])",
+    repl: "new Set(['trigger', 'deliver'])" },
+
+  // ── foreach (rounds 5/6) ─────────────────────────────────────────────────
+  { file: 'src/workflows/flow-tester.js',
+    name: 'foreach bypasses the policy path (idempotency + retry silently skipped in a loop)',
+    find: '      runSubNode: (subNode, subCtx) => this._executeNode(subNode, subCtx, {',
+    repl: '      runSubNode: (subNode, subCtx) => this._runNode(subNode, subCtx) ?? this._executeNode(subNode, subCtx, {' },
+  { file: 'src/workflows/flow-tester.js',
+    name: 'foreach `steps` pre-substituted ({{item}} silently becomes "")',
+    find: '      cfg = { ...this._substitute(rest, ctx), steps };   // `steps` stay RAW',
+    repl: '      cfg = this._substitute(rawCfg, ctx);' },
+  { file: 'src/workflows/node-types/foreach.js',
+    name: 'foreach default maxItems unbounded (cost incident)',
+    find: 'cfg.maxItems ?? DEFAULT_MAX_ITEMS', repl: 'cfg.maxItems ?? Infinity' },
+
+  // ── branch routing (rounds 5/6) ──────────────────────────────────────────
+  { file: 'src/workflows/flow-tester.js',
+    name: 'branch `on` gets template-substituted (mainline {{x.output}} form crashes)',
+    find: '      cfg = { ...this._substitute(rest, ctx), on };      // `on` stays RAW',
+    repl: '      cfg = this._substitute(rawCfg, ctx);' },
+  { file: 'src/workflows/node-types/branch.js',
+    name: 'branch throws on a legitimately SKIPPED step (crashes a valid workflow)',
+    find: '    if (ctx?.nodeIds?.has(id)) return undefined;', repl: '    // removed' },
+  { file: 'src/workflows/node-types/branch.js',
+    name: 'branch falls through to the catch-all on a typo (silent 100% misroute)',
+    find: '    throw new Error(\n      `branch routes on "${raw}", but no step "${id}" exists',
+    repl: '    return raw; throw new Error(\n      `branch routes on "${raw}", but no step "${id}" exists' },
+
+  // ── validator rules — each must be pinned in BOTH directions ─────────────
+  { file: 'src/workflows/workflow-validator.js',
+    name: 'NON_EXHAUSTIVE_BRANCH disabled (a branch can silently do nothing)',
+    find: "        if (!cases.some(c => String(c?.when).trim() === CATCH_ALL)) {", repl: '        if (false) {' },
+  { file: 'src/workflows/workflow-validator.js',
+    name: 'BRANCH_BAD_ON disabled (typo routes 100% of traffic to the catch-all)',
+    find: '        } else if (!onId || !seenIds.has(onId)) {', repl: '        } else if (false) {' },
+  { file: 'src/workflows/workflow-validator.js',
+    name: 'BRANCH_BAD_ON always fires (rejects every valid branch)',
+    find: '        } else if (!onId || !seenIds.has(onId)) {', repl: '        } else if (true) {' },
+  { file: 'src/workflows/workflow-validator.js',
+    name: 'ON_ERROR_ROUTE_NO_EDGE always fires (rejects every valid route_to)',
+    find: '        } else if (!edgeSet.has(edgeKey(node.id, target))) {', repl: '        } else if (true) {' },
+  { file: 'src/workflows/workflow-validator.js',
+    name: 'UNKNOWN_CONFIG_KEY disabled (a hallucinated config key ships)',
+    find: "      if (typeDef && typeDef.configPolicy !== 'open') {", repl: '      if (false) {' },
+
+  // ── the approval gate's only integrity constraint in B ───────────────────
+  { file: 'src/workflows/node-types/human.js',
+    name: 'human accepts an answer outside the declared set',
+    find: '    if (allowed.length && !allowed.includes(String(provided.decision))) {', repl: '    if (false) {' },
+  { file: 'src/workflows/node-types/human.js',
+    name: 'human defaults to approved when no decision was given',
+    find: '    if (!provided || !provided.decision) {', repl: '    if (false) {' },
+];
+
+const read  = (f) => readFileSync(f, 'utf8');
+const write = (f, s) => writeFileSync(f, s);
+
+/** Do ALL the suites pass? A guard is unpinned only if NONE of them catches it. */
+function suitePasses() {
+  for (const suite of SUITES) {
+    try {
+      execFileSync('node', ['--test', suite], { stdio: 'pipe' });
+    } catch {
+      return false;
+    }
+  }
+  return true;
+}
+
+console.log(`mutation-guard: ${MUTATIONS.length} mutations against ${SUITES.length} suite(s)\n`);
+
+if (!suitePasses()) {
+  console.error('mutation-guard: the suites do not pass UNMUTATED. Fix that first.');
+  process.exit(1);
+}
+
+const survivors = [];
+const noops     = [];
+
+for (const m of MUTATIONS) {
+  const original = read(m.file);
+
+  // A mutation that does not apply proves nothing — and mistaking a no-op patch
+  // for a passing guard is a mistake that was actually made here. Fail loudly.
+  if (!original.includes(m.find)) {
+    noops.push(m);
+    console.log(`  ??  ${m.name}\n      (anchor not found in ${m.file} — the mutation did NOT apply)`);
+    continue;
+  }
+
+  write(m.file, original.replace(m.find, m.repl));
+  const survived = suitePasses();   // suite still green ⇒ nothing pins this guard
+  write(m.file, original);          // always restore
+
+  if (survived) {
+    survivors.push(m);
+    console.log(`  ✗   SURVIVED — ${m.name}`);
+  } else {
+    console.log(`  ok  killed   — ${m.name}`);
+  }
+}
+
+console.log('');
+
+if (noops.length) {
+  console.error(`mutation-guard FAIL: ${noops.length} mutation(s) did not apply — the anchors have drifted.`);
+  console.error('A mutation that cannot be applied is not a passing check. Re-ground the anchors against the source.');
+  for (const m of noops) console.error(`  · ${m.name}  [${m.file}]`);
+  process.exit(1);
+}
+
+if (survivors.length) {
+  console.error(`mutation-guard FAIL: ${survivors.length} guard(s) SURVIVED deletion with the suite still green.`);
+  console.error('Each is a guard that nothing pins — the next person to touch it can delete it and this gate will smile.');
+  console.error('Every one of these was, at some point, a real defect that shipped behind a green suite.\n');
+  for (const m of survivors) console.error(`  · ${m.name}\n      ${m.file}`);
+  process.exit(1);
+}
+
+console.log(`MUTATION-GUARD-PASS: all ${MUTATIONS.length} mutations killed — the suite has teeth.`);

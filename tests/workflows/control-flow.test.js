@@ -224,7 +224,7 @@ test('human: the run PAUSES at the approval and goes no further', async () => {
   assert.ok(!one(events, 'run_completed'), 'a paused run is not a completed run');
 });
 
-test('human: resuming from the PERSISTED steps continues without re-running earlier work', async () => {
+test('human: resuming from the CHECKPOINT continues without re-running earlier work', async () => {
   let llmCalls = 0;
   const counting = { invoke: async () => { llmCalls++; return { content: 'Dear customer, …' }; } };
   const tester = new FlowTester({ nodeTypes, llm: counting, channelRegistry: stubChannels() });
@@ -788,8 +788,8 @@ test('idempotency: a re-fired trigger does not run the write a second time', asy
   };
   const tester = new FlowTester({ nodeTypes, llm: stubLlm(), channelRegistry, idempotencyStore: store });
 
-  const first  = await runAll(tester, flow, { workflowId: 'wf1' });
-  const second = await runAll(tester, flow, { workflowId: 'wf1' });   // the trigger re-fires
+  const first  = await runAll(tester, flow, { tenantId: 't1', workflowId: 'wf1' });
+  const second = await runAll(tester, flow, { tenantId: 't1', workflowId: 'wf1' });   // the trigger re-fires
 
   assert.equal(writes, 1, 'the connector must be called exactly ONCE across both runs');
   assert.ok(one(first, 'run_completed'));
@@ -813,8 +813,8 @@ test('idempotency: a different key writes again', async () => {
   });
   const tester = new FlowTester({ nodeTypes, llm: stubLlm(), channelRegistry, idempotencyStore: store });
 
-  await runAll(tester, mk('alice@acme.com'), { workflowId: 'wf1' });
-  await runAll(tester, mk('bob@acme.com'),   { workflowId: 'wf1' });
+  await runAll(tester, mk('alice@acme.com'), { tenantId: 't1', workflowId: 'wf1' });
+  await runAll(tester, mk('bob@acme.com'),   { tenantId: 't1', workflowId: 'wf1' });
 
   assert.equal(writes, 2, 'two different keys are two different things — both must be written');
   store.close();
@@ -1099,7 +1099,7 @@ test('foreach: a sub-step declaring idempotency with NO store REFUSES to run', a
                 idempotency: { key: '{{item}}', on_conflict: 'skip' } }],
     } }],
     edges: [],
-  }, { workflowId: 'wf1' });
+  }, { tenantId: 't1', workflowId: 'wf1' });
 
   assert.ok(one(events, 'run_failed'), 'it must fail loudly, exactly as a top-level node does');
   assert.equal(writes, 0, 'and it must NOT have written anything');
@@ -1120,9 +1120,9 @@ test('foreach: a re-fired trigger does not re-write the same items', async () =>
     edges: [],
   };
 
-  await runAll(tester, flow, { workflowId: 'wf1' });
+  await runAll(tester, flow, { tenantId: 't1', workflowId: 'wf1' });
   assert.equal(writes, 2, 'first fire writes both rows');
-  await runAll(tester, flow, { workflowId: 'wf1' });   // the trigger re-fires
+  await runAll(tester, flow, { tenantId: 't1', workflowId: 'wf1' });   // the trigger re-fires
   assert.equal(writes, 2, 'the re-fire must write NOTHING — not 2 more rows');
   store.close();
 });
@@ -1416,8 +1416,8 @@ test('idempotency: on_conflict "error" fails, "update" re-runs, "skip" does not'
     const tester = new FlowTester({ nodeTypes, llm: stubLlm(), channelRegistry: channels, idempotencyStore: store });
     const flow = { nodes: [{ id: 'c', type: 'connector-action', config: { action: 'a' },
                              idempotency: { key: 'K', on_conflict: onConflict } }], edges: [] };
-    await runAll(tester, flow, { workflowId: 'wf' });
-    const second = await runAll(tester, flow, { workflowId: 'wf' });
+    await runAll(tester, flow, { tenantId: 't1', workflowId: 'wf' });
+    const second = await runAll(tester, flow, { tenantId: 't1', workflowId: 'wf' });
     store.close();
     return { writes, second };
   };
@@ -1449,7 +1449,7 @@ test('idempotency: keys are scoped per loop and per step — no collisions', asy
               idempotency: { key: '{{item}}' } }],
   } });
 
-  await runAll(tester, { nodes: [loop('loopA'), loop('loopB')], edges: [] }, { workflowId: 'wf' });
+  await runAll(tester, { nodes: [loop('loopA'), loop('loopB')], edges: [] }, { tenantId: 't1', workflowId: 'wf' });
   assert.equal(writes, 2, 'two distinct steps must both write — they only share a sub-step id');
   store.close();
 });
@@ -1462,7 +1462,7 @@ test('idempotency: a key that resolves to nothing is an error, not a silent skip
     nodes: [{ id: 'c', type: 'connector-action', config: { action: 'a' },
               idempotency: { key: '{{nope.output}}' } }],   // resolves to ''
     edges: [],
-  }, { workflowId: 'wf' });
+  }, { tenantId: 't1', workflowId: 'wf' });
   const failed = one(events, 'run_failed');
   assert.ok(failed, 'an empty key means the dedupe is a no-op — it must not run silently');
   assert.match(failed.error, /resolved to nothing/i);
@@ -1512,4 +1512,260 @@ test('foreach: steps given as a JSON string still run', () => {
     [{ from: 'rows', to: 'loop' }, { from: 'loop', to: 'd' }],
   ));
   assert.ok(res.ok, `a JSON-string steps list must validate; got: ${codesOf(res).join(', ')}`);
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 12. THE PRODUCTION CALL PATH.
+//
+// Every idempotency test above constructs FlowTester directly and hands it a
+// `workflowId` — an option NO production caller passed. So they all verified the
+// engine in a configuration that had never once existed in production, and the
+// scope silently degraded to `unscoped:<nodeId>` in a store with no tenant
+// column: one tenant's step was handed ANOTHER TENANT'S OUTPUT.
+//
+// A unit test on the engine cannot see that class of bug by construction. These
+// tests hand-pass NOTHING.
+// ─────────────────────────────────────────────────────────────────────────────
+
+test('idempotency: a run that cannot be scoped to a tenant REFUSES to run', async () => {
+  // No tenantId, no workflowId — exactly what the callers used to pass. A silent
+  // fallback here is a cross-tenant leak, so there is no fallback.
+  const store = new IdempotencyStore({ dbPath: ':memory:' }).init();
+  let writes = 0;
+  const channels = stubChannels(() => { writes++; return { id: writes }; }, { actionOnly: true });
+  const tester = new FlowTester({ nodeTypes, llm: stubLlm(), channelRegistry: channels, idempotencyStore: store });
+
+  const events = await runAll(tester, {
+    nodes: [{ id: 'create_record', type: 'connector-action', config: { action: 'airtable_create_record' },
+              idempotency: { key: 'alice@acme.com', on_conflict: 'skip' } }],
+    edges: [],
+  }, { /* nothing hand-passed — this is what the scheduler used to send */ });
+
+  const failed = one(events, 'run_failed');
+  assert.ok(failed, 'an unscoped idempotency key is shared across tenants — it must refuse to run');
+  assert.match(failed.error, /tenantId|workflowId/);
+  assert.equal(writes, 0);
+  store.close();
+});
+
+test('idempotency: two TENANTS with the same node id and key do not collide', async () => {
+  // The leak, reproduced. Same node id ("create_record" — they are generic), same
+  // key. Tenant B must write its OWN record and must NOT be handed tenant A's.
+  const store = new IdempotencyStore({ dbPath: ':memory:' }).init();
+  const written = [];
+  const mk = (tenantId) => {
+    const channels = stubChannels(() => {
+      written.push(tenantId);
+      return { record: `SECRET-OF-${tenantId}` };
+    }, { actionOnly: true });
+    return new FlowTester({ nodeTypes, llm: stubLlm(), channelRegistry: channels, idempotencyStore: store });
+  };
+  const flow = {
+    nodes: [{ id: 'create_record', type: 'connector-action', config: { action: 'airtable_create_record' },
+              idempotency: { key: 'shared@example.com', on_conflict: 'skip' } }],
+    edges: [],
+  };
+
+  const a = await runAll(mk('TENANT-A'), flow, { tenantId: 'TENANT-A', workflowId: 'wf' });
+  const b = await runAll(mk('TENANT-B'), flow, { tenantId: 'TENANT-B', workflowId: 'wf' });
+
+  assert.deepEqual(written, ['TENANT-A', 'TENANT-B'], 'BOTH tenants must write — they are different tenants');
+  assert.match(JSON.stringify(outputOf(a, 'create_record')), /SECRET-OF-TENANT-A/);
+  assert.match(JSON.stringify(outputOf(b, 'create_record')), /SECRET-OF-TENANT-B/,
+    'tenant B must NEVER receive tenant A\'s output');
+  store.close();
+});
+
+test('the SCHEDULER passes what the engine needs to scope a key (production path)', async () => {
+  // The bug lived in the WIRING, not the engine — so this asserts the wiring.
+  // It reads the option object the scheduler actually builds, rather than trusting
+  // that someone remembered to pass it.
+  const src = await import('node:fs').then(fs => fs.readFileSync('src/workflows/workflow-scheduler.js', 'utf8'));
+  const runOpts = src.slice(src.indexOf('const runOpts = {'), src.indexOf('};', src.indexOf('const runOpts = {')));
+  assert.match(runOpts, /tenantId:\s*workflow\.tenant_id/, 'the scheduler must pass tenantId');
+  assert.match(runOpts, /workflowId:\s*workflow\.id/, 'the scheduler must pass workflowId');
+
+  const server = await import('node:fs').then(fs => fs.readFileSync('src/api/server.js', 'utf8'));
+  const flowOpts = server.slice(server.indexOf('const flowOpts = {'), server.indexOf('};', server.indexOf('const flowOpts = {')));
+  assert.match(flowOpts, /tenantId:\s*req\.tenant\.id/, 'the REST run path must pass tenantId');
+  assert.match(flowOpts, /workflowId:\s*spec\.id/, 'the REST run path must pass workflowId');
+});
+
+// ── Defect 8: the `branch` half of the control-node guard was 100% unpinned ──
+
+test('control nodes: a BRANCH output is never delivered to the customer', async () => {
+  // Deleting 'branch' from CONTROL_TYPES left the whole suite green while the
+  // customer received {"value":"…","matched":"*","to":"send","viaCatchAll":true}.
+  // The test named "a human/branch output never reaches an AI step" only ever
+  // tested the human half — a test that would pass if the feature it names were
+  // deleted.
+  const bodies = [];
+  const channels = stubChannels((a) => { bodies.push(a.body); return { delivered: true }; });
+  const tester = new FlowTester({ nodeTypes, llm: stubLlm('Dear customer, your refund is approved.'), channelRegistry: channels });
+
+  const events = await runAll(tester, {
+    nodes: [
+      { id: 'draft', type: 'llm', config: { prompt: 'draft' } },
+      { id: 'route', type: 'branch', config: { on: 'draft.output', cases: [{ when: '*', to: 'send' }] } },
+      { id: 'send',  type: 'deliver', config: { channel: 'in_app' } },
+    ],
+    edges: [{ from: 'draft', to: 'route' }, { from: 'route', to: 'send' }],
+  }, { initialContext: 'a refund request' });
+
+  assert.ok(one(events, 'run_completed'));
+  assert.equal(bodies.length, 1);
+  assert.ok(!String(bodies[0]).includes('viaCatchAll'),
+    `a branch's routing record must never be delivered — got: ${bodies[0]}`);
+  assert.equal(bodies[0], 'Dear customer, your refund is approved.',
+    'the customer gets the work product, not the router\'s bookkeeping');
+});
+
+test('control nodes: a BRANCH output never reaches an AI step as its input', async () => {
+  const seen = [];
+  const spy = { invoke: async (msgs) => { seen.push(String(msgs[1].content)); return { content: 'ok' }; } };
+  const tester = new FlowTester({ nodeTypes, llm: spy, channelRegistry: stubChannels() });
+
+  await runAll(tester, {
+    nodes: [
+      { id: 'draft',  type: 'llm', config: { prompt: 'draft' } },
+      { id: 'route',  type: 'branch', config: { on: 'draft.output', cases: [{ when: '*', to: 'polish' }] } },
+      { id: 'polish', type: 'llm', config: { mode: 'rewrite', format: 'email' } },
+      { id: 'send',   type: 'deliver', config: { channel: 'in_app' } },
+    ],
+    edges: [{ from: 'draft', to: 'route' }, { from: 'route', to: 'polish' }, { from: 'polish', to: 'send' }],
+  }, { initialContext: 'x' });
+
+  assert.ok(!seen.at(-1).includes('viaCatchAll'),
+    `an AI step must never ingest the router's bookkeeping; got: ${seen.at(-1).slice(0, 160)}`);
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 13. The last unpinned guards. Each survived deletion with the suite green.
+// ─────────────────────────────────────────────────────────────────────────────
+
+test('human: an answer outside the declared set is REJECTED', async () => {
+  // The approval gate's ONLY integrity constraint in increment B, and nothing
+  // pinned it: any string was accepted as a decision. Increment D adds the
+  // authentication; this is what stops a valid-looking but undeclared answer.
+  const def = nodeTypes.get('human');
+  await assert.rejects(
+    () => def.run({ decisions: ['approve', 'reject'] }, { humanDecision: { decision: 'yolo' } }, {}),
+    /not one of/i,
+    'an answer nobody declared must not resolve the pause',
+  );
+  const ok = await def.run({ decisions: ['approve', 'reject'] }, { humanDecision: { decision: 'approve' } }, {});
+  assert.equal(ok.decision, 'approve', 'and a declared answer must work');
+});
+
+test('on_error: route_to a step that does not exist FAILS the run', async () => {
+  // The engine's guard swallowed this and reported SUCCESS. The validator rejects
+  // the shape (ON_ERROR_BAD_TARGET) but specs in the DB predate the rule.
+  const events = await runAll(
+    new FlowTester({ nodeTypes, llm: { invoke: async () => { throw new Error('boom'); } }, channelRegistry: stubChannels() }),
+    {
+      nodes: [
+        { id: 'x', type: 'llm', config: { prompt: 'go' }, on_error: { then: 'route_to:ghost' } },
+        { id: 'd', type: 'deliver', config: { channel: 'in_app' } },
+      ],
+      edges: [{ from: 'x', to: 'd' }],
+    });
+  const failed = one(events, 'run_failed');
+  assert.ok(failed, 'an unhandled failure must not be reported as a success');
+  assert.match(failed.error, /ghost/);
+});
+
+test('foreach: one item\'s output cannot leak into the next iteration', async () => {
+  // foreach.js promises per-iteration scope isolation. Nothing pinned it: a
+  // globally shared Map survived, so item 2 could read item 1's sub-step output.
+  const seen = [];
+  const spy = { invoke: async (msgs) => { seen.push(String(msgs[1].content)); return { content: 'OUT' }; } };
+  await runAll(new FlowTester({ nodeTypes, llm: spy, channelRegistry: stubChannels() }), {
+    nodes: [{ id: 'loop', type: 'foreach', config: {
+      over: JSON.stringify(['one', 'two']),
+      steps: [
+        { id: 'a', type: 'llm', config: { prompt: 'first {{item}}' } },
+        // `b` reads `a` — of THIS iteration. It must never see a stale `a`.
+        { id: 'b', type: 'llm', config: { prompt: 'second sees=[{{a.output}}] item={{item}}' } },
+      ],
+    } }],
+    edges: [],
+  });
+  // Iteration 1's `a` runs before anything else; iteration 2's `b` must read
+  // iteration 2's `a`, not a value carried over.
+  const firstB = seen[1];
+  assert.ok(firstB.includes('sees=[OUT]'), `sub-steps must see THIS iteration's earlier step; got ${firstB}`);
+  assert.equal(seen.length, 4, 'two items x two steps');
+});
+
+test('branch: case matching is case-insensitive (as documented)', async () => {
+  const tester = new FlowTester({ nodeTypes, llm: stubLlm('URGENT'), channelRegistry: stubChannels() });
+  const events = await runAll(tester, {
+    nodes: [
+      { id: 'c', type: 'llm', config: { mode: 'classify', categories: 'URGENT\nroutine' } },
+      { id: 'r', type: 'branch', config: { on: 'c.output', cases: [{ when: 'urgent', to: 'p' }, { when: '*', to: 'f' }] } },
+      { id: 'p', type: 'deliver', config: { channel: 'in_app', body: 'P' } },
+      { id: 'f', type: 'deliver', config: { channel: 'in_app', body: 'F' } },
+    ],
+    edges: [{ from: 'c', to: 'r' }, { from: 'r', to: 'p' }, { from: 'r', to: 'f' }],
+  }, { initialContext: 'x' });
+  assert.ok(ids(events, 'step_completed').includes('p'), '"URGENT" must match case "urgent"');
+});
+
+test('on_error: retry:N means N EXTRA attempts, not N total', async () => {
+  let tries = 0;
+  const failing = { invoke: async () => { tries++; throw new Error('always'); } };
+  await runAll(new FlowTester({ nodeTypes, llm: failing, channelRegistry: stubChannels() }), {
+    nodes: [
+      { id: 'x', type: 'llm', config: { prompt: 'go' }, on_error: { retry: 2 } },
+      { id: 'd', type: 'deliver', config: { channel: 'in_app' } },
+    ],
+    edges: [{ from: 'x', to: 'd' }],
+  });
+  assert.equal(tries, 3, 'retry:2 = 3 attempts. An off-by-one here re-runs a non-idempotent write.');
+});
+
+test('validator: the branch/foreach/human MISSING_CONFIG rules all fire', () => {
+  const noOn = validator.validate(spec(
+    [{ id: 'r', type: 'branch', config: { cases: [{ when: '*', to: 'd' }] } },
+     { id: 'd', type: 'deliver', config: { channel: 'in_app' } }],
+    [{ from: 'r', to: 'd' }]));
+  assert.ok(codesOf(noOn).includes('MISSING_CONFIG'), 'a branch with no `on`');
+
+  const noCases = validator.validate(spec(
+    [{ id: 'r', type: 'branch', config: { on: 'd.output' } },
+     { id: 'd', type: 'deliver', config: { channel: 'in_app' } }],
+    [{ from: 'r', to: 'd' }]));
+  assert.ok(codesOf(noCases).includes('MISSING_CONFIG'), 'a branch with no cases');
+
+  const noTarget = validator.validate(spec(
+    [{ id: 'c', type: 'llm', config: { mode: 'classify', categories: 'a\nb' } },
+     { id: 'r', type: 'branch', config: { on: 'c.output', cases: [{ when: '*' }] } },
+     { id: 'd', type: 'deliver', config: { channel: 'in_app' } }],
+    [{ from: 'c', to: 'r' }, { from: 'r', to: 'd' }]));
+  assert.ok(codesOf(noTarget).includes('BRANCH_CASE_NO_TARGET'), 'a case with no `to`');
+
+  const noSteps = validator.validate(spec(
+    [{ id: 'l', type: 'foreach', config: { over: 'd.output' } },
+     { id: 'd', type: 'deliver', config: { channel: 'in_app' } }],
+    [{ from: 'l', to: 'd' }]));
+  assert.ok(codesOf(noSteps).includes('MISSING_CONFIG'), 'a foreach with no steps');
+
+  const badMax = validator.validate(spec(
+    [{ id: 'l', type: 'foreach', config: { over: 'd.output', maxItems: 0, steps: [{ id: 's', type: 'llm', config: { prompt: 'x' } }] } },
+     { id: 'd', type: 'deliver', config: { channel: 'in_app' } }],
+    [{ from: 'l', to: 'd' }]));
+  assert.ok(codesOf(badMax).includes('INVALID_MAX_ITEMS'), 'maxItems: 0');
+
+  const oneDecision = validator.validate(spec(
+    [{ id: 'h', type: 'human', config: { prompt: 'ok?', decisions: ['approve'] } },
+     { id: 'd', type: 'deliver', config: { channel: 'in_app' } }],
+    [{ from: 'h', to: 'd' }]));
+  assert.ok(codesOf(oneDecision).includes('MISSING_CONFIG'), 'a single-answer question is not a decision');
+
+  const routeToGhost = validator.validate(spec(
+    [{ id: 'l', type: 'foreach', config: { over: 'd.output',
+        steps: [{ id: 's', type: 'llm', config: { prompt: 'x' }, on_error: { then: 'route_to:d' } }] } },
+     { id: 'd', type: 'deliver', config: { channel: 'in_app' } }],
+    [{ from: 'l', to: 'd' }]));
+  assert.ok(codesOf(routeToGhost).includes('ON_ERROR_IN_FOREACH'), 'route_to inside a loop');
 });

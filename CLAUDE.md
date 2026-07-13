@@ -289,7 +289,8 @@ refactor them without an explicit decision recorded here:
     thing and the customer received a different, mutilated one**, ending in `…(truncated)`, with no
     error and a `run_completed`. ~400 words is nothing for a drafted reply, so every real approval
     would have resumed on corrupt state. The run now emits an explicit **`checkpoint`** on
-    `run_paused` (`{outputs, skipped, lastOutput}`, full fidelity), persisted to
+    `run_paused` (`{outputs, skipped, live, ruledOut, lastOutput}` — the last two are load-bearing, see
+    below — full fidelity), persisted to
     `workflow_runs.checkpoint`; it is written only on a pause, so it costs nothing on runs that
     never pause. **Rule: anything reading back a persisted step gets a DISPLAY COPY, not the live
     value.** (Found by the independent verifier. converger-v2 §7.4 asserted the opposite and is
@@ -313,9 +314,16 @@ refactor them without an explicit decision recorded here:
     rather than by anyone remembering to mirror the next column. Verified against a prod-shaped
     legacy DB: 653 rows and all 653 `read_at` values preserved, and `init()` twice is a no-op.
   - `src/workflows/idempotency-store.js` (new) — SHA-256 of the resolved key, scoped
-    `workflowId:nodeId`. **A node declaring an idempotency key with no store wired REFUSES to
-    run** — a step that claims to deduplicate and silently doesn't is worse than one that never
-    claimed to. Wired in `server.js` (`IDEMPOTENCY_DB`).
+    **`tenantId:workflowId:[foreachId/]nodeId`**. **A node declaring an idempotency key with no
+    store wired — or with no tenant/workflow to scope it to — REFUSES to run.** Both are
+    fail-closed, and the second one is why: the scope was originally
+    `` `${workflowId ?? 'unscoped'}:${node.id}` ``, and **neither production caller passed
+    `workflowId`**, so every tenant collapsed into one namespace (`unscoped:create_record`) in a
+    store with no tenant column — tenant B's write was silently skipped and **tenant B's step was
+    handed tenant A's output**, which then becomes `lastOutput` and is delivered. A cross-tenant
+    leak, out of a `??` default. **A silent fallback is not a safety net; it is the bug.** Wired in
+    `server.js` (`IDEMPOTENCY_DB`); the scheduler and the REST run path both pass
+    `tenantId`/`workflowId`.
   - `src/workflows/workflow-validator.js` — `NON_EXHAUSTIVE_BRANCH` (every branch needs a `*`;
     without one an unanticipated value matches nothing and the workflow **silently does nothing**,
     which is the most expensive failure a router has and is invisible exactly when it matters),
@@ -630,6 +638,43 @@ Deploying is outward-facing: do it only when the operator asks. Committing/pushi
   in the commit.
 - **Don't parallelize the converger.** Phases 0–3 + the spine are serial.
   Worktree-isolate only the independent connectors and the greenfield UI surfaces.
+
+## The verification system had an architectural flaw. Three, actually. (2026-07-13)
+
+P12 Increment B failed independent verification **seven times**, ~20 real defects, and **every
+single one reached candidate state behind a fully green suite**. That is not bad luck or
+sloppiness — it is three structural holes, and they are worth naming because they apply to every
+phase, not just this one.
+
+1. **The gate measured the EXISTENCE of tests, not their POWER.** `p12.sh` checked that a test
+   file exists, that it passes, and grepped the validator for symbol names. **A suite of 70 tests
+   that cannot fail satisfies that perfectly.** So "gate green" and "code correct" were only weakly
+   correlated — which is exactly what seven rounds demonstrated.
+   → **Fixed:** `scripts/checks/mutation-guard.mjs` re-introduces each historical defect and
+   requires the suite to FAIL. It runs **inside the gate**. A guard whose mutation survives is a
+   guard nothing pins, and the next person can delete it with the gate still smiling. It earned
+   its keep on its first run, immediately finding a survivor.
+
+2. **The tests exercised a configuration production never uses.** Every idempotency test
+   constructed `FlowTester` directly and hand-passed a `workflowId` that **no production caller
+   passed** — so the scope silently degraded to `unscoped:<nodeId>` in a store with no tenant
+   column, and one tenant's step was handed **another tenant's output**. A unit test on the engine
+   **cannot see that class of bug by construction**: the mutant and the original behave identically
+   when the test supplies what production omits.
+   → **Fixed two ways:** the scope is now **fail-closed** (no `?? 'unscoped'` — a step that cannot
+   be scoped refuses to run), and `control-flow.test.js` asserts the **production call path**
+   (what the scheduler and the REST route actually pass), hand-passing nothing.
+   **Rule: a `??` default on a security-relevant value is not a safety net — it is the bug.**
+
+3. **The builder writes both the code and the tests**, so they share blind spots. Mutation testing
+   was meant to break that, but the builder also chose the mutations — and twice published a false
+   score ("7/7", "11/11") that an independent verifier falsified by writing a wider list.
+   → **Mitigated:** the mutation list now lives in the repo, in the gate, where a verifier can
+   extend it — and CLAUDE.md forbids quoting a mutation score in a doc (see the note in the P12
+   increment-B entry). It is not fully fixed: the deep fix is for the *verifier* to own the pinning
+   tests, not the builder.
+
+**The one-line lesson: a green suite is evidence of nothing until you have watched it go red.**
 
 ## Agents & gate enforcement
 
