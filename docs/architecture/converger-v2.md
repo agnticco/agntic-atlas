@@ -316,24 +316,46 @@ Keep `analyze`/`clarify`/`propose` for the v1 path until increment C is green (s
 
 ## 4. DELTA: `src/workflows/` (engine)
 
-### `flow-tester.js` — conditional execution
-Today: topo-sort → run every node. Needed: a node may be **skipped**.
+### `flow-tester.js` — conditional execution — **DONE (Increment B)**
 
-- Add an `active: Set<nodeId>` to the run context. Initially all nodes.
-- `branch` evaluates `on`, selects exactly **one** case, and marks the subtrees of the
-  non-selected cases inactive.
-- A node whose parents are **all** inactive → status `skipped` (**not** `error`).
-- **A spec with no `branch`/`foreach`/`human` must execute byte-identically to today.** This is
-  the non-regression contract; P2/P3 prove it.
+**Liveness is tracked on EDGES, not on a node-level `active` set** — this section originally
+specified the latter, and it is wrong. A node-level "all my parents are inactive ⇒ skip me" rule
+gets **joins** wrong: a node downstream of BOTH the taken and the untaken path has one inactive
+parent and one active one, and would be skipped by any rule phrased over parent *nodes*. In the
+canonical approve/reject shape — `branch → send | drop`, both feeding a final `notify` — that
+silently deletes the notify step. So:
+
+- An **edge** is live once its source completes. Out of a `branch`, only the selected case's edge
+  goes live; the rest stay dark.
+- A node is **skipped** iff it has at least one incoming edge and **none** of them is live. A root
+  (no incoming edges) always runs. A join runs as soon as **one** incoming edge is live — which is
+  the correct semantics, and the one BPMN uses.
+- **A ruled-out branch target is DEAD, not merely unlit.** Liveness alone is not enough: if an
+  untaken case target also has an edge from some earlier node, *that* edge is live whichever way
+  the branch went, so the step would run anyway and **the branch would have decided nothing**. The
+  engine therefore marks non-selected case targets dead outright, and the validator rejects the
+  ambiguous shape at build time (`BRANCH_TARGET_EXTRA_PARENT`) — a case target must be reachable
+  **only** through its branch. To use another step's data, reference it with `{{stepId.output}}`;
+  a template needs no edge.
+- A skipped node emits `step_skipped` — **not** `step_failed`. It is not a casualty.
+- **§11.2 then holds structurally, not by promise:** with no `branch` in the spec every edge goes
+  live the instant its source completes, nothing is ever skipped, and the loop reduces to exactly
+  the old one. `tests/workflows/control-flow.test.js` asserts the event sequence is unchanged.
 
 ### New node types (`src/workflows/node-types/`)
-| Type | `run(cfg, ctx, services)` behaviour |
+| Type | `run(cfg, ctx, services)` behaviour | Status |
+|---|---|---|
+| `branch` | Evaluate `on`; select one `case`; the rest of the edges stay dark. Matching is exact-value only — no expressions. An expression language here would be undecidable, which deletes the completeness proof; ranges belong in a `decision` table, where they can be gap-analysed. | **DONE (B)** |
+| `foreach` | Iterate `over` a collection, binding `{{item}}`/`{{index}}`; collect outputs. **`maxItems` (default 100)**. The bound really stops the work, and the truncation is **reported** (`truncated`, `skipped`) — a loop that quietly processed 100 of your 500 rows is worse than one that failed. One level; no nesting (§12). | **DONE (B)** |
+| `human` | **Durable pause.** Run status `awaiting_human`; resume from the run's `checkpoint` (NOT the persisted steps — see §7.4). The ENGINE half is built; the ask-delivery and the authentication of the answer are **Increment D**. **Full design: §7 — read it before touching this.** | **engine DONE (B)**; channels D |
+| `decision` | Evaluate `inputs` (LLM inputs = **classify into the declared enum**, one call per fuzzy input for auditability), match `rules` under `hitPolicy`, return the output value. Emit which rule fired → audit trail. | E |
+| `wait` | Timer. | not built — no gate check and nothing needs it yet |
+
+### Node attributes — **DONE (Increment B)**
+| Attribute | Behaviour |
 |---|---|
-| `decision` | Evaluate `inputs` (LLM inputs = **classify into the declared enum**, one call per fuzzy input for auditability), match `rules` under `hitPolicy`, return the output value. Emit which rule fired → audit trail. |
-| `branch` | Evaluate `on`; select one `case`; deactivate the rest. |
-| `foreach` | Iterate `over` a collection, binding `{{item}}`; collect outputs. **`maxItems` (default 100)** — a runaway `foreach` over a web node is a cost incident. |
-| `human` | **Durable pause + multi-channel approval gate.** Run status `awaiting_human`; ask over Slack / in-app inbox / signed email link; resume from persisted steps. **Full design: §7 — read it before touching this.** |
-| `wait` | Timer. |
+| `on_error: { retry, retry_delay_ms, then }` | `retry` = EXTRA attempts (`retry: 2` ⇒ up to 3 tries). `then: 'route_to:<id>'` lights that edge and the run **continues** down a declared failure path — the happy path stays dark. `then: 'escalate'` still fails the run but **flags** it (`escalated: true`) rather than losing it in a log; Increment D turns that flag into an Approvals-inbox item. It deliberately does NOT pause — a pause nobody can answer is a hang. |
+| `idempotency: { key, on_conflict }` | Backed by `src/workflows/idempotency-store.js` (SHA-256 of the resolved key, scoped `workflowId:nodeId`). `skip` (default) does not re-run and hands back the FIRST run's output, so downstream steps still have their input. `update` re-runs; `error` fails loudly. **A node that declares a key with no store wired refuses to run** — a step that claims to deduplicate and silently doesn't is worse than one that never claimed to. |
 
 ### `llm.js` — add `mode` — **DONE (Increment A)**
 `mode: summarize | extract | rewrite | classify | freeform`. `summarize.js`, `extract.js`,
@@ -376,10 +398,14 @@ where "just talk to it" dies.
 | `UNKNOWN_LLM_MODE` | `llm.mode` ∈ the five modes | typo'd mode | **DONE (A)** |
 | `UNSATISFIED_ASSERTION` | every `outcome.assertions[]` maps to ≥1 node that satisfies it | **#1** | C |
 | `LLM_INPUT_NOT_ENUM` | a `decision` input with `evaluator:'llm'` **must** be `type:'enum'` with `values` | **protects the moat** | C |
-| `NON_EXHAUSTIVE_BRANCH` | every `branch` has a `*` case | **#5** | B |
+| `NON_EXHAUSTIVE_BRANCH` | every `branch` has a `*` case | **#5** | **DONE (B)** |
+| `BRANCH_CASE_NO_EDGE` | a case's target must have an edge from the branch — without one it sorts BEFORE the branch topologically and runs unconditionally, so the routing silently does nothing | silent no-op routing | **DONE (B)** |
+| `BRANCH_TARGET_EXTRA_PARENT` | a case target must be reachable ONLY through its branch — a second incoming edge is live whichever way the branch went, so the step runs even when it was ruled out | a branch that decides nothing | **DONE (B)** |
+| `ON_ERROR_ROUTE_NO_EDGE` · `ON_ERROR_BAD_TARGET` | `route_to:<id>` needs an edge from the failing node (which is what guarantees the target sorts *after* it) — without one the failure path never runs and the workflow reports **success** | an unhandled error reported as a success | **DONE (B)** |
+| `NESTED_FOREACH` · `HUMAN_IN_FOREACH` | one loop level (§12); a pause inside a loop would need one durable pause per item, and the resume model is per-RUN | a loop that pauses on item 1 and never processes 2..N | **DONE (B)** |
 | `DECISION_TABLE_GAP` | enumerable inputs fully covered, or a catch-all rule exists | **#5** | E |
 | `UNIQUE_HIT_OVERLAP` | `hitPolicy: UNIQUE` but rules overlap | **#5** | E |
-| `WRITE_WITHOUT_IDEMPOTENCY` | **warning** on write capabilities lacking `idempotency` | duplicate records | B |
+| `WRITE_WITHOUT_IDEMPOTENCY` | **warning** on write capabilities lacking `idempotency` | duplicate records | **DONE (B)** |
 
 `UNKNOWN_CONFIG_KEY` is the highest-leverage check: it turns "the converger hallucinated a
 field" from a silent production failure into a build-time error.
@@ -631,16 +657,43 @@ mirrors it exactly:
 
 ### 7.4 Durable pause — the engine mechanics
 
-**No StateGraph checkpointer is needed, and adding one would be a mistake.**
-`WorkflowStore.appendStep()` (`src/workflows/workflow-store.js:738`) already persists every
-node's result to `workflow_runs.steps`. The DAG is deterministic and topologically ordered.
+**No StateGraph checkpointer is needed, and adding one would be a mistake.** The DAG is
+deterministic and topologically ordered, so the checkpoint is a plain object.
+
+> ⚠️ **CORRECTED (Increment B).** This section used to say the checkpoint *was*
+> `workflow_runs.steps` — "appendStep already persists every node's result". **That is false, and
+> it silently corrupted the work product.** `steps` holds the **display-shrunk event stream**:
+> `_shrinkOutput` truncates at 2000 chars, appends a literal `…(truncated)`, and JSON-encodes
+> objects, so the UI isn't flooded. Resuming from it meant a 3363-char drafted email came back as
+> 2013 chars — **the person approved one thing and the customer received a different, mutilated
+> one**, with no error and `run_completed`. 2000 chars is ~400 words; a routine drafted reply
+> exceeds it, so *every* real approval would have resumed on corrupt state.
+>
+> The run therefore emits an explicit **`checkpoint`** on `run_paused` —
+> `{ outputs, skipped, live, ruledOut, lastOutput }`, **full fidelity, un-shrunk** — which the
+> scheduler stores in
+> `workflow_runs.checkpoint`. It is written only on a pause, so it costs nothing on runs that never
+> pause. `steps` remains the UI/history record and is **not** resume state.
+>
+> **The rule: anything that reads back a persisted step gets a display copy, not the live value.**
+
 Therefore:
 
 - Run status **`awaiting_human`** (new).
 - **On pause:** persist, emit the asks, return. The run holds **no compute** while it waits —
   a pending approval is free.
-- **On resume:** rehydrate `ctx.outputs` from the persisted steps, inject the decision as the
-  `human` node's output, and continue the topological order from the next node.
+- **On resume:** rehydrate `ctx.outputs` from the **checkpoint** (not the steps — see the box
+  above), inject the decision as the `human` node's output, and continue the topological order from
+  the next node.
+  - ⚠️ Nodes **skipped** before the pause must be tracked separately from **completed** ones
+    (`skipped[]` in the checkpoint). Lump them together and a skipped node relights its own
+    children on the way back through, reviving a dead subtree the branch had ruled out.
+  - ⚠️ **A `branch` and a `human` are CONTROL nodes: their output is never `lastOutput`.** A
+    branch's output is `{value, matched, to}` and a human's is `{decision, by, at, channel}` —
+    routing and audit metadata, not the work product. `deliver` sends `ctx.lastOutput`, so leaving
+    them in means the delivery after an approval sends the literal
+    `{"decision":"approve","by":"user:1",…}` to the customer instead of the reply that was
+    approved. The content is the draft **above** the approval.
 - **The scheduler must skip `awaiting_human` runs** — it must not re-fire them.
 - A **timeout sweeper** (on the existing 60 s scheduler tick) fires `timeout.then` when
   `now > expires_at`.
@@ -732,11 +785,37 @@ gaps) and a shape-derivation call.
   one now in the test: every node/config **shape** that appears anywhere across those 57 specs must
   still validate. That is a superset of the one live prod workflow, and it is what was verified.
 
-### Increment B — engine control flow *(the big engine lift)*
-- `active`-set + `branch` (+ exhaustiveness) · `on_error` · `idempotency`.
-- **Acceptance:** a spec with a `branch` runs only the selected path; a spec **without** one
-  executes byte-identically to today (P2/P3 prove it); a re-fired trigger with `idempotency`
-  does not duplicate a record.
+### Increment B — engine control flow *(the big engine lift)* — ✅ **DONE**
+- Edge liveness (NOT an `active` set — see §4) + `branch` (+ `NON_EXHAUSTIVE_BRANCH`) + `foreach`
+  + the `human` durable pause · `on_error` · `idempotency`.
+- **Acceptance:** ✅ a spec with a `branch` runs only the selected path and **skips** the other
+  (`step_skipped`, not `step_failed`); ✅ a join downstream of both paths still runs; ✅ a spec
+  **without** a branch executes byte-identically (asserted on the exact event sequence); ✅ a
+  re-fired trigger with `idempotency` does not write twice; ✅ `human` pauses and resumes from the
+  **checkpoint** without re-running — or re-paying for — earlier work, and what it delivers is
+  byte-identical to what the person approved.
+  All in `tests/workflows/control-flow.test.js`. **Every guard is mutation-tested** — the bug is
+  re-introduced and a test must fail — because a green suite proved nothing six times running here.
+  Do not trust a mutation score quoted in a doc (two were published and both were falsified by an
+  independent verifier writing a wider list); re-derive it.
+
+  **`live` and `ruledOut` are load-bearing checkpoint fields, not bookkeeping.** The edge liveness
+  is RESTORED from the checkpoint and never re-derived: replaying `propagate()` for an already-done
+  node lights ALL of its outgoing edges, while the original leg may have lit only SOME (a `branch`
+  lights one case; an `on_error: route_to` lights only the error target). Re-deriving revived the
+  ruled-out branch *and* revived the happy path of a step that had FAILED — a declined charge still
+  sent the receipt. If you build a `{outputs, skipped, lastOutput}` checkpoint from an older draft
+  of this section, you will re-create exactly that bug.
+- **Also landed, because the pause is worthless without them:** `workflow_runs.status` gains
+  `awaiting_human` (CHECK-constraint rebuild, mirroring the existing `_migrateStatusCheckIfNeeded`
+  precedent; 653 production run rows preserved), plus `paused_node` / `pending_ask` columns, and
+  `WorkflowScheduler` parks a run on `run_paused` instead of leaving it in `running` forever. It
+  also persists `step_skipped` / `step_retry` / `step_routed` for the run history. **The persisted
+  steps are NOT the checkpoint** — see the box in §7.4; they are display-shrunk, and resuming from
+  them truncated the work product.
+- **A `human` node is unreachable by design until Increment D.** The converger does not emit one
+  and the builder cannot add one, so no user workflow can park itself waiting for a question
+  nobody will ever be asked. D builds the surface that asks it.
 
 ### Increment C — converger v2 core + outcome/gap UI *(the moat)*
 - `outcome` + `examples` + `decisions` + `process` + `gaps` graph nodes.
@@ -800,7 +879,7 @@ gaps) and a shape-derivation call.
 | Layer | What | Where |
 |---|---|---|
 | Unit | `scoreGap()` over crafted specs: unsatisfied assertion · table gap · UNIQUE overlap · non-exhaustive branch · unknown config key | `tests/converger/gap-oracle.test.js` |
-| Unit | Executor: `branch` skips the non-selected subtree; `foreach` bounds at `maxItems`; `human` pauses and **resumes from persisted steps** | `tests/workflows/control-flow.test.js` |
+| Unit | Executor: `branch` skips the non-selected subtree; `foreach` bounds at `maxItems`; `human` pauses and **resumes from the checkpoint**, delivering exactly what was approved | `tests/workflows/control-flow.test.js` |
 | Unit | **Approvals:** token is stored hashed · single-use (replay rejected) · TTL expiry · approve/reject tokens are distinct and mutually invalidating · timeout takes the declared path | `tests/approvals/approval-store.test.js` |
 | Security | **Forged approvals:** unsigned Slack `block_actions` rejected · a token from tenant A cannot resolve a run in tenant B · `email_reply` rejected by the validator | `scripts/checks/approval-adversarial.mjs` |
 | Golden | Corpus of `outcome → spec` pairs. Assert **structural** equivalence + gap-freedom. **Never byte-equality.** | `tests/converger/golden/*.json` |

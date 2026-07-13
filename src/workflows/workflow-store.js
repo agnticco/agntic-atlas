@@ -48,7 +48,10 @@ CREATE TABLE IF NOT EXISTS workflow_runs (
   workflow_id    TEXT NOT NULL REFERENCES workflows(id) ON DELETE CASCADE,
   started_at     TEXT NOT NULL,
   completed_at   TEXT,
-  status         TEXT NOT NULL DEFAULT 'running' CHECK(status IN ('running','success','error')),
+  -- 'awaiting_human': paused on a human step (P12 Increment B, converger-v2 7.4).
+  -- A run waiting on a person is not running, not a success, and not an error --
+  -- and leaving it 'running' would get it swept up as a stale run.
+  status         TEXT NOT NULL DEFAULT 'running' CHECK(status IN ('running','success','error','awaiting_human')),
   output         TEXT,
   error          TEXT,
   is_test        INTEGER NOT NULL DEFAULT 0,
@@ -101,6 +104,18 @@ const ADDITIVE_RUN_COLUMNS = [
   { col: 'warnings',          type: 'TEXT' },
   { col: 'error_explanation', type: 'TEXT' },
   { col: 'time_saved_minutes', type: 'REAL' },
+  // P12 Increment B — the durable pause (§7.4). When a `human` step stops a run,
+  // `paused_node` is the step waiting and `pending_ask` is what the person is
+  // being asked. The RESUME STATE is the `checkpoint` column below — NOT `steps`,
+  // which holds the display-shrunk event stream.
+  { col: 'paused_node',       type: 'TEXT' },
+  { col: 'pending_ask',       type: 'TEXT' },
+  // The resume CHECKPOINT — full-fidelity node outputs, written once when the
+  // run pauses. Deliberately NOT the `steps` blob: that carries the
+  // display-shrunk event stream (truncated at 2000 chars, objects JSON-encoded),
+  // and resuming from it silently delivered mutilated content. See
+  // flow-tester.js, run().
+  { col: 'checkpoint',        type: 'TEXT' },
 ];
 
 export class WorkflowStore {
@@ -143,6 +158,11 @@ export class WorkflowStore {
     // flow-kind state. SQLite can't alter a CHECK in place — so we rebuild
     // the table when we detect the older constraint.
     this._migrateStatusCheckIfNeeded();
+
+    // Same problem, different table: workflow_runs.status was capped to
+    // ('running','success','error'), and a run waiting on a person is none of
+    // those. Widen it to include 'awaiting_human' (P12 Increment B, §7.4).
+    this._migrateRunStatusCheckIfNeeded();
 
     // Drop the legacy global UNIQUE constraint on `slug` and replace with a
     // composite (user_id, slug) so each user owns a separate slug namespace.
@@ -356,6 +376,147 @@ export class WorkflowStore {
       this.db.exec(`CREATE INDEX IF NOT EXISTS idx_wf_status ON workflows(status);`);
     });
     tx();
+  }
+
+  /**
+   * Widen workflow_runs.status to include 'awaiting_human' (P12 Increment B).
+   *
+   * A run paused on a `human` step is neither running, nor a success, nor an
+   * error — it is waiting for a person, and it holds no compute while it does.
+   * Without its own status it would either sit in 'running' forever (and be
+   * swept up as a stale run) or be recorded as a failure, which it is not.
+   *
+   * Same probe-then-rebuild shape as _migrateStatusCheckIfNeeded above: SQLite
+   * cannot alter a CHECK in place. The copy is by SHARED COLUMN NAME, so the
+   * columns ADDITIVE_RUN_COLUMNS has already added survive the rebuild — this
+   * table carries production run history and must not lose a column.
+   */
+  _migrateRunStatusCheckIfNeeded() {
+    let needsMigration = false;
+    const probeId = `__probe_${Date.now()}__`;
+    try {
+      this.db.exec('BEGIN');
+      this.db.prepare(
+        `INSERT INTO workflow_runs (id, workflow_id, started_at, status)
+         SELECT ?, id, '0', 'awaiting_human' FROM workflows LIMIT 1`,
+      ).run(probeId);
+      // No workflows yet ⇒ nothing inserted ⇒ the CHECK was never exercised.
+      // Probe the constraint directly instead, with the FK deferred.
+      const inserted = this.db.prepare('SELECT 1 FROM workflow_runs WHERE id = ?').get(probeId);
+      this.db.exec('ROLLBACK');
+      if (!inserted) {
+        // Fall back to reading the DDL — cheap and exact.
+        const ddl = this.db.prepare(
+          "SELECT sql FROM sqlite_master WHERE type='table' AND name='workflow_runs'",
+        ).get()?.sql ?? '';
+        needsMigration = ddl.includes('CHECK') && !ddl.includes('awaiting_human');
+      }
+    } catch {
+      try { this.db.exec('ROLLBACK'); } catch { /* already rolled back */ }
+      needsMigration = true;
+    }
+    if (!needsMigration) return;
+
+    log.info('[workflow-store] migrating workflow_runs.status CHECK to include awaiting_human');
+    const tx = this.db.transaction(() => {
+      this.db.exec(`
+        CREATE TABLE workflow_runs_new (
+          id             TEXT PRIMARY KEY,
+          workflow_id    TEXT NOT NULL REFERENCES workflows(id) ON DELETE CASCADE,
+          started_at     TEXT NOT NULL,
+          completed_at   TEXT,
+          status         TEXT NOT NULL DEFAULT 'running'
+                         CHECK(status IN ('running','success','error','awaiting_human')),
+          output         TEXT,
+          error          TEXT,
+          is_test        INTEGER NOT NULL DEFAULT 0,
+          steps          TEXT,
+          tokens_in      INTEGER,
+          tokens_out     INTEGER,
+          cost_usd       REAL,
+          llm_calls      INTEGER,
+          user_id        TEXT,
+          tenant_id      TEXT,
+          warnings       TEXT,
+          error_explanation TEXT,
+          time_saved_minutes REAL,
+          paused_node    TEXT,
+          pending_ask    TEXT,
+          checkpoint     TEXT
+        );
+      `);
+      // ── Carry over EVERY column the old table had ─────────────────────────
+      // Copying only `newCols ∩ oldCols` silently DROPS any column the DDL above
+      // doesn't happen to list — and this table is not fully described by that
+      // DDL plus ADDITIVE_RUN_COLUMNS. `read_at` is added by its own one-off
+      // ALTER further down init() (search "ADD COLUMN read_at"), so on any
+      // database where a previous boot already added it, a name-intersection
+      // copy would drop it here and re-add it EMPTY moments later — a silent,
+      // unguarded data loss on a table holding production run history.
+      //
+      // So: adopt any unknown old column into the new table BEFORE copying.
+      // This is future-proof by construction — a column added anywhere else in
+      // init(), or by a migration written years from now, survives without
+      // anyone remembering to mirror it into the DDL above. A rebuild must never
+      // be able to lose data just because two pieces of code disagree about what
+      // the schema is.
+      const oldInfo = this.db.prepare('PRAGMA table_info(workflow_runs)').all();
+      const newCols = new Set(this.db.prepare('PRAGMA table_info(workflow_runs_new)').all().map(r => r.name));
+      for (const col of oldInfo) {
+        if (newCols.has(col.name)) continue;
+        log.warn(`[workflow-store] workflow_runs rebuild: carrying over unlisted column "${col.name}"`);
+        this.db.exec(`ALTER TABLE workflow_runs_new ADD COLUMN ${col.name} ${col.type || 'TEXT'}`);
+        newCols.add(col.name);
+      }
+
+      const shared = oldInfo.map(c => c.name).filter(c => newCols.has(c)).join(', ');
+      this.db.exec(`INSERT INTO workflow_runs_new (${shared}) SELECT ${shared} FROM workflow_runs;`);
+      this.db.exec('DROP TABLE workflow_runs;');
+      this.db.exec('ALTER TABLE workflow_runs_new RENAME TO workflow_runs;');
+      this.db.exec('CREATE INDEX IF NOT EXISTS idx_wr_workflow ON workflow_runs(workflow_id);');
+      this.db.exec('CREATE INDEX IF NOT EXISTS idx_wr_started  ON workflow_runs(started_at);');
+    });
+    tx();
+  }
+
+  /**
+   * Park a run on a `human` step.
+   *
+   * `checkpoint` is the resume state — full-fidelity node outputs plus the edge
+   * liveness as it stood. It is NOT `steps`: those carry the display-shrunk event
+   * stream (truncated at 2000 chars, objects JSON-encoded), and resuming from
+   * them delivered the customer a mutilated copy of what the person approved.
+   */
+  pauseRun(runId, nodeId, ask, checkpoint = null) {
+    this.db.prepare(
+      `UPDATE workflow_runs
+          SET status = 'awaiting_human', paused_node = ?, pending_ask = ?, checkpoint = ?
+        WHERE id = ?`,
+    ).run(nodeId, JSON.stringify(ask ?? null), JSON.stringify(checkpoint ?? null), runId);
+  }
+
+  /** Runs waiting on a person. Increment D's Approvals inbox reads this. */
+  listAwaitingHuman({ tenantId = null, workflowId = null } = {}) {
+    const where = ["status = 'awaiting_human'"];
+    const vals  = [];
+    if (tenantId)   { where.push('tenant_id = ?');   vals.push(tenantId); }
+    if (workflowId) { where.push('workflow_id = ?'); vals.push(workflowId); }
+    return this.db
+      .prepare(`SELECT * FROM workflow_runs WHERE ${where.join(' AND ')} ORDER BY started_at DESC`)
+      .all(...vals)
+      .map(r => ({
+        ...r,
+        steps: r.steps ? JSON.parse(r.steps) : [],
+        pending_ask: r.pending_ask ? JSON.parse(r.pending_ask) : null,
+        checkpoint:  r.checkpoint  ? JSON.parse(r.checkpoint)  : null,
+      }));
+  }
+
+  /** Flip a paused run back to running once a decision has been captured. */
+  markRunResumed(runId) {
+    this.db.prepare(
+      `UPDATE workflow_runs SET status = 'running', paused_node = NULL, pending_ask = NULL, checkpoint = NULL WHERE id = ?`,
+    ).run(runId);
   }
 
   _migrateStatusCheckIfNeeded() {

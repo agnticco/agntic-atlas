@@ -267,6 +267,169 @@ refactor them without an explicit decision recorded here:
     long-timeout path, but the registered id is `search_web` — so every web-search step had been
     silently getting the *short* timeout.
 
+- **Engine control flow (2026-07-13, P12 increment B)** — the engine could only run a DAG
+  straight through: no conditionals, no loops, no pause, no retry, no dedupe. It now has all five.
+  New node types `branch` / `foreach` / `human` (`src/workflows/node-types/`), plus two node-level
+  attributes, `on_error` and `idempotency`. `decision` is increment E; `wait` is unbuilt.
+  - **Liveness is tracked on EDGES, not nodes** — `src/workflows/flow-tester.js`. An edge goes
+    live when its source completes; out of a `branch`, only the selected case's edge does. A node
+    is skipped iff it has incoming edges and NONE is live. **The design doc originally specified a
+    node-level `active` set, and that is wrong**: it skips a JOIN (a node downstream of both the
+    taken and the untaken path has one live parent and one dead one, and any rule phrased over
+    parent *nodes* kills it). converger-v2.md §4 is corrected. A skipped node emits `step_skipped`,
+    never `step_failed` — it is not a casualty.
+  - **§11.2 falls out structurally**: with no `branch` in a spec, every edge goes live the instant
+    its source completes, nothing is skipped, and the loop is the old one. The test asserts the
+    exact event sequence is unchanged — that is what protects the workflows already in production,
+    none of which use control flow.
+  - **THE PERSISTED STEPS ARE NOT THE CHECKPOINT.** `workflow_runs.steps` holds the
+    **display-shrunk event stream**: `_shrinkOutput` truncates at 2000 chars, appends a literal
+    `…(truncated)`, and JSON-encodes objects, so the UI isn't flooded. The first design resumed
+    from it — and a 3363-char drafted email came back as 2013 chars, so **the person approved one
+    thing and the customer received a different, mutilated one**, ending in `…(truncated)`, with no
+    error and a `run_completed`. ~400 words is nothing for a drafted reply, so every real approval
+    would have resumed on corrupt state. The run now emits an explicit **`checkpoint`** on
+    `run_paused` (`{outputs, skipped, live, ruledOut, lastOutput}` — the last two are load-bearing, see
+    below — full fidelity), persisted to
+    `workflow_runs.checkpoint`; it is written only on a pause, so it costs nothing on runs that
+    never pause. **Rule: anything reading back a persisted step gets a DISPLAY COPY, not the live
+    value.** (Found by the independent verifier. converger-v2 §7.4 asserted the opposite and is
+    corrected.)
+  - **`branch` and `human` are CONTROL nodes — their output never becomes `lastOutput`.** A
+    branch's output is `{value, matched, to}`, a human's is `{decision, by, at, channel}`. `deliver`
+    sends `ctx.lastOutput`, so leaving them in meant the step after an approval delivered the
+    literal `{"decision":"approve",…}` to the customer instead of the approved reply. **This holds
+    on BOTH executors** — the top-level loop (`flow-tester.js`, `CONTROL_TYPES`) *and* the `foreach`
+    sub-loop, which has its own executor (`foreach.js`, `CONTROL_SUBSTEP_TYPES`). The sub-loop was
+    missed at first: a validator-clean spec with a `branch` inside a `foreach` delivered
+    `{"value":…,"viaCatchAll":true}` to the customer once per item (found by the independent
+    verifier, round 8). A `branch` in a loop is now **rejected** (`BRANCH_IN_FOREACH`) — it is a
+    structural no-op there anyway (a loop has no edges, so nothing routes) — and the engine drops
+    control-node output from `last` regardless, since DB specs predate the rule.
+  - `src/workflows/workflow-store.js` — `workflow_runs.status` CHECK widened to include
+    **`awaiting_human`** (a run waiting on a person is not running, not a success, and not an
+    error; leaving it `running` gets it swept as stale). SQLite can't alter a CHECK in place, so
+    this is a probe-then-rebuild mirroring the existing `_migrateStatusCheckIfNeeded`. New columns
+    `paused_node`, `pending_ask`; new methods `pauseRun` / `listAwaitingHuman` / `markRunResumed`.
+    **A table rebuild must carry over EVERY column the old table had — not just the ones its DDL
+    lists.** The first version copied `newCols ∩ oldCols`, which is a silent column-stripper: this
+    table is *not* fully described by its `CREATE TABLE` plus `ADDITIVE_RUN_COLUMNS` — `read_at` is
+    added by its own one-off `ALTER` further down `init()`, **after** the rebuild — so on any
+    database where a previous boot had added it, the rebuild dropped it and re-added it empty. The
+    independent verifier reproduced it on the real 653-row DB. The rebuild now `ALTER`s any unknown
+    old column into the new table before copying, so the whole class is closed by construction
+    rather than by anyone remembering to mirror the next column. Verified against a prod-shaped
+    legacy DB: 653 rows and all 653 `read_at` values preserved, and `init()` twice is a no-op.
+  - `src/workflows/idempotency-store.js` (new) — SHA-256 of the resolved key, scoped
+    **`tenantId:workflowId:[foreachId/]nodeId`**. **A node declaring an idempotency key with no
+    store wired — or with no tenant/workflow to scope it to — REFUSES to run.** Both are
+    fail-closed, and the second one is why: the scope was originally
+    `` `${workflowId ?? 'unscoped'}:${node.id}` ``, and **neither production caller passed
+    `workflowId`**, so every tenant collapsed into one namespace (`unscoped:create_record`) in a
+    store with no tenant column — tenant B's write was silently skipped and **tenant B's step was
+    handed tenant A's output**, which then becomes `lastOutput` and is delivered. A cross-tenant
+    leak, out of a `??` default. **A silent fallback is not a safety net; it is the bug.** Wired in
+    `server.js` (`IDEMPOTENCY_DB`); the scheduler and the REST run path both pass
+    `tenantId`/`workflowId`.
+  - `src/workflows/workflow-validator.js` — `NON_EXHAUSTIVE_BRANCH` (every branch needs a `*`;
+    without one an unanticipated value matches nothing and the workflow **silently does nothing**,
+    which is the most expensive failure a router has and is invisible exactly when it matters),
+    `BRANCH_CASE_NO_EDGE`, `BRANCH_TARGET_EXTRA_PARENT`, `ON_ERROR_ROUTE_NO_EDGE`,
+    `ON_ERROR_BAD_TARGET`, `NESTED_FOREACH`, `HUMAN_IN_FOREACH`, `WRITE_WITHOUT_IDEMPOTENCY`
+    (warning). Branch rules live in the validator, not in `branch.js`'s `validate(node)` hook,
+    because they need the **edge list**.
+  - **A ruled-out branch target is DEAD, not merely unlit.** Edge-liveness alone has a hole: if an
+    untaken case target *also* has an edge from an earlier node, that edge is live whichever way
+    the branch went — so the step runs anyway and **the branch decides nothing**. The engine marks
+    non-selected case targets dead outright, and `BRANCH_TARGET_EXTRA_PARENT` rejects the ambiguous
+    shape at build time. (Found by the independent verifier.) The engine does not rely on the
+    validator having run — specs already in the database predate the rule.
+  - **LIVENESS IS RESTORED FROM THE CHECKPOINT, NEVER RE-DERIVED.** The checkpoint carries
+    `{outputs, skipped, live, ruledOut, lastOutput}`, and a replayed node **propagates nothing**.
+    Re-running `propagate()` for already-done nodes is wrong, because it lights **all** of a node's
+    outgoing edges while the original leg may have lit only **some**: a `branch` lights one case,
+    and an `on_error: route_to` lights only the error target. Re-deriving therefore **revived the
+    path the branch ruled out** *and* **revived the HAPPY path of a step that had failed** — the
+    run went on to deliver as though the payment had not been declined. Liveness is a fact about
+    what happened, not something to recompute from outputs. (Both found by the independent
+    verifier; the second only surfaced when probing the first.)
+  - **`branch` / `human` outputs are never `lastOutput`, and never a transform's input.** Two
+    separate guards — `CONTROL_TYPES` in `flow-tester.js` (what `deliver` sends) and
+    `NON_CONTENT_TYPES` in `node-types/_node-input.js` (what an `llm` step ingests). Miss either
+    and the approval record `{"decision":"approve","by":"user:1",…}` reaches the customer, or the
+    model.
+  - **Never use an unprintable character as a separator.** The branch/edge lookup key was first
+    built with a literal **NUL** (`${from}\0${to}`) — invisible in an editor and in a diff — and it
+    silently failed to match the one site that used a space, so `ON_ERROR_ROUTE_NO_EDGE` fired on
+    *every* `route_to` and the feature was unpublishable. This is the same class as the `server.js`
+    NUL in Known gotchas below. `tests/workflows/control-flow.test.js` now fails if **any** file
+    under `src/` contains a NUL byte.
+  - **A GREEN SUITE PROVED NOTHING FOUR TIMES RUNNING. Mutation-test, don't trust the tick.** Every
+    defect in this increment reached `main`-candidate state behind a passing suite, because each
+    test passed *for the wrong reason*: the `route_to` test was **negative-only** (it would have
+    passed if the check were `if (true)`, and indeed the check was rejecting every *correct* spec);
+    the resume test's stub LLM returned **16 characters**, so it never crossed the 2000-char
+    truncation cap; and it asserted a delivery *ran*, never *what it sent*. Two guards
+    (`NON_CONTENT_TYPES`, the `doneSkipped` split) could be **deleted entirely with the suite still
+    green**. So: **every validator rule needs a POSITIVE case** (the good shape is *accepted*), and
+    **every guard must be mutation-tested** — re-introduce the bug and confirm a test actually
+    fails. **Do not quote a mutation score in a doc** — two rounds here published one ("7/7",
+    then "11/11") and an independent verifier falsified both by writing its own, wider list. A
+    score is a claim about tests you did not write. State the RULE and let the next verifier
+    re-derive the number.
+    **Mutation-test the guards you add in the FIX, not just the ones you started with.** Both false
+    scores came from exactly that: the round-4 fix introduced `checkpoint.ruledOut` and the
+    "don't recompute `lastOutput` on replay" rule, never re-tested them, and **both survived
+    deletion with the whole suite green** — dropping `ruledOut` let a ruled-out branch run and
+    deliver on resume, verbatim the bug that commit was written to kill.
+    **A test can be labelled `(pinned)` and not be pinned.** The `lastOutput` test said so in its
+    own name while a `draft` node in its fixture laundered the value and masked the mutation
+    entirely. Assert the DELIVERED BODY, put nothing between the step under test and the assertion,
+    and *run the mutation*.
+  - **`foreach` sub-steps must go through the same POLICY path as any other node.** They called the
+    raw dispatcher, which silently skipped **`idempotency` and `on_error.retry` for every step
+    inside a loop** — inverting the guarantee in the worst possible place. A write in a loop is N
+    writes per fire (the highest-risk write shape the engine has, and the whole reason `foreach`
+    exists), and it was the *only* shape where declaring an idempotency key did nothing: a sub-step
+    with a key and **no store wired wrote twice and reported success**, while the identical
+    top-level node refused to run.
+  - **A `foreach`'s `steps` must NOT be template-substituted before the loop.** They were, with no
+    item in scope, so `{{item}}` was replaced by an **empty string** before the first iteration —
+    meaning `{{item}}` never bound at all, and an idempotency key of `{{item}}` resolved to `""`
+    (falsy), skipping the dedupe check entirely. The test that "proved" `{{item}}` worked was
+    passing for the wrong reason: the item reached the prompt only via `llm`'s auto-injection of
+    `lastOutput`.
+  - **`BRANCH_BAD_ON`** — the value a branch routes on is the one thing the node exists to read, and
+    it was the one thing never checked. A one-letter typo (`clasify.output`) is not a template, so
+    `BAD_TEMPLATE_REF` never fired; the engine took it as a literal, nothing matched, and the
+    **mandatory catch-all then swallowed 100% of traffic — forever, silently, with
+    `run_completed`**. The catch-all that exists to prevent a silent misroute was *masking* one.
+    Rejected at build time.
+  - **A `branch`'s `on` is a REFERENCE, not a template — it must stay RAW** (same carve-out as a
+    `foreach`'s `steps`). The first fix for `BRANCH_BAD_ON` shipped two regressions, both of which
+    crashed *valid* workflows, and both because `_runNode` substitutes config before the node sees
+    it:
+    - `on: "{{classify.output}}"` — the mainline shape — arrived as the classified **value**
+      (`"urgent"`), which is indistinguishable from a step id, so the engine looked up a step called
+      "urgent" and killed the run. **Data-dependent**, which is worse: `"urgent"` matched the id
+      regex and crashed; `"needs review"` (a space) did not. Not one of the then-49 tests used the
+      braced form.
+    - The engine must distinguish **"no such step"** (a typo → fail loudly) from **"a real step that
+      didn't run on this leg"** (an upstream branch skipped it → take the **catch-all**, which is
+      exactly what a mandatory catch-all is *for*). Throwing on the latter failed a workflow the
+      validator correctly accepts. `ctx.nodeIds` is what tells them apart.
+  - **`scripts/gates/p12.sh` — one DESCRIPTION string changed** ("resumes from persisted steps" →
+    "resumes from its checkpoint"). **No check was altered.** Recorded here because a diff against
+    `scripts/` is exactly how a verifier detects a builder weakening their own gate — so it must
+    never be silent. Left as-is, the gate itself would have taught the next agent the lie.
+  - **`{{item}}` / `{{index}}` are bound ONLY inside a `foreach`.** Used anywhere else they are a
+    `BAD_TEMPLATE_REF` at build time, rather than an empty string at run time.
+  - **A `human` node is unreachable by design until increment D.** The engine pauses correctly, but
+    nothing DELIVERS the ask yet (Slack buttons, signed magic links, the Approvals inbox are D).
+    The converger doesn't emit one and the builder can't add one, so no user workflow can park
+    itself waiting for a question nobody will ever be asked. **Do not surface `human` in the
+    converger prompt or the builder until D lands.**
+
 ## Support tickets (in-app feedback / bug reporting) — added 2026-07-08
 
 Users submit bugs/ideas/requests from a floating **Feedback** button in the operator
@@ -339,8 +502,8 @@ spec is actually executable, not just structurally similar to the frozen file.
   should convert to mrkdwn; SMS/webhooks should strip all markup. Fix belongs in each
   capability's `handle` in `src/connectors/*/index.js`, not in the LLM prompt.
 
-- **The node library is `trigger · llm · assemble · connector-action · search_web · deliver`
-  (P12 increment A, 2026-07-13).** `tool` / `mcp_tool` / `fetch` **no longer exist** — they were
+- **The node library is `trigger · llm · assemble · connector-action · search_web · deliver`, plus
+  the control-flow types `branch · foreach · human` (P12 increments A + B, 2026-07-13).** `tool` / `mcp_tool` / `fetch` **no longer exist** — they were
   deleted, and the validator now rejects them by name (`REMOVED_NODE_TYPE`). They were never
   runnable: there is no `ToolRegistry` (no `src/tools/`, never instantiated) and `FlowTester` is
   built without `tools`, so they threw at run time; now they fail at build time instead.
@@ -483,6 +646,68 @@ Deploying is outward-facing: do it only when the operator asks. Committing/pushi
 - **Don't parallelize the converger.** Phases 0–3 + the spine are serial.
   Worktree-isolate only the independent connectors and the greenfield UI surfaces.
 
+## The verification system had an architectural flaw. Three, actually. (2026-07-13)
+
+P12 Increment B failed independent verification **seven times**, ~20 real defects, and **every
+single one reached candidate state behind a fully green suite**. That is not bad luck or
+sloppiness — it is three structural holes, and they are worth naming because they apply to every
+phase, not just this one.
+
+1. **The gate measured the EXISTENCE of tests, not their POWER.** `p12.sh` checked that a test
+   file exists, that it passes, and grepped the validator for symbol names. **A suite of 70 tests
+   that cannot fail satisfies that perfectly.** So "gate green" and "code correct" were only weakly
+   correlated — which is exactly what seven rounds demonstrated.
+   → **Fixed:** `scripts/checks/mutation-guard.mjs` re-introduces each historical defect and
+   requires the suite to FAIL. It runs **inside the gate**. A guard whose mutation survives is a
+   guard nothing pins, and the next person can delete it with the gate still smiling. It earned
+   its keep on its first run, immediately finding a survivor.
+
+2. **The tests exercised a configuration production never uses.** Every idempotency test
+   constructed `FlowTester` directly and hand-passed a `workflowId` that **no production caller
+   passed** — so the scope silently degraded to `unscoped:<nodeId>` in a store with no tenant
+   column, and one tenant's step was handed **another tenant's output**. A unit test on the engine
+   **cannot see that class of bug by construction**: the mutant and the original behave identically
+   when the test supplies what production omits.
+   → **Fixed two ways:** the scope is now **fail-closed** (no `?? 'unscoped'` — a step that cannot
+   be scoped refuses to run), and `control-flow.test.js` asserts the **production call path**
+   (what the scheduler and the REST route actually pass), hand-passing nothing.
+   **Rule: a `??` default on a security-relevant value is not a safety net — it is the bug.**
+
+3. **The builder writes both the code and the tests**, so they share blind spots. Mutation testing
+   was meant to break that, but the builder also chose the mutations — and twice published a false
+   score ("7/7", "11/11") that an independent verifier falsified by writing a wider list. **A
+   self-authored mutation score is a tautology**: you can only mutate what you already thought of,
+   which is exactly what you already wrote tests for.
+   → **Fixed, both halves:**
+   - *Mechanically* — `scripts/checks/mutation-sweep.mjs` **generates** mutants across the engine
+     (every `if` → `true`/`false`, every `??` → no default, every `throw` → swallowed). The builder
+     is out of the loop: you cannot omit a mutation you did not think of when you are not choosing
+     them. It found real holes the curated list never touched — an untested `escalate` flag, the
+     untested branch/`foreach` throws, untested JSON-string paths. It runs **in the gate** with a
+     kill-rate **ratchet** (raise it, never lower it). The **survivor list is the coverage report**.
+   - *In process* — the new **`test-adversary`** agent (`.claude/agents/test-adversary.md`) writes
+     the pinning tests. It may write `tests/` and `scripts/checks/` and **must not touch `src/`**:
+     if a test cannot pass without a source change, that is a finding, reported and left failing.
+     **Spawn it after every Builder increment, before the verifier.** The Builder no longer grades
+     his own homework.
+
+**The one-line lesson: a green suite is evidence of nothing until you have watched it go red.**
+
+**First run of the `test-adversary` (2026-07-13), against a suite already hardened by 8 rounds.**
+It touched no `src/`, found **no live bug** (every invariant held), but pinned 8 untested *paths*
+and raised the generated-sweep kill rate **69.9% → 75.0%** (floor ratcheted 0.65 → 0.72). The
+headline hole was flaw 2 again: **every `foreach` test drove the loop with a literal
+`JSON.stringify([...])`** — the step-reference path (`over: "rows.output"`, what every real
+foreach uses: connector search → loop its rows) was *entirely unexecuted*. Correct code, zero
+coverage; a regression there would have shipped green. Also newly pinned: the retry-exhaustion
+event count, the already-aborted-signal path, `human` decisions as a comma-string, the
+audit-trail fields, dedupe across a fresh store instance, and the resume boundary **through
+`WorkflowStore`** (in-memory checkpoint tests bypassed the exact serialisation layer the original
+truncation disaster lived in). One survivor left unpinned by deliberate judgment — the topo-sort
+cycle/disconnected fallback (`flow-tester.js`), pre-existing salvage the validator already guards
+with `CYCLE_DETECTED`; the Builder tried to pin it, got the expected behaviour wrong, and removed
+the test — **the Builder overriding the adversary's scope call is itself the anti-pattern.**
+
 ## Agents & gate enforcement
 
 The build runs with four roles. **Builder is this main session** (you), governed
@@ -525,4 +750,4 @@ Update as gates close. `git log --grep "^Gate:"` is the authoritative ledger.
 - [x] **P9** — value tracking: time-saved metrics per run, all-up ROI summary, customer-facing report
 - [x] **P10** — admin observability: standalone admin app, per-tenant usage + cost monitoring *(merged `601760c`; carries `Gate: P10` trailer + passing `scripts/gates/p10.sh`. Ledger backfilled by independent verifier: `docs/gates/p10.md`.)*
 - [x] **P11** — E2E validation + production hardening + VPS migration. **Closed 2026-07-13** (`b711b44`, `Gate: P11`, ledger `docs/gates/p11.md`). Built & merged long before (`d73b813`…`75891b7` + artifacts `2106f71`); the gate was un-closeable only because `scripts/gates/p11.sh` fail-closes when `PROD_HOST` is unset — it cannot smoke-test a VPS that doesn't exist. Prod went live, so `PROD_HOST=atlas.agntic.co bash scripts/gate.sh 11` finally runs. **Note for anyone re-running it:** the E2E suite *self-skips the converger test* without `ANTHROPIC_API_KEY` (`tests/e2e/full-journey.test.js`), so a bare run reports "6 pass / 1 skip" and the skipped one is Done-when #1. Run it with a key (7/7) or you are passing a gate you haven't proven.
-- [~] **P12** — **converger v2**: outcome contracts + BPMN/DMN shape (decisions, gap analysis) + the elicitation UI + the human approval gate. Build spec: [`docs/architecture/converger-v2.md`](docs/architecture/converger-v2.md) (theory: [`bpmn-dmn-foundations.md`](docs/architecture/bpmn-dmn-foundations.md)). Gate `scripts/gates/p12.sh` is **progressive** — it runs increments A–G in order and stops at the first unbuilt one, so `bash scripts/gate.sh 12` answers both *"is the phase closed?"* and *"which increment next?"*. **Increment A (validator hardening + node re-cut) is done** — the gate now stops at **B (engine control flow)**. Increments do NOT carry a `Gate:` trailer; only the phase's close does. Two invariants are load-bearing and must never be weakened: **`LLM_INPUT_NOT_ENUM`** (an LLM-evaluated decision input must classify into a *closed enum* — without it there is no completeness proof, and the completeness proof is the moat) and **`EMAIL_REPLY_APPROVAL`** (an approval parsed out of an email reply body authenticates *nothing*: `From:` is spoofable, and SPF/DKIM authenticate a sending domain, not a human intent — use a signed, hashed, single-use magic link).
+- [~] **P12** — **converger v2**: outcome contracts + BPMN/DMN shape (decisions, gap analysis) + the elicitation UI + the human approval gate. Build spec: [`docs/architecture/converger-v2.md`](docs/architecture/converger-v2.md) (theory: [`bpmn-dmn-foundations.md`](docs/architecture/bpmn-dmn-foundations.md)). Gate `scripts/gates/p12.sh` is **progressive** — it runs increments A–G in order and stops at the first unbuilt one, so `bash scripts/gate.sh 12` answers both *"is the phase closed?"* and *"which increment next?"*. **Increments A (validator hardening + node re-cut) and B (engine control flow) are done** — the gate now stops at **C (converger v2 core — the moat)**. Increments do NOT carry a `Gate:` trailer; only the phase's close does. Two invariants are load-bearing and must never be weakened: **`LLM_INPUT_NOT_ENUM`** (an LLM-evaluated decision input must classify into a *closed enum* — without it there is no completeness proof, and the completeness proof is the moat) and **`EMAIL_REPLY_APPROVAL`** (an approval parsed out of an email reply body authenticates *nothing*: `From:` is spoofable, and SPF/DKIM authenticate a sending domain, not a human intent — use a signed, hashed, single-use magic link).
