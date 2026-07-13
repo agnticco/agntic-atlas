@@ -693,6 +693,14 @@ phase, not just this one.
 
 **The one-line lesson: a green suite is evidence of nothing until you have watched it go red.**
 
+**Residual for a future increment (from the round-9 readiness verifier, non-blocking):**
+`mutation-sweep.mjs` `TARGETS` covers `flow-tester` / `branch` / `foreach` / `human` /
+`idempotency-store` but **not** `workflow-validator.js`, `workflow-store.js`, or
+`workflow-scheduler.js` — those surfaces are graded only by the curated `mutation-guard` +
+`control-flow.test.js`, not the generated sweep. Verified by hand that the validator control-flow
+rules and the store migration bite, so it is a coverage-*scope* note, not a hole. Widen `TARGETS`
+when C/D touch those files (watch the floor — new files will surface equivalent-mutant survivors).
+
 **First run of the `test-adversary` (2026-07-13), against a suite already hardened by 8 rounds.**
 It touched no `src/`, found **no live bug** (every invariant held), but pinned 8 untested *paths*
 and raised the generated-sweep kill rate **69.9% → 75.0%** (floor ratcheted 0.65 → 0.72). The
