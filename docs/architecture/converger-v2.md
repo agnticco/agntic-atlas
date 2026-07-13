@@ -445,13 +445,19 @@ gaps) and a shape-derivation call.
 
 ## 11. Open questions (decide before the increment that needs them)
 
-- **FEEL subset.** DMN's expression language already gives `>50000`, `[10000..50000]`, `-` with
-  battle-tested semantics. Adopt a constrained subset rather than invent one. **Blocks E.**
+- ~~**FEEL subset**~~ — **ANSWERED.** Adopt DMN's *simple unary tests* subset ("FEEL-A"):
+  `-` · literal · `< <= > >=` · intervals `[a..b] (a..b] [a..b) (a..b)` · comma disjunction ·
+  `not(...)`. **Exclude variable references (`>= x`)** — their domain is unknown at build time,
+  which destroys decidability. No `!=` (FEEL doesn't have it; use `not()`). See
+  `bpmn-dmn-foundations.md` §7b(b).
 - **Decision evaluation cost.** One LLM call for the whole table (cheap, less auditable) vs one
   per fuzzy input (costlier, precisely attributable)? Lean per-input for the audit trail; measure.
-- **Practical table width.** Gap analysis is exponential in input count. Where does it become
-  unusable — 5 inputs? 7? This determines when the converger must **decompose** a decision into
-  sub-decisions (a DRG) rather than widen it. **Needs measurement, not a guess. Blocks E.**
+- ~~**Practical table width**~~ — **ANSWERED, measured** (`scripts/checks/gap-analysis-bench.mjs`).
+  Compute is a non-issue with **box subtraction**: 10 inputs × 10 values (10¹⁰ combinations)
+  analyses in **1 ms**. The binding limit is **cognitive** — at 5+ inputs (1,024+ combinations)
+  no human reviews the table, and an unreviewable table is not auditable, which is the moat.
+  **DECOMPOSE AT >4 INPUTS.** Implementation directive: box subtraction, never cross-product
+  enumeration. See `bpmn-dmn-foundations.md` §7b(a).
 - **`foreach` nesting.** Start: **no.** One level.
 
 ---

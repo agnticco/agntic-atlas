@@ -106,12 +106,28 @@ basis of the gap analysis shipped in Camunda/Signavio/Trisotech:
 - **Completeness is computable — but only over finite / enumerable domains**: enums,
   booleans, bounded integer ranges.
 
-> ### ⚠️ The constraint that shapes our entire design
+> ### ⚠️ The constraint that shapes our entire design — CORRECTED 2026-07-13
 >
-> **Gap analysis is *not* decidable over continuous ranges, unbounded integers, or free strings.**
-> The method "fundamentally requires finite domain enumeration."
+> An earlier draft of this note said *"decidable only over enums / bounded ints"*. **That was
+> too strict, and it would have crippled the design** (it would have banned `budget > 50000`,
+> the canonical example). The correct statement:
 >
-> And: complexity is **exponential in the number of input dimensions**. Wide tables do not scale.
+> **Gap analysis is decidable when the domain is finitely PARTITIONABLE by the conditions used.**
+>
+> | Input | Conditions | Decidable? | Why |
+> |---|---|---|---|
+> | enum / boolean | equality, membership | **yes** | finite by construction |
+> | **number** | `<`, `<=`, `>`, `>=`, intervals | **yes** | the rule boundaries cut the real line into finitely many intervals — this is exactly what the *geometric* (hyper-rectangle) method exploits, and it is why it beats enumeration |
+> | string | equality / list only | **yes** | the listed values, plus one "everything else" region |
+> | string | regex / pattern | **no** | not partitionable |
+> | **free-text LLM judgment** | — | **no** | no domain at all |
+>
+> The "finite enumeration" limit in the literature applies to the *enumerative* algorithm, not
+> the geometric one. **Use box subtraction, not cross-product enumeration** — see the measured
+> numbers below.
+>
+> This does **not** weaken §6: an LLM-evaluated input still must be a **closed enum**, because a
+> free-text judgment has no partitionable domain at all. Numbers are fine. Free text is not.
 
 Two consequences we cannot design our way around:
 
@@ -244,6 +260,69 @@ just another AI workflow builder. **The closed enum is the moat's load-bearing w
 
 ---
 
+## 7b. MEASURED: the two open questions, answered
+
+Benchmarked 2026-07-13 (`scratchpad/gap-bench.mjs`), two algorithms over realistic tables
+(each rule pins 2 inputs, the rest `-`).
+
+### (a) Where does gap analysis become unusable?
+
+| dims × values | cross-product | **enumerative** | **rectangular (box subtraction)** |
+|---|---|---|---|
+| 5 × 4 | 1,024 | 1.2 ms | **0.3 ms** |
+| 8 × 4 | 65,536 | 25.9 ms | **0.2 ms** |
+| 10 × 4 | 1,048,576 | 474 ms | **7.3 ms** |
+| 6 × 10 | 1,000,000 | 226 ms | **0.4 ms** |
+| 8 × 10 | 100,000,000 | **ABORT** | **1.7 ms** |
+| 10 × 10 | 10,000,000,000 | **ABORT** | **1.0 ms** |
+| 12 × 10 | 10¹² | **ABORT** | **51 ms** |
+
+**Computation is not the binding constraint.** With box subtraction, ten inputs over ten values
+— ten *billion* combinations — is analysed in **1 ms**. Enumeration dies; geometry does not.
+
+**The binding constraint is cognitive:**
+
+| inputs (×4 values) | combinations | verdict |
+|---|---|---|
+| 3 | 64 | a human can read and sign this |
+| 4 | 256 | borderline |
+| **5+** | **1,024+** | **nobody reviews this** |
+
+A decision table nobody can read is not auditable — and *auditable decision logic is the moat*.
+So:
+
+> **DECOMPOSITION RULE: the converger must split a decision into sub-decisions (a DRG) at
+> > 4 inputs — because a human stops being able to review it, not because the maths fails.**
+
+That is a better rule than the one I would have guessed, and it is why DMN has a Decision
+Requirements Graph at all.
+
+**Implementation directive: box subtraction, never cross-product enumeration.**
+
+### (b) The FEEL subset — "FEEL-A"
+
+DMN's *simple unary tests* grammar is small and closed. Adopt this subset for rule cells;
+do not invent syntax.
+
+| Form | Examples | Adopt? |
+|---|---|---|
+| irrelevant | `-` | **yes** — this is the catch-all mechanism |
+| literal | `"urgent"` · `42` · `true` | **yes** |
+| comparison | `< 10` · `<= 10` · `> 10` · `>= 10` | **yes** |
+| interval | `[1..10]` · `(1..10]` · `[1..10)` · `(1..10)` | **yes** |
+| disjunction | `3,5,7` · `<2,>10` · `10,[20..30]` | **yes** |
+| negation | `not("Steak")` · `not(>10)` · `not([20..30])` | **yes** |
+| **variable / qualified name** | `>= x` · `< customer.age` | **NO — excluded** |
+| date/time expressions | `date and time("…")` | **defer** |
+
+**Why variable references are excluded, on principle:** a cell like `>= x` has a domain that is
+**unknown at build time**, so the covered region cannot be computed — it destroys decidability.
+Excluding them is not a simplification; it is what keeps the completeness proof true.
+
+Note `!=` does not exist in FEEL — negation is `not(...)`. Match that; don't invent `!=`.
+
+---
+
 ## 8. What I still owe before implementing
 
 1. **The validation-bypass bug.** I asserted in `converger-v2.md` that the validator misses
@@ -251,11 +330,9 @@ just another AI workflow builder. **The closed enum is the moat's load-bearing w
    `BAD_TEMPLATE_REF` correctly. So a spec the validator *would have rejected* was executed
    against a live Google API anyway. **Something on the build/test path skips validation
    entirely.** That is a live hole and it must be found before any of this is built on top.
-2. **FEEL.** DMN's expression language gives us range syntax (`[10000..50000]`, `>50000`,
-   `-`) with battle-tested semantics. We should adopt a **constrained subset** for rule
-   entries rather than invent one. Needs a scoping pass.
-3. **Practical table width.** Where does gap analysis actually become unusable — 5 inputs? 7?
-   This determines when the converger must decompose. Needs measurement, not a guess.
+2. ~~FEEL subset~~ — **ANSWERED, §7b(b).**
+3. ~~Practical table width~~ — **ANSWERED, §7b(a): decompose at >4 inputs, for cognitive
+   reasons; box subtraction makes the maths free.**
 
 ---
 
