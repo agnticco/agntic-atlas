@@ -40,3 +40,12 @@ Thumbs.db
 # Local Claude session artifacts (keep .claude/ config, ignore local state)
 .claude/local/
 .claude/*.local.*
+
+# Local agent tooling — NOT product config.
+# .mcp.json enables MCP servers (e.g. chrome-devtools, which grants an agent
+# browser control). Kept local and opt-in rather than committed, so cloning the
+# repo never silently grants an agent capabilities the operator didn't choose.
+.mcp.json
+
+# Design/brand asset drops — large binaries, not source.
+*.zip

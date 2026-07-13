@@ -123,9 +123,24 @@ them **off the VPS** on a schedule — they're worthless on the same disk:
 ```
 
 ## 10. Deploys / updates
+
+**Use `scripts/deploy.sh`. Do not run the steps by hand.**
+
 ```bash
-cd ~/atlas && git pull && npm ci && sudo systemctl restart atlas
+ssh ubuntu@32.198.159.147 'sudo -u atlas -H bash -c "cd /home/atlas/atlas && ./scripts/deploy.sh"'
 ```
+
+It pulls `main`, runs `npm ci`, restarts `atlas`, **polls `/health` until the new
+version is actually being served**, and **prints the exact rollback SHA if the deploy
+fails**. The manual sequence (`git pull && npm ci && systemctl restart atlas`) does
+none of that — it exits 0 whether or not the process came back up, which is precisely
+the wrong behaviour at 2am.
+
+Full protocol (version bump, What's-New entry, verification):
+[`update-protocol.md`](update-protocol.md). Every prod push must bump `package.json`
+via `./scripts/release.sh` first — it is the single source of truth for `/health` and
+the What's-New modal.
+
 SIGTERM triggers graceful drain (scheduler stops, in-flight requests finish,
 `SHUTDOWN_GRACE_MS` backstop). A WAL checkpoint runs on clean shutdown.
 
