@@ -693,6 +693,21 @@ phase, not just this one.
 
 **The one-line lesson: a green suite is evidence of nothing until you have watched it go red.**
 
+**First run of the `test-adversary` (2026-07-13), against a suite already hardened by 8 rounds.**
+It touched no `src/`, found **no live bug** (every invariant held), but pinned 8 untested *paths*
+and raised the generated-sweep kill rate **69.9% → 75.0%** (floor ratcheted 0.65 → 0.72). The
+headline hole was flaw 2 again: **every `foreach` test drove the loop with a literal
+`JSON.stringify([...])`** — the step-reference path (`over: "rows.output"`, what every real
+foreach uses: connector search → loop its rows) was *entirely unexecuted*. Correct code, zero
+coverage; a regression there would have shipped green. Also newly pinned: the retry-exhaustion
+event count, the already-aborted-signal path, `human` decisions as a comma-string, the
+audit-trail fields, dedupe across a fresh store instance, and the resume boundary **through
+`WorkflowStore`** (in-memory checkpoint tests bypassed the exact serialisation layer the original
+truncation disaster lived in). One survivor left unpinned by deliberate judgment — the topo-sort
+cycle/disconnected fallback (`flow-tester.js`), pre-existing salvage the validator already guards
+with `CYCLE_DETECTED`; the Builder tried to pin it, got the expected behaviour wrong, and removed
+the test — **the Builder overriding the adversary's scope call is itself the anti-pattern.**
+
 ## Agents & gate enforcement
 
 The build runs with four roles. **Builder is this main session** (you), governed

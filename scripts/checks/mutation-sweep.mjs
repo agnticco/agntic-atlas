@@ -77,7 +77,7 @@ const args    = process.argv.slice(2);
  * pass — lowering it is exactly the "weaken the check to force a pass" move the
  * constitution forbids. It was 0.65 when 69.5% was the measured rate.
  */
-const FLOOR   = Number(args[args.indexOf('--floor') + 1]) || 0.65;
+const FLOOR   = Number(args[args.indexOf('--floor') + 1]) || 0.72;
 const VERBOSE = args.includes('--verbose');
 
 /** Generate every mutant for one file. Line-oriented and blunt, on purpose. */

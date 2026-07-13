@@ -1907,3 +1907,256 @@ test('foreach: a control sub-step\'s output never becomes the delivered body', a
   // The item itself is the deliverable (the branch is a no-op), not the blob.
   assert.ok(bodies.some(b => String(b).includes('alpha')), `the item must flow through; got ${JSON.stringify(bodies)}`);
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 16. TEST-ADVERSARY additions (independent pass, post round-8).
+//     Every test below was written after confirming, by mutation, that the
+//     existing 78-test suite stays GREEN when the guard it names is broken.
+//     Each names the survivor / mutation it kills.
+// ─────────────────────────────────────────────────────────────────────────────
+
+// ── 16.1  foreach over a STEP REFERENCE — the mainline production shape ───────
+// Every foreach RUN test drives the loop with `over: JSON.stringify([...])` — a
+// literal. The `foreach: bounds at maxItems` test even builds a `rows.output`
+// spec and then throws it away (`void flow`) to drive a literal instead. So the
+// ENTIRE step-reference resolution path in resolveCollection() — the shape
+// EVERY real foreach uses ("connector search → loop over its rows") — was
+// unexecuted. Mutating `if (typeof over === 'string')` (foreach.js:204) to
+// `if (false)` left all 78 tests green. This runs the loop over an upstream
+// step's real array output.
+test('foreach: loops over an UPSTREAM STEP\'s array output (not just a literal)', async () => {
+  const seen = [];
+  const spy = { invoke: async (m) => { seen.push(String(m[1].content)); return { content: 'ok' }; } };
+  // `rows` is a connector-action whose handler returns a real array — exactly
+  // what an airtable/gmail search produces and what a foreach loops over.
+  const channels = stubChannels(() => ['ROW-A', 'ROW-B', 'ROW-C'], { actionOnly: true });
+  const tester = new FlowTester({ nodeTypes, llm: spy, channelRegistry: channels });
+
+  const events = await runAll(tester, {
+    nodes: [
+      { id: 'rows', type: 'connector-action', config: { action: 'airtable_search_records' } },
+      { id: 'loop', type: 'foreach', config: {
+        over: 'rows.output',                          // ← a STEP REFERENCE, not a literal
+        steps: [{ id: 's', type: 'llm', config: { prompt: 'ITEM=[{{item}}]' } }],
+      } },
+    ],
+    edges: [{ from: 'rows', to: 'loop' }],
+  }, { tenantId: 't1', workflowId: 'wf' });
+
+  assert.ok(!one(events, 'run_failed'),
+    `resolving over as a step ref must not fail: ${one(events, 'run_failed')?.error}`);
+  const loop = outputOf(events, 'loop');
+  assert.equal(loop.count, 3, 'the loop must resolve `rows.output` to its 3 rows and process each');
+  // ITEM=[ROW-A] can only come from {{item}} binding against the RESOLVED step
+  // output — not from the llm's lastOutput auto-injection.
+  assert.ok(seen.some(p => p.includes('ITEM=[ROW-A]')), `must bind the resolved rows; got ${JSON.stringify(seen)}`);
+  assert.ok(seen.some(p => p.includes('ITEM=[ROW-C]')));
+});
+
+// ── 16.2  foreach unwraps a connector's {results:[...]} wrapper ───────────────
+// Connector list/search capabilities return rows under a wrapper key
+// (results/records/items/…), not as a bare array. resolveCollection() unwraps
+// them (foreach.js:223) — and that branch was never executed either (mutating it
+// to `if (false)` left the suite green). Without the unwrap, EVERY foreach over a
+// connector fails "expected a list".
+test('foreach: unwraps a connector result wrapper ({results:[…]}) to its rows', async () => {
+  const seen = [];
+  const spy = { invoke: async (m) => { seen.push(String(m[1].content)); return { content: 'ok' }; } };
+  const channels = stubChannels(() => ({ results: ['alpha', 'beta'] }), { actionOnly: true });
+  const tester = new FlowTester({ nodeTypes, llm: spy, channelRegistry: channels });
+
+  const events = await runAll(tester, {
+    nodes: [
+      { id: 'search', type: 'connector-action', config: { action: 'airtable_search_records' } },
+      { id: 'loop', type: 'foreach', config: {
+        over: 'search.output',
+        steps: [{ id: 's', type: 'llm', config: { prompt: 'ITEM=[{{item}}]' } }],
+      } },
+    ],
+    edges: [{ from: 'search', to: 'loop' }],
+  }, { tenantId: 't1', workflowId: 'wf' });
+
+  assert.ok(!one(events, 'run_failed'),
+    `a foreach over a wrapped connector result must not fail: ${one(events, 'run_failed')?.error}`);
+  assert.equal(outputOf(events, 'loop').count, 2, 'the {results:[…]} wrapper must be unwrapped to 2 rows');
+  assert.ok(seen.some(p => p.includes('ITEM=[alpha]')) && seen.some(p => p.includes('ITEM=[beta]')));
+});
+
+// ── 16.3  retry EXHAUSTION emits exactly N step_retry events, not N+1 ─────────
+// `if (attempt < attempts)` (flow-tester.js:394) guards BOTH the retry event and
+// the inter-attempt delay. Forcing it to `if (true)` survives — because the
+// only retry-event-count assertion is in the SUCCESS case (which breaks out
+// before the last attempt). On an all-fail run the mutant emits a spurious
+// step_retry for the final attempt (and would sleep a needless delay). Assert the
+// count on the exhaustion path.
+test('on_error: an EXHAUSTED retry emits N retries, not N+1 (no phantom final retry)', async () => {
+  let tries = 0;
+  const failing = { invoke: async () => { tries++; throw new Error('always'); } };
+  const events = await runAll(new FlowTester({ nodeTypes, llm: failing, channelRegistry: stubChannels() }), {
+    nodes: [
+      { id: 'x', type: 'llm', config: { prompt: 'go' }, on_error: { retry: 2 } },
+      { id: 'd', type: 'deliver', config: { channel: 'in_app' } },
+    ],
+    edges: [{ from: 'x', to: 'd' }],
+  });
+  assert.equal(tries, 3, 'retry:2 = 3 attempts');
+  assert.equal(events.filter(e => e.type === 'step_retry').length, 2,
+    'a retry event announces a NEXT attempt — the final, failed attempt has no next, so exactly 2 fire, not 3');
+  assert.ok(one(events, 'run_failed'), 'and the run still fails after exhausting retries');
+});
+
+// ── 16.4  an aborted signal stops the run ────────────────────────────────────
+// `if (options.signal?.aborted)` (flow-tester.js:246) had no test — forcing it
+// to `if (false)` left the suite green, so a cancelled run would run to
+// completion anyway. This is the production cancel path (an operator stops a run,
+// a request is aborted).
+test('engine: an already-aborted signal fails the run before any node executes', async () => {
+  const controller = new AbortController();
+  controller.abort();
+  const tester = new FlowTester({ nodeTypes, llm: stubLlm('x'), channelRegistry: stubChannels() });
+  const events = await runAll(tester, {
+    nodes: [
+      { id: 'a', type: 'llm', config: { prompt: 'go' } },
+      { id: 'b', type: 'deliver', config: { channel: 'in_app' } },
+    ],
+    edges: [{ from: 'a', to: 'b' }],
+  }, { signal: controller.signal });
+
+  const failed = one(events, 'run_failed');
+  assert.ok(failed, 'an aborted run must fail, not complete');
+  assert.equal(failed.error, 'aborted');
+  assert.ok(!ids(events, 'step_completed').length, 'and no node may run after abort');
+  assert.ok(!one(events, 'run_completed'), 'an aborted run is not a completed run');
+});
+
+// ── 16.5  decisions given as a STRING still parse (builder-textarea shape) ────
+// `cases`, `steps` and foreach-`steps` all have a "textarea hands it over as a
+// string" test. `decisions` did not: `if (typeof d === 'string')` (human.js:127)
+// forced to `if (false)` left the suite green, so a human step whose decisions
+// arrived as "approve, escalate" silently collapsed to the DEFAULT
+// ["approve","reject"] — and a legitimately-declared "escalate" answer would be
+// rejected as off-set.
+test('human: decisions given as a comma string are parsed, not silently defaulted', async () => {
+  const def = nodeTypes.get('human');
+  // "escalate" is NOT in the default set — so it only works if the string parsed.
+  const out = await def.run(
+    { decisions: 'approve, escalate' },
+    { humanDecision: { decision: 'escalate', by: 'u' } },
+    {},
+  );
+  assert.equal(out.decision, 'escalate',
+    'a decision declared via a comma string must be accepted — not collapsed to the default set');
+  // And the ask surfaced to the delivery layer must carry the parsed set too.
+  const { buildAsk } = await import('../../src/workflows/node-types/human.js');
+  assert.deepEqual(buildAsk({ id: 'h' }, { prompt: 'p', decisions: 'approve, escalate' }).decisions,
+    ['approve', 'escalate'], 'buildAsk must expose the parsed decisions');
+});
+
+// ── 16.6  the human step records WHO approved (the audit trail) ──────────────
+// CLAUDE.md: the human output "{decision, by, at, channel} … is the audit trail."
+// Every human test asserts the DECISION; none asserts that `by`/`channel`/`at`
+// are actually carried through. Hard-coding `by: null` in human.js left the whole
+// suite green — the approver's identity, the one thing that makes an approval
+// accountable, was unpinned. (NULLISH-equivalent to the sweep, so this does not
+// move the kill rate; it pins an invariant the sweep cannot express.)
+test('human: the resolved output records who approved, when, and over which channel', async () => {
+  const def = nodeTypes.get('human');
+  const out = await def.run(
+    { decisions: ['approve', 'reject'] },
+    { humanDecision: { decision: 'approve', by: 'user:abc', at: '2026-07-13T00:00:00.000Z', channel: 'inbox' } },
+    {},
+  );
+  assert.equal(out.by, 'user:abc', 'the approver identity is the audit trail — it must be recorded');
+  assert.equal(out.channel, 'inbox', 'the channel the approval came over must be recorded');
+  assert.equal(out.at, '2026-07-13T00:00:00.000Z', 'the time of approval must be recorded');
+});
+
+// ── 16.7  idempotency store PERSISTS across a restart (the whole point) ───────
+// Every idempotency test uses an in-memory store reused within one test, so
+// nothing proves the dedupe survives a process restart — which is the exact
+// scenario the store exists for (the scheduler's retry wrapper, or a redelivered
+// webhook, AFTER a redeploy). Also pins the mkdir guard (idempotency-store.js:57):
+// forcing `if (this.dbPath !== ':memory:')` to `if (false)` skips the directory
+// creation and a store in a fresh nested dir fails to open.
+test('idempotency: a key written by one store instance is seen by a fresh instance (durable + mkdir)', async () => {
+  const { mkdtempSync } = await import('node:fs');
+  const { join } = await import('node:path');
+  const { tmpdir } = await import('node:os');
+  // A NESTED path whose parent does not exist yet — init() must mkdir it.
+  const dbPath = join(mkdtempSync(join(tmpdir(), 'idem-')), 'nested', 'store.sqlite');
+
+  const first = new IdempotencyStore({ dbPath }).init();
+  first.put('t1:wf:create', 'alice@acme.com', { record: 'rec_1' });
+  first.close();
+
+  // A brand-new instance on the same file — i.e. after a restart.
+  const second = new IdempotencyStore({ dbPath }).init();
+  const seen = second.get('t1:wf:create', 'alice@acme.com');
+  assert.ok(seen, 'the key written before the restart must still be found');
+  assert.deepEqual(seen.output, { record: 'rec_1' }, 'and it must return the first run\'s output verbatim');
+  assert.equal(second.get('t1:wf:create', 'bob@acme.com'), null, 'a different key is still absent');
+  second.close();
+});
+
+// ── 16.8  the checkpoint survives the STORE's JSON persistence boundary ───────
+// THE production-shape gap. Every resume test rehydrates from the IN-MEMORY
+// checkpoint object the pause yielded — bypassing WorkflowStore, which is where
+// the original disaster lived (the persisted `steps` are display-shrunk, and the
+// first design resumed from THEM). This drives the real persistence boundary:
+// pauseRun() serialises the checkpoint to JSON, listAwaitingHuman() reads it
+// back, and the resume rehydrates from THAT. The delivered body must still be the
+// full, un-truncated content the person approved.
+test('resume: a checkpoint round-tripped THROUGH WorkflowStore still delivers the full approved body', async () => {
+  const { WorkflowStore } = await import('../../src/workflows/workflow-store.js');
+  const store = new WorkflowStore({ dbPath: ':memory:' });
+  await store.init();
+  // workflow_runs.workflow_id is a FK — the run must belong to a real workflow.
+  const wf = store.create({ name: 'approval flow', kind: 'flow' });
+
+  const LONG_DRAFT = 'Dear customer, thank you for your detailed enquiry. '.repeat(70);
+  assert.ok(LONG_DRAFT.length > 2000, 'the fixture must exceed the 2000-char shrink cap, or it proves nothing');
+
+  let sentBody = null;
+  const channels = stubChannels((args) => { sentBody = args.body; return { delivered: true }; });
+  const tester = new FlowTester({ nodeTypes, llm: stubLlm(LONG_DRAFT), channelRegistry: channels });
+
+  const flow = {
+    nodes: [
+      { id: 'draft',   type: 'llm', config: { prompt: 'Draft a reply.' } },
+      { id: 'approve', type: 'human', config: { prompt: 'Send?', preview: '{{draft.output}}', decisions: ['approve', 'reject'] } },
+      { id: 'send',    type: 'deliver', config: { channel: 'in_app' } },
+    ],
+    edges: [{ from: 'draft', to: 'approve' }, { from: 'approve', to: 'send' }],
+  };
+
+  // Leg 1 — run to the pause, persisting EXACTLY as the scheduler does: append
+  // the (shrunk) step events, then pauseRun() the full-fidelity checkpoint.
+  const run = store.startRun(wf.id);
+  let ask = null;
+  for await (const evt of tester.run(flow, { runId: run.id, initialContext: 'an enquiry' })) {
+    if (['step_started', 'step_completed', 'step_failed', 'step_skipped'].includes(evt.type)) {
+      store.appendStep(run.id, evt);
+    }
+    if (evt.type === 'run_paused') { ask = evt.ask; store.pauseRun(run.id, evt.nodeId, evt.ask, evt.checkpoint); }
+  }
+  assert.ok(ask, 'the run must have paused and been persisted');
+
+  // Read the checkpoint back the way Increment D's Approvals inbox will — JSON
+  // parsed out of the DB column, NOT the in-memory object.
+  const parked = store.listAwaitingHuman({ workflowId: wf.id }).find(r => r.id === run.id);
+  assert.ok(parked?.checkpoint, 'the parked run must carry a persisted checkpoint');
+  assert.equal(parked.checkpoint.outputs.draft, LONG_DRAFT,
+    'the PERSISTED checkpoint must hold the full draft — not the shrunk step copy');
+
+  // Leg 2 — resume from the DB-round-tripped checkpoint.
+  for await (const evt of tester.run(flow, {
+    runId: run.id, initialContext: 'an enquiry',
+    checkpoint: parked.checkpoint,
+    decisions: { approve: { decision: 'approve', by: 'user:1' } },
+  })) { void evt; }
+
+  assert.equal(sentBody, LONG_DRAFT,
+    'after a full persistence round-trip, the customer must receive EXACTLY what was approved');
+  assert.ok(!String(sentBody).includes('(truncated)'), 'never the shrink marker');
+  store.close?.();
+});
