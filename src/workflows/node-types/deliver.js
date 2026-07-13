@@ -28,25 +28,31 @@ export const deliverNodeType = {
     // carried an unknown key when the key was in fact load-bearing. P12
     // Increment A turned the config check into a hard error (UNKNOWN_CONFIG_KEY),
     // so every key a handler actually consumes has to be declared or the very
-    // workflows running in production would fail to validate. Each of these is
-    // read by real code — the file:line is on the line.
+    // workflows running in production would fail to validate.
+    //
+    // EVERY key below is read by real code, and the file:line is on the line.
+    // Verify before you add one — a key nothing consumes makes this schema a lie
+    // and turns UNKNOWN_CONFIG_KEY into theatre, which is the exact state that
+    // let `"model": "claude-opus-4-5"` ship. `message` was briefly declared here
+    // on a misread (`config.messageId`, a gmail_get_message param, prefix-matched
+    // a grep for `config.message`); nothing reads `config.message`, so it is NOT
+    // a deliver key and a spec carrying it is correctly rejected. The body comes
+    // from the previous step, or from `body` — never from `message`.
     { key: 'target', label: 'Channel / recipient', type: 'text', optional: true,
       placeholder: 'e.g. #social',
-      hint: 'Slack: the channel to post to. (src/connectors/slack/index.js — config.target)' },
+      hint: 'Slack: the channel to post to. (src/connectors/slack/index.js:256 — config.target)' },
     { key: 'user', label: 'Direct-message recipient', type: 'text', optional: true,
       placeholder: 'e.g. someone@company.com or @handle',
-      hint: 'slack_dm: who to DM. (src/connectors/slack/index.js — config.user)' },
+      hint: 'slack_dm: who to DM. (src/connectors/slack/index.js:278 — config.user)' },
     { key: 'to', label: 'Email recipient', type: 'text', optional: true,
-      hint: 'gmail_send: the To: address. (src/connectors/google/index.js — config.to)' },
+      hint: 'gmail_send: the To: address. (src/connectors/google/index.js:591 — config.to)' },
     { key: 'subject', label: 'Subject', type: 'text', optional: true,
-      hint: 'gmail_send: the email subject. Also used as the delivery title when no title is set. (src/connectors/google/index.js — config.subject)' },
-    { key: 'message', label: 'Message override', type: 'textarea', optional: true, advanced: true, rows: 4,
-      hint: 'Sends this instead of the previous step\'s output. (src/connectors/google/index.js — config.message)' },
+      hint: 'gmail_send: the email subject. Also used as the delivery title when no title is set. (src/connectors/google/index.js:591 — config.subject)' },
     { key: 'username', label: 'Post as (bot name)', type: 'text', optional: true, advanced: true,
-      hint: 'Slack: overrides the bot display name. (src/connectors/slack/index.js — config.username)' },
+      hint: 'Slack: overrides the bot display name. (src/connectors/slack/index.js:259 — config.username)' },
     { key: 'icon_emoji', label: 'Post as (bot icon)', type: 'text', optional: true, advanced: true,
       placeholder: 'e.g. :package:',
-      hint: 'Slack: overrides the bot avatar. (src/connectors/slack/index.js — config.icon_emoji)' },
+      hint: 'Slack: overrides the bot avatar. (src/connectors/slack/index.js:260 — config.icon_emoji)' },
   ],
   previewTemplate: 'Sends the result to {channel}{title? with title "{title}"}.',
   run: async (cfg, ctx, services) => {

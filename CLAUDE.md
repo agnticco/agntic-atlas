@@ -232,11 +232,22 @@ refactor them without an explicit decision recorded here:
     default; `connector-action` is the only `'open'` one, because its params are per-capability).
     A blanket subset check was **impossible**: it rejects the frozen canonical spec (whose
     `summarize` node carries `instructions`/`format`, which the v1 schema never declared) and the
-    live prod workflow (`deliver(channel, message, target)`). Keys the handlers genuinely read
-    (`deliver.target|user|to|subject|message|username|icon_emoji`, `search_web.query`) are now
-    **declared**, because the schemas were lying — a key no code reads (`llm.model`) is a
-    hallucination and errors; a key a handler reads but the schema omitted is an untrue schema and
-    gets fixed. **Never declare a key `run()` doesn't consume** — that makes the check theatre.
+    ordinary Slack/Gmail delivery shapes. Keys the handlers genuinely read
+    (`deliver.target|user|to|subject|username|icon_emoji`, `search_web.query`) are now **declared**,
+    because the schemas were lying — a key no code reads (`llm.model`) is a hallucination and
+    errors; a key a handler reads but the schema omitted is an untrue schema and gets fixed.
+    **Never declare a key `run()` doesn't consume, and prove the consumer with a word-boundary grep
+    before you declare it.** Increment A briefly declared `deliver.message` on a misread (a grep for
+    `config.message` **prefix-matched `config.messageId`**, a `gmail_get_message` param); the
+    independent verifier caught it. Nothing reads `config.message`, so such a deliver node has its
+    content **silently dropped** at run time — defect #3, re-created inside the check built to kill
+    it. It is rejected, and pinned by a test.
+  - `scripts/gates/p12.sh` — `run_test()` now runs `node --env-file-if-exists=.env --test` **and
+    fails closed on any skipped test**. It previously ran the E2E with no env file, so the gate's
+    own regression step hit the self-skip trap: `tests/e2e/full-journey.test.js` skips its converger
+    test without `ANTHROPIC_API_KEY` and still reports a cheerful "6 pass / 1 skip" — the skipped
+    one being the thing under test. The gate was passing itself on a suite that had quietly not
+    tested the converger. *(Making a check stricter, not weaker — CLAUDE.md, Gates.)*
   - `src/converger/prompts.js` — **the actual root cause of the `model` hallucination**: the prompt
     advertised `llm: (config: prompt, model)`, i.e. it *told* the model to emit a key no schema
     had. Now it teaches `llm` + `mode` with the closed key set, and states that `model` does not

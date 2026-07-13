@@ -395,11 +395,11 @@ connector workflow in production.** Grounded against `main` before building Incr
   fails `docs/specs/canonical-ups-slack.json` → **P3 dies** (§11.1). *(It also means the canonical
   workflow's carefully-written instructions were being silently dropped at run time — the same
   class of bug as defect #3, in the fixture we validate against. The v2 `llm` node honours them.)*
-- **`deliver`** nodes across the shipped corpus carry `target`, `user`, `to`, `subject`, `message`,
-  `username`, `icon_emoji`. **Every one is read by a real handler** (`config.target`
-  `src/connectors/slack/index.js`; `config.user` ibid.; `config.to` / `config.subject` /
-  `config.message` `src/connectors/google/index.js`). They were simply never *declared*. The live
-  production workflow is `deliver(channel, message, target)` — the blanket rule **breaks prod**.
+- **`deliver`** nodes across the shipped corpus carry `target`, `user`, `to`, `subject`,
+  `username`, `icon_emoji`. **Every one is read by a real handler** — `config.target`
+  `slack/index.js:256`, `config.user` `:278`, `config.username` `:259`, `config.icon_emoji` `:260`,
+  `config.to` / `config.subject` `google/index.js:591`. They were simply never *declared*, so a
+  blanket rule rejects the ordinary Slack and Gmail delivery shapes.
 - **`connector-action`** params are **per-capability** (`baseId`, `tableId`, `filterByFormula`,
   `spreadsheetId`, `range`, …). They cannot be enumerated in a static schema, because the
   capability catalog is built at run time from the tenant's authorised connectors.
@@ -419,7 +419,15 @@ entire value of the check:
 - a key **a handler reads but the schema never declared** (`deliver.target`) is an **untrue
   schema** → *fix the schema*, do not relax the check.
 
-Declaring a key that `run()` does not consume turns this check into theatre. Don't.
+**Declaring a key that `run()` does not consume turns this check into theatre. Don't — and prove
+the consumer before you declare, with a word-boundary grep.** This is not hypothetical: Increment A
+briefly declared `deliver.message` on a misread — a grep for `config.message` **prefix-matched
+`config.messageId`**, a `gmail_get_message` parameter — and the independent verifier caught it.
+Nothing reads `config.message`, so a `deliver` node carrying it has its content **silently
+discarded** at run time: the user writes *"post exactly this greeting"* and gets the upstream LLM's
+output instead, and is never told. Declaring the key to make that spec pass would have re-created
+defect #3 **inside the very check built to kill it**. It is rejected, and
+`tests/workflows/validator-config-keys.test.js` pins it that way.
 
 > **Increment F closes the `connector-action` hole** by validating params against each
 > capability's *own* declared schema — that is what "schema-aware connectors" buys, beyond base

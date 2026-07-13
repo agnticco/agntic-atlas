@@ -83,37 +83,67 @@ test('v1 compat: the FROZEN canonical spec still validates', () => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// 3. §11.2 — the shipped corpus. These are the exact node shapes found across
-//    all 57 historical specs in the local workflow store, including the shape
-//    of the one live production workflow: deliver(channel, message, target).
-//    Every one of these config keys is READ BY A HANDLER — they were simply
-//    never declared. If any of these regress, production breaks.
+// 3. §11.2 — the shipped corpus. Every deliver routing key below is READ BY A
+//    HANDLER; they were simply never declared. If any of these regress, the
+//    workflows running in production stop validating.
 // ─────────────────────────────────────────────────────────────────────────────
-test('v1 compat: the prod-shaped deliver node validates (channel, message, target)', () => {
-  const res = validator.validate(spec(
-    [
-      { id: 'l1',   type: 'llm', config: { prompt: 'Write a greeting.' } },
-      { id: 'send', type: 'deliver', config: { channel: 'slack', message: 'hi', target: '#general' } },
-    ],
-    [{ from: 'l1', to: 'send' }],
-  ));
-  assert.ok(res.ok, `prod's live workflow shape must validate, got: ${errorCodes(res).join(', ')}`);
-});
-
 test('v1 compat: every deliver routing key a handler actually reads is declared', () => {
-  // Proven consumed: slack/index.js:256 (target), :278 (user), :259 (username),
-  // :260 (icon_emoji); google/index.js:576 (message), :591 (subject/to/body).
+  // Each key here has a real consumer, verified with a word-boundary grep:
+  //   target      src/connectors/slack/index.js:256
+  //   user        src/connectors/slack/index.js:278
+  //   username    src/connectors/slack/index.js:259
+  //   icon_emoji  src/connectors/slack/index.js:260
+  //   to/subject  src/connectors/google/index.js:591
+  //   title/body  src/workflows/node-types/deliver.js (run())
   const res = validator.validate(spec(
     [
       { id: 'l1', type: 'llm', config: { prompt: 'x' } },
       { id: 'd',  type: 'deliver', config: {
-        channel: 'gmail_send', to: 'a@b.com', subject: 'S', message: 'M',
+        channel: 'gmail_send', to: 'a@b.com', subject: 'S',
         title: 'T', body: 'B', user: '@me', username: 'bot', icon_emoji: ':x:',
       } },
     ],
     [{ from: 'l1', to: 'd' }],
   ));
   assert.ok(res.ok, `declared deliver routing keys must validate, got: ${errorCodes(res).join(', ')}`);
+});
+
+test('deliver `message` is REJECTED — nothing reads it, so it is silently dropped', () => {
+  // `message` was briefly declared on this schema during Increment A, on a
+  // misread: a grep for `config.message` prefix-matched `config.messageId` (a
+  // gmail_get_message param). NOTHING in src/ reads `config.message`:
+  //
+  //   grep -rnE "(config|cfg)\.message\b" src/   →  no matches
+  //
+  // A deliver node carrying `message` therefore has its content SILENTLY
+  // DISCARDED at run time — the user writes "post exactly this greeting" and
+  // gets the upstream LLM's output instead, and is never told. That is defect
+  // #3 exactly, and it is what this check exists to kill. Declaring the key to
+  // make such a spec pass would have turned UNKNOWN_CONFIG_KEY into theatre.
+  //
+  // The body comes from the previous step, or from `body`. Never from `message`.
+  const res = validator.validate(spec(
+    [
+      { id: 'l1',   type: 'llm', config: { prompt: 'Write a greeting.' } },
+      { id: 'send', type: 'deliver', config: { channel: 'slack', target: '#general', message: 'Good morning team' } },
+    ],
+    [{ from: 'l1', to: 'send' }],
+  ));
+  assert.ok(!res.ok, 'a deliver node whose content would be silently dropped must not validate');
+  const issue = res.errors.find(i => i.code === 'UNKNOWN_CONFIG_KEY');
+  assert.ok(issue, `expected UNKNOWN_CONFIG_KEY, got: ${errorCodes(res).join(', ') || '(none)'}`);
+  assert.equal(issue.field, 'config.message');
+});
+
+test('v1 compat: a deliver node using only real routing keys validates', () => {
+  const res = validator.validate(spec(
+    [
+      { id: 'l1',   type: 'llm', config: { prompt: 'Write a greeting.' } },
+      { id: 'send', type: 'deliver', config: { channel: 'slack', target: '#general' } },
+    ],
+    [{ from: 'l1', to: 'send' }],
+  ));
+  assert.ok(res.ok, `the common Slack delivery shape must validate, got: ${errorCodes(res).join(', ')}`);
 });
 
 test('v1 compat: the old LLM primitives (summarize/extract/rewrite) still validate', () => {
