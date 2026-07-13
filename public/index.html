@@ -1746,7 +1746,7 @@
               <div style="border:1px solid {{ p.borderColor }};border-radius:16px;padding:16px 16px 15px;background:rgba(255,255,255,.02);display:flex;flex-direction:column">
                 <div style="display:flex;align-items:baseline;justify-content:space-between">
                   <div style="font-size:15px;font-weight:700;color:#fff">{{ p.label }}</div>
-                  <div style="font-size:15px;font-weight:700;color:#fff">{{ p.price }}<span style="font-size:11px;font-weight:500;color:rgba(255,255,255,.4)">/mo</span></div>
+                  <div style="font-size:15px;font-weight:700;color:#fff">{{ p.price }}<span style="font-size:11px;font-weight:500;color:rgba(255,255,255,.4)">{{ p.perMo }}</span></div>
                 </div>
                 <div style="font-size:11.5px;color:rgba(255,255,255,.4);margin-top:2px">{{ p.tagline }}</div>
                 <div style="margin-top:11px;display:flex;flex-direction:column;gap:5px;font-size:12px;color:rgba(255,255,255,.7)">
@@ -1759,6 +1759,9 @@
                 </sc-if>
                 <sc-if value="{{ p.btnShow }}" hint-placeholder-val="{{ false }}">
                   <button onClick="{{ p.onSelect }}" style="margin-top:13px;border:none;background:#fff;color:#0a0a0a;font-family:inherit;font-size:12.5px;font-weight:600;padding:9px;border-radius:9px;cursor:pointer" style-hover="background:rgba(255,255,255,.9)">{{ p.btnLabel }}</button>
+                </sc-if>
+                <sc-if value="{{ p.consultShow }}" hint-placeholder-val="{{ false }}">
+                  <button onClick="{{ p.onConsult }}" style="margin-top:13px;border:1px solid rgba(255,255,255,.22);background:transparent;color:#fff;font-family:inherit;font-size:12.5px;font-weight:600;padding:9px;border-radius:9px;cursor:pointer" style-hover="background:rgba(255,255,255,.07)">Request a consult</button>
                 </sc-if>
               </div>
             </sc-for>
@@ -5695,12 +5698,17 @@ class Component extends DCLogic {
         const rnPct = (rnLimit != null && rnLimit > 0) ? Math.min(100, Math.round((rnUsed / rnLimit) * 100)) : (U ? 6 : 0);
         const upTo = U ? U.upgradeTo : null;
         const billingOn = !!(U && U.billingConfigured);
-        const catalog = [
-          { id: "solo",         label: "Solo",         price: "$20",  tagline: "Get in the door",        workflows: "1 live automation",       runs: "30 runs / mo",     users: "1 user" },
-          { id: "professional", label: "Professional", price: "$50",  tagline: "Run several in parallel", workflows: "10 live automations",     runs: "200 runs / mo",    users: "1 user" },
-          { id: "team",         label: "Team",         price: "$200", tagline: "For a whole team",       workflows: "50 live automations",     runs: "1,000 runs / mo",  users: "5 users" },
-          { id: "business",     label: "Business",     price: "$600", tagline: "Scale with no limits",   workflows: "Unlimited automations",   runs: "5,000 runs / mo",  users: "Unlimited users" },
-        ];
+        // The catalog comes from the SERVER (/api/builder/usage → PLAN_META), not from
+        // a copy kept here. A hardcoded copy silently drifted once already — the modal
+        // went on advertising Professional at 10 workflows / 200 runs long after the
+        // caps were re-derived. Taglines stay client-side (pure copy, no limits in them).
+        const TAGLINES = {
+          solo:         "Get in the door",
+          professional: "Run several in parallel",
+          team:         "For a whole team",
+          business:     "Built and run with you",
+        };
+        const catalog = ((U && U.catalog) || []).map(p => ({ ...p, tagline: TAGLINES[p.id] || "" }));
         const curPlan = U ? U.plan : "solo";
         const curIdx = catalog.findIndex(p => p.id === curPlan);
         const seatLimit = (U && U.seats) ? U.seats.limit : 1; // null = unlimited
@@ -5730,11 +5738,27 @@ class Component extends DCLogic {
           upgradePlans: catalog.map((p, i) => ({
             id: p.id, label: p.label, price: p.price, tagline: p.tagline,
             workflows: p.workflows, runs: p.runs, users: p.users,
+            // "/mo" only makes sense next to a number. Business shows "Let's talk".
+            perMo: p.selfServe ? "/mo" : "",
             isCurrent: p.id === curPlan,
-            btnShow: i > curIdx && billingOn,
+            // Checkout is offered ONLY for self-serve plans above the current one.
+            // Business grants unlimited runs; a card-swipe path into it would be an
+            // unbounded cost liability, so it is never selectable — the server also
+            // rejects it with 409 CONSULTATIVE_PLAN, this is just the matching UI.
+            btnShow: p.selfServe && i > curIdx && billingOn,
             btnLabel: S.upgradeBusy === p.id ? "Starting…" : ("Upgrade to " + p.label),
+            consultShow: !p.selfServe && p.id !== curPlan,
             borderColor: p.id === curPlan ? "rgba(127,194,138,.45)" : "rgba(255,255,255,.1)",
             onSelect: () => this.startCheckout(p.id),
+            onConsult: () => {
+              const to = (U && U.consultEmail) || "hello@agntic.co";
+              const subject = encodeURIComponent("Atlas Business — consult request");
+              const body = encodeURIComponent(
+                "Hi Atlas team,\n\nWe'd like to talk about the Business tier.\n\n" +
+                "What we're trying to automate:\n\n\nCurrent plan: " + curPlan + "\n"
+              );
+              window.location.href = "mailto:" + to + "?subject=" + subject + "&body=" + body;
+            },
           })),
           onOpenUpgrade: () => this.openUpgrade(),
           onCloseUpgrade: () => this.closeUpgrade(),
@@ -6313,7 +6337,10 @@ class Component extends DCLogic {
     // plus deep-link signup: marketing pricing cards link to /?plan=<tier> to open the
     // Create-account form with that tier pre-selected.
     var _rmsg = null, _rgood = true, _signupPlan = null;
-    var _PLANS = { solo: 1, professional: 1, team: 1, business: 1 };
+    // Self-serve plans only. Business is consultative (unlimited runs, quoted per
+    // engagement) — a ?plan=business deep-link would drop the visitor into a
+    // checkout the server rejects with 409 CONSULTATIVE_PLAN. They email us instead.
+    var _PLANS = { solo: 1, professional: 1, team: 1 };
     try {
       var _p = new URLSearchParams(location.search);
       if (_p.get("signup") === "complete") _rmsg = "Payment received — check your email to set your password and finish setting up your workspace.";
