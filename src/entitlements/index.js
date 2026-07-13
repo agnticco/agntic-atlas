@@ -37,13 +37,36 @@ export const PLANS = {
   solo:         { seats: 1,        activeWorkflows: 1,        monthlyRuns: 30  },
   professional: { seats: 1,        activeWorkflows: 3,        monthlyRuns: 75  },
   team:         { seats: 5,        activeWorkflows: 10,       monthlyRuns: 300 },
-  business:     { seats: Infinity, activeWorkflows: Infinity, monthlyRuns: 900 },
+  // Business is CONSULTATIVE, not self-serve: unlimited everything, plus hands-on
+  // integration work. Unlimited runs is only safe because it cannot be bought
+  // without a conversation — the deal is priced against the customer's actual
+  // usage. See SELF_SERVE_PLANS; the invariant is enforced by
+  // scripts/checks/tier-caps.mjs: unlimited ⇒ not self-serve.
+  business:     { seats: Infinity, activeWorkflows: Infinity, monthlyRuns: Infinity },
   // Atlas's own workspace. Unlimited, non-sellable, never offered to a customer.
   internal:     { seats: Infinity, activeWorkflows: Infinity, monthlyRuns: Infinity },
   // RETIRED (2026-07-13). Deliberately mapped to Solo, NOT Infinity: a stale
   // `founding` row must never resolve to an uncapped tenant.
   founding:     { seats: 1,        activeWorkflows: 1,        monthlyRuns: 30  },
 };
+
+/**
+ * Plans a customer can buy themselves, with a card, without talking to anyone.
+ *
+ * Business is deliberately absent. It grants unlimited runs, and an unlimited plan
+ * that anyone can self-serve is an unbounded cost liability — exactly the hole the
+ * retired `founding` plan left open. Business is sold consultatively so the
+ * contract can be priced against real usage.
+ *
+ * Checkout validates against THIS list, not PUBLIC_PLANS (which is the display
+ * ladder and still includes Business, because it belongs on the pricing page).
+ */
+export const SELF_SERVE_PLANS = ['solo', 'professional', 'team'];
+
+/** True if `plan` can be purchased through Stripe Checkout without a sales conversation. */
+export function isSelfServe(plan) {
+  return SELF_SERVE_PLANS.includes(plan);
+}
 
 /**
  * What one workflow build costs from the run allowance.
@@ -65,10 +88,12 @@ export const PUBLIC_PLANS = ['solo', 'professional', 'team', 'business'];
 
 /** Display metadata for the sellable plans (labels, monthly USD price, headline limits). */
 export const PLAN_META = {
-  solo:         { label: 'Solo',         price: 20,  users: 1,          workflows: 1,          runs: 30  },
-  professional: { label: 'Professional', price: 50,  users: 1,          workflows: 3,          runs: 75  },
-  team:         { label: 'Team',         price: 200, users: 5,          workflows: 10,         runs: 300 },
-  business:     { label: 'Business',     price: 600, users: Infinity,   workflows: Infinity,   runs: 900 },
+  solo:         { label: 'Solo',         price: 20,   users: 1,        workflows: 1,        runs: 30  },
+  professional: { label: 'Professional', price: 50,   users: 1,        workflows: 3,        runs: 75  },
+  team:         { label: 'Team',         price: 200,  users: 5,        workflows: 10,       runs: 300 },
+  // price: null → "Talk to us". Consultative: unlimited usage plus integration
+  // work, quoted per engagement. Never render a number for this tier.
+  business:     { label: 'Business',     price: null, users: Infinity, workflows: Infinity, runs: Infinity, consultative: true },
 };
 
 const DEFAULT_PLAN = 'solo';

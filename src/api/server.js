@@ -86,7 +86,7 @@ import { FileCheckpointer } from '../graph/checkpointer/index.js';
 import { sendMail } from '../utils/mailer.js';
 import { renderResetEmail } from '../auth/reset-email.js';
 import { oauthRedirectBase } from '../connectors/oauth-redirect.js';
-import { entitlementsFor, PUBLIC_PLANS, PLAN_META } from '../entitlements/index.js';
+import { entitlementsFor, PUBLIC_PLANS, PLAN_META, isSelfServe } from '../entitlements/index.js';
 import { BillingEventStore } from '../billing/billing-event-store.js';
 import { handleStripeLifecycle } from '../billing/lifecycle.js';
 import {
@@ -2008,6 +2008,16 @@ export function createApp(spine) {
       if (!isBillingConfigured()) throw new BillingNotConfiguredError();
       const plan = String(req.body?.plan ?? '');
       if (!PUBLIC_PLANS.includes(plan)) return res.status(400).json({ error: 'Unknown plan.' });
+      // Business grants unlimited runs and is quoted per engagement — never
+      // reachable by card. A self-serve path into an unlimited plan is an
+      // unbounded cost liability.
+      if (!isSelfServe(plan)) {
+        logEvent('billing.consultative_plan', { tenant: req.tenant?.id ?? null, plan });
+        return res.status(409).json({
+          error: 'Business is tailored to your team — talk to us and we\'ll scope it with you.',
+          code: 'CONSULTATIVE_PLAN', plan,
+        });
+      }
       const tenant = spine.auth.tenantStore.get(req.tenant.id);
 
       // Existing subscriber → change the plan IN PLACE (no second subscription, no
@@ -2068,6 +2078,13 @@ export function createApp(spine) {
       const workspaceName = String(req.body?.workspaceName ?? '').trim();
       if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) return res.status(400).json({ error: 'Enter a valid email address.' });
       if (!PUBLIC_PLANS.includes(plan)) return res.status(400).json({ error: 'Choose a plan.' });
+      if (!isSelfServe(plan)) {
+        logEvent('billing.signup.consultative_plan', { email, plan });
+        return res.status(409).json({
+          error: 'Business is tailored to your team — talk to us and we\'ll scope it with you.',
+          code: 'CONSULTATIVE_PLAN', plan,
+        });
+      }
       if (spine.auth.userStore.findByEmail(email)) {
         return res.status(409).json({ error: 'An account with that email already exists — please sign in.', code: 'ACCOUNT_EXISTS' });
       }
