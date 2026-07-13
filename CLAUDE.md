@@ -298,7 +298,14 @@ refactor them without an explicit decision recorded here:
   - **`branch` and `human` are CONTROL nodes — their output never becomes `lastOutput`.** A
     branch's output is `{value, matched, to}`, a human's is `{decision, by, at, channel}`. `deliver`
     sends `ctx.lastOutput`, so leaving them in meant the step after an approval delivered the
-    literal `{"decision":"approve",…}` to the customer instead of the approved reply.
+    literal `{"decision":"approve",…}` to the customer instead of the approved reply. **This holds
+    on BOTH executors** — the top-level loop (`flow-tester.js`, `CONTROL_TYPES`) *and* the `foreach`
+    sub-loop, which has its own executor (`foreach.js`, `CONTROL_SUBSTEP_TYPES`). The sub-loop was
+    missed at first: a validator-clean spec with a `branch` inside a `foreach` delivered
+    `{"value":…,"viaCatchAll":true}` to the customer once per item (found by the independent
+    verifier, round 8). A `branch` in a loop is now **rejected** (`BRANCH_IN_FOREACH`) — it is a
+    structural no-op there anyway (a loop has no edges, so nothing routes) — and the engine drops
+    control-node output from `last` regardless, since DB specs predate the rule.
   - `src/workflows/workflow-store.js` — `workflow_runs.status` CHECK widened to include
     **`awaiting_human`** (a run waiting on a person is not running, not a success, and not an
     error; leaving it `running` gets it swept as stale). SQLite can't alter a CHECK in place, so

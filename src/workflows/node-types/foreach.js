@@ -30,6 +30,13 @@
 
 export const DEFAULT_MAX_ITEMS = 100;
 
+/**
+ * Control-node types whose output is routing/audit metadata, never the work
+ * product — so they never become a loop iteration's `last`. Mirrors
+ * flow-tester.js CONTROL_TYPES for the sub-loop, which has its own executor.
+ */
+const CONTROL_SUBSTEP_TYPES = new Set(['branch', 'human']);
+
 export const foreachNodeType = {
   type: 'foreach',
   label: 'For each item',
@@ -78,6 +85,22 @@ export const foreachNodeType = {
         message: `"${node.label || node.id}" asks a person to approve something inside a loop. That isn't supported.`,
         nodeId: node.id, field: 'config.steps',
         hint: 'Move the approval outside the loop — approve the whole batch once, before or after it runs.',
+      });
+    }
+    if (steps.some(s => s?.type === 'branch')) {
+      // A branch is a structural NO-OP inside a loop, and a dangerous one. Routing
+      // needs edges and liveness; a loop runs its sub-steps in array order with
+      // neither, so the branch's `.to` is ignored and EVERY sub-step runs every
+      // iteration. Worse, its control output {value,matched,to} becomes the
+      // iteration's `last`, so a downstream deliver sub-step sends that BLOB to the
+      // customer, once per item. (Found by the independent verifier — a
+      // validator-clean spec delivered `{"value":…,"viaCatchAll":true}` to Slack.)
+      // To branch per item, branch OUTSIDE the loop on a value the loop produced.
+      issues.push({
+        severity: 'error', code: 'BRANCH_IN_FOREACH',
+        message: `"${node.label || node.id}" contains a branch. A loop has no branches — its steps run in order, every time.`,
+        nodeId: node.id, field: 'config.steps',
+        hint: 'Routing needs the edges a loop does not have. Branch outside the loop, on a value the loop produced.',
       });
     }
 
@@ -138,7 +161,13 @@ export const foreachNodeType = {
           index,
         });
         if (step.id) scope.set(step.id, out);
-        last = out;
+        // A control node's output is routing/audit metadata, never the work
+        // product — the same rule the top-level loop applies (flow-tester.js,
+        // CONTROL_TYPES). Without this, a branch/human sub-step's blob becomes
+        // `last` and a downstream deliver sends it to the customer. The engine
+        // must not depend on the validator having rejected the shape: specs in
+        // the DB predate BRANCH_IN_FOREACH.
+        if (!CONTROL_SUBSTEP_TYPES.has(step.type)) last = out;
       }
       results.push(last);
     }

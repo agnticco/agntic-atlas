@@ -1854,3 +1854,56 @@ test('engine: an unregistered node type fails the run by name', async () => {
   assert.ok(failed, 'an unknown step type must not be silently skipped');
   assert.match(failed.error, /teleport/);
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 15. Round-8: a control node's blob must not leak to the customer FROM INSIDE
+//     A LOOP. Every earlier control-node test was on the top-level path; the
+//     foreach sub-loop has its OWN executor, and it laundered nothing.
+// ─────────────────────────────────────────────────────────────────────────────
+
+test('foreach: a branch sub-step is REJECTED at build time', () => {
+  // A branch is a structural no-op in a loop (no edges → no routing) and its
+  // output would be delivered as a blob. Reject the shape.
+  const res = validator.validate(spec(
+    [
+      { id: 'rows', type: 'connector-action', config: { action: 'airtable_search_records' } },
+      { id: 'loop', type: 'foreach', config: {
+        over: 'rows.output',
+        steps: [
+          { id: 'r', type: 'branch', config: { on: '{{item}}', cases: [{ when: '*', to: 'x' }] } },
+          { id: 'x', type: 'deliver', config: { channel: 'in_app' } },
+        ],
+      } },
+      { id: 'd', type: 'deliver', config: { channel: 'in_app' } },
+    ],
+    [{ from: 'rows', to: 'loop' }, { from: 'loop', to: 'd' }],
+  ));
+  assert.ok(codesOf(res).includes('BRANCH_IN_FOREACH'), `got: ${codesOf(res).join(', ')}`);
+});
+
+test('foreach: a control sub-step\'s output never becomes the delivered body', async () => {
+  // Defence in depth — the engine must not depend on the validator having run
+  // (specs in the DB predate BRANCH_IN_FOREACH). A branch sub-step's
+  // {value,matched,to} blob must NOT reach a downstream deliver sub-step.
+  const bodies = [];
+  const channels = stubChannels((a) => { bodies.push(a.body); return { delivered: true }; });
+  const tester = new FlowTester({ nodeTypes, llm: stubLlm('urgent'), channelRegistry: channels });
+
+  await runAll(tester, {
+    nodes: [{ id: 'loop', type: 'foreach', config: {
+      over: JSON.stringify(['alpha', 'beta']),
+      steps: [
+        { id: 'r', type: 'branch', config: { on: '{{item}}', cases: [{ when: '*', to: 'send' }] } },
+        { id: 'send', type: 'deliver', config: { channel: 'in_app' } },
+      ],
+    } }],
+    edges: [],
+  }, {});
+
+  for (const b of bodies) {
+    assert.ok(!String(b).includes('viaCatchAll') && !String(b).includes('"matched"'),
+      `a deliver in a loop must never receive a branch's routing blob — got: ${b}`);
+  }
+  // The item itself is the deliverable (the branch is a no-op), not the blob.
+  assert.ok(bodies.some(b => String(b).includes('alpha')), `the item must flow through; got ${JSON.stringify(bodies)}`);
+});

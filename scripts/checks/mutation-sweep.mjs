@@ -123,6 +123,28 @@ function suitesPass() {
 }
 
 // ── Run ──────────────────────────────────────────────────────────────────────
+// ── Crash-safety: NEVER leave a mutation on disk. ────────────────────────────
+// These harnesses mutate one source file at a time and restore it after running
+// the suite. An interrupt (Ctrl-C, SIGTERM, a thrown error) in that window used
+// to leave the mutation applied — and a Ctrl-C'd run could silently arm the
+// cross-tenant-leak mutation in the working tree. So snapshot every target up
+// front and restore ALL of them on any exit path. (Found by the independent
+// verifier.)
+const __PRISTINE = new Map(TARGETS.map(f => [f, readFileSync(f, 'utf8')]));
+let __restored = false;
+function __restoreAll() {
+  if (__restored) return;
+  __restored = true;
+  for (const [f, src] of __PRISTINE) {
+    try { if (readFileSync(f, 'utf8') !== src) writeFileSync(f, src); } catch { /* best effort */ }
+  }
+}
+process.on('exit', __restoreAll);
+for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP']) {
+  process.on(sig, () => { __restoreAll(); process.exit(130); });
+}
+process.on('uncaughtException', (e) => { __restoreAll(); console.error(e); process.exit(1); });
+
 if (!suitesPass()) {
   console.error('mutation-sweep: the suites do not pass UNMUTATED. Fix that first.');
   process.exit(1);

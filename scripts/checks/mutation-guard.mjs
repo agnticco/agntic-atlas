@@ -136,6 +136,15 @@ const MUTATIONS = [
     name: 'UNKNOWN_CONFIG_KEY disabled (a hallucinated config key ships)',
     find: "      if (typeDef && typeDef.configPolicy !== 'open') {", repl: '      if (false) {' },
 
+  // ── control node blob leaking from INSIDE a loop (round 8) ───────────────
+  { file: 'src/workflows/node-types/foreach.js',
+    name: 'foreach sub-loop lets a control node become `last` (branch blob delivered per item)',
+    find: 'if (!CONTROL_SUBSTEP_TYPES.has(step.type)) last = out;',
+    repl: 'last = out;' },
+  { file: 'src/workflows/node-types/foreach.js',
+    name: 'BRANCH_IN_FOREACH disabled (a branch in a loop validates clean)',
+    find: "    if (steps.some(s => s?.type === 'branch')) {", repl: '    if (false) {' },
+
   // ── the approval gate's only integrity constraint in B ───────────────────
   { file: 'src/workflows/node-types/human.js',
     name: 'human accepts an answer outside the declared set',
@@ -161,6 +170,28 @@ function suitePasses() {
 }
 
 console.log(`mutation-guard: ${MUTATIONS.length} mutations against ${SUITES.length} suite(s)\n`);
+
+// ── Crash-safety: NEVER leave a mutation on disk. ────────────────────────────
+// These harnesses mutate one source file at a time and restore it after running
+// the suite. An interrupt (Ctrl-C, SIGTERM, a thrown error) in that window used
+// to leave the mutation applied — and a Ctrl-C'd run could silently arm the
+// cross-tenant-leak mutation in the working tree. So snapshot every target up
+// front and restore ALL of them on any exit path. (Found by the independent
+// verifier.)
+const __PRISTINE = new Map([...new Set(MUTATIONS.map(m => m.file))].map(f => [f, readFileSync(f, 'utf8')]));
+let __restored = false;
+function __restoreAll() {
+  if (__restored) return;
+  __restored = true;
+  for (const [f, src] of __PRISTINE) {
+    try { if (readFileSync(f, 'utf8') !== src) writeFileSync(f, src); } catch { /* best effort */ }
+  }
+}
+process.on('exit', __restoreAll);
+for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP']) {
+  process.on(sig, () => { __restoreAll(); process.exit(130); });
+}
+process.on('uncaughtException', (e) => { __restoreAll(); console.error(e); process.exit(1); });
 
 if (!suitePasses()) {
   console.error('mutation-guard: the suites do not pass UNMUTATED. Fix that first.');
