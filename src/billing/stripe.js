@@ -17,29 +17,13 @@
  *   STRIPE_PRICE_SOLO, STRIPE_PRICE_PROFESSIONAL, STRIPE_PRICE_TEAM, STRIPE_PRICE_BUSINESS
  */
 
-import { PUBLIC_PLANS, SELF_SERVE_PLANS, isSelfServe } from '../entitlements/index.js';
+import { PUBLIC_PLANS } from '../entitlements/index.js';
 
 export class BillingNotConfiguredError extends Error {
   constructor(msg = 'Billing is not configured (STRIPE_SECRET_KEY unset).') {
     super(msg);
     this.status = 503;
     this.code = 'BILLING_NOT_CONFIGURED';
-  }
-}
-
-/**
- * Raised when someone tries to self-serve a consultative plan (Business).
- *
- * This is a load-bearing guard, not a UX nicety: Business grants UNLIMITED runs,
- * so a card-swipe path into it would be an unbounded cost liability — the same
- * hole the retired `founding` plan left open. Business is quoted per engagement.
- */
-export class ConsultativePlanError extends Error {
-  constructor(plan = 'business') {
-    super('This plan is tailored to your team — talk to us and we\'ll scope it with you.');
-    this.status = 409;
-    this.code = 'CONSULTATIVE_PLAN';
-    this.plan = plan;
   }
 }
 
@@ -65,14 +49,14 @@ function priceEnvKey(plan) {
 
 /** Stripe price id configured for a sellable plan (or null if unset/not sellable). */
 export function planToPrice(plan) {
-  if (!isSelfServe(plan)) return null;   // consultative plans have no Stripe price
+  if (!PUBLIC_PLANS.includes(plan)) return null;
   return process.env[priceEnvKey(plan)] || null;
 }
 
 /** Reverse map: a Stripe price id → the plan it sells (or null). */
 export function priceToPlan(priceId) {
   if (!priceId) return null;
-  for (const plan of SELF_SERVE_PLANS) {
+  for (const plan of PUBLIC_PLANS) {
     if (process.env[priceEnvKey(plan)] === priceId) return plan;
   }
   return null;
@@ -105,7 +89,7 @@ function taxParams() {
  */
 export async function createCheckoutSession({ tenantId, plan, email = null, customerId = null, baseUrl, context = 'upgrade' }) {
   if (!tenantId) throw new Error('tenantId is required');
-  if (!isSelfServe(plan)) throw new ConsultativePlanError(plan);
+  if (!PUBLIC_PLANS.includes(plan)) throw new Error(`"${plan}" is not a purchasable plan`);
   const price = planToPrice(plan);
   if (!price) throw new BillingNotConfiguredError(`No Stripe price configured for the ${plan} plan (${priceEnvKey(plan)}).`);
 
@@ -133,7 +117,7 @@ export async function createCheckoutSession({ tenantId, plan, email = null, cust
  */
 export async function createSignupCheckoutSession({ email, workspaceName, plan, baseUrl }) {
   if (!email) throw new Error('email is required');
-  if (!isSelfServe(plan)) throw new ConsultativePlanError(plan);
+  if (!PUBLIC_PLANS.includes(plan)) throw new Error(`"${plan}" is not a purchasable plan`);
   const price = planToPrice(plan);
   if (!price) throw new BillingNotConfiguredError(`No Stripe price configured for the ${plan} plan (${priceEnvKey(plan)}).`);
 
@@ -171,7 +155,7 @@ export async function getSubscription(subscriptionId) {
  */
 export async function changeSubscriptionPlan({ subscriptionId, plan }) {
   if (!subscriptionId) throw new Error('subscriptionId is required');
-  if (!isSelfServe(plan)) throw new ConsultativePlanError(plan);
+  if (!PUBLIC_PLANS.includes(plan)) throw new Error(`"${plan}" is not a purchasable plan`);
   const price = planToPrice(plan);
   if (!price) throw new BillingNotConfiguredError(`No Stripe price configured for the ${plan} plan (${priceEnvKey(plan)}).`);
   const stripe = await getStripe();

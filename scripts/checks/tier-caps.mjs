@@ -10,7 +10,7 @@
  *
  * Run: node --env-file-if-exists=.env scripts/checks/tier-caps.mjs
  */
-import { PLANS, PLAN_META, PUBLIC_PLANS, SELF_SERVE_PLANS, BUILD_RUN_COST, entitlement, isSelfServe } from '../../src/entitlements/index.js';
+import { PLANS, PLAN_META, PUBLIC_PLANS, BUILD_RUN_COST, entitlement } from '../../src/entitlements/index.js';
 
 // ── Measured inputs (2026-07-13, post prompt-caching v1.3.8) ─────────────────
 // Worst run we could construct across eight connectors: web_fetch -> extract ->
@@ -28,29 +28,11 @@ const ok   = (msg) => console.log('  ok    ' + msg);
 
 console.log('TIER CAPS — margin guard\n');
 
-// 1. THE INVARIANT: unlimited runs ⇒ not self-serve.
-//
-// An unlimited plan anyone can buy with a card is an unbounded cost liability —
-// exactly the hole the retired `founding` plan left open. Unlimited is allowed
-// ONLY on a consultative plan, where the contract is priced against real usage.
+// 1. No sellable plan may have unlimited runs. Unlimited runs = unbounded cost.
 for (const plan of PUBLIC_PLANS) {
   const runs = entitlement(plan, 'monthlyRuns');
-  const finite = Number.isFinite(runs);
-  if (!finite && isSelfServe(plan)) {
-    fail(`${plan}: UNLIMITED runs AND self-serve — anyone with a card can create unbounded cost`);
-  } else if (!finite) {
-    ok(`${plan}: unlimited runs, but consultative (not self-serve) — priced per engagement`);
-  } else {
-    ok(`${plan}: monthlyRuns is finite (${runs})`);
-  }
-}
-
-// A consultative plan must not have a listed price, or the pricing page will
-// render a number a customer can hold you to for an unscoped engagement.
-for (const plan of PUBLIC_PLANS) {
-  if (!isSelfServe(plan) && PLAN_META[plan]?.price != null) {
-    fail(`${plan}: consultative but has a listed price ($${PLAN_META[plan].price}) — must be "Talk to us"`);
-  }
+  if (!Number.isFinite(runs)) fail(`${plan}: monthlyRuns is unlimited — unbounded cost liability`);
+  else ok(`${plan}: monthlyRuns is finite (${runs})`);
 }
 
 // 2. `founding` is retired and must never resolve to unlimited again.
@@ -63,7 +45,7 @@ if (!Number.isFinite(PLANS.founding?.monthlyRuns ?? Infinity)) {
 // 3. Worst-case margin at each cap, charging builds against the same meter.
 console.log('\nWorst-case gross margin (every run the most expensive shape):\n');
 console.log('  plan          price   runs   COGS@cap   Stripe    GM');
-for (const plan of SELF_SERVE_PLANS) {
+for (const plan of PUBLIC_PLANS) {
   const price = PLAN_META[plan].price;
   const runs  = entitlement(plan, 'monthlyRuns');
   const cogs  = runs * WORST_RUN_USD;
@@ -92,7 +74,7 @@ if (!(BUILD_RUN_COST >= 1)) {
 //    or the workflow count we advertise is a promise the run budget cannot keep.
 console.log('');
 const DAILY = 22;
-for (const plan of SELF_SERVE_PLANS) {
+for (const plan of PUBLIC_PLANS) {
   const runs = entitlement(plan, 'monthlyRuns');
   const wfs  = entitlement(plan, 'activeWorkflows');
   const funded = Math.floor(runs / DAILY);
