@@ -13,10 +13,14 @@ This is written for a coding agent picking up one increment cold.
 - **§1 is the current state** — the real contracts as they exist in `main` today. Do not
   re-derive them; they were read out of the code on 2026-07-13.
 - **§2 is the target state** — the same contracts, after v2.
-- **§3–§8 are the deltas**, file by file, with before/after signatures.
-- **§9 sequences the work** into increments. Each has explicit **acceptance criteria** and a
+- **§3–§9 are the deltas**, file by file, with before/after signatures.
+  **§6 (the elicitation UI) and §7 (the human approval gate) are load-bearing, not trim.** v2
+  elicits strictly more than v1; without §6 that becomes a 40-question interrogation, and
+  without §7 the "accept all defaults" escape hatch in §6 would be a lie. Do not treat either
+  as a phase to be tacked on at the end — they are folded through the increments deliberately.
+- **§10 sequences the work** into increments. Each has explicit **acceptance criteria** and a
   gate. Do one increment per session, end at its gate.
-- **§10 is the list of things that must not break.** Check it before you open a PR.
+- **§11 is the list of things that must not break.** Check it before you open a PR.
 
 **Anchors are exported symbol names, not line numbers.** Per CLAUDE.md, line numbers in a brief
 are non-authoritative provenance — re-ground against the symbol.
@@ -298,7 +302,7 @@ Today: topo-sort → run every node. Needed: a node may be **skipped**.
 | `decision` | Evaluate `inputs` (LLM inputs = **classify into the declared enum**, one call per fuzzy input for auditability), match `rules` under `hitPolicy`, return the output value. Emit which rule fired → audit trail. |
 | `branch` | Evaluate `on`; select one `case`; deactivate the rest. |
 | `foreach` | Iterate `over` a collection, binding `{{item}}`; collect outputs. **`maxItems` (default 100)** — a runaway `foreach` over a web node is a cost incident. |
-| `human` | **Durable pause.** New run status `awaiting_human`; persist; resume via the Approvals inbox (reuse `src/inbox/`). |
+| `human` | **Durable pause + multi-channel approval gate.** Run status `awaiting_human`; ask over Slack / in-app inbox / signed email link; resume from persisted steps. **Full design: §7 — read it before touching this.** |
 | `wait` | Timer. |
 
 ### `llm.js` — add `mode`
@@ -331,39 +335,259 @@ field" from a silent production failure into a build-time error.
 
 ---
 
-## 6. DELTA: API + UI
+## 6. DELTA: the elicitation UI
 
-- `POST /api/builder/sessions/:threadId/respond` — accept the new interrupt payloads (§2.5).
-- `public/index.html` — the switch on `iv.type` (currently `done|clarification|proposal|ratify`)
-  gains `outcome_check | example_request | decision_review | gap_review`.
+> The UI is **not** a downstream skin on the converger. It is *half of the moat*. The closed
+> vocabulary that makes the completeness proof possible (`decisions[].inputs[].values`, the
+> connected capability catalog, the induced gap set) is **the same thing that makes multiple
+> choice possible**. A pure-LLM competitor cannot render this screen, because it does not know
+> what the finite set of answers *is*.
 
-New surfaces:
-1. **Outcome card** — pinned above the steps. The contract, in the user's words. Editable.
-2. **Decision table review** — a `decision` renders as a **table**, not prose. *This is the
-   artifact a compliance buyer signs and a pure-LLM competitor cannot produce.*
-3. **Gap list** — *"You haven't told me what to do in these 3 cases."* Each row:
-   **Answer** · **Escalate to me** *(pre-selected default)* · **Ignore**.
-4. **Approvals inbox** — where escalations land at runtime (`src/inbox/`).
+### 6.1 The problem this solves
 
-**Test panel becomes the outcome oracle.** It stops asking *"does this look right?"* and starts
-asserting the `outcome.examples` — pass/fail against the contract. This is a strict upgrade to
-the single most persuasive moment in the demo.
+v2 asks for strictly more than v1: an outcome contract, worked examples, decision inputs, hit
+policies, exception paths. Elicited as free-text chat turns, that is a **40-question
+interrogation** and it will kill activation stone dead — which matters, because prod today is
+**5 signups, 1 workflow, 0 subscriptions**. Activation is the actual business problem; a v2 that
+elicits more but converts less is a net loss.
 
-**SOP export** (`sop-generator.js`, `sop-pdf.js`) gains outcome + decision tables + escalation
-policy + provenance. That is the consultant's deliverable.
+The fix is a shift in interaction model:
+
+| | v1 (today) | v2 |
+|---|---|---|
+| Who produces the answer | The **user**, by typing | The **system**, by proposing |
+| What the user does | Recall and articulate | **Recognise and correct** |
+| Cost of a turn | A sentence | **A click** |
+| Cost of not knowing | Blocked | **Accept the default, ship anyway** |
+
+### 6.2 Design principles (load-bearing — an agent must not violate these)
+
+1. **Recognition over recall.** People cannot articulate their own rules. They *instantly*
+   recognise a wrong one. Never ask an open question where a closed one is available. Every
+   turn is *"here is my best guess — correct me."*
+2. **The system proposes, the user disposes.** Every interrupt ships with a **pre-selected
+   default**. `Enter` is always a valid answer.
+3. **Never ask for something we can read.** We hold OAuth tokens for the user's Gmail, Slack,
+   Airtable, Drive. Asking the user to *type* an example email — when `gmail_search` can list
+   three real ones to pick from — is a self-inflicted wound. This principle generalises: table
+   names, channel lists, field names, label names. **Read it, render it, let them pick.**
+4. **Accept-all-defaults must always be one click away.** A user must be able to publish a
+   provably-complete workflow **having answered nothing**, because the default resolution for
+   every unknown is *"escalate to a human"* (§7) — which is safe, correct, and honest.
+5. **Progressive disclosure.** Depth is opt-in. The decision table is *reviewed*, not
+   *authored* — collapsed to a sentence, expandable to the grid.
+6. **Free text is always available.** Chips never *replace* the composer; they sit above it. An
+   expert who wants to type a paragraph must never be forced through a wizard.
+
+### 6.3 Interrupt → component map
+
+`public/index.html` switches on `iv.type`. Today: `clarification | proposal | ratify | done`.
+v2 adds four, each with a payload shape the client renders **without** knowing the domain:
+
+| `iv.type` | Component | Payload | Default |
+|---|---|---|---|
+| `outcome_check` | **Outcome cards** — 2–3 candidate contracts, pick one or edit | `{ candidates: [{ id, statement, assertions[] }] }` | `candidates[0]` |
+| `example_request` | **Example picker** — real records fetched from a connected source | `{ source: 'gmail'\|'airtable'\|…, query, items: [{ id, preview, raw }], allowManual: true }` | none *(user picks ≥1)* |
+| `decision_review` | **Decision table** — read-mostly grid; cells are dropdowns over `values` | `{ decisionId, inputs[], rules[], hitPolicy, hitPolicyOptions[] }` | the induced table, unmodified |
+| `gap_review` | **Gap list** — one row per uncovered case, each `Answer ▾ / Escalate / Ignore` | `{ gaps: [{ id, description, suggestedAnswers[], defaultResolution: 'escalate' }] }` | **escalate, all rows** |
+
+Two shared primitives, reusable by *any* interrupt (including today's `clarification`):
+
+- **`choices[]`** — `{ id, label, hint?, selected? }`. Renders as chips. `multi: true` ⇒
+  checkboxes. **Any interrupt may carry `choices[]`**; this is how a `clarification` stops being
+  a blank text box. Adding `choices` to an existing interrupt is backward-compatible — a client
+  that ignores it still shows the composer.
+- **`assertionBuilder`** — `{ verbs[], objects[], targets[] }` where `targets` is drawn from the
+  **connected capability catalog**. Composes *"[create] [a record] in [Airtable · Deals]"* from
+  three dropdowns. This is the outcome contract, built without typing.
+
+### 6.4 Per-phase surfaces
+
+**Outcome.** 2–3 outcome cards — *"Which did you mean?"* — each showing the statement plus its
+assertions. Below: the assertion builder (chips → catalog targets). The chosen card is **pinned
+above the chat for the rest of the session** and stays editable. It is the contract; it must
+never scroll away.
+
+**Examples — the biggest single unlock.** Do **not** ask the user to invent test cases; they
+will invent easy ones. Call `gmail_search` (already built) and render *"Pick 3 emails that
+should trigger this"* + *"Pick 1 that should NOT"* from their real inbox. Zero typing, and the
+negative example is the one that finds the bug. Falls back to manual entry when no source is
+connected (`allowManual`).
+
+**Decisions.** Render the **induced** table for review. Cells are dropdowns — the enum values
+are known, that is the whole point of `LLM_INPUT_NOT_ENUM`. Hit policy is a radio in plain
+language, never the DMN letter:
+
+| Radio label | DMN |
+|---|---|
+| *"Only one rule should ever match"* | `UNIQUE` |
+| *"First match wins"* | `FIRST` |
+| *"Collect everything that matches"* | `COLLECT` |
+
+**Gaps — the killer surface.** *"You haven't told me what to do in these 3 cases."* Each row:
+**Answer ▾** (pre-filled with the model's suggestion) · **Escalate to me** *(pre-selected)* ·
+**Ignore**. A single **"Accept all defaults"** button resolves every row to *escalate* and
+publishes. The user ships a **provably complete** workflow having answered nothing, and the gaps
+become a backlog that fills in as real escalations arrive. This is the mechanism that lets v2
+demand more rigour **without** demanding more typing — and it is why §7 is a hard dependency,
+not a nice-to-have.
+
+### 6.5 Framework constraints (an agent WILL hit these — CLAUDE.md gotchas)
+
+- **`sc-if` / `sc-for` are visible DOM nodes until `support.js` compiles them.** The global
+  `sc-if, sc-for { display: none; }` rule at `public/index.html:135` is what stops the browser
+  computing child styles early. **Never** put `<img src="{{…}}">` or `background:url('{{…}}')`
+  inside a template element — the browser fetches the *uninterpolated* URL and 404s.
+- **Event attributes must resolve through `EVENT_MAP`** (`public/support.js:298`). HTML lowercases
+  attribute names, so `EVENT_MAP` maps `onclick → onClick`, `onkeydown → onKeyDown`, etc. An
+  event **absent** from the map hits the fallback at `support.js:390`
+  (`"on" + key[2].toUpperCase() + key.slice(3)`), which yields `onDragover` — **not** a valid
+  React prop, and it silently does nothing. **If you need an event that isn't in `EVENT_MAP`, add
+  it to `EVENT_MAP`.** Existing usage: `onClick` ×146, `onInput` ×17, `onKeydown`/`onKeyDown` ×8,
+  `onBlur` ×3, `onDrop` ×2.
+- **`index.html` on the marketing site stores markup as a JSON string** inside
+  `<script type="__bundler/template">`. Not this repo — but the same trap exists for any
+  templated fragment: a find-string containing no quotes and no slashes matches **identically**
+  in both plain and JSON-escaped encodings. Choose the encoding by **file**, and re-validate the
+  JSON before writing.
+
+### 6.6 API
+
+- `POST /api/builder/sessions/:threadId/respond` accepts the new payloads. The response envelope
+  gains an optional `choices[]` / `assertionBuilder` on **any** interrupt — additive, so a v1
+  client degrades to the plain composer rather than breaking.
+- **Test panel becomes the outcome oracle.** It stops asking *"does this look right?"* and starts
+  asserting `outcome.examples` — pass/fail against the contract. Strict upgrade to the single
+  most persuasive moment in the demo.
+- **SOP export** (`sop-generator.js`, `sop-pdf.js`) gains outcome + decision tables + escalation
+  policy + provenance. That is the consultant's deliverable.
 
 ---
 
-## 7. Spec versioning / compatibility
+## 7. DELTA: human-in-the-loop — the `human` approval gate
+
+> Maps to BPMN's **User Task** + a **boundary timer event** + an **escalation path**. This is a
+> standard shape, not an Atlas invention — say so to a compliance buyer.
+
+A `human` node is **two halves**: an **ask**, delivered over one or more channels, and an
+**answer**, captured back — *authenticated, single-use, and idempotent*.
+
+### 7.1 Node shape
+
+```jsonc
+{
+  "id": "approve_send",
+  "type": "human",
+  "config": {
+    "prompt": "Send this reply to {{extract.customer_email}}?",
+    "preview": "{{draft_reply.output}}",          // what the approver actually sees
+    "decisions": ["approve", "reject"],           // later: "edit"
+    "channels": [                                  // ask over ALL; first valid answer wins
+      { "type": "slack", "target": "#ops" },
+      { "type": "inbox", "assignee": "user:abc" },
+      { "type": "email", "to": "ops@acme.com" }
+    ],
+    "quorum": 1,
+    "timeout": { "after": "48h", "then": "escalate", "escalateTo": "inbox:owner" }
+  }
+}
+```
+
+Outputs `{{approve_send.decision}}` (`approve|reject|timeout`), `.by`, `.at`, `.channel` — so a
+downstream `branch` routes on it and the run log carries **who approved what, when, over which
+channel**. That is the audit trail.
+
+### 7.2 Channels and their trust levels — *the crux*
+
+An approval that anyone can forge is not an approval. Channels are **not interchangeable**:
+
+| Channel | Ask | Answer | Trust | Proves |
+|---|---|---|---|---|
+| `inbox` | In-app item (`src/inbox/`) | Click, authenticated session | **strong** | *This user*, logged in |
+| `slack` | Block Kit message + buttons | `block_actions` → HMAC-verified with `SLACK_SIGNING_SECRET`, carries `user.id` | **strong** | *Which Slack user* clicked |
+| `email` | Email with **signed magic links** | `GET /approvals/:token` — hashed, single-use, TTL | **medium** | Possession of the link (i.e. mailbox access). **Forwardable.** |
+| ~~`email_reply`~~ | — | Parse `"yes"` from a reply body | **FORBIDDEN** | *Nothing.* `From:` is trivially spoofable |
+
+**Hard rule: never authenticate an approval by parsing an email reply.** SPF/DKIM authenticate a
+*sending domain*, not a *human intent*; and the body of a forwarded thread is full of the word
+"yes". Email approvals use a **signed magic link** or they do not exist.
+
+**Hard rule: the channel must be at least as strong as the action is risky.** A write capability
+(create a record, send a customer email, move money) behind a `medium`-trust approval is a
+validator **error**, not a warning.
+
+### 7.3 Token model — reuse the password-reset pattern verbatim
+
+`src/auth/password-reset-store.js` already solved this and is battle-tested. `ApprovalStore`
+mirrors it exactly:
+
+- `newApprovalToken()` → 32 random bytes, base64url.
+- Store the **SHA-256 hash only**. The raw token exists solely in the email.
+- **Single-use** — consumed on first valid click.
+- **TTL**, defaulting to the node's `timeout.after`.
+- **One token per `(runId, nodeId, decision)`.** Approve and reject are *different* tokens, so a
+  forwarded "approve" link cannot be flipped to "reject" by editing a query param. Consuming
+  either invalidates **both** — one approval, one answer.
+
+### 7.4 Durable pause — the engine mechanics
+
+**No StateGraph checkpointer is needed, and adding one would be a mistake.**
+`WorkflowStore.appendStep()` (`src/workflows/workflow-store.js:738`) already persists every
+node's result to `workflow_runs.steps`. The DAG is deterministic and topologically ordered.
+Therefore:
+
+- Run status **`awaiting_human`** (new).
+- **On pause:** persist, emit the asks, return. The run holds **no compute** while it waits —
+  a pending approval is free.
+- **On resume:** rehydrate `ctx.outputs` from the persisted steps, inject the decision as the
+  `human` node's output, and continue the topological order from the next node.
+- **The scheduler must skip `awaiting_human` runs** — it must not re-fire them.
+- A **timeout sweeper** (on the existing 60 s scheduler tick) fires `timeout.then` when
+  `now > expires_at`.
+
+### 7.5 New endpoints / stores
+
+| What | Where | Note |
+|---|---|---|
+| `POST /connectors/slack/interactive` | `src/api/server.js` | **New.** Slack Block Kit buttons post to the *Interactivity* Request URL, **not** to `/connectors/slack/events` (which exists, at `server.js:1619`). Verify the Slack signature. Register the URL in the Slack app manifest. |
+| `GET /approvals/:token` | `src/api/server.js` | Email magic link. Consume → record → resume. Renders a confirmation page (it is a `GET` from a mail client — must be safe to prefetch, so **require a POST confirm** on the landing page rather than mutating on the `GET`). |
+| `ApprovalStore` | `src/approvals/approval-store.js` | New. Hashed, single-use, TTL, bound to `(run, node, decision)`. Fail-closed on tenant. |
+| Approvals inbox | `src/inbox/` | Exists. Add approval items with Approve/Reject. |
+
+### 7.6 Where approval gates come from
+
+1. **The user asks.** *"Check with me before it sends."*
+2. **The gap oracle's default resolution.** Every unresolved gap escalates to a human — which
+   **is** a `human` node. This is what makes §6.4's *"Accept all defaults"* safe.
+3. **The converger proposes one, unprompted, on high-impact writes.** An irreversible or
+   outward-facing action — sending a customer email, posting publicly, creating a record,
+   spending money — should trigger: *"This sends a real email to a customer. Want to approve each
+   one before it goes out?"* This is a product moment: it is the system demonstrating that it
+   understands consequence.
+
+### 7.7 New validator codes
+
+| Code | Rule | Severity |
+|---|---|---|
+| `HUMAN_WITHOUT_TIMEOUT` | a `human` node **must** declare `timeout` | **error** — a pause with no timeout is a workflow that hangs forever |
+| `WEAK_APPROVAL_FOR_WRITE` | a write capability gated by a `medium`-trust channel alone | **error** |
+| `APPROVAL_CHANNEL_NOT_CONNECTED` | `channels[].type` not in the tenant's connected catalog | **error** |
+| `EMAIL_REPLY_APPROVAL` | `email_reply` used at all | **error** — see §7.2 |
+
+---
+
+## 8. Spec versioning / compatibility
 
 - Executor branches on `spec.version`; **absent ⇒ 1**.
 - v1 specs keep running untouched. No migration. (1 live workflow in prod; 13 local.)
 - `outcome` is required only when `version === 2`.
 - New node types are additive to the registry; a v1 spec simply never uses them.
+- **The UI degrades, it does not break.** `choices[]` / `assertionBuilder` are optional fields on
+  the interrupt envelope; a client that ignores them still renders the plain composer.
 
 ---
 
-## 8. Cost
+## 9. Cost
 
 Build is **$0.2215** today (measured, post-caching v1.3.8). v2 adds turns (outcome + examples +
 gaps) and a shape-derivation call.
@@ -371,15 +595,22 @@ gaps) and a shape-derivation call.
 - Expect **$0.35–0.55/build**. Still 1–2 run-units. Re-derive `BUILD_RUN_COST` from measurement
   when increment C lands; `scripts/checks/tier-caps.mjs` **already fails** if a build is
   under-charged.
-- **`foreach` is the new cost risk.** 100 items × a `web_fetch` node ≈ a $20 run. `maxItems`
-  plus the per-plan daily USD ceiling (`tenant-guard.js`) are the brakes. **A `foreach` whose
-  body contains a web capability must be explicitly bounded in the UI**, not in a config file.
+- **The UI *lowers* cost.** A click is not an LLM turn. Multiple-choice replaces a
+  free-text→parse→re-ask loop with a single structured response — fewer turns, and the ones that
+  remain are cheaper because the answer is already normalised.
+- **A paused `human` node costs nothing.** It holds no compute. Approvals are free to wait.
+- **`foreach` is the new cost risk.** 100 items × a `web_fetch` node ≈ a $20 run. `maxItems` plus
+  the per-plan daily USD ceiling (`tenant-guard.js`) are the brakes. **A `foreach` whose body
+  contains a web capability must be explicitly bounded in the UI**, not in a config file.
 
 ---
 
-## 9. Increments
+## 10. Increments
 
 > One deliverable per session, ending at a gate (CLAUDE.md working rules).
+> **Every increment from C on ships its own UI.** The UI is not a phase at the end — a converger
+> that asks more without a surface that makes answering cheap is strictly worse than what we
+> have today.
 
 ### Increment A — validator hardening + node re-cut *(days)*
 **Do this first. It ships value even if everything after is cancelled.**
@@ -395,31 +626,48 @@ gaps) and a shape-derivation call.
   executes byte-identically to today (P2/P3 prove it); a re-fired trigger with `idempotency`
   does not duplicate a record.
 
-### Increment C — converger v2 core *(the moat)*
+### Increment C — converger v2 core + outcome/gap UI *(the moat)*
 - `outcome` + `examples` + `decisions` + `process` + `gaps` graph nodes.
 - `gap-scorer.js` rewrite. Spec v2. `UNSATISFIED_ASSERTION`, `LLM_INPUT_NOT_ENUM`.
-- Outcome card + gap list in the UI.
+- **UI:** the shared `choices[]` primitive · outcome cards (`outcome_check`) · the pinned outcome
+  card · the gap list (`gap_review`) with **escalate pre-selected** and **Accept all defaults**.
 - **Acceptance:** the "Slack AND email" case (defect #1) **cannot publish** — it fails
-  `UNSATISFIED_ASSERTION`. A 2-node workflow ratifies without inventing an LLM node
-  (defect #4). The converger asks ≥1 exception question (defect #5).
+  `UNSATISFIED_ASSERTION`. A 2-node workflow ratifies without inventing an LLM node (defect #4).
+  The converger asks ≥1 exception question (defect #5). **A user can publish a gap-free workflow
+  by clicking only defaults — zero free-text turns.**
 
-### Increment D — `human` + Approvals inbox
-- Durable pause; escalation as the **default** gap resolution.
-- **Acceptance:** an unresolved gap publishes safely and routes to the inbox at runtime.
+### Increment D — `human` approval gate + channels + Approvals inbox
+- `ApprovalStore` (hashed / single-use / TTL, per §7.3) · durable pause + resume (§7.4) ·
+  `POST /connectors/slack/interactive` · `GET /approvals/:token` · timeout sweeper.
+- Escalation is the **default** gap resolution — this is what makes Increment C's
+  *"Accept all defaults"* honest.
+- **UI:** Approvals inbox items with Approve/Reject; Slack Block Kit buttons; the approval email.
+- **Acceptance:** an unresolved gap publishes safely and routes to the inbox at runtime. **An
+  approval is accepted from Slack and from an email magic link, each recorded with *who* and
+  *how*.** A replayed magic link is **rejected** (single-use). A run with no answer hits
+  `timeout` and takes the declared path. `email_reply` is rejected by the validator.
 
 ### Increment E — `decision` node + table review UI + DMN gap analysis
+- Box subtraction, **never** cross-product enumeration (§12).
+- **UI:** the decision table (`decision_review`) — dropdown cells over the enum values,
+  plain-language hit-policy radio, collapsed by default.
 - **Acceptance:** a table with an uncovered enum combination is reported *before* publish;
-  `UNIQUE` + overlapping rules is rejected.
+  `UNIQUE` + overlapping rules is rejected; a decision with **>4 inputs** triggers a decompose
+  prompt rather than a table nobody can read.
 
-### Increment F — `foreach` + schema-aware connectors
+### Increment F — `foreach` + schema-aware connectors + the example picker
+- `airtable_list_bases` · `airtable_describe_table` · `sheets_describe`.
+- **UI:** the example picker (`example_request`) — *"pick 3 real emails"* from `gmail_search`;
+  destination fields chosen from the **read** schema, never a pasted base ID. This is
+  principle §6.2.3 (*never ask for something we can read*) made concrete.
 - **Acceptance:** the flagship — *inbound email → extract → decide → Airtable record + Slack* —
-  is buildable **by conversation alone**, with no pasted base ID.
+  is buildable **by conversation and clicks alone**, with no pasted base ID and no typed example.
 
-### Increment G — test panel as outcome oracle; SOP carries outcome + tables + provenance
+### Increment G — test panel as outcome oracle; SOP carries outcome + tables + escalation policy + provenance
 
 ---
 
-## 10. Invariants — check before opening a PR
+## 11. Invariants — check before opening a PR
 
 1. **`scripts/gates/p3.sh` is green.** The converger still reproduces the frozen canonical spec
    (`docs/specs/canonical-ups-slack.json`). Structural equivalence + runnability — **never**
@@ -431,41 +679,58 @@ gaps) and a shape-derivation call.
    must be re-derived.
 6. **No spec publishes with an unresolved gap that isn't explicitly escalated.**
 7. **No `decision` input has `evaluator:'llm'` without a closed enum.** This is the moat.
+8. **No approval is authenticated by parsing an email body.** Signed, hashed, single-use tokens
+   only (§7.2, §7.3).
+9. **Every interrupt carries a default.** `Enter` must always be a valid answer, and
+   *Accept all defaults* must always be reachable.
 
 ### New tests
 | Layer | What | Where |
 |---|---|---|
 | Unit | `scoreGap()` over crafted specs: unsatisfied assertion · table gap · UNIQUE overlap · non-exhaustive branch · unknown config key | `tests/converger/gap-oracle.test.js` |
-| Unit | Executor: `branch` skips the non-selected subtree; `foreach` bounds at `maxItems`; `human` pauses/resumes | `tests/workflows/control-flow.test.js` |
+| Unit | Executor: `branch` skips the non-selected subtree; `foreach` bounds at `maxItems`; `human` pauses and **resumes from persisted steps** | `tests/workflows/control-flow.test.js` |
+| Unit | **Approvals:** token is stored hashed · single-use (replay rejected) · TTL expiry · approve/reject tokens are distinct and mutually invalidating · timeout takes the declared path | `tests/approvals/approval-store.test.js` |
+| Security | **Forged approvals:** unsigned Slack `block_actions` rejected · a token from tenant A cannot resolve a run in tenant B · `email_reply` rejected by the validator | `scripts/checks/approval-adversarial.mjs` |
 | Golden | Corpus of `outcome → spec` pairs. Assert **structural** equivalence + gap-freedom. **Never byte-equality.** | `tests/converger/golden/*.json` |
 | Adversarial | Extend the `adversary` agent: contradictory outcomes; unstateable outcomes; an outcome needing an absent connector. **It must never silently drop an assertion.** | `scripts/checks/converger-adversarial.mjs` |
-| Gate | `p12.sh` = p3 green **+** gap-oracle **+** adversarial **+** the write-shaped E2E | `scripts/gates/p12.sh` |
+| UI | The **zero-typing path**: a build completed entirely through defaults + clicks yields a gap-free, publishable spec | `tests/e2e/zero-typing-build.test.js` |
+| Gate | `p12.sh` = p3 green **+** gap-oracle **+** adversarial **+** approval-adversarial **+** the write-shaped E2E | `scripts/gates/p12.sh` |
 
 ---
 
-## 11. Open questions (decide before the increment that needs them)
+## 12. Open questions (decide before the increment that needs them)
 
 - ~~**FEEL subset**~~ — **ANSWERED.** Adopt DMN's *simple unary tests* subset ("FEEL-A"):
   `-` · literal · `< <= > >=` · intervals `[a..b] (a..b] [a..b) (a..b)` · comma disjunction ·
   `not(...)`. **Exclude variable references (`>= x`)** — their domain is unknown at build time,
   which destroys decidability. No `!=` (FEEL doesn't have it; use `not()`). See
   `bpmn-dmn-foundations.md` §7b(b).
-- **Decision evaluation cost.** One LLM call for the whole table (cheap, less auditable) vs one
-  per fuzzy input (costlier, precisely attributable)? Lean per-input for the audit trail; measure.
 - ~~**Practical table width**~~ — **ANSWERED, measured** (`scripts/checks/gap-analysis-bench.mjs`).
   Compute is a non-issue with **box subtraction**: 10 inputs × 10 values (10¹⁰ combinations)
   analyses in **1 ms**. The binding limit is **cognitive** — at 5+ inputs (1,024+ combinations)
   no human reviews the table, and an unreviewable table is not auditable, which is the moat.
   **DECOMPOSE AT >4 INPUTS.** Implementation directive: box subtraction, never cross-product
   enumeration. See `bpmn-dmn-foundations.md` §7b(a).
+- **Decision evaluation cost.** One LLM call for the whole table (cheap, less auditable) vs one
+  per fuzzy input (costlier, precisely attributable)? Lean per-input for the audit trail; measure.
 - **`foreach` nesting.** Start: **no.** One level.
+- **Approval quorum > 1.** Deferred. `quorum: 1` (first responder wins) covers every case we have.
+  Two-man rule is a compliance feature to sell *later*, not to build now.
+- **`edit` as an approval decision** — *"approve, but change the wording first"*. Very desirable
+  for drafted emails; needs a payload-mutation path through the resume. **Increment D+1**, not D.
 
 ---
 
-## 12. Why
+## 13. Why
 
 > **Atlas can tell you what it doesn't know about your process — and won't pretend otherwise.**
 
 Zapier moves records and cannot judge. Camunda can prove completeness and cannot evaluate
 "sounds urgent". A pure-LLM builder will hand you a workflow with a hole in it and never mention
-the hole. This is the only design that closes both — and §10.7 is the line that keeps it true.
+the hole.
+
+This is the only design that closes both — and the two things that keep it true are **§11.7**
+(the moat: no LLM decision input without a closed enum) and **§6.2.4** (the honesty: every hole
+the system finds and cannot fill routes to a human, by default, without the user having to
+ask). The completeness proof is what makes the multiple-choice UI possible; the multiple-choice
+UI is what makes the completeness proof affordable to the user. They are the same asset.
