@@ -1091,7 +1091,12 @@ export function createApp(spine) {
 
   // Per-tenant abuse/cost guard for expensive LLM endpoints (Cloudflare is per-IP,
   // not per-tenant). Applied to /workflows/run here and /api/builder/chat below.
-  const tenantGuard = createTenantGuard({ workflowStore: spine.engine.workflowStore });
+  // tenantStore is required for the per-plan daily USD ceiling — without it the
+  // guard cannot tell a $20 tenant from a $600 one and falls back to the tightest.
+  const tenantGuard = createTenantGuard({
+    workflowStore: spine.engine.workflowStore,
+    tenantStore:   spine.auth.tenantStore,
+  });
 
   // ── First-run setup (creates the platform admin) ──────────────────────────
   app.get('/setup/status', (_req, res) => {

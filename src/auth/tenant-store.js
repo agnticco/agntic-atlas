@@ -12,6 +12,7 @@
 import Database from 'better-sqlite3';
 import { randomUUID } from 'node:crypto';
 import { PLATFORM_TENANT_ID } from './user-store.js';
+import { log } from '../utils/logger.js';
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS tenants (
@@ -27,10 +28,20 @@ CREATE TABLE IF NOT EXISTS tenants (
 `;
 
 const SLUG_RE = /^[a-z0-9][a-z0-9-]{1,62}$/;
-// Sellable adoption ladder + the internal grandfathered `founding` plan. See
+// Sellable adoption ladder + `internal` (Atlas's own workspace, never sold) and
+// the RETIRED `founding` plan, still accepted so historic rows validate. See
 // src/entitlements/index.js and docs/architecture/tier-gating.md.
-export const VALID_PLANS = ['solo', 'professional', 'team', 'business', 'founding'];
+export const VALID_PLANS = ['solo', 'professional', 'team', 'business', 'internal', 'founding'];
 const DEFAULT_PLAN = 'solo';
+
+/**
+ * Tenants that are Atlas itself, not customers — they get the uncapped `internal`
+ * plan. Comma-separated override via INTERNAL_TENANT_IDS; the platform tenant is
+ * always included. Kept as config, not a hardcoded id, so a second internal
+ * workspace doesn't require a code change.
+ */
+const INTERNAL_TENANT_IDS = (process.env.INTERNAL_TENANT_IDS ?? 'agntic')
+  .split(',').map(s => s.trim()).filter(Boolean);
 
 export class TenantStore {
   constructor({ db = null, dbPath = null } = {}) {
@@ -81,6 +92,35 @@ export class TenantStore {
         ).run(now, PLATFORM_TENANT_ID);
         this.db.prepare('INSERT INTO tenant_store_migrations (name, applied_at) VALUES (?, ?)').run(GRANDFATHER, now);
       })();
+    }
+
+    // Retire `founding` (2026-07-13). It granted UNLIMITED runs, which is an
+    // unbounded cost liability: the only backstop was a flat $25/day ceiling,
+    // i.e. up to $750/month per tenant on a $20 plan. Every founding tenant is
+    // moved onto a real, capped plan.
+    //
+    // Atlas's own workspaces move to `internal` (uncapped) instead — our own
+    // company must not be rate-limited by a customer tier, and capping it would
+    // have stopped our production workflows the moment this shipped.
+    //
+    // Marker-guarded so it runs exactly once and never re-downgrades a tenant who
+    // later upgrades. Ordering matters: promote internal FIRST, then sweep the
+    // remaining founding rows to solo, so an internal tenant is never briefly solo.
+    const RETIRE_FOUNDING = 'retire_founding_2026_07_13';
+    if (!this.db.prepare('SELECT 1 FROM tenant_store_migrations WHERE name = ?').get(RETIRE_FOUNDING)) {
+      const now = new Date().toISOString();
+      const internalIds = [PLATFORM_TENANT_ID, ...INTERNAL_TENANT_IDS];
+      this.db.transaction(() => {
+        const marks = internalIds.map(() => '?').join(',');
+        this.db.prepare(
+          `UPDATE tenants SET plan = 'internal', updated_at = ? WHERE id IN (${marks})`
+        ).run(now, ...internalIds);
+        this.db.prepare(
+          "UPDATE tenants SET plan = 'solo', updated_at = ? WHERE plan = 'founding'"
+        ).run(now);
+        this.db.prepare('INSERT INTO tenant_store_migrations (name, applied_at) VALUES (?, ?)').run(RETIRE_FOUNDING, now);
+      })();
+      log.info(`[tenant-store] retired 'founding' plan; internal tenants: ${internalIds.join(', ')}`);
     }
   }
 
