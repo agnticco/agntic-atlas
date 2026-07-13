@@ -164,7 +164,10 @@ function _extractSources(output, type) {
 
   // Structured search outputs
   if (obj && typeof obj === 'object' && Array.isArray(obj.results)) {
-    if (type === 'search_web' || type === 'tool') {
+    // `tool` was deleted in the P12 node re-cut (it never ran — no ToolRegistry
+    // exists in this build); `connector-action` is the capability path now, and
+    // list/search capabilities return the same results[] shape.
+    if (type === 'search_web' || type === 'connector-action') {
       return obj.results.map(r => ({
         kind: 'article',
         title: r.title || r.url || '',

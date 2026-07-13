@@ -3,47 +3,40 @@
  *
  * To add a new type: create its module next to this file, export the def,
  * then append a line here.
+ *
+ * P12 Increment A re-cut this library. It used to hold eleven types; four of
+ * them (summarize / extract / rewrite) were `llm.js` with a different prompt,
+ * and three (tool / mcp_tool / fetch) could not run at all. What is left is the
+ * set that is actually runnable, with no two entries doing the same job:
+ *
+ *   trigger · llm · assemble · connector-action · deliver · search_web
+ *
+ * v1 specs naming a collapsed type still validate and still run — ./compat-v1.js
+ * lifts them. See that file for the full mapping and the reasoning.
  */
 
-import { triggerNodeType }      from './trigger.js';
-import { fetchNodeType }        from './fetch.js';
-import { toolNodeType }         from './tool.js';
-import { mcpToolNodeType }      from './mcp-tool.js';
-import { llmNodeType }          from './llm.js';
-import { deliverNodeType }      from './deliver.js';
+import { triggerNodeType }         from './trigger.js';
+import { llmNodeType }             from './llm.js';
+import { assembleNodeType }        from './assemble.js';
+import { deliverNodeType }         from './deliver.js';
 import { connectorActionNodeType } from './connector-action.js';
-
-import { searchWebNodeType }    from './search-web.js';
-import { summarizeNodeType }    from './summarize.js';
-import { rewriteNodeType }      from './rewrite.js';
-import { extractNodeType }      from './extract.js';
-import { dailyDigestNodeType }  from './daily-digest.js';
+import { searchWebNodeType }       from './search-web.js';
 
 export function registerBuiltInNodeTypes(registry) {
   // Triggers + transport
   registry.register(triggerNodeType);
   registry.register(deliverNodeType);
 
-  // High-level primitives (the UX surface)
-  registry.register(searchWebNodeType);
-  registry.register(summarizeNodeType);
-  registry.register(rewriteNodeType);
-  registry.register(extractNodeType);
-  registry.register(dailyDigestNodeType);
-  registry.register(connectorActionNodeType);
-
-  // Low-level escape hatches (hidden from palette unless needed)
-  registry.register(fetchNodeType);
-  registry.register(toolNodeType);
-  registry.register(mcpToolNodeType);
+  // The working steps
   registry.register(llmNodeType);
+  registry.register(assembleNodeType);
+  registry.register(connectorActionNodeType);
+  registry.register(searchWebNodeType);
 
   return registry;
 }
 
 export {
-  triggerNodeType, fetchNodeType, toolNodeType, mcpToolNodeType,
-  llmNodeType, deliverNodeType, connectorActionNodeType,
-  searchWebNodeType,
-  summarizeNodeType, rewriteNodeType, extractNodeType, dailyDigestNodeType,
+  triggerNodeType, llmNodeType, assembleNodeType,
+  deliverNodeType, connectorActionNodeType, searchWebNodeType,
 };
