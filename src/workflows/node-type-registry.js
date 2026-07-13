@@ -44,6 +44,13 @@ export class NodeTypeRegistry {
       icon:            def.icon         ?? 'adjust',
       family:          def.family       ?? 'low_level',
       configSchema:    def.configSchema ?? [],
+      // 'closed' — config keys must be a subset of configSchema; an unknown key
+      // is a hallucination and the validator rejects it (UNKNOWN_CONFIG_KEY).
+      // 'open'   — the type takes params this schema cannot enumerate ahead of
+      // time (connector-action: they are per-capability). Defaults to 'closed':
+      // a new type opts IN to being unchecked, it does not get there by
+      // omission. See src/workflows/workflow-validator.js.
+      configPolicy:    def.configPolicy ?? 'closed',
       previewTemplate: def.previewTemplate ?? null,
       validate:        def.validate     ?? null,
       run:             def.run,

@@ -109,7 +109,10 @@ function estimateSourceChars(run, workflow) {
   const steps = run?.steps ?? [];
   if (!Array.isArray(steps)) return 0;
   let total = 0;
-  const fetchTypes = new Set(['search_web', 'fetch', 'tool']);
+  // The steps that pull outside content in. `fetch` and `tool` were deleted in
+  // the P12 node re-cut — neither could run — and `connector-action` is what
+  // actually fetches now.
+  const fetchTypes = new Set(['search_web', 'connector-action']);
   const nodesById = new Map((workflow?.nodes ?? []).map(n => [n.id, n]));
   for (const step of steps) {
     if (step.type !== 'step_completed' || !step.nodeId) continue;

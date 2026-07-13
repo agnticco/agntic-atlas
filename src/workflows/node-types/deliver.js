@@ -21,6 +21,32 @@ export const deliverNodeType = {
     { key: 'url', label: 'URL (for webhook channel)', type: 'text', optional: true,
       hint: 'Required only if channel = webhook.' },
     { key: 'headers', label: 'Headers (object, for webhook)', type: 'object', optional: true, advanced: true },
+
+    // ── Per-channel routing fields ────────────────────────────────────────
+    // These were read by the channel handlers long before they were declared
+    // here, which made this schema untrue: a spec using `target` looked like it
+    // carried an unknown key when the key was in fact load-bearing. P12
+    // Increment A turned the config check into a hard error (UNKNOWN_CONFIG_KEY),
+    // so every key a handler actually consumes has to be declared or the very
+    // workflows running in production would fail to validate. Each of these is
+    // read by real code — the file:line is on the line.
+    { key: 'target', label: 'Channel / recipient', type: 'text', optional: true,
+      placeholder: 'e.g. #social',
+      hint: 'Slack: the channel to post to. (src/connectors/slack/index.js — config.target)' },
+    { key: 'user', label: 'Direct-message recipient', type: 'text', optional: true,
+      placeholder: 'e.g. someone@company.com or @handle',
+      hint: 'slack_dm: who to DM. (src/connectors/slack/index.js — config.user)' },
+    { key: 'to', label: 'Email recipient', type: 'text', optional: true,
+      hint: 'gmail_send: the To: address. (src/connectors/google/index.js — config.to)' },
+    { key: 'subject', label: 'Subject', type: 'text', optional: true,
+      hint: 'gmail_send: the email subject. Also used as the delivery title when no title is set. (src/connectors/google/index.js — config.subject)' },
+    { key: 'message', label: 'Message override', type: 'textarea', optional: true, advanced: true, rows: 4,
+      hint: 'Sends this instead of the previous step\'s output. (src/connectors/google/index.js — config.message)' },
+    { key: 'username', label: 'Post as (bot name)', type: 'text', optional: true, advanced: true,
+      hint: 'Slack: overrides the bot display name. (src/connectors/slack/index.js — config.username)' },
+    { key: 'icon_emoji', label: 'Post as (bot icon)', type: 'text', optional: true, advanced: true,
+      placeholder: 'e.g. :package:',
+      hint: 'Slack: overrides the bot avatar. (src/connectors/slack/index.js — config.icon_emoji)' },
   ],
   previewTemplate: 'Sends the result to {channel}{title? with title "{title}"}.',
   run: async (cfg, ctx, services) => {

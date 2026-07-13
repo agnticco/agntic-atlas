@@ -209,6 +209,53 @@ refactor them without an explicit decision recorded here:
   The old `search_web` built-in node type remains but is no longer promoted to the converger;
   `web_search` connector-action is the primary path.
 
+- **Node library re-cut + `UNKNOWN_CONFIG_KEY` (2026-07-13, P12 increment A)** — the node library
+  had eleven types; three could never run and four were `llm.js` with a different prompt. It is now
+  **`trigger · llm · assemble · connector-action · search_web · deliver`**.
+  - `src/workflows/node-types/llm.js` gains **`mode: summarize|extract|rewrite|classify|freeform`**
+    and absorbs the prompts of the types it replaces. `summarize.js`, `extract.js`, `rewrite.js`,
+    `tool.js`, `mcp-tool.js`, `fetch.js` **deleted**. `daily-digest.js` → **`assemble.js`**: it was
+    *not* an LLM node (its `run()` took `(cfg, _ctx, _services)` and never called the model), so
+    collapsing it into `llm` would have turned free, deterministic string assembly into a paid
+    model call. Renamed, behaviour identical.
+  - **`classify`** is new and load-bearing for increment C: it is the only sanctioned way for an
+    LLM to feed a decision, because it classifies into a **closed enum** and throws on an off-enum
+    answer instead of passing free text downstream.
+  - **`src/workflows/node-types/compat-v1.js`** (new) — `liftV1Node()` maps the old types to the
+    new ones. Called from **exactly two** places: `WorkflowValidator.validate()` and
+    `FlowTester._runNode()` (the scheduler and the REST run path both execute through FlowTester).
+    **No DB migration**: v1 specs are lifted on read, never rewritten on disk.
+  - `src/workflows/workflow-validator.js` — new **`UNKNOWN_CONFIG_KEY`** (a config key not in the
+    type's `configSchema` is an error, not a shrug), `REMOVED_NODE_TYPE`, `UNKNOWN_LLM_MODE`. The
+    dead `fetch`/`tool`/`mcp_tool` branches of `_checkTypeSpecific` are gone.
+  - **`UNKNOWN_CONFIG_KEY` is scoped by a new `configPolicy` on each node type** (`'closed'` by
+    default; `connector-action` is the only `'open'` one, because its params are per-capability).
+    A blanket subset check was **impossible**: it rejects the frozen canonical spec (whose
+    `summarize` node carries `instructions`/`format`, which the v1 schema never declared) and the
+    live prod workflow (`deliver(channel, message, target)`). Keys the handlers genuinely read
+    (`deliver.target|user|to|subject|message|username|icon_emoji`, `search_web.query`) are now
+    **declared**, because the schemas were lying — a key no code reads (`llm.model`) is a
+    hallucination and errors; a key a handler reads but the schema omitted is an untrue schema and
+    gets fixed. **Never declare a key `run()` doesn't consume** — that makes the check theatre.
+  - `src/converger/prompts.js` — **the actual root cause of the `model` hallucination**: the prompt
+    advertised `llm: (config: prompt, model)`, i.e. it *told* the model to emit a key no schema
+    had. Now it teaches `llm` + `mode` with the closed key set, and states that `model` does not
+    exist. The converger emits v2 nodes natively (verified against the live LLM).
+  - `scripts/checks/p3-converger-run.mjs` — asked `n.type === 'summarize'`. That asks about an
+    *encoding*, and the encoding changed; P3 actually asserts a *role*. Now checks
+    `llm` + `mode:'summarize'` **via the same lift**, so both spellings satisfy it. Not weaker: a
+    spec with no summarizing step still fails. *(Fixing the check, not weakening it — CLAUDE.md,
+    Gates.)*
+  - Also updated for the re-cut: `sop-generator.js` (mode-aware labels — an SOP is customer-facing,
+    so a step that read "Summarize (LLM)" must not start reading "AI step"), `run-enricher.js`,
+    `output-validator.js`, `workflow-scheduler.js` (`_collectToolsUsed` read only the two deleted
+    types, so it would have returned `null` forever — it counts `connector-action` capability ids
+    now), `error-translator.js`, and `public/index.html` (one `effNodeType()` helper so an
+    `llm`+`mode` node still renders as a "Summarize"/"Extract" card, not a generic λ).
+  - **Fixed in passing:** `flow-tester.js` tested `node.type === 'search-web'` (hyphen) for the
+    long-timeout path, but the registered id is `search_web` — so every web-search step had been
+    silently getting the *short* timeout.
+
 ## Support tickets (in-app feedback / bug reporting) — added 2026-07-08
 
 Users submit bugs/ideas/requests from a floating **Feedback** button in the operator
@@ -281,15 +328,26 @@ spec is actually executable, not just structurally similar to the frozen file.
   should convert to mrkdwn; SMS/webhooks should strip all markup. Fix belongs in each
   capability's `handle` in `src/connectors/*/index.js`, not in the LLM prompt.
 
-- **`tool` / `mcp-tool` / `fetch` node types are NOT runnable in this build.** There is
-  no `ToolRegistry` (no `src/tools/`, never instantiated), and `FlowTester` is built
-  without `tools`, so a `tool`/`mcp-tool` node throws `Tool registry unavailable`; `fetch`
-  needs a registered `source`, not a URL. The converger prompt
-  (`src/converger/prompts.js`) is therefore restricted to the runnable set
-  (summarize/llm/extract/rewrite/search_web/deliver + connector-action for registered
-  capabilities + triggers). `search_web` was added in P8 (2026-06-21). Filesystem
-  capabilities (`filesystem_read`, `filesystem_list`) surface automatically in
-  connector-action options via CapabilityRegistry/ChannelRegistry. (2026-06-18, updated 2026-06-21)
+- **The node library is `trigger · llm · assemble · connector-action · search_web · deliver`
+  (P12 increment A, 2026-07-13).** `tool` / `mcp_tool` / `fetch` **no longer exist** — they were
+  deleted, and the validator now rejects them by name (`REMOVED_NODE_TYPE`). They were never
+  runnable: there is no `ToolRegistry` (no `src/tools/`, never instantiated) and `FlowTester` is
+  built without `tools`, so they threw at run time; now they fail at build time instead.
+  `summarize` / `extract` / `rewrite` are **`llm` with a `mode`**, and `daily_digest` is
+  **`assemble`**. Old specs still validate and run — `node-types/compat-v1.js` lifts them on read
+  (nothing in the DB was migrated), so **you will still see v1 types in the database and in the
+  store; that is expected, not a bug.** Filesystem capabilities (`filesystem_read`,
+  `filesystem_list`) surface automatically in connector-action options via
+  CapabilityRegistry/ChannelRegistry.
+
+- **A node's config keys are checked against its `configSchema` (`UNKNOWN_CONFIG_KEY`), so an
+  undeclared key is now a hard error.** If you add a config key that a node's `run()` reads, you
+  **must** declare it in that type's `configSchema` or every spec using it stops validating. The
+  check is scoped by `configPolicy` — `'closed'` (the default, subset enforced) vs `'open'`
+  (`connector-action` only, whose params are per-capability). The inverse is just as important:
+  **never declare a key `run()` doesn't consume** to make a spec pass — a schema that lists keys
+  nothing reads turns the check into theatre, which is exactly the state that let
+  `"model": "claude-opus-4-5"` ship. (2026-07-13)
 - **`/workflows/run` returns 200 with `{completed:false, error}` for a failed step**, not a
   5xx — Cloudflare replaces origin 502/504 with its own HTML error page, which hid the real
   run error behind a "tunnel/proxy" message. Application-level run failures must stay 2xx so
@@ -456,4 +514,4 @@ Update as gates close. `git log --grep "^Gate:"` is the authoritative ledger.
 - [x] **P9** — value tracking: time-saved metrics per run, all-up ROI summary, customer-facing report
 - [x] **P10** — admin observability: standalone admin app, per-tenant usage + cost monitoring *(merged `601760c`; carries `Gate: P10` trailer + passing `scripts/gates/p10.sh`. Ledger backfilled by independent verifier: `docs/gates/p10.md`.)*
 - [x] **P11** — E2E validation + production hardening + VPS migration. **Closed 2026-07-13** (`b711b44`, `Gate: P11`, ledger `docs/gates/p11.md`). Built & merged long before (`d73b813`…`75891b7` + artifacts `2106f71`); the gate was un-closeable only because `scripts/gates/p11.sh` fail-closes when `PROD_HOST` is unset — it cannot smoke-test a VPS that doesn't exist. Prod went live, so `PROD_HOST=atlas.agntic.co bash scripts/gate.sh 11` finally runs. **Note for anyone re-running it:** the E2E suite *self-skips the converger test* without `ANTHROPIC_API_KEY` (`tests/e2e/full-journey.test.js`), so a bare run reports "6 pass / 1 skip" and the skipped one is Done-when #1. Run it with a key (7/7) or you are passing a gate you haven't proven.
-- [ ] **P12** — **converger v2**: outcome contracts + BPMN/DMN shape (decisions, gap analysis) + the elicitation UI + the human approval gate. Build spec: [`docs/architecture/converger-v2.md`](docs/architecture/converger-v2.md) (theory: [`bpmn-dmn-foundations.md`](docs/architecture/bpmn-dmn-foundations.md)). Gate `scripts/gates/p12.sh` is **progressive** — it runs increments A–G in order and stops at the first unbuilt one, so `bash scripts/gate.sh 12` answers both *"is the phase closed?"* and *"which increment next?"*. Two invariants are load-bearing and must never be weakened: **`LLM_INPUT_NOT_ENUM`** (an LLM-evaluated decision input must classify into a *closed enum* — without it there is no completeness proof, and the completeness proof is the moat) and **`EMAIL_REPLY_APPROVAL`** (an approval parsed out of an email reply body authenticates *nothing*: `From:` is spoofable, and SPF/DKIM authenticate a sending domain, not a human intent — use a signed, hashed, single-use magic link).
+- [~] **P12** — **converger v2**: outcome contracts + BPMN/DMN shape (decisions, gap analysis) + the elicitation UI + the human approval gate. Build spec: [`docs/architecture/converger-v2.md`](docs/architecture/converger-v2.md) (theory: [`bpmn-dmn-foundations.md`](docs/architecture/bpmn-dmn-foundations.md)). Gate `scripts/gates/p12.sh` is **progressive** — it runs increments A–G in order and stops at the first unbuilt one, so `bash scripts/gate.sh 12` answers both *"is the phase closed?"* and *"which increment next?"*. **Increment A (validator hardening + node re-cut) is done** — the gate now stops at **B (engine control flow)**. Increments do NOT carry a `Gate:` trailer; only the phase's close does. Two invariants are load-bearing and must never be weakened: **`LLM_INPUT_NOT_ENUM`** (an LLM-evaluated decision input must classify into a *closed enum* — without it there is no completeness proof, and the completeness proof is the moat) and **`EMAIL_REPLY_APPROVAL`** (an approval parsed out of an email reply body authenticates *nothing*: `From:` is spoofable, and SPF/DKIM authenticate a sending domain, not a human intent — use a signed, hashed, single-use magic link).

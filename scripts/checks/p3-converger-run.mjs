@@ -22,6 +22,7 @@ import { readFileSync } from 'node:fs';
 import { mkdtempSync }  from 'node:fs';
 import { tmpdir }       from 'node:os';
 import { join }         from 'node:path';
+import { liftV1Node }   from '../../src/workflows/node-types/compat-v1.js';
 
 // ── Hermetic env ──────────────────────────────────────────────────────────────
 const tmp = mkdtempSync(join(tmpdir(), 'atlas-p3-'));
@@ -75,17 +76,37 @@ const trigger = spec.triggers[0];
 if (trigger?.type !== 'email') fail(`trigger type is "${trigger?.type}", expected "email"`);
 if (!/ups/i.test(trigger?.filter ?? '')) fail(`trigger filter "${trigger?.filter}" does not reference UPS`);
 
-const DELIVERY     = new Set(['deliver', 'tool', 'mcp-tool']);
-const hasSummarize = spec.nodes.some(n => n.type === 'summarize');
+// This check used to ask `n.type === 'summarize'`. The P12 Increment A node
+// re-cut collapsed the summarize/extract/rewrite node types into `llm` + `mode`,
+// so that question became the wrong one: it asks about an ENCODING, and the
+// encoding changed. What P3 actually asserts is a ROLE — "the spec summarizes
+// the email before delivering it" — and that role now has two spellings: a v1
+// `summarize` node (still valid; the compat shim lifts it) and a v2
+// `llm` node with `mode: 'summarize'`.
+//
+// So the check is expressed in terms of the role, via the same lift the
+// validator and the executor use. It is not weaker: a spec with NO summarizing
+// step still fails, exactly as before. The frozen spec (a v1 spec) still
+// satisfies it, and so does anything the v2 converger emits.
+const isSummarizer = (n) => {
+  const lifted = liftV1Node(n);
+  return lifted.type === 'llm' && (lifted.config?.mode ?? 'freeform') === 'summarize';
+};
+
+// `tool` / `mcp-tool` were deleted in the re-cut — they were never runnable
+// (there is no ToolRegistry in this build), so they could never have been a
+// real delivery path. `deliver` is the delivery node.
+const DELIVERY     = new Set(['deliver']);
+const hasSummarize = spec.nodes.some(isSummarizer);
 const hasDeliver   = spec.nodes.some(n => DELIVERY.has(n.type));
-if (!hasSummarize) fail('no summarize node in emitted spec');
+if (!hasSummarize) fail('no summarizing step in emitted spec (expected an llm node with mode:"summarize", or a v1 summarize node)');
 if (!hasDeliver)   fail('no delivery node in emitted spec');
 
-const deliverNode    = spec.nodes.find(n => n.type === 'deliver') ?? spec.nodes.find(n => n.type === 'tool');
+const deliverNode    = spec.nodes.find(n => n.type === 'deliver');
 const deliverChannel = deliverNode?.config?.channel ?? deliverNode?.config?.connector;
 if (deliverChannel !== 'slack') fail(`delivery channel is "${deliverChannel}", expected "slack"`);
 
-const summarizeId = spec.nodes.find(n => n.type === 'summarize')?.id;
+const summarizeId = spec.nodes.find(isSummarizer)?.id;
 const deliverId   = spec.nodes.find(n => DELIVERY.has(n.type))?.id;
 const hasEdge     = spec.edges.some(e => e.from === summarizeId && e.to === deliverId);
 if (!hasEdge) fail(`no edge from "${summarizeId}" to "${deliverId}"`);
@@ -94,9 +115,9 @@ if (!confirmationLog?.length)  fail('confirmation log is empty');
 if (confirmationLog.length < 3) fail(`only ${confirmationLog.length} confirmations — expected at least 3`);
 
 // Structural match vs frozen (same roles present)
-if (frozen.triggers[0]?.type !== trigger.type)                        fail('trigger type mismatch vs frozen spec');
-if (frozen.nodes.some(n => n.type === 'summarize') && !hasSummarize) fail('emitted spec missing summarize node');
-if (frozen.nodes.some(n => DELIVERY.has(n.type))  && !hasDeliver)   fail('emitted spec missing delivery node');
+if (frozen.triggers[0]?.type !== trigger.type)                     fail('trigger type mismatch vs frozen spec');
+if (frozen.nodes.some(isSummarizer) && !hasSummarize)              fail('emitted spec missing summarizing step');
+if (frozen.nodes.some(n => DELIVERY.has(n.type)) && !hasDeliver)   fail('emitted spec missing delivery node');
 
 // ── Step 3: Runnability — run emitted spec through the engine ─────────────────
 // Start an inline stub Slack server so we don't need a real token.

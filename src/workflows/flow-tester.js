@@ -2,15 +2,12 @@
  * FlowTester — execute a draft workflow definition step-by-step and emit
  * per-node events so the UI can animate the run.
  *
- * Node types supported in MVP
- * ───────────────────────────
- *   trigger  — yields immediately; starting point
- *   fetch    — calls a SourceRegistry fetcher with node.config
- *   tool     — calls a ToolRegistry tool by name with node.config.args
- *   llm      — invokes the LLM with node.config.prompt (substituting {{prev}})
- *   deliver  — stub that echoes prior output (real delivery is Phase 2)
- *   branch   — not executed; router (control flow)
- *   loop     — not executed; iteration (control flow)
+ * Node types are not listed here — they are whatever the NodeTypeRegistry holds
+ * (src/workflows/node-types/index.js), and _runNode dispatches to the type's own
+ * run(). The registry is the source of truth; a list here would only go stale.
+ *
+ * v1 nodes are lifted to their v2 shape in _runNode, so specs written before the
+ * P12 node re-cut still execute unmigrated. See ./node-types/compat-v1.js.
  *
  * Execution is single-threaded topological order. If no explicit edges match,
  * the tester runs nodes in declaration order.
@@ -23,6 +20,7 @@
 
 import { withTimeout } from '../utils/with-timeout.js';
 import { numEnv } from '../utils/env.js';
+import { liftV1Node } from './node-types/compat-v1.js';
 
 export class FlowTester {
   /**
@@ -145,7 +143,11 @@ export class FlowTester {
         // Slow external steps (web search, multi-page fetch, connector HTTP) need
         // more headroom than in-process transforms — a real web_search + synthesis
         // can exceed 180s and shouldn't fail the run (S7-2). Give them at least 300s.
-        const isSlowExternal = node.type === 'connector-action' || node.type === 'fetch' || node.type === 'search-web';
+        // The registered type id is `search_web` (underscore). This read
+        // 'search-web' — a hyphen that matched nothing — so a web-search step
+        // silently got the short timeout instead of the long one. `fetch` was
+        // deleted in the P12 node re-cut.
+        const isSlowExternal = node.type === 'connector-action' || node.type === 'search_web';
         const effectiveBackstop = isSlowExternal ? Math.max(backstopMs, 300_000) : backstopMs;
         const nodeTimeout  = Math.max(effectiveBackstop, Number(node.config?.timeoutMs ?? 0) + 30_000);
         const output = await withTimeout(
@@ -181,7 +183,14 @@ export class FlowTester {
 
   // ── Node execution ────────────────────────────────────────────────────────
 
-  async _runNode(node, ctx) {
+  async _runNode(rawNode, ctx) {
+    // Lift v1 nodes to their v2 shape (summarize/extract/rewrite → llm + mode,
+    // daily_digest → assemble). Specs written before the P12 node re-cut are
+    // still in the database, unmigrated, and must keep running untouched — this
+    // and WorkflowValidator.validate() are the only two places that lift. The
+    // scheduler and the REST run path both execute through here, so this one
+    // call site covers every way a workflow runs. See ./node-types/compat-v1.js.
+    const node = liftV1Node(rawNode);
     const type = node.type ?? 'noop';
     // Substitute template variables ({{prev}}, {{date}}, etc.) across the full
     // node config so every type's run() sees resolved strings.

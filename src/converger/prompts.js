@@ -107,7 +107,7 @@ function knowledgeContextBlock(capabilities) {
   // edits to the file won't reach the running workflow. Steer toward a live read in that case.
   const hasFolders = (capabilities?.filesystem ?? []).length > 0;
   const liveNote = hasFolders
-    ? `\nSTATIC vs LIVE — IMPORTANT: The excerpts below are a point-in-time snapshot. If the workflow's job is to APPLY or FOLLOW the CONTENTS of a specific named document at run time (a playbook, template, price list, script, policy, guidelines) AND that document appears as a CONNECTED FILESYSTEM FOLDER above, prefer a "filesystem_read" step that re-reads the file on every run, then feed its output into the summarize/llm/extract step via {{<readNodeId>.output}} — do NOT hard-code the document's contents into a prompt. A run-time read stays correct when the operator edits the file; a baked-in copy silently goes stale. Only bake excerpts directly into a prompt for STATIC background facts (correct field names, domain terms, structure) that the workflow references but does not re-apply wholesale.`
+    ? `\nSTATIC vs LIVE — IMPORTANT: The excerpts below are a point-in-time snapshot. If the workflow's job is to APPLY or FOLLOW the CONTENTS of a specific named document at run time (a playbook, template, price list, script, policy, guidelines) AND that document appears as a CONNECTED FILESYSTEM FOLDER above, prefer a "filesystem_read" step that re-reads the file on every run, then feed its output into the llm step via {{<readNodeId>.output}} — do NOT hard-code the document's contents into a prompt. A run-time read stays correct when the operator edits the file; a baked-in copy silently goes stale. Only bake excerpts directly into a prompt for STATIC background facts (correct field names, domain terms, structure) that the workflow references but does not re-apply wholesale.`
     : '';
   return `${liveNote}\nKNOWLEDGE BASE CONTENT (relevant excerpts from this tenant's knowledge base — use these to inform proposals, e.g. correct field names, document structure, or domain terms):\n${chunks}\n`;
 }
@@ -193,10 +193,15 @@ TRIGGER INFERENCE RULES:
 - If trigger type genuinely unclear, ask: "What should start this workflow?"
 
 AVAILABLE NODE TYPES (only these — every one is runnable by the engine today):
-- summarize: Summarize text with AI (config: instructions, format)
-- llm: Run a custom AI prompt (config: prompt, model). IMPORTANT: when this node consumes connector-action outputs (Drive files, Airtable records, etc.), the prompt MUST begin with a guard clause, e.g.: "If the provided data is empty or missing (e.g. files:[], records:[]), output EXACTLY: ERROR: required data not found — do not compose content." This prevents silent hallucination when a connector returns no results.
-- extract: Extract structured fields from text (config: fields[])
-- rewrite: Rewrite/transform text (config: instructions, tone)
+- llm: THE AI STEP. One node type does every AI job; \`mode\` picks which. Emit exactly one mode per node:
+  - mode:"summarize" — condense the input. config: instructions, format, length ("short"|"medium"|"long"), style ("neutral"|"editorial"|"bullets"|"plain"), focus
+  - mode:"extract"   — pull structured fields out as JSON. config: fields (one "name: description" per line), format
+  - mode:"rewrite"   — restate the input in another shape/voice. config: instructions, format, tone
+  - mode:"classify"  — sort the input into exactly ONE of a closed list. config: categories (one per line — the list MUST be exhaustive), instructions
+  - mode:"freeform"  — your own prompt, when no other mode fits. config: prompt
+  CONFIG KEYS ARE A CLOSED SET. The allowed keys are: mode, prompt, instructions, fields, categories, format, length, style, tone, focus, input, system, maxTokens, timeoutMs. Any other key is REJECTED at publish time (UNKNOWN_CONFIG_KEY) — the workflow will not save. In particular there is NO "model" key: the engine picks the model tier. Never emit one.
+  IMPORTANT: when an llm node consumes connector-action output (Drive files, Airtable records, etc.), its instructions/prompt MUST begin with a guard clause, e.g.: "If the provided data is empty or missing (e.g. files:[], records:[]), output EXACTLY: ERROR: required data not found — do not compose content." This prevents silent hallucination when a connector returns no results.
+- assemble: Stitch several upstream steps into ONE markdown document. No AI call, so it is free and exact. config: title, intro, sections (JSON array of { heading, content }, where content is "{{<nodeId>.output}}"), outro. Use it to combine sections; never use an llm node just to concatenate.
 - connector-action: Call a connector capability MID-workflow to GET or DO something, then pass the result to the next step (config: { action:"<id>", ...params }). Use this ONLY when the workflow genuinely needs to reach into a connector mid-flow — e.g. pull a Slack channel's history, look up a user, create/invite to a channel. Do NOT use it to "fetch" the data a trigger already delivers, and never for the final delivery (use deliver). If no connector action is needed, skip it entirely. Available actions:
 ${stepSummary(capabilities)}
 - deliver: Send the final result to a destination. Choose config.channel from the destinations below and set ONLY its routing fields — the message body is filled automatically from the previous step's output, so never put the content in config. MULTIPLE DESTINATIONS: if the user asks to send the result to more than one place (e.g. "email me AND save a Google Doc", "post to Slack and email the team"), add ONE deliver node PER destination, each with its own edge from the final content node (fan-out) — the engine runs them all. Never silently drop a requested destination. Deliver nodes are always terminal (nothing runs after them).
@@ -215,10 +220,10 @@ HOW INPUT ENTERS THE WORKFLOW:
   workflow then operates on connector data — e.g. "summarize the #general channel", "digest
   my unread emails", "report on yesterday's messages" — the FIRST step MUST be a
   connector-action that fetches that data, because the transform steps
-  (summarize/extract/rewrite) have nothing to work on otherwise. Use ONLY an action listed in
+  (the llm node, in any mode) have nothing to work on otherwise. Use ONLY an action listed in
   "Available actions" above — those are the actions THIS workspace's scopes actually allow. If
   no listed action can fetch the needed data, tell the user that capability isn't enabled
-  (e.g. a missing Slack scope) instead of inventing one. Never use a "tool" or "fetch" node.
+  (e.g. a missing Slack scope) instead of inventing one. The "tool", "mcp_tool" and "fetch" node types DO NOT EXIST — they are rejected at publish time (REMOVED_NODE_TYPE). connector-action is the only way to reach a connector.
 - Use connector-action for side-effects too (post then pin, look up a user, create a channel).
 
 HOW DATA PASSES BETWEEN STEPS (hard engine limits — violating these makes the workflow FAIL at runtime):
@@ -231,22 +236,22 @@ HOW DATA PASSES BETWEEN STEPS (hard engine limits — violating these makes the 
 - A connector-action runs EXACTLY ONCE and CANNOT loop or map over a list — the engine has no per-item
   iteration. So NEVER add a step that "fetches the full content of each result" / "gets each item" /
   "enriches every row". When a search or list action returns multiple items, pass its whole output
-  straight to the next summarize/llm node, which reads the entire list at once. If a search already
+  straight to the next llm node, which reads the entire list at once. If a search already
   returns usable fields (sender, subject, snippet, etc.), do NOT add a second connector-action to
   fetch each row — that pattern is unrunnable. Prefer the FEWEST steps that satisfy the intent.
 
 OUTPUT FORMATTING — the engine passes the previous node's output to the deliver node as-is. It does
 NOT reformat it. The "output format" shown next to each delivery channel above is non-negotiable — you
-MUST instruct the content-generating node (summarize/llm/rewrite) to produce exactly that format:
+MUST instruct the content-generating llm node to produce exactly that format:
 
 - output format: mrkdwn (slack, slack_dm) — include in the node's instructions:
   "Format output as Slack mrkdwn: *bold* for headers, • for list items, blank line between sections.
   No HTML tags of any kind."
 - output format: html (gmail_send) — fold the HTML formatting into the instructions of the LAST
-  content-producing LLM/summarize/rewrite node that feeds the deliver step, exactly like the other
+  content-producing llm node that feeds the deliver step, exactly like the other
   formats: "Format the output as clean inner HTML for an email body — <h2>/<h3> headers, <p>
   paragraphs, <ul>/<li> lists. Do NOT include <html>/<body> wrappers." Only add a SEPARATE dedicated
-  formatting node when there is NO LLM/summarize/rewrite node feeding the deliver step (e.g. a pure
+  formatting node when there is NO llm node feeding the deliver step (e.g. a pure
   connector-action → email pipeline). NEVER stack a formatting node after a node that already
   produces email-ready HTML — that is a redundant, costly extra LLM call.
 - output format: markdown (docs_create) — include in the node's instructions:
@@ -258,7 +263,7 @@ MUST instruct the content-generating node (summarize/llm/rewrite) to produce exa
   symbols. Use clean prose paragraphs and line breaks." Any markup will appear verbatim as raw
   characters in the destination.
 
-INFER THE FORMAT EARLY: apply the right format instruction from the FIRST LLM/summarize/rewrite node,
+INFER THE FORMAT EARLY: apply the right format instruction from the FIRST llm node,
 based on the delivery intent — do not wait until the deliver node is in the draft. "Create a Doc" →
 markdown. "Send to Slack" or "DM me" → mrkdwn. "Email me" → html. Default to plain when unknown.
 
@@ -284,7 +289,7 @@ RULES:
     RAG excerpts in context. Choose by how the doc is used: if the workflow must APPLY/FOLLOW the
     doc's CONTENTS at run time (playbook, template, script, policy), add a filesystem_read step so
     edits stay live (see STATIC vs LIVE above); if you only need a static fact from it (a field
-    name, a term), reference the RAG excerpt in a summarize/llm/extract step — no folder needed.
+    name, a term), reference the RAG excerpt in an llm step — no folder needed.
     Only when a Knowledge item is RAG-indexed but has NO connected folder is filesystem_read
     unavailable — reference it through context instead.
   • Email ATTACHMENTS: the email trigger delivers email text and metadata only — attachment

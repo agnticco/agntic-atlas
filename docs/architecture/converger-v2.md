@@ -107,7 +107,7 @@ Measured 2026-07-13 across 13 workflows built through the real UI.
 |---|---|---|
 | 1 | Converger **silently dropped a requested delivery step** (asked for Slack **and** Gmail, confirmed twice; spec had only Slack) | Nothing declares what the finished workflow must produce |
 | 2 | ~~`{{today}}` reached Google → 400~~ | **FIXED** (`1601634`) — the run path now validates. Root cause was *the test-run path skipping the validator*, **not** a missing check. |
-| 3 | Dead `"model":"claude-opus-4-5"` on LLM nodes | Config keys are not checked against `configSchema` |
+| 3 | ~~Dead `"model":"claude-opus-4-5"` on LLM nodes~~ | **FIXED (Increment A)** — `UNKNOWN_CONFIG_KEY`. Root cause was *two* things, not one: config keys were never checked against `configSchema`, **and `prompts.js` literally advertised `llm (config: prompt, model)`** — the prompt was *telling* the model to emit a key no schema had. Both are fixed; the converger now emits `llm` + `mode` natively, with no `model` key. |
 | 4 | **Cannot tell a 2-node workflow is finished** — invented an LLM node to satisfy the checklist | `scoreGap()` demands a "processing" node |
 | 5 | **Zero exception questions**, ever | No shape to interrogate |
 | 6 | Airtable unreachable conversationally | No schema/base discovery capability |
@@ -215,10 +215,21 @@ undecidable — see `bpmn-dmn-foundations.md` §3.3 and §6. **The validator enf
 
 | | Today | v2 |
 |---|---|---|
-| **Work (open axis)** | `connector-action`, `llm`, `summarize`, `extract`, `rewrite`, `search-web`, `deliver`, `daily-digest` | `connector-action` *(unchanged — this is the open axis; **do not touch**)*<br>`llm` **+ `mode: summarize\|extract\|rewrite\|classify\|freeform`**<br>`deliver` |
+| **Work (open axis)** | `connector-action`, `llm`, `summarize`, `extract`, `rewrite`, `search-web`, `deliver`, `daily-digest` | `connector-action` *(unchanged — this is the open axis; **do not touch**)*<br>`llm` **+ `mode: summarize\|extract\|rewrite\|classify\|freeform`**<br>`assemble` · `search_web` · `deliver` |
 | **Control (new, closed)** | — | **`decision`** · **`branch`** · **`foreach`** · **`human`** · **`wait`** |
 | **Attributes (any node)** | — | `on_error: { retry, then: 'escalate'\|'route_to:<id>' }`<br>`idempotency: { key, on_conflict: 'skip'\|'update'\|'error' }` |
-| **Delete** | — | `tool`, `mcp-tool`, `fetch` *(dead — no ToolRegistry)*, `daily-digest` *(a preset)* |
+| **Delete** | — | `tool`, `mcp-tool`, `fetch` *(dead — no ToolRegistry)* |
+
+**DONE — Increment A.** The work axis is now `trigger · llm · assemble · connector-action ·
+search_web · deliver`. Two corrections to what this table originally said, both forced by the code:
+
+- **`daily-digest` was NOT a preset of `llm`, and did not collapse into it.** Its `run()` never
+  touched `services.llm` — it took `(cfg, _ctx, _services)` and did pure string templating. Folding
+  it into `llm` would have converted a free, deterministic, instant string operation into a paid,
+  non-deterministic model call. It kept its exact `run()` and config and was **renamed to
+  `assemble`** (`node-types/assemble.js`); v1 specs saying `daily_digest` lift to it. It is the one
+  entry in the original re-cut table that was wrong on the facts.
+- `search_web` stays. It is runnable and it is not an `llm` mode.
 
 > **Hard rule: the converger COMPOSES from this closed vocabulary. It never DEFINES node types.**
 > Free-form node shapes make gap analysis, overlap detection and "you declared an output that
@@ -324,10 +335,29 @@ Today: topo-sort → run every node. Needed: a node may be **skipped**.
 | `human` | **Durable pause + multi-channel approval gate.** Run status `awaiting_human`; ask over Slack / in-app inbox / signed email link; resume from persisted steps. **Full design: §7 — read it before touching this.** |
 | `wait` | Timer. |
 
-### `llm.js` — add `mode`
-`mode: summarize | extract | rewrite | classify | freeform`. Then **delete** `summarize.js`,
-`extract.js`, `rewrite.js`, `daily-digest.js`, `tool.js`, `mcp-tool.js`, `fetch.js`, and remove
-them from `node-types/index.js`. Map the old types → `llm` + mode in a v1 compat shim.
+### `llm.js` — add `mode` — **DONE (Increment A)**
+`mode: summarize | extract | rewrite | classify | freeform`. `summarize.js`, `extract.js`,
+`rewrite.js`, `tool.js`, `mcp-tool.js`, `fetch.js` are **deleted**; `daily-digest.js` was renamed
+to `assemble.js` (see §2.3 — it was never an LLM node). The v1 compat shim is
+**`node-types/compat-v1.js`**:
+
+- `liftV1Node(node)` maps `summarize|extract|rewrite → llm + mode`, and `daily_digest → assemble`.
+  The v1 config keys (`instructions`, `format`, `fields`, `length`, `style`, `tone`, `focus`,
+  `input`) are all declared on the v2 `llm` schema **under the same names**, so the lift is a type
+  swap plus a `mode` — no key renaming, no config dropped.
+- `tool` / `mcp_tool` / `fetch` are **not** lifted — they have no v2 equivalent, and none of them
+  could ever run. They are rejected by name as `REMOVED_NODE_TYPE`, with a hint naming the
+  replacement. That converts a 6am runtime failure into a build-time one.
+- It is called in exactly **two** places — `WorkflowValidator.validate()` and
+  `FlowTester._runNode()`. Both the scheduler and the REST run path execute through FlowTester, so
+  those two call sites cover every way a workflow can validate or run. **Nothing in the database
+  was migrated**: a v1 spec is lifted on read, never rewritten on disk, so the shim can be deleted
+  in one move once no v1 specs remain.
+
+`classify` is new and is load-bearing for Increment C: it is the only sanctioned way for an LLM to
+feed a `decision`, because it classifies into a **closed enum** (`categories`) instead of emitting
+free text. `llm.js` rejects an off-enum answer at run time rather than passing it downstream — an
+unclassifiable input is exactly the case a decision must escalate on. See §11.7.
 
 ### Schema-aware connectors (unblocks the write story)
 New capabilities: `airtable_list_bases`, `airtable_describe_table`, `sheets_describe`.
@@ -339,18 +369,61 @@ where "just talk to it" dies.
 
 ## 5. DELTA: `workflow-validator.js`
 
-| New code | Rule | Kills |
-|---|---|---|
-| `UNSATISFIED_ASSERTION` | every `outcome.assertions[]` maps to ≥1 node that satisfies it | **#1** |
-| `UNKNOWN_CONFIG_KEY` | node config keys ⊆ the type's `configSchema` | **#3** |
-| `LLM_INPUT_NOT_ENUM` | a `decision` input with `evaluator:'llm'` **must** be `type:'enum'` with `values` | **protects the moat** |
-| `NON_EXHAUSTIVE_BRANCH` | every `branch` has a `*` case | **#5** |
-| `DECISION_TABLE_GAP` | enumerable inputs fully covered, or a catch-all rule exists | **#5** |
-| `UNIQUE_HIT_OVERLAP` | `hitPolicy: UNIQUE` but rules overlap | **#5** |
-| `WRITE_WITHOUT_IDEMPOTENCY` | **warning** on write capabilities lacking `idempotency` | duplicate records |
+| New code | Rule | Kills | Status |
+|---|---|---|---|
+| `UNKNOWN_CONFIG_KEY` | node config keys ⊆ the type's `configSchema`, **for `configPolicy: 'closed'` types** | **#3** | **DONE (A)** |
+| `REMOVED_NODE_TYPE` | `tool` / `mcp_tool` / `fetch` are rejected by name | dead node types | **DONE (A)** |
+| `UNKNOWN_LLM_MODE` | `llm.mode` ∈ the five modes | typo'd mode | **DONE (A)** |
+| `UNSATISFIED_ASSERTION` | every `outcome.assertions[]` maps to ≥1 node that satisfies it | **#1** | C |
+| `LLM_INPUT_NOT_ENUM` | a `decision` input with `evaluator:'llm'` **must** be `type:'enum'` with `values` | **protects the moat** | C |
+| `NON_EXHAUSTIVE_BRANCH` | every `branch` has a `*` case | **#5** | B |
+| `DECISION_TABLE_GAP` | enumerable inputs fully covered, or a catch-all rule exists | **#5** | E |
+| `UNIQUE_HIT_OVERLAP` | `hitPolicy: UNIQUE` but rules overlap | **#5** | E |
+| `WRITE_WITHOUT_IDEMPOTENCY` | **warning** on write capabilities lacking `idempotency` | duplicate records | B |
 
 `UNKNOWN_CONFIG_KEY` is the highest-leverage check: it turns "the converger hallucinated a
 field" from a silent production failure into a build-time error.
+
+#### `UNKNOWN_CONFIG_KEY` is scoped by `configPolicy` — and it has to be
+
+This section originally stated the rule as a blanket "node config keys ⊆ the type's
+`configSchema`". **Implemented literally, that rejects the frozen canonical spec and every
+connector workflow in production.** Grounded against `main` before building Increment A:
+
+- The **frozen canonical spec**'s `summarize` node carries `instructions` and `format`. The v1
+  `summarize` schema declared neither (`length`, `style`, `focus`, `input`). So the blanket rule
+  fails `docs/specs/canonical-ups-slack.json` → **P3 dies** (§11.1). *(It also means the canonical
+  workflow's carefully-written instructions were being silently dropped at run time — the same
+  class of bug as defect #3, in the fixture we validate against. The v2 `llm` node honours them.)*
+- **`deliver`** nodes across the shipped corpus carry `target`, `user`, `to`, `subject`, `message`,
+  `username`, `icon_emoji`. **Every one is read by a real handler** (`config.target`
+  `src/connectors/slack/index.js`; `config.user` ibid.; `config.to` / `config.subject` /
+  `config.message` `src/connectors/google/index.js`). They were simply never *declared*. The live
+  production workflow is `deliver(channel, message, target)` — the blanket rule **breaks prod**.
+- **`connector-action`** params are **per-capability** (`baseId`, `tableId`, `filterByFormula`,
+  `spreadsheetId`, `range`, …). They cannot be enumerated in a static schema, because the
+  capability catalog is built at run time from the tenant's authorised connectors.
+
+So each node type declares **`configPolicy`**, defaulting to **`'closed'`** — a type opts *in* to
+being unchecked, it does not get there by omission:
+
+| Type | Policy | Why |
+|---|---|---|
+| `llm`, `deliver`, `assemble`, `trigger`, `search_web` | `closed` | Fixed, knowable key set. Subset enforced. |
+| `connector-action` | `open` | Params are per-capability. **The only hole in the check.** |
+
+The two failure modes look identical and are not the same thing, and telling them apart is the
+entire value of the check:
+
+- a key **no code reads** (`llm.model`) is a hallucination → **error**;
+- a key **a handler reads but the schema never declared** (`deliver.target`) is an **untrue
+  schema** → *fix the schema*, do not relax the check.
+
+Declaring a key that `run()` does not consume turns this check into theatre. Don't.
+
+> **Increment F closes the `connector-action` hole** by validating params against each
+> capability's *own* declared schema — that is what "schema-aware connectors" buys, beyond base
+> discovery. Until F lands, `connector-action` is unchecked, and it is the only node type that is.
 
 ---
 
@@ -631,13 +704,25 @@ gaps) and a shape-derivation call.
 > that asks more without a surface that makes answering cheap is strictly worse than what we
 > have today.
 
-### Increment A — validator hardening + node re-cut *(days)*
+### Increment A — validator hardening + node re-cut *(days)* — ✅ **DONE**
 **Do this first. It ships value even if everything after is cancelled.**
-- Add `UNKNOWN_CONFIG_KEY`.
-- `llm.mode`; delete `summarize`/`extract`/`rewrite`/`daily-digest`/`tool`/`mcp-tool`/`fetch`;
-  v1 compat shim maps old types → `llm`+mode.
-- **Acceptance:** the exact 2026-07-13 spec with `"model":"claude-opus-4-5"` is rejected with
-  `UNKNOWN_CONFIG_KEY`. P2/P3/E2E green. All 13 local workflows still validate.
+- Add `UNKNOWN_CONFIG_KEY` — scoped by `configPolicy`, see §5. Plus `REMOVED_NODE_TYPE`,
+  `UNKNOWN_LLM_MODE`.
+- `llm.mode`; delete `summarize`/`extract`/`rewrite`/`tool`/`mcp-tool`/`fetch`; rename
+  `daily-digest` → `assemble` (§2.3); v1 compat shim (`node-types/compat-v1.js`) maps old types →
+  `llm`+mode, called from the validator and `FlowTester._runNode` only.
+- **Acceptance:** ✅ a spec with `"model":"claude-opus-4-5"` is rejected with
+  `UNKNOWN_CONFIG_KEY` (`tests/workflows/validator-config-keys.test.js`). ✅ P2/P3/E2E green
+  (E2E **7/7 with `ANTHROPIC_API_KEY` set** — without a key it self-skips the converger test and
+  still reports a cheerful "6 pass / 1 skip", where the skipped one is the thing under test).
+  ✅ The frozen canonical spec and the prod-shaped `deliver(channel, message, target)` still
+  validate.
+- **Correction to the acceptance as originally written** — it said *"all 13 local workflows still
+  validate"*. There are not 13. `memory/workflows/workflows.sqlite` holds **57 rows, of which 2 are
+  not soft-deleted**; the "13" in §1.4 was a count of workflows built through the UI during the
+  2026-07-13 measurement, most since deleted. The check that actually protects production is the
+  one now in the test: every node/config **shape** that appears anywhere across those 57 specs must
+  still validate. That is a superset of the one live prod workflow, and it is what was verified.
 
 ### Increment B — engine control flow *(the big engine lift)*
 - `active`-set + `branch` (+ exhaustiveness) · `on_error` · `idempotency`.

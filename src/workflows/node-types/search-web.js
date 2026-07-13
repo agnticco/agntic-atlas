@@ -37,6 +37,8 @@ export const searchWebNodeType = {
     { key: 'topic', label: 'Topic', type: 'text',
       placeholder: 'e.g. agentic AI developer tools',
       hint: 'What to search for. Supports templates like {{date}}.' },
+    { key: 'query', label: 'Topic (alias)', type: 'text', optional: true, advanced: true,
+      hint: 'Accepted as a synonym for `topic` — run() reads `cfg.topic ?? cfg.query`. Declared so the schema matches what the code actually consumes.' },
     { key: 'count', label: 'How many articles', type: 'number',
       default: 4,
       hint: '1–10. Each article includes a content summary so later steps can pull facts and quotes.' },

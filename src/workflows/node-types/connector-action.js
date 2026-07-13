@@ -22,6 +22,16 @@ export const connectorActionNodeType = {
   description: 'Runs a connector capability mid-workflow (e.g. Slack lookup, channel history) and passes its result to the next step.',
   icon: 'plug',
   family: 'action',
+  // The ONLY open-schema node type. Its params are per-capability — an Airtable
+  // search takes baseId/tableId/filterByFormula, a Sheets read takes
+  // spreadsheetId/range — and this schema cannot enumerate them ahead of time,
+  // because the capability catalog is built at run time from whichever
+  // connectors a tenant has authorised. So UNKNOWN_CONFIG_KEY does not apply
+  // here: params pass through to the handler, exactly as the note above says.
+  // Increment F closes this properly by validating params against the
+  // capability's OWN declared schema ("schema-aware connectors"). Until then
+  // this is a real, bounded hole in the config check, and it is the only one.
+  configPolicy: 'open',
   configSchema: [
     { key: 'action', label: 'Action', type: 'string', optional: false,
       hint: 'A registered connector capability id, e.g. "slack_history", "slack_lookup_user".' },
