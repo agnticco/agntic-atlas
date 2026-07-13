@@ -86,11 +86,36 @@ running. This is not optional — see the invariant below.
       validates.** Prod runs a v1 spec; if your change breaks it, you have broken production.
 - [ ] P2, P3 and the E2E suite are green — the regression block at the top of `gate.sh 12`
       runs these for you.
+- [ ] **The docs still tell the truth.** See below — this is a deliverable, not paperwork.
 
 **Running the E2E suite:** it **self-skips the converger test without `ANTHROPIC_API_KEY`** and
 still reports a cheerful "6 pass / 1 skip" — and the skipped test is the converger. Run it with
 a key (`node --env-file=.env --test tests/e2e/full-journey.test.js`, expect **7/7**) or you are
 passing a gate you have not proven. This bit us on P11.
+
+---
+
+## Leave the docs true — in the same commit as the code
+
+**This is a deliverable, and it is graded.** Increment B is built by a *fresh session with no
+memory of yours*. It rehydrates from `CLAUDE.md` and `converger-v2.md` — not from your
+reasoning, which will be gone. Those documents are the entire handoff.
+
+So, in the **same commit** as your code:
+
+- If your work contradicts `docs/architecture/converger-v2.md` — a contract in §1, a node-type
+  in §4, a validator code in §5 — **fix the document.** §1 was read out of `main` on
+  2026-07-13. If it has drifted, **the code is right and the doc is wrong**, and correcting it
+  is your job, not a note you leave behind.
+- Record your edits to the engine (validator, node-types) in `CLAUDE.md` → **"Recorded salvage
+  edits"**, with the *why*, matching the existing entries' style.
+- Update `CLAUDE.md`'s **Known gotchas**: the entry saying `tool`/`mcp-tool`/`fetch` "are NOT
+  runnable in this build" becomes wrong the moment you delete them. Rewrite it, don't append
+  to it.
+
+A stale doc is worse than no doc: the next session trusts it *because it looks authoritative*
+and builds on a lie. That is the single most likely way this build fails, and it costs a full
+round every time.
 
 ---
 

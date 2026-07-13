@@ -392,6 +392,15 @@ Deploying is outward-facing: do it only when the operator asks. Committing/pushi
 
 - **One deliverable per session, ending at a gate.** Rehydrate from this file +
   the module map, not from scrollback. Don't span a phase boundary in one session.
+- **The doc is the memory — keep it true, in the same commit.** Fresh sessions only
+  work because the *documents* carry state, not the agent's context. So: if your work
+  contradicts a design doc or this file, **fix the doc in the same commit as the code**.
+  Never leave a correct implementation next to a stale spec. The next session rehydrates
+  from that spec and will build on the lie — which is the same stale-brief failure that
+  costs a full round every time it happens. A design doc that disagrees with `main` is
+  worse than no doc: it is *confidently* wrong, and it reads as authoritative.
+  Corollary: if the code is right and the doc is wrong, that is a **doc bug**, and it is
+  yours to fix — not a note to leave for someone else.
 - **Close a phase before starting the next.** A phase is *closed* only when its
   gate-verified work is **merged to `main`** — not merely "gate passed" or "PR
   opened". Do not begin (or branch) phase N+1 until phase N is merged; branch the
