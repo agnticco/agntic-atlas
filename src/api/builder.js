@@ -32,7 +32,7 @@ import { notesSince } from '../release-notes.js';
 import { sendMail } from '../utils/mailer.js';
 import { renderInviteEmail } from '../auth/invite-email.js';
 import { oauthRedirectBase } from '../connectors/oauth-redirect.js';
-import { seatLimit, entitlement, entitlementsFor, nextPlan, PLAN_META, BUILD_RUN_COST } from '../entitlements/index.js';
+import { seatLimit, entitlement, entitlementsFor, nextPlan, PLAN_META, BUILD_RUN_COST, PUBLIC_PLANS, isSelfServe } from '../entitlements/index.js';
 import { isBillingConfigured } from '../billing/stripe.js';
 import { randomBytes } from 'node:crypto';
 
@@ -517,12 +517,36 @@ export function mountBuilderRoutes(app, { spine, requireActiveTenant, requireAut
       // First day of next calendar month — when the run budget resets.
       const [y, m] = store.currentRunPeriod().split('-').map(Number);
       const resetsOn = new Date(Date.UTC(m === 12 ? y + 1 : y, m === 12 ? 0 : m, 1)).toISOString().slice(0, 10);
+      // Serve the plan catalog from PLAN_META rather than letting the client
+      // hardcode it. The UI previously carried its own copy of the tiers, which
+      // silently drifted from what the server enforces (it was still advertising
+      // Professional at 10 workflows / 200 runs after the caps were re-derived).
+      // One source of truth, or the pricing modal lies again.
+      const plural = (n, one, many) => (n === Infinity ? `Unlimited ${many}` : `${n} ${n === 1 ? one : many}`);
+      const catalog = PUBLIC_PLANS.map((id) => {
+        const m = PLAN_META[id];
+        const selfServe = isSelfServe(id);
+        return {
+          id,
+          label: m.label,
+          // Consultative plans have no price to show — never render a number the
+          // customer could hold us to for an unscoped engagement.
+          price: selfServe ? `$${m.price}` : "Let's talk",
+          selfServe,
+          workflows: plural(m.workflows, 'live automation', 'live automations'),
+          runs: m.runs === Infinity ? 'Unlimited runs' : `${m.runs.toLocaleString()} runs / mo`,
+          users: plural(m.users, 'user', 'users'),
+        };
+      });
+
       res.json({
         plan: ent.plan,
         planLabel: PLAN_META[ent.plan]?.label ?? ent.plan,
         upgradeTo: nextPlan(ent.plan),
         billingConfigured: isBillingConfigured(),
         manageable: !!tenantRow?.stripe_customer_id,
+        catalog,
+        consultEmail: 'hello@agntic.co',
         workflows: { used: store.countActiveForTenant(req.tenant.id), limit: cap(ent.activeWorkflows) },
         runs:      { used: store.getRunCount(req.tenant.id), limit: cap(ent.monthlyRuns), resetsOn },
         seats:     { used: activeMembers(req.tenant.id).length, limit: cap(ent.seats) },
