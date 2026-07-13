@@ -330,6 +330,13 @@ silently deletes the notify step. So:
 - A node is **skipped** iff it has at least one incoming edge and **none** of them is live. A root
   (no incoming edges) always runs. A join runs as soon as **one** incoming edge is live — which is
   the correct semantics, and the one BPMN uses.
+- **A ruled-out branch target is DEAD, not merely unlit.** Liveness alone is not enough: if an
+  untaken case target also has an edge from some earlier node, *that* edge is live whichever way
+  the branch went, so the step would run anyway and **the branch would have decided nothing**. The
+  engine therefore marks non-selected case targets dead outright, and the validator rejects the
+  ambiguous shape at build time (`BRANCH_TARGET_EXTRA_PARENT`) — a case target must be reachable
+  **only** through its branch. To use another step's data, reference it with `{{stepId.output}}`;
+  a template needs no edge.
 - A skipped node emits `step_skipped` — **not** `step_failed`. It is not a casualty.
 - **§11.2 then holds structurally, not by promise:** with no `branch` in the spec every edge goes
   live the instant its source completes, nothing is ever skipped, and the loop reduces to exactly
@@ -393,6 +400,8 @@ where "just talk to it" dies.
 | `LLM_INPUT_NOT_ENUM` | a `decision` input with `evaluator:'llm'` **must** be `type:'enum'` with `values` | **protects the moat** | C |
 | `NON_EXHAUSTIVE_BRANCH` | every `branch` has a `*` case | **#5** | **DONE (B)** |
 | `BRANCH_CASE_NO_EDGE` | a case's target must have an edge from the branch — without one it sorts BEFORE the branch topologically and runs unconditionally, so the routing silently does nothing | silent no-op routing | **DONE (B)** |
+| `BRANCH_TARGET_EXTRA_PARENT` | a case target must be reachable ONLY through its branch — a second incoming edge is live whichever way the branch went, so the step runs even when it was ruled out | a branch that decides nothing | **DONE (B)** |
+| `ON_ERROR_ROUTE_NO_EDGE` · `ON_ERROR_BAD_TARGET` | `route_to:<id>` needs an edge from the failing node (which is what guarantees the target sorts *after* it) — without one the failure path never runs and the workflow reports **success** | an unhandled error reported as a success | **DONE (B)** |
 | `NESTED_FOREACH` · `HUMAN_IN_FOREACH` | one loop level (§12); a pause inside a loop would need one durable pause per item, and the resume model is per-RUN | a loop that pauses on item 1 and never processes 2..N | **DONE (B)** |
 | `DECISION_TABLE_GAP` | enumerable inputs fully covered, or a catch-all rule exists | **#5** | E |
 | `UNIQUE_HIT_OVERLAP` | `hitPolicy: UNIQUE` but rules overlap | **#5** | E |

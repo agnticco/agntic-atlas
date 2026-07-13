@@ -483,6 +483,55 @@ test('BRANCH_CASE_NO_EDGE: a case with no edge would run unconditionally — rej
   assert.ok(codesOf(res).includes('BRANCH_CASE_NO_EDGE'), `got: ${codesOf(res).join(', ')}`);
 });
 
+test('the SNEAK PATH: a ruled-out branch target does not run just because something else feeds it', async () => {
+  // Found by the independent verifier. `b1` is the branch's UNTAKEN case, but it
+  // also has an edge from `c`. That edge is live whichever way the branch went,
+  // so on pure edge-liveness `b1` runs anyway — and the branch has decided
+  // nothing. A ruled-out target must be DEAD, not merely unlit.
+  const flow = {
+    nodes: [
+      { id: 'c',  type: 'llm', config: { mode: 'classify', categories: 'a\nb' } },
+      { id: 'r',  type: 'branch', config: { on: 'c.output', cases: [{ when: 'a', to: 'a1' }, { when: '*', to: 'b1' }] } },
+      { id: 'a1', type: 'llm', config: { prompt: 'A' } },
+      { id: 'b1', type: 'llm', config: { prompt: 'B' } },
+    ],
+    edges: [
+      { from: 'c', to: 'r' },
+      { from: 'r', to: 'a1' },
+      { from: 'r', to: 'b1' },
+      { from: 'c', to: 'b1' },        // ← the sneak path
+    ],
+  };
+  const events = await runAll(
+    new FlowTester({ nodeTypes, llm: stubLlm('a'), channelRegistry: stubChannels() }),
+    flow, { initialContext: 'x' },
+  );
+  assert.ok(ids(events, 'step_completed').includes('a1'), 'the selected path runs');
+  assert.ok(!ids(events, 'step_completed').includes('b1'),
+    'the RULED-OUT path must not run, even though another live edge feeds it');
+  assert.ok(ids(events, 'step_skipped').includes('b1'));
+
+  // And the ambiguity is rejected at BUILD time, so it can't reach the engine.
+  const res = validator.validate(spec(flow.nodes.concat([{ id: 'd', type: 'deliver', config: { channel: 'in_app' } }]),
+                                      flow.edges.concat([{ from: 'a1', to: 'd' }])));
+  assert.ok(codesOf(res).includes('BRANCH_TARGET_EXTRA_PARENT'), `got: ${codesOf(res).join(', ')}`);
+});
+
+test('ON_ERROR_ROUTE_NO_EDGE: a failure path with no edge would never run — rejected', () => {
+  // Without an edge, the target usually sorts BEFORE the failing node and has
+  // already run — so the error path silently never executes and the workflow
+  // reports success. Found by the independent verifier.
+  const res = validator.validate(spec(
+    [
+      { id: 'x', type: 'llm', config: { prompt: 'go' }, on_error: { then: 'route_to:tell_ops' } },
+      { id: 'tell_ops', type: 'deliver', config: { channel: 'in_app', body: 'broke' } },
+      { id: 'd', type: 'deliver', config: { channel: 'in_app' } },
+    ],
+    [{ from: 'x', to: 'd' }],   // no edge x → tell_ops
+  ));
+  assert.ok(codesOf(res).includes('ON_ERROR_ROUTE_NO_EDGE'), `got: ${codesOf(res).join(', ')}`);
+});
+
 test('WRITE_WITHOUT_IDEMPOTENCY: a create with no key warns (but does not block)', () => {
   const res = validator.validate(spec(
     [

@@ -291,10 +291,17 @@ refactor them without an explicit decision recorded here:
   - `src/workflows/workflow-store.js` — `workflow_runs.status` CHECK widened to include
     **`awaiting_human`** (a run waiting on a person is not running, not a success, and not an
     error; leaving it `running` gets it swept as stale). SQLite can't alter a CHECK in place, so
-    this is a probe-then-rebuild mirroring the existing `_migrateStatusCheckIfNeeded`. **653
-    production run rows survived the rebuild** — the copy is by shared column name, so
-    ADDITIVE_RUN_COLUMNS are not stripped. New columns `paused_node`, `pending_ask`; new methods
-    `pauseRun` / `listAwaitingHuman` / `markRunResumed`.
+    this is a probe-then-rebuild mirroring the existing `_migrateStatusCheckIfNeeded`. New columns
+    `paused_node`, `pending_ask`; new methods `pauseRun` / `listAwaitingHuman` / `markRunResumed`.
+    **A table rebuild must carry over EVERY column the old table had — not just the ones its DDL
+    lists.** The first version copied `newCols ∩ oldCols`, which is a silent column-stripper: this
+    table is *not* fully described by its `CREATE TABLE` plus `ADDITIVE_RUN_COLUMNS` — `read_at` is
+    added by its own one-off `ALTER` further down `init()`, **after** the rebuild — so on any
+    database where a previous boot had added it, the rebuild dropped it and re-added it empty. The
+    independent verifier reproduced it on the real 653-row DB. The rebuild now `ALTER`s any unknown
+    old column into the new table before copying, so the whole class is closed by construction
+    rather than by anyone remembering to mirror the next column. Verified against a prod-shaped
+    legacy DB: 653 rows and all 653 `read_at` values preserved, and `init()` twice is a no-op.
   - `src/workflows/idempotency-store.js` (new) — SHA-256 of the resolved key, scoped
     `workflowId:nodeId`. **A node declaring an idempotency key with no store wired REFUSES to
     run** — a step that claims to deduplicate and silently doesn't is worse than one that never
@@ -302,9 +309,16 @@ refactor them without an explicit decision recorded here:
   - `src/workflows/workflow-validator.js` — `NON_EXHAUSTIVE_BRANCH` (every branch needs a `*`;
     without one an unanticipated value matches nothing and the workflow **silently does nothing**,
     which is the most expensive failure a router has and is invisible exactly when it matters),
-    `BRANCH_CASE_NO_EDGE`, `NESTED_FOREACH`, `HUMAN_IN_FOREACH`, `WRITE_WITHOUT_IDEMPOTENCY`
+    `BRANCH_CASE_NO_EDGE`, `BRANCH_TARGET_EXTRA_PARENT`, `ON_ERROR_ROUTE_NO_EDGE`,
+    `ON_ERROR_BAD_TARGET`, `NESTED_FOREACH`, `HUMAN_IN_FOREACH`, `WRITE_WITHOUT_IDEMPOTENCY`
     (warning). Branch rules live in the validator, not in `branch.js`'s `validate(node)` hook,
     because they need the **edge list**.
+  - **A ruled-out branch target is DEAD, not merely unlit.** Edge-liveness alone has a hole: if an
+    untaken case target *also* has an edge from an earlier node, that edge is live whichever way
+    the branch went — so the step runs anyway and **the branch decides nothing**. The engine marks
+    non-selected case targets dead outright, and `BRANCH_TARGET_EXTRA_PARENT` rejects the ambiguous
+    shape at build time. (Found by the independent verifier.) The engine does not rely on the
+    validator having run — specs already in the database predate the rule.
   - **`{{item}}` / `{{index}}` are bound ONLY inside a `foreach`.** Used anywhere else they are a
     `BAD_TEMPLATE_REF` at build time, rather than an empty string at run time.
   - **A `human` node is unreachable by design until increment D.** The engine pauses correctly, but

@@ -48,7 +48,10 @@ CREATE TABLE IF NOT EXISTS workflow_runs (
   workflow_id    TEXT NOT NULL REFERENCES workflows(id) ON DELETE CASCADE,
   started_at     TEXT NOT NULL,
   completed_at   TEXT,
-  status         TEXT NOT NULL DEFAULT 'running' CHECK(status IN ('running','success','error')),
+  -- 'awaiting_human': paused on a human step (P12 Increment B, converger-v2 7.4).
+  -- A run waiting on a person is not running, not a success, and not an error --
+  -- and leaving it 'running' would get it swept up as a stale run.
+  status         TEXT NOT NULL DEFAULT 'running' CHECK(status IN ('running','success','error','awaiting_human')),
   output         TEXT,
   error          TEXT,
   is_test        INTEGER NOT NULL DEFAULT 0,
@@ -436,9 +439,31 @@ export class WorkflowStore {
           pending_ask    TEXT
         );
       `);
-      const oldCols = this.db.prepare('PRAGMA table_info(workflow_runs)').all().map(r => r.name);
-      const newCols = this.db.prepare('PRAGMA table_info(workflow_runs_new)').all().map(r => r.name);
-      const shared  = newCols.filter(c => oldCols.includes(c)).join(', ');
+      // ── Carry over EVERY column the old table had ─────────────────────────
+      // Copying only `newCols ∩ oldCols` silently DROPS any column the DDL above
+      // doesn't happen to list — and this table is not fully described by that
+      // DDL plus ADDITIVE_RUN_COLUMNS. `read_at` is added by its own one-off
+      // ALTER further down init() (search "ADD COLUMN read_at"), so on any
+      // database where a previous boot already added it, a name-intersection
+      // copy would drop it here and re-add it EMPTY moments later — a silent,
+      // unguarded data loss on a table holding production run history.
+      //
+      // So: adopt any unknown old column into the new table BEFORE copying.
+      // This is future-proof by construction — a column added anywhere else in
+      // init(), or by a migration written years from now, survives without
+      // anyone remembering to mirror it into the DDL above. A rebuild must never
+      // be able to lose data just because two pieces of code disagree about what
+      // the schema is.
+      const oldInfo = this.db.prepare('PRAGMA table_info(workflow_runs)').all();
+      const newCols = new Set(this.db.prepare('PRAGMA table_info(workflow_runs_new)').all().map(r => r.name));
+      for (const col of oldInfo) {
+        if (newCols.has(col.name)) continue;
+        log.warn(`[workflow-store] workflow_runs rebuild: carrying over unlisted column "${col.name}"`);
+        this.db.exec(`ALTER TABLE workflow_runs_new ADD COLUMN ${col.name} ${col.type || 'TEXT'}`);
+        newCols.add(col.name);
+      }
+
+      const shared = oldInfo.map(c => c.name).filter(c => newCols.has(c)).join(', ');
       this.db.exec(`INSERT INTO workflow_runs_new (${shared}) SELECT ${shared} FROM workflow_runs;`);
       this.db.exec('DROP TABLE workflow_runs;');
       this.db.exec('ALTER TABLE workflow_runs_new RENAME TO workflow_runs;');

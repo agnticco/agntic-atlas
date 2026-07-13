@@ -374,6 +374,48 @@ export class WorkflowValidator {
               hint: `Add an edge { "from": "${node.id}", "to": "${to}" } for every case.`,
             });
           }
+
+          // A case target must be reached ONLY through the branch. If something
+          // else also feeds it, that other edge is live whichever way the branch
+          // went — so the step runs even when the branch ruled it out, and the
+          // branch decides nothing. The graph is genuinely ambiguous, so make it
+          // a build error rather than a runtime coin-flip. To use another step's
+          // data, reference it with {{stepId.output}} — a template needs no edge.
+          const otherParents = edges
+            .filter(e => e?.to === to && e.from !== node.id)
+            .map(e => e.from);
+          if (otherParents.length) {
+            issues.push({
+              severity: 'error', code: 'BRANCH_TARGET_EXTRA_PARENT',
+              message: `"${to}" is a destination of "${node.label || node.id}", but ${otherParents.map(p => `"${p}"`).join(', ')} also connects to it — so it would run even when the branch routes the other way, and the branch would decide nothing.`,
+              nodeId: to, field: 'edges',
+              hint: `Remove the connection${otherParents.length > 1 ? 's' : ''} from ${otherParents.map(p => `"${p}"`).join(', ')} to "${to}". To use that step's data, reference it as {{${otherParents[0]}.output}} — a template needs no connection.`,
+            });
+          }
+        }
+      }
+
+      // on_error: route_to must point somewhere the run can still GO. An edge
+      // from the failing node guarantees the target sorts AFTER it in
+      // topological order. Without one, the target has usually already run (or
+      // will be skipped), so the failure path silently never executes — and the
+      // run reports success while the error was never handled.
+      const errThen = node?.on_error?.then;
+      if (typeof errThen === 'string' && errThen.startsWith('route_to:')) {
+        const target = errThen.slice('route_to:'.length).trim();
+        if (!seenIds.has(target)) {
+          issues.push({
+            severity: 'error', code: 'ON_ERROR_BAD_TARGET',
+            message: `"${node.label || node.id}" sends failures to "${target}", but there's no step with that id.`,
+            nodeId: node.id, field: 'on_error',
+          });
+        } else if (!edgeSet.has(`${node.id} ${target}`)) {
+          issues.push({
+            severity: 'error', code: 'ON_ERROR_ROUTE_NO_EDGE',
+            message: `"${node.label || node.id}" sends failures to "${target}", but there is no connection drawn from it to "${target}" — the failure path would never run, and the workflow would report success anyway.`,
+            nodeId: node.id, field: 'edges',
+            hint: `Add an edge { "from": "${node.id}", "to": "${target}" }.`,
+          });
         }
       }
 

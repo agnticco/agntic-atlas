@@ -153,11 +153,24 @@ export class FlowTester {
     const hasIncoming = new Set(edges.filter(e => e?.to).map(e => e.to));
     const liveInto    = new Map(nodes.map(n => [n.id, 0]));
 
+    // Nodes a branch explicitly ruled out. Liveness alone isn't quite enough: if
+    // an untaken case target ALSO has an edge from some earlier node, that edge
+    // is live and the node would run anyway — the branch would have decided
+    // nothing. So a ruled-out target is dead regardless of its other parents.
+    // (The validator rejects that shape outright — BRANCH_TARGET_EXTRA_PARENT —
+    // but the engine must not depend on the validator having run: specs already
+    // in the database were saved before the rule existed.)
+    const ruledOut = new Set();
+
     /** Light up this node's outgoing edges. A branch lights only the case it picked. */
     const propagate = (nodeId, output) => {
-      const selected = byId.get(nodeId)?.type === 'branch' ? (output?.to ?? null) : null;
+      const isBranch = byId.get(nodeId)?.type === 'branch';
+      const selected = isBranch ? (output?.to ?? null) : null;
       for (const target of (outEdges.get(nodeId) ?? [])) {
-        if (selected !== null && target !== selected) continue;   // the untaken path stays dark
+        if (selected !== null && target !== selected) {
+          ruledOut.add(target);   // the untaken path is dead, not merely unlit
+          continue;
+        }
         liveInto.set(target, (liveInto.get(target) ?? 0) + 1);
       }
     };
@@ -171,7 +184,7 @@ export class FlowTester {
       }
 
       // Not selected by an upstream branch (or every path into it died).
-      if (hasIncoming.has(node.id) && (liveInto.get(node.id) ?? 0) === 0) {
+      if (ruledOut.has(node.id) || (hasIncoming.has(node.id) && (liveInto.get(node.id) ?? 0) === 0)) {
         if (!done.has(node.id)) {
           yield { type: 'step_skipped', nodeId: node.id, reason: 'not on the selected branch' };
         }
