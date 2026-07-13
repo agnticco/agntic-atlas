@@ -71,9 +71,12 @@ export class FlowTester {
    *                                              so the CostTracker can report this run's
    *                                              tokens/USD in isolation.
    * @param {string}      [options.costContext] — label for the cost ledger (e.g. a slug)
-   * @param {object[]}    [options.resumeSteps] — persisted steps from a paused run
-   *                                              (workflow_runs.steps). Their outputs are
-   *                                              rehydrated and those nodes are NOT re-run.
+   * @param {object}      [options.checkpoint]  — resume state from a paused run
+   *                                              (workflow_runs.checkpoint): full-fidelity
+   *                                              {outputs, skipped, live, ruledOut, lastOutput}.
+   *                                              NOT workflow_runs.steps — those carry the
+   *                                              display-shrunk event stream and resuming from
+   *                                              them delivers truncated content.
    * @param {object}      [options.decisions]   — { [humanNodeId]: { decision, by, at, channel } }
    *                                              the answers that unblock paused `human` steps.
    */
@@ -104,9 +107,28 @@ export class FlowTester {
     // the shrink stays where it belongs — the event stream, for the UI — and the
     // checkpoint carries the FULL, un-shrunk values. It is written once, on
     // pause, so it costs nothing on the runs that never pause.
+    // The checkpoint also carries the EDGE LIVENESS as it stood at the pause, and
+    // that is not a detail — it is the whole reason this is correct.
+    //
+    // The first design re-DERIVED liveness on resume by replaying propagate() for
+    // every already-done node. That is wrong, because propagate() lights ALL of a
+    // node's outgoing edges, while the original leg may have lit only SOME of them:
+    //
+    //   • a `branch` lights exactly one case — so replay revived the path it ruled out;
+    //   • an `on_error: route_to` step lights ONLY the error target — so replay
+    //     revived the HAPPY path of a step that had failed, and the run went on to
+    //     deliver as though the failure never happened.
+    //
+    // Liveness is a fact about what happened, not something to recompute from
+    // outputs. So the checkpoint RESTORES it, and replayed nodes propagate nothing.
     const decisions   = options.decisions ?? {};
-    const doneOutputs = new Set();   // ran before the pause — don't re-run, DO relight
-    const doneSkipped = new Set();   // ruled out before the pause — stay dark, relight NOTHING
+    const doneOutputs = new Set();   // ran before the pause — don't re-run, don't re-propagate
+    // Ruled out before the pause. What keeps these nodes DEAD across the resume is
+    // the restored liveness (nothing lit them, so liveInto stays 0) — NOT this
+    // set. Its only job is to avoid emitting a second `step_skipped` for a node
+    // already recorded as skipped, which would otherwise be appended to
+    // `workflow_runs.steps` twice.
+    const doneSkipped = new Set();
     const ckpt = options.checkpoint ?? null;
     if (ckpt) {
       for (const [id, out] of Object.entries(ckpt.outputs ?? {})) {
@@ -174,7 +196,9 @@ export class FlowTester {
       if (outEdges.has(e.from)) outEdges.get(e.from).push(e.to);
     }
     const hasIncoming = new Set(edges.filter(e => e?.to).map(e => e.to));
-    const liveInto    = new Map(nodes.map(n => [n.id, 0]));
+    // Restored from the checkpoint on a resume — never re-derived. See the note
+    // in the resume block above.
+    const liveInto = new Map(nodes.map(n => [n.id, ckpt?.live?.[n.id] ?? 0]));
 
     // Nodes a branch explicitly ruled out. Liveness alone isn't quite enough: if
     // an untaken case target ALSO has an edge from some earlier node, that edge
@@ -183,7 +207,7 @@ export class FlowTester {
     // (The validator rejects that shape outright — BRANCH_TARGET_EXTRA_PARENT —
     // but the engine must not depend on the validator having run: specs already
     // in the database were saved before the rule existed.)
-    const ruledOut = new Set();
+    const ruledOut = new Set(ckpt?.ruledOut ?? []);
 
     /** Light up this node's outgoing edges. A branch lights only the case it picked. */
     const propagate = (nodeId, output) => {
@@ -242,17 +266,22 @@ export class FlowTester {
       // the pause knows which paths are live. For a branch, that relights ONLY
       // the case it originally picked (propagate decodes the persisted output).
       if (doneOutputs.has(node.id)) {
-        const prior = outputs.get(node.id);
-        try {
-          propagate(node.id, prior);
-        } catch (err) {
-          // An unreadable branch decision. propagate() refuses to guess, and so
-          // do we: report it as a run failure rather than letting it escape the
-          // generator as an unhandled throw.
-          yield { type: 'run_failed', error: err.message ?? String(err) };
-          return;
-        }
-        if (prior !== undefined && !CONTROL_TYPES.has(node.type)) lastOutput = prior;
+        // Deliberately does NOT propagate. The edges this node lit — which may be
+        // only SOME of its outgoing edges, if it is a branch or it failed with
+        // route_to — were restored from the checkpoint. Re-lighting them here is
+        // what revived ruled-out branches and the happy paths of failed steps.
+        // Do NOT recompute `lastOutput` while replaying already-done nodes. The
+        // checkpoint's own `lastOutput` is what the original leg actually had at
+        // the moment it paused, and it is authoritative — recomputing it from
+        // `outputs` re-derives it from values the original leg deliberately never
+        // promoted. Concretely: an `on_error: route_to` step stores the sentinel
+        // {error, failed:true} into `outputs` but never makes it `lastOutput`
+        // (the catch block doesn't touch it). Replaying it as `lastOutput` — it
+        // is an `llm` node, so CONTROL_TYPES doesn't exclude it — meant a
+        // `deliver` after the pause sent the customer the raw error blob
+        // {"error":"LLM step failed: card declined","failed":true}, with
+        // run_completed and no error. Same spec, same failure, only difference
+        // being a `human` step in between.
         continue;
       }
 
@@ -270,8 +299,11 @@ export class FlowTester {
           // what the run resumes on, so the content the person approves is the
           // content that actually gets sent. See the note at the top of run().
           checkpoint: {
-            outputs: Object.fromEntries(outputs),
-            skipped: [...doneSkipped],
+            outputs:  Object.fromEntries(outputs),
+            skipped:  [...doneSkipped],
+            // The edge liveness AS IT STOOD, not something to recompute later.
+            live:     Object.fromEntries(liveInto),
+            ruledOut: [...ruledOut],
             lastOutput,
           },
         };

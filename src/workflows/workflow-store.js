@@ -481,8 +481,12 @@ export class WorkflowStore {
   }
 
   /**
-   * Park a run on a `human` step. The steps completed so far are already in
-   * `steps` (appendStep wrote them as they happened) — that is the checkpoint.
+   * Park a run on a `human` step.
+   *
+   * `checkpoint` is the resume state — full-fidelity node outputs plus the edge
+   * liveness as it stood. It is NOT `steps`: those carry the display-shrunk event
+   * stream (truncated at 2000 chars, objects JSON-encoded), and resuming from
+   * them delivered the customer a mutilated copy of what the person approved.
    */
   pauseRun(runId, nodeId, ask, checkpoint = null) {
     this.db.prepare(

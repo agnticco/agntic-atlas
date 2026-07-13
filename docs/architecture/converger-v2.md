@@ -347,7 +347,7 @@ silently deletes the notify step. So:
 |---|---|---|
 | `branch` | Evaluate `on`; select one `case`; the rest of the edges stay dark. Matching is exact-value only — no expressions. An expression language here would be undecidable, which deletes the completeness proof; ranges belong in a `decision` table, where they can be gap-analysed. | **DONE (B)** |
 | `foreach` | Iterate `over` a collection, binding `{{item}}`/`{{index}}`; collect outputs. **`maxItems` (default 100)**. The bound really stops the work, and the truncation is **reported** (`truncated`, `skipped`) — a loop that quietly processed 100 of your 500 rows is worse than one that failed. One level; no nesting (§12). | **DONE (B)** |
-| `human` | **Durable pause.** Run status `awaiting_human`; resume from persisted steps. The ENGINE half is built; the ask-delivery and the authentication of the answer are **Increment D**. **Full design: §7 — read it before touching this.** | **engine DONE (B)**; channels D |
+| `human` | **Durable pause.** Run status `awaiting_human`; resume from the run's `checkpoint` (NOT the persisted steps — see §7.4). The ENGINE half is built; the ask-delivery and the authentication of the answer are **Increment D**. **Full design: §7 — read it before touching this.** | **engine DONE (B)**; channels D |
 | `decision` | Evaluate `inputs` (LLM inputs = **classify into the declared enum**, one call per fuzzy input for auditability), match `rules` under `hitPolicy`, return the output value. Emit which rule fired → audit trail. | E |
 | `wait` | Timer. | not built — no gate check and nothing needs it yet |
 
@@ -791,15 +791,16 @@ gaps) and a shape-derivation call.
   (`step_skipped`, not `step_failed`); ✅ a join downstream of both paths still runs; ✅ a spec
   **without** a branch executes byte-identically (asserted on the exact event sequence); ✅ a
   re-fired trigger with `idempotency` does not write twice; ✅ `human` pauses and resumes from the
-  persisted steps without re-running — or re-paying for — earlier work.
+  **checkpoint** without re-running — or re-paying for — earlier work, and what it delivers is
+  byte-identical to what the person approved.
   All in `tests/workflows/control-flow.test.js` (23 tests).
 - **Also landed, because the pause is worthless without them:** `workflow_runs.status` gains
   `awaiting_human` (CHECK-constraint rebuild, mirroring the existing `_migrateStatusCheckIfNeeded`
   precedent; 653 production run rows preserved), plus `paused_node` / `pending_ask` columns, and
   `WorkflowScheduler` parks a run on `run_paused` instead of leaving it in `running` forever. It
-  also now persists `step_skipped` / `step_retry` / `step_routed` — **the persisted steps ARE the
-  checkpoint**, so a skipped node that wasn't recorded would be re-evaluated on resume and could
-  run a path the branch had already ruled out.
+  also persists `step_skipped` / `step_retry` / `step_routed` for the run history. **The persisted
+  steps are NOT the checkpoint** — see the box in §7.4; they are display-shrunk, and resuming from
+  them truncated the work product.
 - **A `human` node is unreachable by design until Increment D.** The converger does not emit one
   and the builder cannot add one, so no user workflow can park itself waiting for a question
   nobody will ever be asked. D builds the surface that asks it.
@@ -866,7 +867,7 @@ gaps) and a shape-derivation call.
 | Layer | What | Where |
 |---|---|---|
 | Unit | `scoreGap()` over crafted specs: unsatisfied assertion · table gap · UNIQUE overlap · non-exhaustive branch · unknown config key | `tests/converger/gap-oracle.test.js` |
-| Unit | Executor: `branch` skips the non-selected subtree; `foreach` bounds at `maxItems`; `human` pauses and **resumes from persisted steps** | `tests/workflows/control-flow.test.js` |
+| Unit | Executor: `branch` skips the non-selected subtree; `foreach` bounds at `maxItems`; `human` pauses and **resumes from the checkpoint**, delivering exactly what was approved | `tests/workflows/control-flow.test.js` |
 | Unit | **Approvals:** token is stored hashed · single-use (replay rejected) · TTL expiry · approve/reject tokens are distinct and mutually invalidating · timeout takes the declared path | `tests/approvals/approval-store.test.js` |
 | Security | **Forged approvals:** unsigned Slack `block_actions` rejected · a token from tenant A cannot resolve a run in tenant B · `email_reply` rejected by the validator | `scripts/checks/approval-adversarial.mjs` |
 | Golden | Corpus of `outcome → spec` pairs. Assert **structural** equivalence + gap-freedom. **Never byte-equality.** | `tests/converger/golden/*.json` |

@@ -4,7 +4,7 @@
  * The four things the gate demands (scripts/gates/p12.sh):
  *   1. `branch` skips the non-selected subtree
  *   2. `foreach` bounds at maxItems
- *   3. `human` pauses and RESUMES FROM PERSISTED STEPS
+ *   3. `human` pauses and RESUMES from a full-fidelity checkpoint
  *   4. §11.2 — a spec WITHOUT a branch executes byte-identically to today
  *
  * (4) is the one that protects production. Every workflow running today has no
@@ -182,7 +182,9 @@ test('foreach: runs its steps once per item, binding {{item}}', async () => {
 
 // ─────────────────────────────────────────────────────────────────────────────
 // 3. human — pauses, and RESUMES FROM PERSISTED STEPS.
-//    §7.4: no checkpointer. The store's persisted steps ARE the checkpoint.
+//    §7.4: no checkpointer needed — but the persisted STEPS are NOT the
+//    checkpoint (they are display-shrunk). The run emits an explicit, full-
+//    fidelity `checkpoint` on pause, and that is what a resume rehydrates from.
 // ─────────────────────────────────────────────────────────────────────────────
 const approvalFlow = {
   nodes: [
@@ -411,22 +413,252 @@ test('resume: a rehydrated branch relights ONLY the case it originally picked', 
   assert.equal(delivered, 1, 'exactly one delivery');
 });
 
-test('resume: an unrecoverable branch decision FAILS the run rather than taking every path', async () => {
-  // If we can't read which way a branch went, the one thing we must never do is
+test('a LIVE branch that produces no route FAILS the run rather than taking every path', async () => {
+  // If we can't tell which way a branch went, the one thing we must never do is
   // light every edge — that runs the path it ruled out. Fail loudly instead.
+  //
+  // (This used to be phrased as a RESUME test, feeding a corrupt branch output in
+  // the checkpoint. That is now meaningless by construction: the checkpoint
+  // restores the edge liveness directly, so a resume never re-reads a branch's
+  // output to decide routing at all. The invariant it protects now lives where it
+  // belongs — on the live path.)
   const tester = new FlowTester({ nodeTypes, llm: stubLlm('urgent'), channelRegistry: stubChannels() });
-  const events = await runAll(tester, branchThenHumanFlow, {
+  const events = await runAll(tester, {
+    nodes: [
+      { id: 'c', type: 'llm', config: { mode: 'classify', categories: 'urgent\nroutine' } },
+      // A case with no `to`. The validator rejects this shape — but the engine
+      // must not depend on the validator having run.
+      { id: 'r', type: 'branch', config: { on: 'c.output', cases: [{ when: '*' }] } },
+      { id: 'a', type: 'deliver', config: { channel: 'in_app', body: 'A' } },
+      { id: 'b', type: 'deliver', config: { channel: 'in_app', body: 'B' } },
+    ],
+    edges: [{ from: 'c', to: 'r' }, { from: 'r', to: 'a' }, { from: 'r', to: 'b' }],
+  }, { initialContext: 'an alert' });
+
+  assert.ok(one(events, 'run_failed'), 'a branch with no route must fail the run');
+  assert.ok(!ids(events, 'step_completed').includes('a'), 'and must NOT take a path');
+  assert.ok(!ids(events, 'step_completed').includes('b'), 'and must NOT take both paths');
+});
+
+test('resume: a FAILED step\'s happy path stays dead (route_to lit only the error edge)', async () => {
+  // On resume, replaying a done node used to re-run propagate(), which lights ALL
+  // of its outgoing edges — but the original leg lit only SOME: an `on_error:
+  // route_to` lights ONLY the error target. So the HAPPY path of a step that had
+  // FAILED came back to life after the pause, and the run delivered as though the
+  // failure never happened — a receipt for a payment that was declined.
+  //
+  // Liveness is a fact about what happened, not something to recompute from
+  // outputs. The checkpoint restores it.
+  const failing = { invoke: async () => { throw new Error('card declined'); } };
+  const bodies = [];
+  const channels = stubChannels((a) => { bodies.push(a.body); return { delivered: true }; });
+  const tester = new FlowTester({ nodeTypes, llm: failing, channelRegistry: channels });
+
+  const flow = {
+    nodes: [
+      { id: 'charge', type: 'llm', config: { prompt: 'charge' }, on_error: { then: 'route_to:ask' } },
+      { id: 'ask',    type: 'human', config: { prompt: 'Retry?', decisions: ['approve', 'reject'] } },
+      { id: 'happy',  type: 'deliver', config: { channel: 'in_app', body: 'RECEIPT' } },
+      { id: 'happy_child', type: 'deliver', config: { channel: 'in_app', body: 'THANKS' } },
+      { id: 'done',   type: 'deliver', config: { channel: 'in_app' } },
+    ],
+    // charge->ask FIRST, so the pause is reached before `happy` in topo order —
+    // which means `happy` is NOT in checkpoint.skipped and the only thing keeping
+    // it dead is the restored liveness.
+    edges: [
+      { from: 'charge', to: 'ask' }, { from: 'charge', to: 'happy' },
+      { from: 'ask', to: 'done' }, { from: 'happy', to: 'happy_child' },
+    ],
+  };
+
+  const first = await runAll(tester, flow, { initialContext: 'ORDER EMAIL' });
+  const ckpt = one(first, 'run_paused').checkpoint;
+  assert.ok(ids(first, 'step_failed').includes('charge'), 'the charge failed');
+  assert.ok(!ckpt.skipped.includes('happy'), 'the fixture must NOT lean on checkpoint.skipped');
+
+  bodies.length = 0;
+  const second = await runAll(tester, flow, {
+    initialContext: 'ORDER EMAIL',
+    checkpoint: ckpt,
+    decisions: { ask: { decision: 'approve', by: 'u' } },
+  });
+
+  assert.ok(!ids(second, 'step_completed').includes('happy'),
+    'the happy path of a FAILED step must not come back to life on resume');
+  assert.ok(!ids(second, 'step_completed').includes('happy_child'), 'nor its children');
+  assert.ok(!bodies.includes('RECEIPT'),
+    'the customer must not get a receipt for a payment that was declined');
+  assert.equal(bodies.length, 1, 'exactly one delivery — the one on the error path');
+});
+
+test('resume: a RESUMED run delivers exactly what the same spec delivers straight through', async () => {
+  // Found by the independent verifier. The ONLY difference between these two
+  // specs is a `human` step between the failure and the delivery. They must
+  // deliver the same body.
+  //
+  // They didn't. A step with `on_error: route_to` stores the sentinel
+  // {error, failed:true} into `outputs` but never promotes it to `lastOutput`.
+  // Replaying done nodes on resume DID promote it — it's an `llm` node, so
+  // CONTROL_TYPES doesn't exclude it — so `deliver` sent the customer the raw
+  // error blob. run_completed, no error. This is the "a non-work-product value
+  // becomes lastOutput and reaches the customer" bug, re-entered by a new door.
+  const SOURCE = 'THE ORIGINAL ORDER EMAIL';
+
+  const mkFlow = (withPause) => ({
+    nodes: [
+      { id: 'charge', type: 'llm', config: { prompt: 'Charge the card.' },
+        on_error: { then: 'route_to:tell_ops' } },
+      { id: 'tell_ops', type: 'deliver', config: { channel: 'in_app', body: 'ops: {{charge.output}}' } },
+      ...(withPause ? [{ id: 'ask', type: 'human', config: { prompt: 'Continue?', decisions: ['approve', 'reject'] } }] : []),
+      { id: 'done', type: 'deliver', config: { channel: 'in_app' } },
+    ],
+    edges: withPause
+      ? [{ from: 'charge', to: 'tell_ops' }, { from: 'tell_ops', to: 'ask' }, { from: 'ask', to: 'done' }]
+      : [{ from: 'charge', to: 'tell_ops' }, { from: 'tell_ops', to: 'done' }],
+  });
+
+  const bodies = [];
+  const channels = () => stubChannels((args) => { bodies.push(args.body); return { delivered: true }; });
+  const failing = { invoke: async () => { throw new Error('card declined'); } };
+
+  // A — straight through, no pause.
+  const a = new FlowTester({ nodeTypes, llm: failing, channelRegistry: channels() });
+  await runAll(a, mkFlow(false), { initialContext: SOURCE });
+  const straightBody = bodies.at(-1);
+
+  // B — identical, but with a human step between the failure and the delivery.
+  bodies.length = 0;
+  const b = new FlowTester({ nodeTypes, llm: failing, channelRegistry: channels() });
+  const leg1 = await runAll(b, mkFlow(true), { initialContext: SOURCE });
+  const paused = one(leg1, 'run_paused');
+  assert.ok(paused, 'must pause');
+
+  bodies.length = 0;
+  await runAll(b, mkFlow(true), {
+    initialContext: SOURCE,
+    checkpoint: paused.checkpoint,
+    decisions: { ask: { decision: 'approve', by: 'u' } },
+  });
+  const resumedBody = bodies.at(-1);
+
+  assert.ok(!String(resumedBody).includes('"failed":true'),
+    `a resumed delivery must never carry a failed step's error sentinel — got: ${resumedBody}`);
+  assert.equal(resumedBody, straightBody,
+    'a pause must not change WHAT gets delivered — only when');
+});
+
+test('control nodes: a human/branch output never reaches an AI step as its input', async () => {
+  // The `lastOutput` half of the control-node fix was pinned; the
+  // NON_CONTENT_TYPES half was not — dropping branch/human from that set left
+  // all 31 tests green while an `llm` step after an approval ingested
+  // `{"decision":"approve","by":"user:1",…}` as its model input.
+  const seen = [];
+  const spy = {
+    invoke: async (msgs) => { seen.push(String(msgs[1].content)); return { content: 'ok' }; },
+  };
+  const tester = new FlowTester({ nodeTypes, llm: spy, channelRegistry: stubChannels() });
+
+  const flow = {
+    nodes: [
+      { id: 'draft',   type: 'llm', config: { prompt: 'Draft it.' } },
+      { id: 'approve', type: 'human', config: { prompt: 'ok?', decisions: ['approve', 'reject'] } },
+      { id: 'polish',  type: 'llm', config: { mode: 'rewrite', format: 'email' } },
+      { id: 'send',    type: 'deliver', config: { channel: 'in_app' } },
+    ],
+    edges: [{ from: 'draft', to: 'approve' }, { from: 'approve', to: 'polish' }, { from: 'polish', to: 'send' }],
+  };
+
+  const first = await runAll(tester, flow, { initialContext: 'an enquiry' });
+  await runAll(tester, flow, {
+    initialContext: 'an enquiry',
+    checkpoint: one(first, 'run_paused').checkpoint,
+    decisions: { approve: { decision: 'approve', by: 'user:1' } },
+  });
+
+  const polishPrompt = seen.at(-1);
+  assert.ok(!polishPrompt.includes('"decision"'),
+    `an AI step must never ingest the approval record as content; got: ${polishPrompt.slice(0, 200)}`);
+  assert.ok(!polishPrompt.includes('user:1'), 'the approver identity is audit metadata, not content');
+});
+
+test('resume: a checkpoint with a NON-EMPTY skipped[] keeps those nodes dead', async () => {
+  // No prior test ever produced a non-empty checkpoint.skipped — the
+  // branch-then-human tests pause before the topo order reaches the untaken
+  // target. So lumping ckpt.skipped into doneOutputs left all 31 green while a
+  // skipped node relit its own children on resume. Force the ordering.
+  const flow = {
+    nodes: [
+      { id: 'classify',  type: 'llm', config: { mode: 'classify', categories: 'urgent\nroutine' } },
+      { id: 'route',     type: 'branch', config: {
+        on: 'classify.output',
+        cases: [{ when: 'urgent', to: 'urgent_path' }, { when: '*', to: 'quiet_path' }],
+      } },
+      // `quiet_path` sorts BEFORE the human step, so leg 1 really does emit a
+      // step_skipped for it — that is what puts an entry in checkpoint.skipped.
+      { id: 'quiet_path', type: 'llm', config: { prompt: 'file quietly' } },
+      { id: 'quiet_send', type: 'deliver', config: { channel: 'in_app', body: 'QUIET' } },
+      { id: 'urgent_path', type: 'llm', config: { prompt: 'escalate' } },
+      { id: 'ask',        type: 'human', config: { prompt: 'page?', decisions: ['approve', 'reject'] } },
+      { id: 'paged',      type: 'deliver', config: { channel: 'in_app', body: 'PAGED' } },
+    ],
+    edges: [
+      { from: 'classify', to: 'route' },
+      { from: 'route', to: 'urgent_path' },
+      { from: 'route', to: 'quiet_path' },
+      { from: 'quiet_path', to: 'quiet_send' },
+      { from: 'urgent_path', to: 'ask' },
+      { from: 'ask', to: 'paged' },
+    ],
+  };
+  let delivered = [];
+  const channels = stubChannels((a) => { delivered.push(a.body); return { delivered: true }; });
+  const tester = new FlowTester({ nodeTypes, llm: stubLlm('urgent'), channelRegistry: channels });
+
+  const first = await runAll(tester, flow, { initialContext: 'alert' });
+  const ckpt = one(first, 'run_paused').checkpoint;
+  assert.ok(ckpt.skipped.includes('quiet_path'),
+    'the fixture must actually produce a non-empty checkpoint.skipped, or it proves nothing');
+
+  delivered = [];
+  const second = await runAll(tester, flow, {
+    initialContext: 'alert',
+    checkpoint: ckpt,
+    decisions: { ask: { decision: 'approve', by: 'u' } },
+  });
+
+  assert.ok(!ids(second, 'step_completed').includes('quiet_send'),
+    'a node downstream of a SKIPPED node must not come back to life on resume');
+  assert.ok(ids(second, 'step_skipped').includes('quiet_send'),
+    'the dead subtree stays dead through the resume');
+  assert.ok(ids(second, 'step_completed').includes('paged'), 'the live path still runs');
+  assert.equal(delivered.length, 1,
+    'exactly ONE delivery — the ruled-out branch must not deliver on resume');
+});
+
+test('resume: a node already recorded as skipped is not re-reported as skipped', async () => {
+  // What keeps a ruled-out node DEAD across a resume is the RESTORED LIVENESS,
+  // not `checkpoint.skipped` — nothing lit it, so its liveInto stays 0. The
+  // skipped[] list exists only so the same node isn't appended to
+  // workflow_runs.steps as `step_skipped` twice. Pin that, honestly, rather than
+  // leave an unpinned guard whose comment claims a job it no longer does.
+  const tester = new FlowTester({ nodeTypes, llm: stubLlm('urgent'), channelRegistry: stubChannels() });
+  const first  = await runAll(tester, branchThenHumanFlow, { initialContext: 'an alert' });
+  const ckpt   = one(first, 'run_paused').checkpoint;
+
+  // Force a non-empty skipped[] by hand — the branch-then-human fixture pauses
+  // before the topo order reaches the untaken target, so it produces none.
+  ckpt.skipped = ['auto_file'];
+
+  const second = await runAll(tester, branchThenHumanFlow, {
     initialContext: 'an alert',
-    // A corrupt checkpoint — the branch's route is unreadable.
-    checkpoint: {
-      outputs: { classify: 'urgent', route: 'not-json-and-not-a-route' },
-      skipped: [], lastOutput: 'urgent',
-    },
+    checkpoint: ckpt,
     decisions: { escalate: { decision: 'approve', by: 'u' } },
   });
-  const failed = one(events, 'run_failed');
-  assert.ok(failed, 'an unreadable branch decision must fail the run');
-  assert.match(failed.error, /produced no route/i);
+
+  assert.ok(!ids(second, 'step_skipped').includes('auto_file'),
+    'a node already recorded as skipped must not be reported skipped a second time');
+  assert.ok(!ids(second, 'step_completed').includes('auto_file'),
+    'and it must still be dead');
 });
 
 test('human: an approval can never DEFAULT — the node refuses to evaluate without a decision', async () => {
@@ -736,6 +968,65 @@ test('{{item}} outside a foreach is a build-time error, not an empty string at r
     [{ from: 'x', to: 'd' }],
   ));
   assert.ok(codesOf(res).includes('BAD_TEMPLATE_REF'), `got: ${codesOf(res).join(', ')}`);
+});
+
+test('ON_ERROR_BAD_TARGET: routing failures to a step that does not exist is rejected', () => {
+  const res = validator.validate(spec(
+    [
+      { id: 'x', type: 'llm', config: { prompt: 'go' }, on_error: { then: 'route_to:nowhere' } },
+      { id: 'd', type: 'deliver', config: { channel: 'in_app' } },
+    ],
+    [{ from: 'x', to: 'd' }],
+  ));
+  assert.ok(codesOf(res).includes('ON_ERROR_BAD_TARGET'), `got: ${codesOf(res).join(', ')}`);
+});
+
+// ── POSITIVE cases ──────────────────────────────────────────────────────────
+// Every rule below had a rejection test and no acceptance test. A negative-only
+// test would still pass if the check were `if (true)` — which is exactly how
+// ON_ERROR_ROUTE_NO_EDGE shipped rejecting every valid spec. Assert the GOOD
+// shape is accepted, or you have not tested the check.
+test('positive: a well-formed foreach validates', () => {
+  const res = validator.validate(spec(
+    [
+      { id: 'rows', type: 'connector-action', config: { action: 'airtable_search_records' } },
+      { id: 'loop', type: 'foreach', config: {
+        over: 'rows.output',
+        maxItems: 25,
+        steps: [{ id: 's', type: 'llm', config: { prompt: 'Handle {{item}} (#{{index}})' } }],
+      } },
+      { id: 'd', type: 'deliver', config: { channel: 'in_app' } },
+    ],
+    [{ from: 'rows', to: 'loop' }, { from: 'loop', to: 'd' }],
+  ));
+  assert.ok(res.ok, `a good foreach — including {{item}}/{{index}} — must validate; got: ${codesOf(res).join(', ')}`);
+});
+
+test('positive: a well-formed human step validates', () => {
+  const res = validator.validate(spec(
+    [
+      { id: 'draft', type: 'llm', config: { prompt: 'draft' } },
+      { id: 'ask',   type: 'human', config: { prompt: 'Send it?', preview: '{{draft.output}}', decisions: ['approve', 'reject'] } },
+      { id: 'd',     type: 'deliver', config: { channel: 'in_app' } },
+    ],
+    [{ from: 'draft', to: 'ask' }, { from: 'ask', to: 'd' }],
+  ));
+  assert.ok(res.ok, `a good human step must validate; got: ${codesOf(res).join(', ')}`);
+});
+
+test('positive: a branch whose targets are reached ONLY through it validates', () => {
+  // The mirror of BRANCH_TARGET_EXTRA_PARENT. `c` feeds the branch, not the
+  // targets — so the routing is unambiguous.
+  const res = validator.validate(spec(
+    [
+      { id: 'c',  type: 'llm', config: { mode: 'classify', categories: 'a\nb' } },
+      { id: 'r',  type: 'branch', config: { on: 'c.output', cases: [{ when: 'a', to: 'a1' }, { when: '*', to: 'b1' }] } },
+      { id: 'a1', type: 'deliver', config: { channel: 'in_app', body: 'A' } },
+      { id: 'b1', type: 'deliver', config: { channel: 'in_app', body: 'B' } },
+    ],
+    [{ from: 'c', to: 'r' }, { from: 'r', to: 'a1' }, { from: 'r', to: 'b1' }],
+  ));
+  assert.ok(res.ok, `an unambiguous branch must validate; got: ${codesOf(res).join(', ')}`);
 });
 
 test('NESTED_FOREACH / HUMAN_IN_FOREACH are rejected', () => {

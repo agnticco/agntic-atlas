@@ -329,28 +329,37 @@ refactor them without an explicit decision recorded here:
     non-selected case targets dead outright, and `BRANCH_TARGET_EXTRA_PARENT` rejects the ambiguous
     shape at build time. (Found by the independent verifier.) The engine does not rely on the
     validator having run — specs already in the database predate the rule.
-  - **RESUMING A BRANCH: `step_completed` carries a SHRUNK output.** `_shrinkOutput` **always**
-    JSON-encodes (so the event stream never carries megabytes), which means a `branch` rehydrates
-    from the persisted steps as a **string** — `output.to` reads `undefined`. The first version
-    then lit *every* outgoing edge, so **on resume the branch the workflow had ruled out ran and
-    delivered** (a rejected draft gets sent). Two fixes, both kept: branch outputs are decoded on
-    rehydration, and `propagate()` **fails the run** rather than guessing if it still cannot read a
-    route — silently taking every path is the worst possible answer to "which way did it go?".
-    Separately, nodes SKIPPED before a pause are tracked apart from completed ones (`doneSkipped`
-    vs `doneOutputs`): lumping them together made a skipped node relight its own children on the
-    way back through. **Anything that reads a persisted step must expect a JSON string, not the
-    live object.** (Found by the independent verifier; both are pinned by tests that were confirmed
-    to fail when the bug is re-introduced.)
+  - **LIVENESS IS RESTORED FROM THE CHECKPOINT, NEVER RE-DERIVED.** The checkpoint carries
+    `{outputs, skipped, live, ruledOut, lastOutput}`, and a replayed node **propagates nothing**.
+    Re-running `propagate()` for already-done nodes is wrong, because it lights **all** of a node's
+    outgoing edges while the original leg may have lit only **some**: a `branch` lights one case,
+    and an `on_error: route_to` lights only the error target. Re-deriving therefore **revived the
+    path the branch ruled out** *and* **revived the HAPPY path of a step that had failed** — the
+    run went on to deliver as though the payment had not been declined. Liveness is a fact about
+    what happened, not something to recompute from outputs. (Both found by the independent
+    verifier; the second only surfaced when probing the first.)
+  - **`branch` / `human` outputs are never `lastOutput`, and never a transform's input.** Two
+    separate guards — `CONTROL_TYPES` in `flow-tester.js` (what `deliver` sends) and
+    `NON_CONTENT_TYPES` in `node-types/_node-input.js` (what an `llm` step ingests). Miss either
+    and the approval record `{"decision":"approve","by":"user:1",…}` reaches the customer, or the
+    model.
   - **Never use an unprintable character as a separator.** The branch/edge lookup key was first
     built with a literal **NUL** (`${from}\0${to}`) — invisible in an editor and in a diff — and it
     silently failed to match the one site that used a space, so `ON_ERROR_ROUTE_NO_EDGE` fired on
     *every* `route_to` and the feature was unpublishable. This is the same class as the `server.js`
     NUL in Known gotchas below. `tests/workflows/control-flow.test.js` now fails if **any** file
     under `src/` contains a NUL byte.
-  - **A negative-only test is not a test.** The `route_to` check was 100% green while rejecting the
-    *correct* shape: the test only asserted that a bad spec is rejected, so it would have passed if
-    the check were `if (true)`. Every validator rule needs a case asserting the GOOD shape is
-    **accepted**.
+  - **A GREEN SUITE PROVED NOTHING FOUR TIMES RUNNING. Mutation-test, don't trust the tick.** Every
+    defect in this increment reached `main`-candidate state behind a passing suite, because each
+    test passed *for the wrong reason*: the `route_to` test was **negative-only** (it would have
+    passed if the check were `if (true)`, and indeed the check was rejecting every *correct* spec);
+    the resume test's stub LLM returned **16 characters**, so it never crossed the 2000-char
+    truncation cap; and it asserted a delivery *ran*, never *what it sent*. Two guards
+    (`NON_CONTENT_TYPES`, the `doneSkipped` split) could be **deleted entirely with the suite still
+    green**. So: **every validator rule needs a POSITIVE case** (the good shape is *accepted*), and
+    **every guard must be mutation-tested** — re-introduce the bug and confirm a test actually
+    fails. `tests/workflows/control-flow.test.js` now kills 7/7 mutations; the two that survived
+    are what exposed the liveness bug above.
   - **`{{item}}` / `{{index}}` are bound ONLY inside a `foreach`.** Used anywhere else they are a
     `BAD_TEMPLATE_REF` at build time, rather than an empty string at run time.
   - **A `human` node is unreachable by design until increment D.** The engine pauses correctly, but
