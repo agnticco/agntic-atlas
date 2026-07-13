@@ -32,6 +32,15 @@ const RATES = [
  */
 const WEB_SEARCH_RATE_PER_1K = 10;
 
+/**
+ * Prompt-caching multipliers, applied against the model's *input* rate.
+ * Cache writes cost more than a normal input token; cache reads cost ~a tenth.
+ * We write with a 1h TTL (see ChatModel), which bills at 2x rather than 1.25x.
+ * https://platform.claude.com/docs/en/build-with-claude/prompt-caching
+ */
+const CACHE_WRITE_MULTIPLIER = 2.0;   // 1h TTL (5m TTL would be 1.25)
+const CACHE_READ_MULTIPLIER  = 0.1;
+
 export class CostTracker {
   constructor() {
     /** @type {Array<{timestamp:string, sessionId:string, tier:string, model:string, context:string, inputTokens:number, outputTokens:number, costUsd:number|null}>} */
@@ -93,11 +102,11 @@ export class CostTracker {
    *   Billed at $10 per 1,000 in addition to token usage. Sourced from
    *   `additionalKwargs.usage.web_search_requests` on the AIMessage.
    */
-  record({ sessionId = 'unknown', userId = null, tier, model, inputTokens = 0, outputTokens = 0, context = '', webSearchRequests = 0 }) {
+  record({ sessionId = 'unknown', userId = null, tier, model, inputTokens = 0, outputTokens = 0, context = '', webSearchRequests = 0, cacheWriteTokens = 0, cacheReadTokens = 0 }) {
     // Auto-fill userId from the session→user map when the caller doesn't have it.
     userId = userId ?? this.getSessionUser(sessionId);
 
-    const tokenCostUsd     = CostTracker.estimateCost(model, inputTokens, outputTokens);
+    const tokenCostUsd     = CostTracker.estimateCost(model, inputTokens, outputTokens, cacheWriteTokens, cacheReadTokens);
     const webSearchCostUsd = CostTracker.estimateServerToolCost(webSearchRequests);
     // Total cost includes both token spend and server-tool fees. Stays null only
     // when token cost is unknown AND no web searches happened.
@@ -119,6 +128,8 @@ export class CostTracker {
       costUsd,
       webSearchRequests,
       webSearchCostUsd,
+      cacheWriteTokens,
+      cacheReadTokens,
     };
     this._records.push(record);
     this._store?.recordCost(record);
@@ -354,11 +365,16 @@ export class CostTracker {
    * @param {number} output - Output tokens
    * @returns {number|null}
    */
-  static estimateCost(model, input, output) {
+  static estimateCost(model, input, output, cacheWrite = 0, cacheRead = 0) {
     const m = (model ?? '').toLowerCase();
     for (const [key, rate] of RATES) {
       if (m.includes(key)) {
-        return +((input * rate.in + output * rate.out) / 1_000_000).toFixed(6);
+        return +((
+          input      * rate.in
+        + output     * rate.out
+        + cacheWrite * rate.in * CACHE_WRITE_MULTIPLIER
+        + cacheRead  * rate.in * CACHE_READ_MULTIPLIER
+        ) / 1_000_000).toFixed(6);
       }
     }
     return null;
