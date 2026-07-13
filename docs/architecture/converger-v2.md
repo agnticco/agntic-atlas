@@ -25,6 +25,25 @@ This is written for a coding agent picking up one increment cold.
 **Anchors are exported symbol names, not line numbers.** Per CLAUDE.md, line numbers in a brief
 are non-authoritative provenance — re-ground against the symbol.
 
+### This document is the handoff. Keep it true.
+
+Each increment is built by a **fresh session with no memory of the last one**. That is
+deliberate: an agent carrying 200k tokens of its own prior reasoning stops re-grounding and
+starts defending decisions it made three increments ago. Fresh sessions work *only* because
+**this document carries the state instead of the agent**.
+
+Which imposes one obligation on you:
+
+> **If your work contradicts this document, fix this document in the same commit as the code.**
+
+Not a follow-up. Not a TODO. The same commit. §1's contracts were read out of `main` on
+2026-07-13 — if you find they have drifted, **the code is right and this file is wrong**, and
+correcting it is part of your deliverable.
+
+A spec that disagrees with `main` is worse than no spec: the next session rehydrates from it,
+trusts it because it looks authoritative, and builds on a lie. That costs a full round, every
+time. **The document going stale is the single most likely way this build fails.**
+
 ---
 
 ## 1. CURRENT STATE (as of `main`, 2026-07-13)
