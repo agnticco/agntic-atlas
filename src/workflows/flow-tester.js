@@ -21,6 +21,7 @@
 import { withTimeout } from '../utils/with-timeout.js';
 import { numEnv } from '../utils/env.js';
 import { liftV1Node } from './node-types/compat-v1.js';
+import { buildAsk } from './node-types/human.js';
 
 export class FlowTester {
   /**
@@ -32,7 +33,11 @@ export class FlowTester {
    * @param {import('./channel-registry.js').ChannelRegistry}  [options.channelRegistry]
    * @param {import('./node-type-registry.js').NodeTypeRegistry} [options.nodeTypes] — required for execution
    */
-  constructor({ sourceRegistry, scheduler, tools, llm, channelRegistry, nodeTypes } = {}) {
+  constructor({ sourceRegistry, scheduler, tools, llm, channelRegistry, nodeTypes, idempotencyStore = null } = {}) {
+    // Optional: only needed by specs that declare an `idempotency` attribute. A
+    // node that declares one with no store wired throws rather than silently
+    // failing to deduplicate (see _executeNode).
+    this.idempotencyStore = idempotencyStore;
     this.sourceRegistry  = sourceRegistry;
     this.scheduler       = scheduler;
     this.tools           = tools;
@@ -50,6 +55,9 @@ export class FlowTester {
    *   { type: 'run_completed', output }
    *   { type: 'run_failed', error }
    *
+   *   { type: 'step_skipped',  nodeId, reason }        — a branch didn't select it
+   *   { type: 'run_paused',    nodeId, ask }           — a `human` step is waiting
+   *
    * @param {object} flow — { nodes: [...], edges: [...] }
    * @param {object} [options]
    * @param {AbortSignal} [options.signal]
@@ -57,12 +65,33 @@ export class FlowTester {
    *                                              so the CostTracker can report this run's
    *                                              tokens/USD in isolation.
    * @param {string}      [options.costContext] — label for the cost ledger (e.g. a slug)
+   * @param {object[]}    [options.resumeSteps] — persisted steps from a paused run
+   *                                              (workflow_runs.steps). Their outputs are
+   *                                              rehydrated and those nodes are NOT re-run.
+   * @param {object}      [options.decisions]   — { [humanNodeId]: { decision, by, at, channel } }
+   *                                              the answers that unblock paused `human` steps.
    */
   async* run(flow, options = {}) {
     const nodes = flow.nodes ?? [];
     const edges = flow.edges ?? [];
     const order = this._topoSort(nodes, edges);
     const outputs = new Map();
+
+    // ── Resume (§7.4) ────────────────────────────────────────────────────────
+    // A paused run holds no compute. To continue it we rehydrate ctx.outputs
+    // from the steps WorkflowStore already persisted, then carry on in the same
+    // topological order — no StateGraph checkpointer, because the DAG is
+    // deterministic and the store is already the record of what happened.
+    const decisions = options.decisions ?? {};
+    const done = new Set();
+    for (const s of (options.resumeSteps ?? [])) {
+      if (s?.type === 'step_completed' && s.nodeId) {
+        outputs.set(s.nodeId, s.output);
+        done.add(s.nodeId);
+      } else if (s?.type === 'step_skipped' && s.nodeId) {
+        done.add(s.nodeId);
+      }
+    }
     // Allow a caller (e.g. the scheduler's email-trigger path) to inject an
     // initial value that downstream nodes see as ctx.lastOutput before any
     // node has run. This is how a fetched email becomes the input to a
@@ -101,11 +130,71 @@ export class FlowTester {
       },
     };
 
+    // ── Edge liveness — conditional execution (§4) ───────────────────────────
+    // A node is SKIPPED iff it has at least one incoming edge and NONE of them
+    // is live. An edge goes live when its source completes — EXCEPT out of a
+    // `branch`, where only the selected case's edge goes live.
+    //
+    // This is an edge-level model, not the node-level `active` set §4 sketches,
+    // because a node-level set gets JOINS wrong: a node downstream of both the
+    // taken and the untaken path would be wrongly skipped. With edges, a join
+    // runs as soon as ONE incoming edge is live, which is the correct semantics
+    // and the one BPMN uses.
+    //
+    // It is also why §11.2 holds STRUCTURALLY rather than by promise: with no
+    // `branch` in the spec, every edge goes live the instant its source
+    // completes, nothing is ever skipped, and this loop reduces to the old one.
+    const byId     = new Map(nodes.map(n => [n.id, n]));
+    const outEdges = new Map(nodes.map(n => [n.id, []]));
+    for (const e of edges) {
+      if (!e?.from || !e?.to) continue;
+      if (outEdges.has(e.from)) outEdges.get(e.from).push(e.to);
+    }
+    const hasIncoming = new Set(edges.filter(e => e?.to).map(e => e.to));
+    const liveInto    = new Map(nodes.map(n => [n.id, 0]));
+
+    /** Light up this node's outgoing edges. A branch lights only the case it picked. */
+    const propagate = (nodeId, output) => {
+      const selected = byId.get(nodeId)?.type === 'branch' ? (output?.to ?? null) : null;
+      for (const target of (outEdges.get(nodeId) ?? [])) {
+        if (selected !== null && target !== selected) continue;   // the untaken path stays dark
+        liveInto.set(target, (liveInto.get(target) ?? 0) + 1);
+      }
+    };
+
     yield { type: 'run_started', runId };
 
     for (const node of order) {
       if (options.signal?.aborted) {
         yield { type: 'run_failed', error: 'aborted' };
+        return;
+      }
+
+      // Not selected by an upstream branch (or every path into it died).
+      if (hasIncoming.has(node.id) && (liveInto.get(node.id) ?? 0) === 0) {
+        if (!done.has(node.id)) {
+          yield { type: 'step_skipped', nodeId: node.id, reason: 'not on the selected branch' };
+        }
+        continue;   // its own outgoing edges stay dark
+      }
+
+      // Already ran, in the part of this run that happened before the pause.
+      // Don't re-run it — but DO relight its edges, so the graph downstream of
+      // the pause knows which paths are live.
+      if (done.has(node.id)) {
+        const prior = outputs.get(node.id);
+        propagate(node.id, prior);
+        if (prior !== undefined) lastOutput = prior;
+        continue;
+      }
+
+      // ── The durable pause (§7.4) ──────────────────────────────────────────
+      // A `human` step with no answer yet stops the run here. Everything already
+      // computed is persisted by the caller (the scheduler appends every step),
+      // and the run holds NO compute while it waits — a pending approval is free.
+      if (node.type === 'human' && !decisions[node.id]) {
+        const askCfg = this._substitute(node.config ?? {}, { outputs, lastOutput });
+        yield { type: 'run_paused', nodeId: node.id, ask: buildAsk(node, askCfg) };
         return;
       }
 
@@ -150,13 +239,48 @@ export class FlowTester {
         const isSlowExternal = node.type === 'connector-action' || node.type === 'search_web';
         const effectiveBackstop = isSlowExternal ? Math.max(backstopMs, 300_000) : backstopMs;
         const nodeTimeout  = Math.max(effectiveBackstop, Number(node.config?.timeoutMs ?? 0) + 30_000);
-        const output = await withTimeout(
-          this._runNode(node, { outputs, lastOutput, costConfig: nodeCostConfig, ancestorOutputs }),
-          nodeTimeout,
-          `node ${node.id} (${node.type})`,
-        );
+
+        const nodeCtx = {
+          outputs, lastOutput,
+          costConfig: nodeCostConfig,
+          ancestorOutputs,
+          humanDecision: decisions[node.id] ?? null,
+        };
+
+        // ── on_error: retry ───────────────────────────────────────────────
+        // `retry` is the number of EXTRA attempts, so retry:2 => up to 3 tries.
+        // Matches workflow.error_handling.retry.attempts (the scheduler's
+        // whole-run retry, P7) — same word, same meaning, one level down.
+        const policy   = node.on_error ?? {};
+        const attempts = Math.max(0, Math.floor(Number(policy.retry ?? 0))) + 1;
+
+        let output, lastErr = null;
+        for (let attempt = 1; attempt <= attempts; attempt++) {
+          try {
+            output = await withTimeout(
+              this._executeNode(node, nodeCtx, { runId, workflowId: options.workflowId }),
+              nodeTimeout,
+              `node ${node.id} (${node.type})`,
+            );
+            lastErr = null;
+            break;
+          } catch (err) {
+            lastErr = err;
+            if (attempt < attempts) {
+              yield {
+                type: 'step_retry', nodeId: node.id, attempt,
+                of: attempts, error: err.message ?? String(err),
+              };
+              const delayMs = Math.max(0, Number(policy.retry_delay_ms ?? 0));
+              if (delayMs) await new Promise(r => setTimeout(r, delayMs));
+            }
+          }
+        }
+        if (lastErr) throw lastErr;
+
         outputs.set(node.id, output);
         lastOutput = output;
+        propagate(node.id, output);
         yield {
           type: 'step_completed',
           nodeId: node.id,
@@ -164,13 +288,44 @@ export class FlowTester {
           durationMs: Date.now() - t0,
         };
       } catch (err) {
+        const message = err.message ?? String(err);
         yield {
           type: 'step_failed',
           nodeId: node.id,
-          error: err.message ?? String(err),
+          error: message,
           durationMs: Date.now() - t0,
         };
-        yield { type: 'run_failed', error: `${node.id}: ${err.message ?? err}` };
+
+        // ── on_error: then ────────────────────────────────────────────────
+        const then = node.on_error?.then;
+
+        // `route_to:<id>` — a declared failure path. The run does NOT die; it
+        // continues down the error branch (e.g. to a human step, or a Slack
+        // "this broke" delivery). Only that edge is lit, so the happy path
+        // downstream stays dark.
+        if (typeof then === 'string' && then.startsWith('route_to:')) {
+          const target = then.slice('route_to:'.length).trim();
+          if (byId.has(target)) {
+            liveInto.set(target, (liveInto.get(target) ?? 0) + 1);
+            outputs.set(node.id, { error: message, failed: true });
+            yield { type: 'step_routed', nodeId: node.id, to: target, error: message };
+            continue;
+          }
+          yield { type: 'run_failed', error: `${node.id}: ${message} (on_error.route_to named "${target}", which is not a step)` };
+          return;
+        }
+
+        // `escalate` — the run still fails, but it is MARKED as needing a person
+        // rather than dying quietly in a log. Increment D turns this flag into a
+        // real Approvals-inbox item; until then it is an honest, visible failure.
+        // It deliberately does NOT pause: a pause nobody can answer is a hang,
+        // and the answering surface is D's job.
+        if (then === 'escalate') {
+          yield { type: 'run_failed', error: `${node.id}: ${message}`, escalated: true };
+          return;
+        }
+
+        yield { type: 'run_failed', error: `${node.id}: ${message}` };
         return;
       }
     }
@@ -182,6 +337,55 @@ export class FlowTester {
   }
 
   // ── Node execution ────────────────────────────────────────────────────────
+
+  /**
+   * Run a node, honouring its `idempotency` attribute (§2.2).
+   *
+   *   idempotency: { key: "{{extract.email}}", on_conflict: "skip"|"update"|"error" }
+   *
+   * The problem it solves: a trigger re-fires (Gmail redelivers, a webhook is
+   * retried, the operator re-runs a workflow) and the connector action runs a
+   * SECOND time — creating a duplicate Airtable record, sending the customer a
+   * second email. Nothing in the engine prevented that; the key does.
+   *
+   * `skip` (the default) is the safe one: on a repeat key the node does not run
+   * at all and the FIRST run's output is returned, so downstream steps still see
+   * a record and the workflow completes normally. `update` re-runs (for actions
+   * that upsert). `error` fails loudly.
+   *
+   * A node that declares idempotency with no store wired is an ERROR, not a
+   * silent no-op — pretending to deduplicate is worse than not claiming to.
+   */
+  async _executeNode(node, ctx, { workflowId } = {}) {
+    const idem = node.idempotency;
+    if (!idem?.key) return await this._runNode(node, ctx);
+
+    if (!this.idempotencyStore) {
+      throw new Error(
+        `step "${node.id}" declares idempotency but no idempotency store is wired into the executor. ` +
+        'Refusing to run — a step that claims to deduplicate and does not is worse than one that never claimed to.',
+      );
+    }
+
+    const key = String(this._substitute(String(idem.key), ctx) ?? '').trim();
+    if (!key) {
+      throw new Error(`step "${node.id}" has an idempotency key that resolved to nothing (${idem.key}).`);
+    }
+    const scope      = `${workflowId ?? 'unscoped'}:${node.id}`;
+    const onConflict = idem.on_conflict ?? 'skip';
+    const prior      = this.idempotencyStore.get(scope, key);
+
+    if (prior) {
+      if (onConflict === 'error') {
+        throw new Error(`step "${node.id}" has already run for "${key}" (idempotency on_conflict: error).`);
+      }
+      if (onConflict !== 'update') return prior.output;   // 'skip' — do not run again
+    }
+
+    const output = await this._runNode(node, ctx);
+    this.idempotencyStore.put(scope, key, output);
+    return output;
+  }
 
   async _runNode(rawNode, ctx) {
     // Lift v1 nodes to their v2 shape (summarize/extract/rewrite → llm + mode,
@@ -210,6 +414,11 @@ export class FlowTester {
       sourceRegistry:  this.sourceRegistry,
       channelRegistry: this.channelRegistry,
       scheduler:       this.scheduler,
+      // `foreach` executes its per-item steps through this — the SAME dispatch
+      // every other node goes through (template substitution, the v1 lift, the
+      // node registry), so a step inside a loop behaves exactly like one
+      // outside it. A separate mini-executor would drift.
+      runSubNode:      (subNode, subCtx) => this._runNode(subNode, subCtx),
     };
     // Expose the RAW (pre-substitution) config so a node can tell a
     // templated field from a static one. deliver uses rawConfig.body to
@@ -283,6 +492,11 @@ export class FlowTester {
         .replace(/\{\{\s*([a-z0-9_-]+)\.output\s*\}\}/gi, (_, id) =>
           this._stringifyForDelivery(ctx.outputs.get(id))
         )
+        // {{item}} / {{index}} — the current element inside a `foreach`. Only
+        // bound within a loop; the validator rejects them anywhere else, so an
+        // empty substitution here means a bug upstream, not a silent default.
+        .replace(/\{\{\s*item\s*\}\}/gi, () => this._stringifyForDelivery(ctx.item))
+        .replace(/\{\{\s*index\s*\}\}/gi, () => (ctx.index == null ? '' : String(ctx.index)))
         .replace(/\{\{\s*(date|time|datetime|year|month|day)\s*\}\}/gi, (_, key) => vars[key.toLowerCase()] ?? '');
     }
     if (Array.isArray(value)) return value.map(v => this._substitute(v, ctx));

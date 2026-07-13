@@ -5,6 +5,7 @@
 
 export { SourceRegistry }      from './source-registry.js';
 export { WorkflowStore }       from './workflow-store.js';
+export { IdempotencyStore }    from './idempotency-store.js';
 export { WorkflowScheduler }   from './workflow-scheduler.js';
 export { detectRecurringIntent, parseSchedule, buildProposal } from './workflow-compiler.js';
 export { FlowTester }          from './flow-tester.js';

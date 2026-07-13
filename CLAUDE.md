@@ -267,6 +267,52 @@ refactor them without an explicit decision recorded here:
     long-timeout path, but the registered id is `search_web` — so every web-search step had been
     silently getting the *short* timeout.
 
+- **Engine control flow (2026-07-13, P12 increment B)** — the engine could only run a DAG
+  straight through: no conditionals, no loops, no pause, no retry, no dedupe. It now has all five.
+  New node types `branch` / `foreach` / `human` (`src/workflows/node-types/`), plus two node-level
+  attributes, `on_error` and `idempotency`. `decision` is increment E; `wait` is unbuilt.
+  - **Liveness is tracked on EDGES, not nodes** — `src/workflows/flow-tester.js`. An edge goes
+    live when its source completes; out of a `branch`, only the selected case's edge does. A node
+    is skipped iff it has incoming edges and NONE is live. **The design doc originally specified a
+    node-level `active` set, and that is wrong**: it skips a JOIN (a node downstream of both the
+    taken and the untaken path has one live parent and one dead one, and any rule phrased over
+    parent *nodes* kills it). converger-v2.md §4 is corrected. A skipped node emits `step_skipped`,
+    never `step_failed` — it is not a casualty.
+  - **§11.2 falls out structurally**: with no `branch` in a spec, every edge goes live the instant
+    its source completes, nothing is skipped, and the loop is the old one. The test asserts the
+    exact event sequence is unchanged — that is what protects the workflows already in production,
+    none of which use control flow.
+  - **The durable pause needs no checkpointer** (converger-v2 §7.4). `WorkflowStore.appendStep`
+    already persists every step as it happens — **the persisted steps ARE the checkpoint**. On
+    resume, `ctx.outputs` is rehydrated from them and the topological order continues. Therefore
+    `WorkflowScheduler` now also persists `step_skipped` / `step_retry` / `step_routed`: a skipped
+    node that isn't recorded would be re-evaluated on resume and could run a path the branch had
+    already ruled out.
+  - `src/workflows/workflow-store.js` — `workflow_runs.status` CHECK widened to include
+    **`awaiting_human`** (a run waiting on a person is not running, not a success, and not an
+    error; leaving it `running` gets it swept as stale). SQLite can't alter a CHECK in place, so
+    this is a probe-then-rebuild mirroring the existing `_migrateStatusCheckIfNeeded`. **653
+    production run rows survived the rebuild** — the copy is by shared column name, so
+    ADDITIVE_RUN_COLUMNS are not stripped. New columns `paused_node`, `pending_ask`; new methods
+    `pauseRun` / `listAwaitingHuman` / `markRunResumed`.
+  - `src/workflows/idempotency-store.js` (new) — SHA-256 of the resolved key, scoped
+    `workflowId:nodeId`. **A node declaring an idempotency key with no store wired REFUSES to
+    run** — a step that claims to deduplicate and silently doesn't is worse than one that never
+    claimed to. Wired in `server.js` (`IDEMPOTENCY_DB`).
+  - `src/workflows/workflow-validator.js` — `NON_EXHAUSTIVE_BRANCH` (every branch needs a `*`;
+    without one an unanticipated value matches nothing and the workflow **silently does nothing**,
+    which is the most expensive failure a router has and is invisible exactly when it matters),
+    `BRANCH_CASE_NO_EDGE`, `NESTED_FOREACH`, `HUMAN_IN_FOREACH`, `WRITE_WITHOUT_IDEMPOTENCY`
+    (warning). Branch rules live in the validator, not in `branch.js`'s `validate(node)` hook,
+    because they need the **edge list**.
+  - **`{{item}}` / `{{index}}` are bound ONLY inside a `foreach`.** Used anywhere else they are a
+    `BAD_TEMPLATE_REF` at build time, rather than an empty string at run time.
+  - **A `human` node is unreachable by design until increment D.** The engine pauses correctly, but
+    nothing DELIVERS the ask yet (Slack buttons, signed magic links, the Approvals inbox are D).
+    The converger doesn't emit one and the builder can't add one, so no user workflow can park
+    itself waiting for a question nobody will ever be asked. **Do not surface `human` in the
+    converger prompt or the builder until D lands.**
+
 ## Support tickets (in-app feedback / bug reporting) — added 2026-07-08
 
 Users submit bugs/ideas/requests from a floating **Feedback** button in the operator
@@ -339,8 +385,8 @@ spec is actually executable, not just structurally similar to the frozen file.
   should convert to mrkdwn; SMS/webhooks should strip all markup. Fix belongs in each
   capability's `handle` in `src/connectors/*/index.js`, not in the LLM prompt.
 
-- **The node library is `trigger · llm · assemble · connector-action · search_web · deliver`
-  (P12 increment A, 2026-07-13).** `tool` / `mcp_tool` / `fetch` **no longer exist** — they were
+- **The node library is `trigger · llm · assemble · connector-action · search_web · deliver`, plus
+  the control-flow types `branch · foreach · human` (P12 increments A + B, 2026-07-13).** `tool` / `mcp_tool` / `fetch` **no longer exist** — they were
   deleted, and the validator now rejects them by name (`REMOVED_NODE_TYPE`). They were never
   runnable: there is no `ToolRegistry` (no `src/tools/`, never instantiated) and `FlowTester` is
   built without `tools`, so they threw at run time; now they fail at build time instead.
@@ -525,4 +571,4 @@ Update as gates close. `git log --grep "^Gate:"` is the authoritative ledger.
 - [x] **P9** — value tracking: time-saved metrics per run, all-up ROI summary, customer-facing report
 - [x] **P10** — admin observability: standalone admin app, per-tenant usage + cost monitoring *(merged `601760c`; carries `Gate: P10` trailer + passing `scripts/gates/p10.sh`. Ledger backfilled by independent verifier: `docs/gates/p10.md`.)*
 - [x] **P11** — E2E validation + production hardening + VPS migration. **Closed 2026-07-13** (`b711b44`, `Gate: P11`, ledger `docs/gates/p11.md`). Built & merged long before (`d73b813`…`75891b7` + artifacts `2106f71`); the gate was un-closeable only because `scripts/gates/p11.sh` fail-closes when `PROD_HOST` is unset — it cannot smoke-test a VPS that doesn't exist. Prod went live, so `PROD_HOST=atlas.agntic.co bash scripts/gate.sh 11` finally runs. **Note for anyone re-running it:** the E2E suite *self-skips the converger test* without `ANTHROPIC_API_KEY` (`tests/e2e/full-journey.test.js`), so a bare run reports "6 pass / 1 skip" and the skipped one is Done-when #1. Run it with a key (7/7) or you are passing a gate you haven't proven.
-- [~] **P12** — **converger v2**: outcome contracts + BPMN/DMN shape (decisions, gap analysis) + the elicitation UI + the human approval gate. Build spec: [`docs/architecture/converger-v2.md`](docs/architecture/converger-v2.md) (theory: [`bpmn-dmn-foundations.md`](docs/architecture/bpmn-dmn-foundations.md)). Gate `scripts/gates/p12.sh` is **progressive** — it runs increments A–G in order and stops at the first unbuilt one, so `bash scripts/gate.sh 12` answers both *"is the phase closed?"* and *"which increment next?"*. **Increment A (validator hardening + node re-cut) is done** — the gate now stops at **B (engine control flow)**. Increments do NOT carry a `Gate:` trailer; only the phase's close does. Two invariants are load-bearing and must never be weakened: **`LLM_INPUT_NOT_ENUM`** (an LLM-evaluated decision input must classify into a *closed enum* — without it there is no completeness proof, and the completeness proof is the moat) and **`EMAIL_REPLY_APPROVAL`** (an approval parsed out of an email reply body authenticates *nothing*: `From:` is spoofable, and SPF/DKIM authenticate a sending domain, not a human intent — use a signed, hashed, single-use magic link).
+- [~] **P12** — **converger v2**: outcome contracts + BPMN/DMN shape (decisions, gap analysis) + the elicitation UI + the human approval gate. Build spec: [`docs/architecture/converger-v2.md`](docs/architecture/converger-v2.md) (theory: [`bpmn-dmn-foundations.md`](docs/architecture/bpmn-dmn-foundations.md)). Gate `scripts/gates/p12.sh` is **progressive** — it runs increments A–G in order and stops at the first unbuilt one, so `bash scripts/gate.sh 12` answers both *"is the phase closed?"* and *"which increment next?"*. **Increments A (validator hardening + node re-cut) and B (engine control flow) are done** — the gate now stops at **C (converger v2 core — the moat)**. Increments do NOT carry a `Gate:` trailer; only the phase's close does. Two invariants are load-bearing and must never be weakened: **`LLM_INPUT_NOT_ENUM`** (an LLM-evaluated decision input must classify into a *closed enum* — without it there is no completeness proof, and the completeness proof is the moat) and **`EMAIL_REPLY_APPROVAL`** (an approval parsed out of an email reply body authenticates *nothing*: `From:` is spoofable, and SPF/DKIM authenticate a sending domain, not a human intent — use a signed, hashed, single-use magic link).

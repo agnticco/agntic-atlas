@@ -101,6 +101,13 @@ const ADDITIVE_RUN_COLUMNS = [
   { col: 'warnings',          type: 'TEXT' },
   { col: 'error_explanation', type: 'TEXT' },
   { col: 'time_saved_minutes', type: 'REAL' },
+  // P12 Increment B — the durable pause (§7.4). When a `human` step stops a run,
+  // `paused_node` is the step waiting and `pending_ask` is what the person is
+  // being asked. The already-completed steps live in `steps` (they always did),
+  // which IS the checkpoint — no StateGraph checkpointer is needed, because the
+  // DAG is deterministic and the store is already the record of what happened.
+  { col: 'paused_node',       type: 'TEXT' },
+  { col: 'pending_ask',       type: 'TEXT' },
 ];
 
 export class WorkflowStore {
@@ -143,6 +150,11 @@ export class WorkflowStore {
     // flow-kind state. SQLite can't alter a CHECK in place — so we rebuild
     // the table when we detect the older constraint.
     this._migrateStatusCheckIfNeeded();
+
+    // Same problem, different table: workflow_runs.status was capped to
+    // ('running','success','error'), and a run waiting on a person is none of
+    // those. Widen it to include 'awaiting_human' (P12 Increment B, §7.4).
+    this._migrateRunStatusCheckIfNeeded();
 
     // Drop the legacy global UNIQUE constraint on `slug` and replace with a
     // composite (user_id, slug) so each user owns a separate slug namespace.
@@ -356,6 +368,119 @@ export class WorkflowStore {
       this.db.exec(`CREATE INDEX IF NOT EXISTS idx_wf_status ON workflows(status);`);
     });
     tx();
+  }
+
+  /**
+   * Widen workflow_runs.status to include 'awaiting_human' (P12 Increment B).
+   *
+   * A run paused on a `human` step is neither running, nor a success, nor an
+   * error — it is waiting for a person, and it holds no compute while it does.
+   * Without its own status it would either sit in 'running' forever (and be
+   * swept up as a stale run) or be recorded as a failure, which it is not.
+   *
+   * Same probe-then-rebuild shape as _migrateStatusCheckIfNeeded above: SQLite
+   * cannot alter a CHECK in place. The copy is by SHARED COLUMN NAME, so the
+   * columns ADDITIVE_RUN_COLUMNS has already added survive the rebuild — this
+   * table carries production run history and must not lose a column.
+   */
+  _migrateRunStatusCheckIfNeeded() {
+    let needsMigration = false;
+    const probeId = `__probe_${Date.now()}__`;
+    try {
+      this.db.exec('BEGIN');
+      this.db.prepare(
+        `INSERT INTO workflow_runs (id, workflow_id, started_at, status)
+         SELECT ?, id, '0', 'awaiting_human' FROM workflows LIMIT 1`,
+      ).run(probeId);
+      // No workflows yet ⇒ nothing inserted ⇒ the CHECK was never exercised.
+      // Probe the constraint directly instead, with the FK deferred.
+      const inserted = this.db.prepare('SELECT 1 FROM workflow_runs WHERE id = ?').get(probeId);
+      this.db.exec('ROLLBACK');
+      if (!inserted) {
+        // Fall back to reading the DDL — cheap and exact.
+        const ddl = this.db.prepare(
+          "SELECT sql FROM sqlite_master WHERE type='table' AND name='workflow_runs'",
+        ).get()?.sql ?? '';
+        needsMigration = ddl.includes('CHECK') && !ddl.includes('awaiting_human');
+      }
+    } catch {
+      try { this.db.exec('ROLLBACK'); } catch { /* already rolled back */ }
+      needsMigration = true;
+    }
+    if (!needsMigration) return;
+
+    log.info('[workflow-store] migrating workflow_runs.status CHECK to include awaiting_human');
+    const tx = this.db.transaction(() => {
+      this.db.exec(`
+        CREATE TABLE workflow_runs_new (
+          id             TEXT PRIMARY KEY,
+          workflow_id    TEXT NOT NULL REFERENCES workflows(id) ON DELETE CASCADE,
+          started_at     TEXT NOT NULL,
+          completed_at   TEXT,
+          status         TEXT NOT NULL DEFAULT 'running'
+                         CHECK(status IN ('running','success','error','awaiting_human')),
+          output         TEXT,
+          error          TEXT,
+          is_test        INTEGER NOT NULL DEFAULT 0,
+          steps          TEXT,
+          tokens_in      INTEGER,
+          tokens_out     INTEGER,
+          cost_usd       REAL,
+          llm_calls      INTEGER,
+          user_id        TEXT,
+          tenant_id      TEXT,
+          warnings       TEXT,
+          error_explanation TEXT,
+          time_saved_minutes REAL,
+          paused_node    TEXT,
+          pending_ask    TEXT
+        );
+      `);
+      const oldCols = this.db.prepare('PRAGMA table_info(workflow_runs)').all().map(r => r.name);
+      const newCols = this.db.prepare('PRAGMA table_info(workflow_runs_new)').all().map(r => r.name);
+      const shared  = newCols.filter(c => oldCols.includes(c)).join(', ');
+      this.db.exec(`INSERT INTO workflow_runs_new (${shared}) SELECT ${shared} FROM workflow_runs;`);
+      this.db.exec('DROP TABLE workflow_runs;');
+      this.db.exec('ALTER TABLE workflow_runs_new RENAME TO workflow_runs;');
+      this.db.exec('CREATE INDEX IF NOT EXISTS idx_wr_workflow ON workflow_runs(workflow_id);');
+      this.db.exec('CREATE INDEX IF NOT EXISTS idx_wr_started  ON workflow_runs(started_at);');
+    });
+    tx();
+  }
+
+  /**
+   * Park a run on a `human` step. The steps completed so far are already in
+   * `steps` (appendStep wrote them as they happened) — that is the checkpoint.
+   */
+  pauseRun(runId, nodeId, ask) {
+    this.db.prepare(
+      `UPDATE workflow_runs
+          SET status = 'awaiting_human', paused_node = ?, pending_ask = ?
+        WHERE id = ?`,
+    ).run(nodeId, JSON.stringify(ask ?? null), runId);
+  }
+
+  /** Runs waiting on a person. Increment D's Approvals inbox reads this. */
+  listAwaitingHuman({ tenantId = null, workflowId = null } = {}) {
+    const where = ["status = 'awaiting_human'"];
+    const vals  = [];
+    if (tenantId)   { where.push('tenant_id = ?');   vals.push(tenantId); }
+    if (workflowId) { where.push('workflow_id = ?'); vals.push(workflowId); }
+    return this.db
+      .prepare(`SELECT * FROM workflow_runs WHERE ${where.join(' AND ')} ORDER BY started_at DESC`)
+      .all(...vals)
+      .map(r => ({
+        ...r,
+        steps: r.steps ? JSON.parse(r.steps) : [],
+        pending_ask: r.pending_ask ? JSON.parse(r.pending_ask) : null,
+      }));
+  }
+
+  /** Flip a paused run back to running once a decision has been captured. */
+  markRunResumed(runId) {
+    this.db.prepare(
+      `UPDATE workflow_runs SET status = 'running', paused_node = NULL, pending_ask = NULL WHERE id = ?`,
+    ).run(runId);
   }
 
   _migrateStatusCheckIfNeeded() {

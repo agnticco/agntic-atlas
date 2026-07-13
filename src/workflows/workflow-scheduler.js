@@ -313,12 +313,35 @@ export class WorkflowScheduler {
         { nodes: wf.nodes, edges: wf.edges },
         runOpts,
       )) {
-        if (evt.type === 'step_started' || evt.type === 'step_completed' || evt.type === 'step_failed') {
+        // step_skipped / step_retry / step_routed are new in P12 Increment B and
+        // MUST be persisted too: `steps` is what a paused run is rehydrated from
+        // (§7.4), so a skipped node that isn't recorded would be re-evaluated on
+        // resume and could run a path the branch had already ruled out.
+        if (evt.type === 'step_started'  || evt.type === 'step_completed' ||
+            evt.type === 'step_failed'   || evt.type === 'step_skipped'   ||
+            evt.type === 'step_retry'    || evt.type === 'step_routed') {
           this.workflowStore.appendStep(run.id, evt);
         }
         if (evt.type === 'step_failed') failedStep = evt.nodeId ?? null;
         if (evt.type === 'run_completed') lastOutput = evt.output;
         if (evt.type === 'run_failed')    failed = evt.error;
+
+        // ── The durable pause (§7.4) ──────────────────────────────────────
+        // A `human` step stopped the run. Park it: the completed steps are
+        // already persisted, the run holds no compute, and it costs nothing
+        // while it waits. It is NOT a failure and NOT still running — either
+        // would be a lie, and 'running' would get it swept up as a stale run.
+        //
+        // Nothing DELIVERS the ask yet — the Slack buttons, the signed magic
+        // links and the Approvals inbox are Increment D (§7.2/§7.3/§7.5). Until
+        // then a `human` step is unreachable by design: the converger does not
+        // emit one and the builder cannot add one, so no user workflow can park
+        // itself here waiting for a question nobody will ever be asked.
+        if (evt.type === 'run_paused') {
+          this.workflowStore.pauseRun(run.id, evt.nodeId, evt.ask);
+          log.info(`[workflow-scheduler] flow "${workflow.slug}" paused at "${evt.nodeId}" awaiting a person`);
+          return null;   // not an error — there is simply nothing more to do yet
+        }
       }
       const runCost = this.costTracker?.getSessionCost(`flow-run-${run.id}`) ?? null;
       const actualDurationS = (Date.now() - startedAt) / 1000;

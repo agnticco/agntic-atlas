@@ -28,6 +28,7 @@ import cookieParser from 'cookie-parser';
 import { createAuthSubsystem } from '../auth/index.js';
 import {
   WorkflowStore,
+  IdempotencyStore,
   SourceRegistry,
   ChannelRegistry,
   registerBuiltInChannels,
@@ -102,6 +103,9 @@ const PORT = numEnv('PORT', 3000);
 // NODE_ENV was unset (the common case here).
 const SECURE_COOKIES = boolEnv('COOKIE_SECURE', process.env.NODE_ENV !== 'development');
 const WORKFLOWS_DB = process.env.WORKFLOWS_DB ?? './memory/workflows/workflows.sqlite';
+// P12 Increment B — remembers which (step, key) pairs have already run, so a
+// re-fired trigger doesn't create the record twice.
+const IDEMPOTENCY_DB = process.env.IDEMPOTENCY_DB ?? './memory/workflows/idempotency.sqlite';
 const SOURCES_DB   = process.env.SOURCES_DB   ?? './memory/workflows/sources.sqlite';
 // Base directory for per-tenant RAG stores: VECTOR_DIR/<tenantId>/company.sqlite.
 const VECTOR_DIR   = process.env.VECTOR_DIR   ?? './memory/vectors';
@@ -540,12 +544,20 @@ async function buildEngine(workflowStore, llm, costTracker = null) {
   // Scheduler is constructed (FlowTester uses it for preview fetches) but NOT
   // started — the spine runs no background tick yet; scheduled triggers are P2/P7.
   const workflowScheduler = new WorkflowScheduler({ workflowStore, sourceRegistry, costTracker });
+
+  // P12 Increment B — backs the `idempotency` node attribute. A step that
+  // declares an idempotency key with no store wired REFUSES to run, so this must
+  // exist before any spec can use one: a step that claims to deduplicate and
+  // silently doesn't is worse than one that never claimed to.
+  const idempotencyStore = new IdempotencyStore({ dbPath: IDEMPOTENCY_DB }).init();
+
   const flowTester = new FlowTester({
     sourceRegistry,
     scheduler: workflowScheduler,
     llm,
     channelRegistry,
     nodeTypes: nodeTypeRegistry,
+    idempotencyStore,
   });
   workflowScheduler.flowTester = flowTester;
 

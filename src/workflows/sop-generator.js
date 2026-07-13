@@ -11,6 +11,7 @@
  */
 
 import { liftV1Node } from './node-types/compat-v1.js';
+import { normalizeCases } from './node-types/branch.js';
 
 const TYPE_LABELS = {
   email:     'Email trigger',
@@ -19,6 +20,9 @@ const TYPE_LABELS = {
   llm:       'AI step',
   assemble:  'Assemble document',
   deliver:   'Deliver',
+  branch:    'Branch (routes one way)',
+  foreach:   'For each item',
+  human:     'Wait for a person',
 };
 
 /**
@@ -152,6 +156,24 @@ function nodeDescription(rawNode) {
       }
     case 'assemble':
       return 'Stitches the upstream sections into a single document. No AI call — layout only.';
+    case 'branch': {
+      // The SOP is the auditable record of the procedure, so a router must spell
+      // out every route — including where the leftovers go. "What happens to the
+      // ones that match nothing" is exactly the question an auditor asks.
+      const cases = normalizeCases(cfg.cases);
+      const routes = cases
+        .map(c => (String(c?.when).trim() === '*'
+          ? `anything else → ${c.to}`
+          : `${c.when} → ${c.to}`))
+        .join('; ');
+      return `Routes on ${cfg.on ?? 'an earlier value'} — exactly one path is taken: ${routes || '(no cases)'}.`;
+    }
+    case 'foreach': {
+      const max = cfg.maxItems ?? 100;
+      return `Repeats its steps once for each item in ${cfg.over ?? 'the list'}, up to ${max} items.`;
+    }
+    case 'human':
+      return `Pauses and waits for a person: "${cfg.prompt ?? 'approve this step'}". Nothing downstream runs until they answer.`;
     case 'deliver': {
       // Method-aware — don't render every delivery as a generic "channel".
       const chan = cfg.channel ?? '';

@@ -22,6 +22,8 @@
  */
 
 import { liftV1Nodes, isRemovedType, REMOVED_TYPES } from './node-types/compat-v1.js';
+import { normalizeCases, CATCH_ALL } from './node-types/branch.js';
+import { normalizeSteps } from './node-types/foreach.js';
 
 /** Per-channel required fields on a deliver node's config (beyond `channel`). */
 const CHANNEL_REQUIRED = {
@@ -297,7 +299,101 @@ export class WorkflowValidator {
     // ── 7. Template references ────────────────────────────────────────────
     this._checkTemplateRefs(nodes, seenIds, issues);
 
+    // ── 8. Control flow (P12 Increment B) ─────────────────────────────────
+    this._checkControlFlow(nodes, edges, seenIds, issues);
+
     return this._finalize(issues);
+  }
+
+  /**
+   * `branch` / `foreach` / `human` rules that need the EDGE LIST, so they can't
+   * live in a node type's own validate(node) hook.
+   */
+  _checkControlFlow(nodes, edges, seenIds, issues) {
+    const edgeSet = new Set(edges.filter(e => e?.from && e?.to).map(e => `${e.from} ${e.to}`));
+
+    for (const node of nodes) {
+      if (node?.type === 'branch') {
+        const cases = normalizeCases(node.config?.cases);
+
+        if (!cases.length) {
+          issues.push({
+            severity: 'error', code: 'MISSING_CONFIG',
+            message: `"${node.label || node.id}" is a branch but has no cases.`,
+            nodeId: node.id, field: 'config.cases',
+            hint: 'Add at least one { when, to }, plus a { when: "*" } catch-all.',
+          });
+          continue;
+        }
+
+        // ── NON_EXHAUSTIVE_BRANCH ─────────────────────────────────────────
+        // Every branch needs a `*` catch-all. Without one, a value nobody
+        // anticipated matches no case, the run falls off the end of the branch,
+        // and the workflow SILENTLY DOES NOTHING — no error, no delivery, no
+        // trace. That is the single most expensive failure mode a router has,
+        // and it is invisible precisely when it matters (an unusual input).
+        // If there is genuinely nothing to do for the leftovers, the catch-all
+        // routes to a `human` step, so a person is told. Silence is never the
+        // right answer to "I didn't expect this".
+        if (!cases.some(c => String(c?.when).trim() === CATCH_ALL)) {
+          issues.push({
+            severity: 'error', code: 'NON_EXHAUSTIVE_BRANCH',
+            message: `"${node.label || node.id}" has no catch-all case. An unexpected value would match nothing and the workflow would silently stop, with no error and no output.`,
+            nodeId: node.id, field: 'config.cases',
+            hint: 'Add a final case { "when": "*", "to": "<stepId>" }. If there is nothing to do for those, send them to a person — so somebody is told, instead of nobody.',
+          });
+        }
+
+        for (const c of cases) {
+          const to = typeof c?.to === 'string' ? c.to.trim() : '';
+          if (!to) {
+            issues.push({
+              severity: 'error', code: 'BRANCH_CASE_NO_TARGET',
+              message: `A case on "${node.label || node.id}" (when: ${JSON.stringify(c?.when)}) doesn't say which step to go to.`,
+              nodeId: node.id, field: 'config.cases',
+              hint: 'Every case needs a `to` naming the step that runs when it matches.',
+            });
+            continue;
+          }
+          if (!seenIds.has(to)) {
+            issues.push({
+              severity: 'error', code: 'BRANCH_CASE_BAD_TARGET',
+              message: `"${node.label || node.id}" routes to "${to}", but there's no step with that id.`,
+              nodeId: node.id, field: 'config.cases',
+            });
+            continue;
+          }
+          // The engine lights the edge branch→to. If that edge doesn't exist,
+          // the target sorts BEFORE the branch in topological order and would
+          // run unconditionally — the routing would silently do nothing.
+          if (!edgeSet.has(`${node.id} ${to}`)) {
+            issues.push({
+              severity: 'error', code: 'BRANCH_CASE_NO_EDGE',
+              message: `"${node.label || node.id}" routes to "${to}", but there is no connection drawn from it to "${to}" — so "${to}" would run no matter which case matched.`,
+              nodeId: node.id, field: 'edges',
+              hint: `Add an edge { "from": "${node.id}", "to": "${to}" } for every case.`,
+            });
+          }
+        }
+      }
+
+      // A write that can run twice creates the record twice. This is a WARNING,
+      // not an error: plenty of writes are naturally idempotent (updating a row
+      // to a fixed value), and blocking publish on it would be paternalistic.
+      // But the converger should be told, because a re-fired trigger duplicating
+      // a customer record is a support ticket, not a theory.
+      if (node?.type === 'connector-action' && !node.idempotency?.key) {
+        const action = String(node.config?.action ?? '');
+        if (/(^|_)(create|append|send|post|add|insert)(_|$)/i.test(action)) {
+          issues.push({
+            severity: 'warning', code: 'WRITE_WITHOUT_IDEMPOTENCY',
+            message: `"${node.label || node.id}" writes ("${action}") but has no idempotency key, so if the trigger fires twice it will write twice.`,
+            nodeId: node.id, field: 'idempotency',
+            hint: 'Add idempotency: { "key": "{{<stepId>.<uniqueField>}}", "on_conflict": "skip" } — e.g. the sender\'s email, or an invoice id.',
+          });
+        }
+      }
+    }
   }
 
   // ── Internals ─────────────────────────────────────────────────────────
@@ -375,6 +471,13 @@ export class WorkflowValidator {
    */
   _checkTemplateRefs(nodes, seenIds, issues) {
     const STATIC_VARS = new Set(['prev', 'date', 'time', 'datetime', 'year', 'month', 'day']);
+    // {{item}} / {{index}} are bound ONLY inside a `foreach`'s per-item steps.
+    // Outside a loop they resolve to nothing, so allowing them everywhere would
+    // turn a real bug (a template referencing a loop variable that isn't in
+    // scope) into a silently empty string. Scoped per node instead.
+    const LOOP_VARS = new Set(['item', 'index']);
+    const varsFor = (node) =>
+      node?.type === 'foreach' ? new Set([...STATIC_VARS, ...LOOP_VARS]) : STATIC_VARS;
     const incomingByNode = new Map();
     for (const n of nodes) incomingByNode.set(n.id, 0);
     // We don't have edges here but _checkTemplateRefs is called from validate()
@@ -383,19 +486,29 @@ export class WorkflowValidator {
 
     const refRe = /\{\{\s*([a-z0-9_-]+)(?:\.output)?\s*\}\}/gi;
 
+    // A foreach's per-item steps may reference each other by id. Those ids are
+    // nested inside config, so they never reach the top-level `seenIds`.
+    const idsFor = (node) => {
+      if (node?.type !== 'foreach') return seenIds;
+      const sub = normalizeSteps(node.config?.steps).map(s => s?.id).filter(Boolean);
+      return new Set([...seenIds, ...sub]);
+    };
+
     for (const node of nodes) {
+      const vars = varsFor(node);
+      const ids  = idsFor(node);
       const strings = this._collectStrings(node.config);
       for (const s of strings) {
         let m;
         while ((m = refRe.exec(s)) !== null) {
           const ref = m[1];
-          if (STATIC_VARS.has(ref.toLowerCase())) continue;
-          if (!seenIds.has(ref)) {
+          if (vars.has(ref.toLowerCase())) continue;
+          if (!ids.has(ref)) {
             issues.push({
               severity: 'error', code: 'BAD_TEMPLATE_REF',
               message: `"${node.label || node.id}" references {{${ref}.output}}, but there's no step with id "${ref}".`,
               nodeId: node.id, field: null,
-              hint: `Check step ids — allowed: ${[...seenIds].join(', ')}, plus {{prev}}, {{date}}, {{time}}, etc.`,
+              hint: `Check step ids — allowed: ${[...ids].join(', ')}, plus {{prev}}, {{date}}, {{time}}, etc.`,
             });
           }
         }

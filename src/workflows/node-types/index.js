@@ -21,6 +21,9 @@ import { assembleNodeType }        from './assemble.js';
 import { deliverNodeType }         from './deliver.js';
 import { connectorActionNodeType } from './connector-action.js';
 import { searchWebNodeType }       from './search-web.js';
+import { branchNodeType }          from './branch.js';
+import { foreachNodeType }         from './foreach.js';
+import { humanNodeType }           from './human.js';
 
 export function registerBuiltInNodeTypes(registry) {
   // Triggers + transport
@@ -33,10 +36,16 @@ export function registerBuiltInNodeTypes(registry) {
   registry.register(connectorActionNodeType);
   registry.register(searchWebNodeType);
 
+  // Control flow (P12 Increment B). `decision` (Increment E) joins these.
+  registry.register(branchNodeType);
+  registry.register(foreachNodeType);
+  registry.register(humanNodeType);
+
   return registry;
 }
 
 export {
   triggerNodeType, llmNodeType, assembleNodeType,
   deliverNodeType, connectorActionNodeType, searchWebNodeType,
+  branchNodeType, foreachNodeType, humanNodeType,
 };
