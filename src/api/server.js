@@ -1751,6 +1751,33 @@ export function createApp(spine) {
     const t0 = Date.now();
     const tenantId = req.tenant?.id ?? null;
     logEvent('run.start', { tenant: tenantId, user: req.user?.id ?? null, nodes: (spec.nodes ?? []).map(n => n.type), seeded: initialContext != null });
+
+    // Validate BEFORE executing. The publish path (workflowService.create) already
+    // validates, but this — the "Run test" path — did not, so a spec the validator
+    // would have rejected was executed against live third-party APIs anyway.
+    //
+    // That is exactly how the converger's `timeMin: "{{today}}"` reached Google and
+    // returned 400 (2026-07-13): BAD_TEMPLATE_REF was catchable at build time, but
+    // nobody asked the validator. A build-time error beats a live API failure every
+    // time — and on a WRITE node it is the difference between a rejected spec and a
+    // corrupt record in someone's CRM.
+    //
+    // Errors only: warnings still run, so this cannot block a spec that works today.
+    // Returns 200 (not 4xx) — Cloudflare replaces origin 5xx with its own HTML error
+    // page, which would hide the real issue from the UI. See CLAUDE.md gotchas.
+    try {
+      const verdict = spine.engine.workflowValidator?.validate?.(spec);
+      const errors  = (verdict?.issues ?? []).filter(i => i.severity === 'error');
+      if (errors.length) {
+        logEvent('run.invalid', { tenant: tenantId, codes: errors.map(e => e.code) });
+        return res.json({
+          runId: null, completed: false, steps: [],
+          error: errors[0].message,
+          issues: errors,
+        });
+      }
+    } catch { /* never block a run because the validator itself threw */ }
+
     try {
       // If authenticated, run in the caller's tenant: inject THAT tenant's stored
       // Slack token into every slack node (deliver + connector-action). A tenant
