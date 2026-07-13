@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Atlas gate runner. Runs a phase's objective "Done when" check.
-#   usage: bash scripts/gate.sh <phase 0-11>
+#   usage: bash scripts/gate.sh <phase 0-12>
 # Exit 0 = the phase's check passed; non-zero = gate is not met.
 # This is the deterministic backbone of the hard gate: the pre-push hook and the
 # Verifier subagent both call it. It is intentionally fail-closed — a phase whose
@@ -11,8 +11,8 @@ cd "$(git rev-parse --show-toplevel)"
 
 phase="${1:-}"
 case "$phase" in
-  0|1|2|3|4|5|6|7|8|9|10|11) ;;
-  *) echo "gate: usage: bash scripts/gate.sh <phase 0-11>" >&2; exit 2 ;;
+  0|1|2|3|4|5|6|7|8|9|10|11|12) ;;
+  *) echo "gate: usage: bash scripts/gate.sh <phase 0-12>" >&2; exit 2 ;;
 esac
 
 check="scripts/gates/p${phase}.sh"
