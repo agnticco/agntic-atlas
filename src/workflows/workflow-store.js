@@ -695,6 +695,26 @@ export class WorkflowStore {
     return (nowIso ?? new Date().toISOString()).slice(0, 7);
   }
 
+  /**
+   * Charge N run-units to a tenant's monthly budget for something that isn't a
+   * run — today, a workflow build (the converger is ~21 LLM turns and costs about
+   * as much as one worst-case run; see BUILD_RUN_COST in src/entitlements).
+   *
+   * Deliberately the SAME meter as runs rather than a second currency: one number
+   * for the user to reason about, and it closes the hole where converger spend was
+   * capped by nothing at all.
+   */
+  chargeRunUnits(tenantId, units = 1, nowIso = null) {
+    if (!tenantId) throw new Error('chargeRunUnits requires a tenantId');
+    if (!Number.isFinite(units) || units <= 0) return this.getRunCount(tenantId);
+    const period = this.currentRunPeriod(nowIso);
+    this.db.prepare(`
+      INSERT INTO tenant_run_counter (tenant_id, yyyymm, count) VALUES (?, ?, ?)
+      ON CONFLICT(tenant_id, yyyymm) DO UPDATE SET count = count + ?
+    `).run(tenantId, period, units, units);
+    return this.getRunCount(tenantId, period);
+  }
+
   /** Count a tenant's non-test runs in a given month (defaults to the current month). */
   getRunCount(tenantId, yyyymm = null) {
     const period = yyyymm ?? this.currentRunPeriod();

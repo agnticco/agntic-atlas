@@ -32,7 +32,7 @@ import { notesSince } from '../release-notes.js';
 import { sendMail } from '../utils/mailer.js';
 import { renderInviteEmail } from '../auth/invite-email.js';
 import { oauthRedirectBase } from '../connectors/oauth-redirect.js';
-import { seatLimit, entitlement, entitlementsFor, nextPlan, PLAN_META } from '../entitlements/index.js';
+import { seatLimit, entitlement, entitlementsFor, nextPlan, PLAN_META, BUILD_RUN_COST } from '../entitlements/index.js';
 import { isBillingConfigured } from '../billing/stripe.js';
 import { randomBytes } from 'node:crypto';
 
@@ -1814,6 +1814,23 @@ Rules:
     if (!result.ok) {
       logEvent('persist.invalid', { tenant: req.tenant?.id ?? null, error: result.error, issues: (result.issues ?? []).map(i => i.code) });
       return res.status(400).json({ ok: false, error: result.error, issues: result.issues });
+    }
+
+    // A build costs BUILD_RUN_COST runs from the monthly allowance. The converger
+    // is ~21 LLM turns (about the price of one worst-case run), and until now it
+    // was metered by nothing at all — a tenant could burn far more than their
+    // subscription building workflows without ever touching a run cap.
+    //
+    // Charged only on a SUCCESSFUL publish, and never blocks: the workflow already
+    // exists at this point, so failing here would take the user's money-equivalent
+    // and give them nothing. Over-cap simply means their next RUN is refused by the
+    // scheduler's budget check, which is the correct place to say no.
+    try {
+      spine.engine.workflowStore.chargeRunUnits(req.tenant.id, BUILD_RUN_COST);
+      logEvent('persist.build_charged', { tenant: req.tenant.id, units: BUILD_RUN_COST });
+    } catch (e) {
+      // Never fail a publish over the meter.
+      logEvent('persist.build_charge_failed', { tenant: req.tenant?.id ?? null, error: String(e?.message ?? e) });
     }
 
     // Retroactively log the builder test run under the new workflowId.

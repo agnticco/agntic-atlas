@@ -21,16 +21,47 @@
 import { logEvent } from '../utils/event-log.js';
 import { numEnv } from '../utils/env.js';
 
-export function createTenantGuard({ workflowStore }) {
-  const DAILY_USD       = numEnv('TENANT_DAILY_USD_LIMIT', 25);
-  const MAX_CONCURRENT  = numEnv('TENANT_MAX_CONCURRENT', 6);
+/**
+ * Daily USD ceiling, per plan. A single flat limit is not a guard — it was $25/day
+ * for EVERY plan, i.e. up to ~$750/month of inference on a $20/month subscription,
+ * a 37x downside. Each ceiling below is ~1.5x the plan's own monthly price spread
+ * over a day: generous enough that no legitimate user ever sees it, tight enough
+ * that a runaway tenant cannot cost multiples of what they pay.
+ *
+ * This is a backstop, not the primary control — the monthly run cap is. It exists
+ * to bound the surfaces the run cap does not meter (notably abandoned builds and
+ * free-form chat, which cost real money and produce no workflow).
+ */
+const DAILY_USD_BY_PLAN = {
+  solo:         1,    // $20/mo plan
+  professional: 3,    // $50/mo
+  team:         10,   // $200/mo
+  business:     30,   // $600/mo
+  internal:     0,    // Atlas's own workspace — unbounded (0 = disabled)
+  founding:     1,    // retired; treated as solo
+};
+
+export function createTenantGuard({ workflowStore, tenantStore = null }) {
+  // Env override applies to every plan (escape hatch / incident lever). When
+  // unset, the per-plan table above is used.
+  const DAILY_USD_OVERRIDE = numEnv('TENANT_DAILY_USD_LIMIT', 0);
+  const MAX_CONCURRENT     = numEnv('TENANT_MAX_CONCURRENT', 6);
   const inflight = new Map(); // tenantId -> in-flight count
+
+  const dailyLimitFor = (tenantId) => {
+    if (DAILY_USD_OVERRIDE > 0) return DAILY_USD_OVERRIDE;
+    const plan = tenantStore?.get?.(tenantId)?.plan;
+    // Unknown plan → the tightest ceiling. Failing closed on an unrecognised plan
+    // is the safe direction for a spend guard.
+    return DAILY_USD_BY_PLAN[plan] ?? DAILY_USD_BY_PLAN.solo;
+  };
 
   return function tenantGuard(req, res, next) {
     const tenantId = req.tenant?.id;
     if (!tenantId) return next(); // unauthenticated / no tenant — nothing to scope
 
-    // 1. Daily USD ceiling
+    // 1. Daily USD ceiling, scaled to what the tenant actually pays
+    const DAILY_USD = dailyLimitFor(tenantId);
     if (DAILY_USD > 0 && workflowStore?.tenantSpendSince) {
       try {
         const startOfDayUtc = new Date().toISOString().slice(0, 10) + 'T00:00:00.000Z';
