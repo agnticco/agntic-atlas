@@ -310,7 +310,13 @@ export class WorkflowValidator {
    * live in a node type's own validate(node) hook.
    */
   _checkControlFlow(nodes, edges, seenIds, issues) {
-    const edgeSet = new Set(edges.filter(e => e?.from && e?.to).map(e => `${e.from} ${e.to}`));
+    // One key function for every edge lookup below. This used to be built with a
+    // literal NUL separator — invisible in an editor, invisible in a diff, and it
+    // silently did not match the one site that used a space, so ON_ERROR_ROUTE_NO_EDGE
+    // fired on every route_to even when the edge was there. Never use an
+    // unprintable character as a separator (CLAUDE.md, `server.js` encoding).
+    const edgeKey = (from, to) => `${from}->${to}`;
+    const edgeSet = new Set(edges.filter(e => e?.from && e?.to).map(e => edgeKey(e.from, e.to)));
 
     for (const node of nodes) {
       if (node?.type === 'branch') {
@@ -366,7 +372,7 @@ export class WorkflowValidator {
           // The engine lights the edge branch→to. If that edge doesn't exist,
           // the target sorts BEFORE the branch in topological order and would
           // run unconditionally — the routing would silently do nothing.
-          if (!edgeSet.has(`${node.id} ${to}`)) {
+          if (!edgeSet.has(edgeKey(node.id, to))) {
             issues.push({
               severity: 'error', code: 'BRANCH_CASE_NO_EDGE',
               message: `"${node.label || node.id}" routes to "${to}", but there is no connection drawn from it to "${to}" — so "${to}" would run no matter which case matched.`,
@@ -409,7 +415,7 @@ export class WorkflowValidator {
             message: `"${node.label || node.id}" sends failures to "${target}", but there's no step with that id.`,
             nodeId: node.id, field: 'on_error',
           });
-        } else if (!edgeSet.has(`${node.id} ${target}`)) {
+        } else if (!edgeSet.has(edgeKey(node.id, target))) {
           issues.push({
             severity: 'error', code: 'ON_ERROR_ROUTE_NO_EDGE',
             message: `"${node.label || node.id}" sends failures to "${target}", but there is no connection drawn from it to "${target}" — the failure path would never run, and the workflow would report success anyway.`,

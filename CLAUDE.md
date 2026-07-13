@@ -319,6 +319,28 @@ refactor them without an explicit decision recorded here:
     non-selected case targets dead outright, and `BRANCH_TARGET_EXTRA_PARENT` rejects the ambiguous
     shape at build time. (Found by the independent verifier.) The engine does not rely on the
     validator having run — specs already in the database predate the rule.
+  - **RESUMING A BRANCH: `step_completed` carries a SHRUNK output.** `_shrinkOutput` **always**
+    JSON-encodes (so the event stream never carries megabytes), which means a `branch` rehydrates
+    from the persisted steps as a **string** — `output.to` reads `undefined`. The first version
+    then lit *every* outgoing edge, so **on resume the branch the workflow had ruled out ran and
+    delivered** (a rejected draft gets sent). Two fixes, both kept: branch outputs are decoded on
+    rehydration, and `propagate()` **fails the run** rather than guessing if it still cannot read a
+    route — silently taking every path is the worst possible answer to "which way did it go?".
+    Separately, nodes SKIPPED before a pause are tracked apart from completed ones (`doneSkipped`
+    vs `doneOutputs`): lumping them together made a skipped node relight its own children on the
+    way back through. **Anything that reads a persisted step must expect a JSON string, not the
+    live object.** (Found by the independent verifier; both are pinned by tests that were confirmed
+    to fail when the bug is re-introduced.)
+  - **Never use an unprintable character as a separator.** The branch/edge lookup key was first
+    built with a literal **NUL** (`${from}\0${to}`) — invisible in an editor and in a diff — and it
+    silently failed to match the one site that used a space, so `ON_ERROR_ROUTE_NO_EDGE` fired on
+    *every* `route_to` and the feature was unpublishable. This is the same class as the `server.js`
+    NUL in Known gotchas below. `tests/workflows/control-flow.test.js` now fails if **any** file
+    under `src/` contains a NUL byte.
+  - **A negative-only test is not a test.** The `route_to` check was 100% green while rejecting the
+    *correct* shape: the test only asserted that a bad spec is rejected, so it would have passed if
+    the check were `if (true)`. Every validator rule needs a case asserting the GOOD shape is
+    **accepted**.
   - **`{{item}}` / `{{index}}` are bound ONLY inside a `foreach`.** Used anywhere else they are a
     `BAD_TEMPLATE_REF` at build time, rather than an empty string at run time.
   - **A `human` node is unreachable by design until increment D.** The engine pauses correctly, but

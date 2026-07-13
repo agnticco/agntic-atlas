@@ -667,6 +667,16 @@ Therefore:
   a pending approval is free.
 - **On resume:** rehydrate `ctx.outputs` from the persisted steps, inject the decision as the
   `human` node's output, and continue the topological order from the next node.
+  - ⚠️ **A persisted step's output is a JSON STRING, not the live object.** `_shrinkOutput` always
+    encodes (so the event stream never carries megabytes). A `branch` that ran *before* the pause
+    therefore comes back as a string, and reading `output.to` off it yields `undefined` — which,
+    in the first implementation, lit **every** outgoing edge, so **the path the branch had ruled
+    out ran on resume and delivered.** Branch outputs are decoded on rehydration, and `propagate()`
+    now **fails the run** rather than guessing if it still cannot read a route. Anything else that
+    reads back a persisted step must expect the same.
+  - ⚠️ Nodes **skipped** before the pause must be tracked separately from **completed** ones. Lump
+    them together and a skipped node relights its own children on the way back through, reviving a
+    dead subtree.
 - **The scheduler must skip `awaiting_human` runs** — it must not re-fire them.
 - A **timeout sweeper** (on the existing 60 s scheduler tick) fires `timeout.then` when
   `now > expires_at`.

@@ -82,14 +82,34 @@ export class FlowTester {
     // from the steps WorkflowStore already persisted, then carry on in the same
     // topological order — no StateGraph checkpointer, because the DAG is
     // deterministic and the store is already the record of what happened.
-    const decisions = options.decisions ?? {};
-    const done = new Set();
-    for (const s of (options.resumeSteps ?? [])) {
-      if (s?.type === 'step_completed' && s.nodeId) {
-        outputs.set(s.nodeId, s.output);
-        done.add(s.nodeId);
-      } else if (s?.type === 'step_skipped' && s.nodeId) {
-        done.add(s.nodeId);
+    //
+    // Two things here are easy to get wrong, and both let a RULED-OUT branch path
+    // execute after a resume — which would make a rejected draft get sent:
+    //
+    //  1. `step_completed` carries a SHRUNK output (_shrinkOutput JSON-encodes
+    //     objects, so the event stream doesn't carry megabytes). A `branch`
+    //     therefore comes back as a STRING, `output.to` reads `undefined`,
+    //     propagate() sees no selection and lights EVERY outgoing edge. Decode
+    //     branch outputs on the way back in.
+    //  2. A node that was SKIPPED before the pause must stay dark and must NOT
+    //     relight its children. Lumping skipped and completed nodes into one
+    //     "done" set does exactly that.
+    const decisions   = options.decisions ?? {};
+    const doneOutputs = new Set();   // ran before the pause — don't re-run, DO relight
+    const doneSkipped = new Set();   // ruled out before the pause — stay dark, relight NOTHING
+    {
+      const typeById = new Map(nodes.map(n => [n.id, n.type]));
+      for (const s of (options.resumeSteps ?? [])) {
+        if (s?.type === 'step_completed' && s.nodeId) {
+          let out = s.output;
+          if (typeById.get(s.nodeId) === 'branch' && typeof out === 'string') {
+            try { out = JSON.parse(out); } catch { /* leave as-is; propagate guards */ }
+          }
+          outputs.set(s.nodeId, out);
+          doneOutputs.add(s.nodeId);
+        } else if (s?.type === 'step_skipped' && s.nodeId) {
+          doneSkipped.add(s.nodeId);
+        }
       }
     }
     // Allow a caller (e.g. the scheduler's email-trigger path) to inject an
@@ -165,7 +185,23 @@ export class FlowTester {
     /** Light up this node's outgoing edges. A branch lights only the case it picked. */
     const propagate = (nodeId, output) => {
       const isBranch = byId.get(nodeId)?.type === 'branch';
-      const selected = isBranch ? (output?.to ?? null) : null;
+      let selected = null;
+      if (isBranch) {
+        // Be robust to a stringified output (a resumed run rehydrates from the
+        // SHRUNK step events). If we cannot read the selection we must NOT fall
+        // back to "light everything" — that would run the path the branch ruled
+        // out. Fail the run instead: a branch whose decision we cannot recover is
+        // not a branch, and silently taking every path is the worst possible
+        // answer to "which way did it go?".
+        const decoded = typeof output === 'string' ? tryParseJson(output) : output;
+        selected = decoded?.to ?? null;
+        if (!selected) {
+          throw new Error(
+            `branch "${nodeId}" produced no route (got: ${JSON.stringify(output)?.slice(0, 120)}). ` +
+            'Refusing to continue — taking every path would run the branch that was ruled out.',
+          );
+        }
+      }
       for (const target of (outEdges.get(nodeId) ?? [])) {
         if (selected !== null && target !== selected) {
           ruledOut.add(target);   // the untaken path is dead, not merely unlit
@@ -183,20 +219,35 @@ export class FlowTester {
         return;
       }
 
+      // Ruled out BEFORE the pause. It stays dark and relights nothing — its
+      // children must not come back to life just because the run was resumed.
+      // (This is the half that let a rejected draft get sent on resume.)
+      if (doneSkipped.has(node.id)) {
+        ruledOut.add(node.id);
+        continue;
+      }
+
       // Not selected by an upstream branch (or every path into it died).
       if (ruledOut.has(node.id) || (hasIncoming.has(node.id) && (liveInto.get(node.id) ?? 0) === 0)) {
-        if (!done.has(node.id)) {
-          yield { type: 'step_skipped', nodeId: node.id, reason: 'not on the selected branch' };
-        }
+        yield { type: 'step_skipped', nodeId: node.id, reason: 'not on the selected branch' };
         continue;   // its own outgoing edges stay dark
       }
 
       // Already ran, in the part of this run that happened before the pause.
       // Don't re-run it — but DO relight its edges, so the graph downstream of
-      // the pause knows which paths are live.
-      if (done.has(node.id)) {
+      // the pause knows which paths are live. For a branch, that relights ONLY
+      // the case it originally picked (propagate decodes the persisted output).
+      if (doneOutputs.has(node.id)) {
         const prior = outputs.get(node.id);
-        propagate(node.id, prior);
+        try {
+          propagate(node.id, prior);
+        } catch (err) {
+          // An unreadable branch decision. propagate() refuses to guess, and so
+          // do we: report it as a run failure rather than letting it escape the
+          // generator as an unhandled throw.
+          yield { type: 'run_failed', error: err.message ?? String(err) };
+          return;
+        }
         if (prior !== undefined) lastOutput = prior;
         continue;
       }
@@ -534,4 +585,13 @@ export class FlowTester {
     const s = typeof v === 'string' ? v : (() => { try { return JSON.stringify(v); } catch { return String(v); } })();
     return s.length > limit ? s.slice(0, limit) + '\n…(truncated)' : s;
   }
+}
+
+/**
+ * Decode a JSON string, or return undefined. Used to recover a `branch`'s
+ * routing decision from a resumed run, where the persisted step_completed event
+ * carries the SHRUNK (JSON-encoded) output rather than the live object.
+ */
+function tryParseJson(s) {
+  try { return JSON.parse(s); } catch { return undefined; }
 }

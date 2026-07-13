@@ -263,6 +263,125 @@ test('human: a REJECT resumes down the other path', async () => {
   assert.ok(ids(second, 'step_skipped').includes('send'), 'the send is skipped');
 });
 
+// ── BRANCH-then-HUMAN: the ruled-out path must stay dead across a resume ─────
+// Found by the independent verifier. The gate's "human resumes from persisted
+// steps" proof was only ever exercised for human-THEN-branch. Reversed, it was
+// broken two different ways, and both let the branch the workflow RULED OUT run
+// after the resume — i.e. a rejected draft gets sent.
+//
+//   1. step_completed carries a SHRUNK output, so a branch rehydrated as a
+//      STRING: `output.to` was undefined, so propagate() lit EVERY edge.
+//   2. Nodes skipped before the pause were lumped in with completed ones, so
+//      they relit their own children on the way back through.
+const branchThenHumanFlow = {
+  nodes: [
+    { id: 'classify', type: 'llm', config: { mode: 'classify', categories: 'urgent\nroutine' } },
+    { id: 'route', type: 'branch', config: {
+      on: 'classify.output',
+      cases: [{ when: 'urgent', to: 'escalate' }, { when: '*', to: 'auto_file' }],
+    } },
+    { id: 'escalate',  type: 'human', config: { prompt: 'Page the on-call?', decisions: ['approve', 'reject'] } },
+    { id: 'auto_file', type: 'deliver', config: { channel: 'in_app', body: 'filed quietly' } },
+    { id: 'paged',     type: 'deliver', config: { channel: 'in_app', body: 'PAGED' } },
+  ],
+  edges: [
+    { from: 'classify', to: 'route' },
+    { from: 'route', to: 'escalate' },
+    { from: 'route', to: 'auto_file' },
+    { from: 'escalate', to: 'paged' },
+  ],
+};
+
+test('resume: a branch ruled out BEFORE the pause stays ruled out after it', async () => {
+  let delivered = 0;
+  const channels = stubChannels(() => { delivered++; return { delivered: true, ts: '1' }; });
+  const tester = new FlowTester({ nodeTypes, llm: stubLlm('urgent'), channelRegistry: channels });
+
+  // Leg 1: classify → urgent → route picks `escalate`; `auto_file` is skipped;
+  // the run pauses on the human step.
+  const first = await runAll(tester, branchThenHumanFlow, { initialContext: 'an alert' });
+  assert.ok(one(first, 'run_paused'), 'leg 1 must pause on the human step');
+  assert.equal(delivered, 0, 'nothing delivered before the person answered');
+  // NOTE: the pause returns before the topological order even reaches
+  // `auto_file`, so leg 1 emits no step_skipped for it. That is the HARSHER
+  // case — there is no persisted skip to lean on, and the branch's own decision
+  // has to survive the round-trip through the shrunk event on its own.
+  assert.ok(!ids(first, 'step_completed').includes('auto_file'), 'the untaken path did not run in leg 1');
+
+  const persisted = first.filter(e => ['step_completed', 'step_skipped'].includes(e.type));
+
+  // Leg 2: the person approves. `auto_file` was RULED OUT and must stay dead.
+  const second = await runAll(tester, branchThenHumanFlow, {
+    initialContext: 'an alert',
+    resumeSteps: persisted,
+    decisions: { escalate: { decision: 'approve', by: 'user:1' } },
+  });
+
+  assert.ok(ids(second, 'step_completed').includes('paged'), 'the approved path runs');
+  assert.ok(!ids(second, 'step_completed').includes('auto_file'),
+    'the RULED-OUT path must NOT run on resume — this is what sent a rejected draft');
+  assert.equal(delivered, 1, 'exactly ONE delivery: the paged one. Not the ruled-out auto_file.');
+});
+
+test('resume: a rehydrated branch relights ONLY the case it originally picked', async () => {
+  // Variant B — the ruled-out node sorts AFTER the pause, so no step_skipped was
+  // ever persisted to fall back on. The branch's own decision has to survive the
+  // round-trip through the shrunk event, or the untaken path delivers.
+  const flow = {
+    nodes: [
+      { id: 'classify', type: 'llm', config: { mode: 'classify', categories: 'urgent\nroutine' } },
+      { id: 'route', type: 'branch', config: {
+        on: 'classify.output',
+        cases: [{ when: 'urgent', to: 'ask' }, { when: '*', to: 'auto_send' }],
+      } },
+      { id: 'ask',       type: 'human',   config: { prompt: 'Send?', decisions: ['approve', 'reject'] } },
+      { id: 'auto_send', type: 'deliver', config: { channel: 'in_app', body: 'sent automatically' } },
+      { id: 'sent',      type: 'deliver', config: { channel: 'in_app', body: 'sent after approval' } },
+    ],
+    edges: [
+      { from: 'classify', to: 'route' },
+      { from: 'route', to: 'ask' },
+      { from: 'route', to: 'auto_send' },
+      { from: 'ask', to: 'sent' },
+    ],
+  };
+  let delivered = 0;
+  const channels = stubChannels(() => { delivered++; return { delivered: true }; });
+  const tester = new FlowTester({ nodeTypes, llm: stubLlm('urgent'), channelRegistry: channels });
+
+  const first = await runAll(tester, flow, { initialContext: 'x' });
+  // Persist ONLY the completed steps — the harsher case: no step_skipped to lean on.
+  const persisted = first.filter(e => e.type === 'step_completed');
+
+  const second = await runAll(tester, flow, {
+    initialContext: 'x',
+    resumeSteps: persisted,
+    decisions: { ask: { decision: 'approve', by: 'u' } },
+  });
+
+  assert.ok(!ids(second, 'step_completed').includes('auto_send'),
+    'the ruled-out branch must not deliver on resume, even with no step_skipped persisted');
+  assert.equal(delivered, 1, 'exactly one delivery');
+});
+
+test('resume: an unrecoverable branch decision FAILS the run rather than taking every path', async () => {
+  // If we can't read which way a branch went, the one thing we must never do is
+  // light every edge — that runs the path it ruled out. Fail loudly instead.
+  const tester = new FlowTester({ nodeTypes, llm: stubLlm('urgent'), channelRegistry: stubChannels() });
+  const events = await runAll(tester, branchThenHumanFlow, {
+    initialContext: 'an alert',
+    // A corrupt persisted branch output — not decodable to a route.
+    resumeSteps: [
+      { type: 'step_completed', nodeId: 'classify', output: 'urgent' },
+      { type: 'step_completed', nodeId: 'route', output: 'not-json-and-not-a-route' },
+    ],
+    decisions: { escalate: { decision: 'approve', by: 'u' } },
+  });
+  const failed = one(events, 'run_failed');
+  assert.ok(failed, 'an unreadable branch decision must fail the run');
+  assert.match(failed.error, /produced no route/i);
+});
+
 test('human: an approval can never DEFAULT — the node refuses to evaluate without a decision', async () => {
   // Belt and braces: if a future caller ever dispatches a `human` node directly,
   // bypassing the pause, it must throw rather than quietly evaluate to approved.
@@ -517,6 +636,23 @@ test('the SNEAK PATH: a ruled-out branch target does not run just because someth
   assert.ok(codesOf(res).includes('BRANCH_TARGET_EXTRA_PARENT'), `got: ${codesOf(res).join(', ')}`);
 });
 
+test('ON_ERROR_ROUTE_NO_EDGE: the CORRECT shape is ACCEPTED (the negative test alone is vacuous)', () => {
+  // The negative test below passed while the check was firing on EVERY route_to
+  // — the edge-key was built with a literal NUL at one site and a space at
+  // another, so it never matched and `route_to` was unpublishable. A test that
+  // only asserts the rejection would still pass if the check were `if (true)`.
+  // Assert the acceptance too, or you have not tested the check.
+  const res = validator.validate(spec(
+    [
+      { id: 'x', type: 'llm', config: { prompt: 'go' }, on_error: { then: 'route_to:tell_ops' } },
+      { id: 'happy', type: 'deliver', config: { channel: 'in_app' } },
+      { id: 'tell_ops', type: 'deliver', config: { channel: 'in_app', body: 'broke: {{x.output}}' } },
+    ],
+    [{ from: 'x', to: 'happy' }, { from: 'x', to: 'tell_ops' }],   // the edge IS present
+  ));
+  assert.ok(res.ok, `a correctly-wired failure path must VALIDATE; got: ${codesOf(res).join(', ')}`);
+});
+
 test('ON_ERROR_ROUTE_NO_EDGE: a failure path with no edge would never run — rejected', () => {
   // Without an edge, the target usually sorts BEFORE the failing node and has
   // already run — so the error path silently never executes and the workflow
@@ -573,4 +709,31 @@ test('NESTED_FOREACH / HUMAN_IN_FOREACH are rejected', () => {
     [{ from: 'l', to: 'd' }],
   ));
   assert.ok(codesOf(withHuman).includes('HUMAN_IN_FOREACH'));
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 8. No NUL bytes in source. CLAUDE.md has a Known-gotchas entry about exactly
+//    this: a single stray \x00 in `server.js` makes macOS grep report "Binary
+//    file matches" and return nothing, which once convinced an agent the engine
+//    had been deleted. P12 Increment B re-created it in workflow-validator.js —
+//    a NUL used as an edge-key separator, invisible in the editor and in the
+//    diff, which silently failed to match the one site that used a space and
+//    made `on_error: route_to` unpublishable. Never again, mechanically.
+// ─────────────────────────────────────────────────────────────────────────────
+test('no source file contains a NUL byte', async () => {
+  const { readdirSync, readFileSync, statSync } = await import('node:fs');
+  const { join } = await import('node:path');
+  const offenders = [];
+  const walk = (dir) => {
+    for (const entry of readdirSync(dir)) {
+      if (entry === 'node_modules' || entry.startsWith('.')) continue;
+      const p = join(dir, entry);
+      if (statSync(p).isDirectory()) { walk(p); continue; }
+      if (!/\.(js|mjs)$/.test(entry)) continue;
+      if (readFileSync(p).includes(0x00)) offenders.push(p);
+    }
+  };
+  walk('src');
+  assert.deepEqual(offenders, [],
+    `NUL bytes break grep and hide bugs — see CLAUDE.md, "server.js encoding". Found in: ${offenders.join(', ')}`);
 });
