@@ -102,6 +102,11 @@ export class ModelPool extends Runnable {
       outputTokens,
       context:           costContext,
       webSearchRequests: usage.web_search_requests ?? 0,
+      // With prompt caching, `input` is the uncached remainder only — the cached
+      // prefix arrives in these two fields and must be priced separately, or the
+      // cost log under-reports.
+      cacheWriteTokens:  usage.cache_write ?? 0,
+      cacheReadTokens:   usage.cache_read  ?? 0,
     });
 
     // Stamp the actually-used model name + computed cost back onto the

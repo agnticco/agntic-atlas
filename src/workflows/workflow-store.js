@@ -194,6 +194,20 @@ export class WorkflowStore {
     this.db.exec(`CREATE INDEX IF NOT EXISTS idx_cost_log_tenant ON llm_cost_log(tenant_id, ts)`);
     this.db.exec(`CREATE INDEX IF NOT EXISTS idx_cost_log_session ON llm_cost_log(session_id)`);
 
+    // Prompt-caching columns (added 2026-07-13). With caching on, Anthropic's
+    // `input_tokens` — persisted as tokens_in — is the UNCACHED REMAINDER only:
+    // the full prompt is tokens_in + cache_write + cache_read. Without these
+    // columns the token counts silently under-report prompt size (cost_usd stays
+    // correct, since CostTracker prices the cached tokens). Additive migration —
+    // existing rows default to 0, which is accurate for the pre-caching era.
+    const costCols = this.db.prepare(`PRAGMA table_info(llm_cost_log)`).all().map(c => c.name);
+    if (!costCols.includes('cache_write')) {
+      this.db.exec(`ALTER TABLE llm_cost_log ADD COLUMN cache_write INTEGER NOT NULL DEFAULT 0`);
+    }
+    if (!costCols.includes('cache_read')) {
+      this.db.exec(`ALTER TABLE llm_cost_log ADD COLUMN cache_read INTEGER NOT NULL DEFAULT 0`);
+    }
+
     // Per-tenant monthly run counter — the hard `monthlyRuns` cap (pilot pricing,
     // 2026-07-09). One row per (tenant, calendar month); a new month is a fresh
     // row, so the budget resets automatically with no cron. Test runs are NOT
@@ -794,14 +808,15 @@ export class WorkflowStore {
    * on every ModelPool._trackUsage() — covers all surfaces: converger, workflow
    * nodes, web search, etc.
    */
-  insertCostCall({ id, ts, sessionId, userId, tenantId, tier, model, context, tokensIn, tokensOut, costUsd, webSearches }) {
+  insertCostCall({ id, ts, sessionId, userId, tenantId, tier, model, context, tokensIn, tokensOut, costUsd, webSearches, cacheWrite, cacheRead }) {
     try {
       this.db.prepare(`
         INSERT OR IGNORE INTO llm_cost_log
-          (id, ts, session_id, user_id, tenant_id, tier, model, context, tokens_in, tokens_out, cost_usd, web_searches)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          (id, ts, session_id, user_id, tenant_id, tier, model, context, tokens_in, tokens_out, cost_usd, web_searches, cache_write, cache_read)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).run(id, ts, sessionId ?? null, userId ?? null, tenantId ?? null, tier ?? null, model ?? null,
-             context ?? null, tokensIn ?? 0, tokensOut ?? 0, costUsd ?? 0, webSearches ?? 0);
+             context ?? null, tokensIn ?? 0, tokensOut ?? 0, costUsd ?? 0, webSearches ?? 0,
+             cacheWrite ?? 0, cacheRead ?? 0);
     } catch { /* best-effort — never crash a workflow over a cost log write */ }
   }
 

@@ -20,6 +20,17 @@ import { numEnv } from '../utils/env.js';
  */
 const MAX_PAUSE_CONTINUATIONS = 3;
 
+/**
+ * Anthropic prompt caching on the system prompt. On by default; set
+ * PROMPT_CACHE=0 to disable at boot without a code change (the escape hatch if
+ * caching is ever suspected in an incident).
+ *
+ * Caching does not change the prompt the model receives — identical bytes are
+ * sent either way — so it cannot alter output quality. It only changes how the
+ * prefix is billed.
+ */
+const ENABLE_PROMPT_CACHE = process.env.PROMPT_CACHE !== '0';
+
 export class ChatModel extends Runnable {
   /**
    * @param {Object} options
@@ -281,7 +292,23 @@ export class ChatModel extends Runnable {
         max_tokens: maxTokens,
         temperature,
       };
-      if (system) baseParams.system = system;
+      // Prompt caching: the system prompt is a large, byte-stable prefix that is
+      // re-sent on every call (the converger re-sends ~3.9k tokens of catalog on
+      // each of its ~22 proposal turns). Marking it cacheable bills the prefix at
+      // 0.1x on reads instead of 1x. The prompt bytes are unchanged — the model
+      // sees exactly what it saw before, so output is unaffected.
+      //
+      // 1h TTL, not the 5m default: users pause to think between confirmations,
+      // and a 5m window goes cold mid-build. The extra write cost (2x vs 1.25x)
+      // is amortised to nothing across a build's many reads.
+      //
+      // Cache minimums are per-model (sonnet 2048 / haiku 4096 tokens). A prefix
+      // below the minimum silently doesn't cache — it does not error.
+      if (system) {
+        baseParams.system = ENABLE_PROMPT_CACHE
+          ? [{ type: 'text', text: system, cache_control: { type: 'ephemeral', ttl: '1h' } }]
+          : system;
+      }
       if (toolRegistry) {
         const tools = Array.isArray(toolRegistry)
           ? toolRegistry
@@ -299,6 +326,8 @@ export class ChatModel extends Runnable {
       let totalOutput    = 0;
       let totalWebSearch = 0;
       let totalWebFetch  = 0;
+      let totalCacheWrite = 0;   // cache_creation_input_tokens (billed 1.25x / 2x @1h)
+      let totalCacheRead  = 0;   // cache_read_input_tokens     (billed 0.1x)
       let pauseCount     = 0;
       let messages       = baseMessages;
 
@@ -306,8 +335,15 @@ export class ChatModel extends Runnable {
         const message = await client.messages.create({ ...baseParams, messages });
 
         if (message.usage) {
+          // NOTE: with prompt caching on, `input_tokens` is the UNCACHED REMAINDER
+          // only. The full prompt is input_tokens + cache_creation + cache_read.
+          // Tracking the cache counts separately is not optional — without them the
+          // cost log would silently under-report spend and we'd read a billing
+          // artifact as a real saving.
           totalInput     += message.usage.input_tokens  ?? 0;
           totalOutput    += message.usage.output_tokens ?? 0;
+          totalCacheWrite += message.usage.cache_creation_input_tokens ?? 0;
+          totalCacheRead  += message.usage.cache_read_input_tokens     ?? 0;
           totalWebSearch += message.usage.server_tool_use?.web_search_requests ?? 0;
           totalWebFetch  += message.usage.server_tool_use?.web_fetch_requests  ?? 0;
         }
@@ -345,7 +381,9 @@ export class ChatModel extends Runnable {
       const usage = { input: totalInput, output: totalOutput };
       if (totalWebSearch > 0) usage.web_search_requests = totalWebSearch;
       if (totalWebFetch  > 0) usage.web_fetch_requests  = totalWebFetch;
-      const usageKwargs = (totalInput || totalOutput) ? { usage } : {};
+      if (totalCacheWrite > 0) usage.cache_write = totalCacheWrite;
+      if (totalCacheRead  > 0) usage.cache_read  = totalCacheRead;
+      const usageKwargs = (totalInput || totalOutput || totalCacheRead) ? { usage } : {};
 
       const hasMetadata = toolUseBlocks.length > 0 || serverToolBlocks.length > 0 || citations.length > 0;
       if (hasMetadata) {
