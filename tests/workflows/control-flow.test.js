@@ -181,7 +181,8 @@ test('foreach: runs its steps once per item, binding {{item}}', async () => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// 3. human — pauses, and RESUMES FROM PERSISTED STEPS.
+// 3. human — pauses, and RESUMES FROM ITS CHECKPOINT (not the persisted steps:
+//    those are display-shrunk, and resuming from them truncated the work product).
 //    §7.4: no checkpointer needed — but the persisted STEPS are NOT the
 //    checkpoint (they are display-shrunk). The run emits an explicit, full-
 //    fidelity `checkpoint` on pause, and that is what a resume rehydrates from.
@@ -1238,34 +1239,31 @@ test('resume: dropping checkpoint.ruledOut would revive a ruled-out branch (pinn
   assert.equal(delivered.length, 0, 'and must NOT deliver');
 });
 
-test('resume: recomputing lastOutput on replay would deliver a failed step\'s error blob (pinned)', async () => {
-  // Asserts the DELIVERED BODY, not that the node ran. Asserting it ran is what
-  // let this ship: `deliver` sends ctx.lastOutput, and a failed step's
-  // {error, failed:true} sentinel was being promoted to it on replay.
+test('resume: recomputing lastOutput on replay would deliver a failed step\'s error blob', async () => {
+  // This test was LABELLED "(pinned)" and was not pinned: its fixture had a
+  // `draft` LLM node between the approval and the delivery, which overwrote
+  // lastOutput and masked the mutation entirely. Removing the guard left the whole
+  // suite green. The delivery must follow the approval DIRECTLY, with nothing in
+  // between to launder the value — and the assertion must be on the DELIVERED
+  // BODY, not on whether the node ran.
   const bodies = [];
   const channels = stubChannels((a) => { bodies.push(a.body); return { delivered: true }; });
-  let calls = 0;
-  const llm = { invoke: async () => {
-    calls++;
-    if (calls === 1) throw new Error('card declined');
-    return { content: 'Dear customer, here is the reply you approved.' };
-  } };
-  const tester = new FlowTester({ nodeTypes, llm, channelRegistry: channels });
+  const failing = { invoke: async () => { throw new Error('card declined'); } };
+  const tester = new FlowTester({ nodeTypes, llm: failing, channelRegistry: channels });
 
   const flow = {
     nodes: [
       { id: 'charge', type: 'llm', config: { prompt: 'charge' }, on_error: { then: 'route_to:ask' } },
-      { id: 'ask',    type: 'human', config: { prompt: 'Reply anyway?', decisions: ['approve', 'reject'] } },
-      { id: 'draft',  type: 'llm', config: { prompt: 'draft a reply' } },
-      { id: 'notify', type: 'deliver', config: { channel: 'in_app' } },
+      { id: 'ask',    type: 'human', config: { prompt: 'Notify anyway?', decisions: ['approve', 'reject'] } },
+      { id: 'notify', type: 'deliver', config: { channel: 'in_app' } },   // ← directly after the approval
     ],
-    edges: [{ from: 'charge', to: 'ask' }, { from: 'ask', to: 'draft' }, { from: 'draft', to: 'notify' }],
+    edges: [{ from: 'charge', to: 'ask' }, { from: 'ask', to: 'notify' }],
   };
 
-  const first = await runAll(tester, flow, { initialContext: 'ORDER' });
+  const first = await runAll(tester, flow, { initialContext: 'ORDER-1234' });
   bodies.length = 0;
   await runAll(tester, flow, {
-    initialContext: 'ORDER',
+    initialContext: 'ORDER-1234',
     checkpoint: one(first, 'run_paused').checkpoint,
     decisions: { ask: { decision: 'approve', by: 'u' } },
   });
@@ -1273,7 +1271,8 @@ test('resume: recomputing lastOutput on replay would deliver a failed step\'s er
   assert.equal(bodies.length, 1, 'one delivery');
   assert.ok(!String(bodies[0]).includes('"failed":true'),
     `a delivery must never carry a failed step's error sentinel — got: ${bodies[0]}`);
-  assert.match(String(bodies[0]), /reply you approved/, 'it must carry the actual work product');
+  assert.equal(bodies[0], 'ORDER-1234',
+    'it must carry what the run actually had, not the failed step\'s error object');
 });
 
 test('engine: a branch routing on a step that produced nothing FAILS, not falls through', async () => {
@@ -1298,6 +1297,219 @@ test('engine: a branch routing on a step that produced nothing FAILS, not falls 
 
   const failed = one(events, 'run_failed');
   assert.ok(failed, 'it must fail loudly rather than quietly take the catch-all');
-  assert.match(failed.error, /no step "clasify" produced a value/i);
+  assert.match(failed.error, /no step "clasify" exists/i);
   assert.equal(delivered.length, 0, 'and must deliver nothing down a misrouted path');
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 10. Round-6 findings. Two of these were REGRESSIONS introduced by the round-5
+//     fix — an over-broad throw in `branch.on`. Both crashed VALID workflows.
+// ─────────────────────────────────────────────────────────────────────────────
+
+test('branch: `on` accepts the {{stepId.output}} form (the mainline shape)', async () => {
+  // REGRESSION, round 5. _runNode substitutes config BEFORE the node sees it, so
+  // `on: "{{classify.output}}"` arrived as the classified VALUE ("urgent") — and a
+  // bare value is indistinguishable from a step id, so the new throw looked up a
+  // step called "urgent" and killed the run. Data-dependent, which is worse:
+  // "urgent" matched the id regex and crashed; "needs review" (a space) did not.
+  //
+  // Not one of the 49 tests used the {{…}} form. `on` is a REFERENCE, not a
+  // template, and now stays raw.
+  const tester = new FlowTester({ nodeTypes, llm: stubLlm('urgent'), channelRegistry: stubChannels() });
+  const events = await runAll(tester, {
+    nodes: [
+      { id: 'classify', type: 'llm', config: { mode: 'classify', categories: 'urgent\nroutine' } },
+      { id: 'route', type: 'branch', config: {
+        on: '{{classify.output}}',                       // ← the braced form
+        cases: [{ when: 'urgent', to: 'page' }, { when: '*', to: 'file_it' }] } },
+      { id: 'page',    type: 'deliver', config: { channel: 'in_app', body: 'P' } },
+      { id: 'file_it', type: 'deliver', config: { channel: 'in_app', body: 'F' } },
+    ],
+    edges: [{ from: 'classify', to: 'route' }, { from: 'route', to: 'page' }, { from: 'route', to: 'file_it' }],
+  }, { initialContext: 'an alert' });
+
+  assert.ok(!one(events, 'run_failed'), `the braced form must not crash: ${one(events, 'run_failed')?.error}`);
+  assert.ok(ids(events, 'step_completed').includes('page'), 'and must route on the VALUE, not the literal');
+  assert.ok(ids(events, 'step_skipped').includes('file_it'));
+});
+
+test('branch: routing on a step an earlier branch SKIPPED takes the catch-all, not a crash', async () => {
+  // REGRESSION, round 5. `r2` routes on `b.output`; `b` is the case `r1` ruled
+  // out. `r2` is still lit (via `a`), so it runs — and the value genuinely isn't
+  // there. That is not an error: nothing can match, so the run takes the
+  // catch-all, which is exactly what a mandatory catch-all is FOR. The validator
+  // accepts this shape (ok:true) and should; throwing failed a valid workflow.
+  const delivered = [];
+  const channels = stubChannels((a) => { delivered.push(a.body); return { delivered: true }; });
+  const tester = new FlowTester({ nodeTypes, llm: stubLlm('urgent'), channelRegistry: channels });
+
+  const flow = {
+    nodes: [
+      { id: 'c',  type: 'llm', config: { mode: 'classify', categories: 'urgent\nroutine' } },
+      { id: 'r1', type: 'branch', config: { on: 'c.output',
+        cases: [{ when: 'urgent', to: 'a' }, { when: '*', to: 'b' }] } },
+      { id: 'a',  type: 'llm', config: { prompt: 'A' } },
+      { id: 'b',  type: 'llm', config: { prompt: 'B' } },
+      { id: 'r2', type: 'branch', config: { on: 'b.output',     // ← b was ruled out
+        cases: [{ when: 'x', to: 'd1' }, { when: '*', to: 'd2' }] } },
+      { id: 'd1', type: 'deliver', config: { channel: 'in_app', body: 'D1' } },
+      { id: 'd2', type: 'deliver', config: { channel: 'in_app', body: 'D2' } },
+    ],
+    edges: [
+      { from: 'c', to: 'r1' }, { from: 'r1', to: 'a' }, { from: 'r1', to: 'b' },
+      { from: 'a', to: 'r2' }, { from: 'r2', to: 'd1' }, { from: 'r2', to: 'd2' },
+    ],
+  };
+  assert.ok(validator.validate(spec(flow.nodes, flow.edges)).ok, 'the validator accepts this shape — so the engine must run it');
+
+  const events = await runAll(tester, flow, { initialContext: 'alert' });
+  assert.ok(!one(events, 'run_failed'), `a valid workflow must not crash: ${one(events, 'run_failed')?.error}`);
+  assert.ok(ids(events, 'step_completed').includes('d2'), 'it takes the catch-all');
+  assert.ok(one(events, 'run_completed'));
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 11. The unpinned guards. Every one of these BEHAVED correctly and had no test,
+//     so any of them could have been deleted with the suite still green. A guard
+//     nothing pins is a guard the next person removes.
+// ─────────────────────────────────────────────────────────────────────────────
+
+test('foreach: in-loop on_error.retry actually retries', async () => {
+  let tries = 0;
+  const flaky = { invoke: async () => {
+    tries++;
+    if (tries < 3) throw new Error('transient');
+    return { content: 'ok' };
+  } };
+  const events = await runAll(new FlowTester({ nodeTypes, llm: flaky, channelRegistry: stubChannels() }), {
+    nodes: [{ id: 'loop', type: 'foreach', config: {
+      over: JSON.stringify(['a']),
+      steps: [{ id: 's', type: 'llm', config: { prompt: 'x' }, on_error: { retry: 3 } }],
+    } }],
+    edges: [],
+  });
+  assert.equal(tries, 3, 'the loop must retry — the run() loop\'s retry wrapper cannot reach a sub-step');
+  assert.ok(one(events, 'run_completed'), 'and the run recovers');
+});
+
+test('foreach: maxItems defaults to 100 — an unbounded loop is still bounded', async () => {
+  let calls = 0;
+  const counting = { invoke: async () => { calls++; return { content: 'k' }; } };
+  const events = await runAll(new FlowTester({ nodeTypes, llm: counting, channelRegistry: stubChannels() }), {
+    nodes: [{ id: 'loop', type: 'foreach', config: {
+      over: JSON.stringify(Array.from({ length: 250 }, (_, i) => i)),   // no maxItems declared
+      steps: [{ id: 's', type: 'llm', config: { prompt: 'x' } }],
+    } }],
+    edges: [],
+  });
+  assert.equal(calls, 100, 'the default bound must actually stop the work — 250 items is a cost incident');
+  const out = outputOf(events, 'loop');
+  assert.equal(out.truncated, true);
+  assert.equal(out.skipped, 150, 'and it must SAY what it dropped');
+});
+
+test('idempotency: on_conflict "error" fails, "update" re-runs, "skip" does not', async () => {
+  const run2 = async (onConflict) => {
+    const store = new IdempotencyStore({ dbPath: ':memory:' }).init();
+    let writes = 0;
+    const channels = stubChannels(() => { writes++; return { n: writes }; }, { actionOnly: true });
+    const tester = new FlowTester({ nodeTypes, llm: stubLlm(), channelRegistry: channels, idempotencyStore: store });
+    const flow = { nodes: [{ id: 'c', type: 'connector-action', config: { action: 'a' },
+                             idempotency: { key: 'K', on_conflict: onConflict } }], edges: [] };
+    await runAll(tester, flow, { workflowId: 'wf' });
+    const second = await runAll(tester, flow, { workflowId: 'wf' });
+    store.close();
+    return { writes, second };
+  };
+
+  const skip = await run2('skip');
+  assert.equal(skip.writes, 1, 'skip: the second fire writes nothing');
+  assert.ok(one(skip.second, 'run_completed'), 'and completes normally');
+
+  const upd = await run2('update');
+  assert.equal(upd.writes, 2, 'update: the action re-runs (it upserts)');
+
+  const err = await run2('error');
+  assert.equal(err.writes, 1, 'error: the second fire does not write');
+  assert.ok(one(err.second, 'run_failed'), 'and it fails LOUDLY');
+});
+
+test('idempotency: keys are scoped per loop and per step — no collisions', async () => {
+  // Two DIFFERENT loops whose sub-steps share an id, over the same item. They are
+  // different steps and must both write. Without the parentId scope they would
+  // collide and the second would be silently deduped away.
+  const store = new IdempotencyStore({ dbPath: ':memory:' }).init();
+  let writes = 0;
+  const channels = stubChannels(() => { writes++; return { n: writes }; }, { actionOnly: true });
+  const tester = new FlowTester({ nodeTypes, llm: stubLlm(), channelRegistry: channels, idempotencyStore: store });
+
+  const loop = (id) => ({ id, type: 'foreach', config: {
+    over: JSON.stringify(['x']),
+    steps: [{ id: 'create', type: 'connector-action', config: { action: 'a' },
+              idempotency: { key: '{{item}}' } }],
+  } });
+
+  await runAll(tester, { nodes: [loop('loopA'), loop('loopB')], edges: [] }, { workflowId: 'wf' });
+  assert.equal(writes, 2, 'two distinct steps must both write — they only share a sub-step id');
+  store.close();
+});
+
+test('idempotency: a key that resolves to nothing is an error, not a silent skip', async () => {
+  const store = new IdempotencyStore({ dbPath: ':memory:' }).init();
+  const channels = stubChannels(() => ({ ok: 1 }), { actionOnly: true });
+  const tester = new FlowTester({ nodeTypes, llm: stubLlm(), channelRegistry: channels, idempotencyStore: store });
+  const events = await runAll(tester, {
+    nodes: [{ id: 'c', type: 'connector-action', config: { action: 'a' },
+              idempotency: { key: '{{nope.output}}' } }],   // resolves to ''
+    edges: [],
+  }, { workflowId: 'wf' });
+  const failed = one(events, 'run_failed');
+  assert.ok(failed, 'an empty key means the dedupe is a no-op — it must not run silently');
+  assert.match(failed.error, /resolved to nothing/i);
+  store.close();
+});
+
+test('ON_ERROR_IN_FOREACH: a good foreach (retry only, no route_to) is ACCEPTED', () => {
+  // The negative case existed; without this one the rule could be `if (false)`.
+  const res = validator.validate(spec(
+    [
+      { id: 'rows', type: 'connector-action', config: { action: 'airtable_search_records' } },
+      { id: 'loop', type: 'foreach', config: {
+        over: 'rows.output',
+        steps: [{ id: 's', type: 'llm', config: { prompt: '{{item}}' }, on_error: { retry: 2 } }],
+      } },
+      { id: 'd', type: 'deliver', config: { channel: 'in_app' } },
+    ],
+    [{ from: 'rows', to: 'loop' }, { from: 'loop', to: 'd' }],
+  ));
+  assert.ok(res.ok, `retry inside a loop is legal; got: ${codesOf(res).join(', ')}`);
+});
+
+test('BRANCH_CASE_BAD_TARGET: routing to a step that does not exist is rejected', () => {
+  const res = validator.validate(spec(
+    [
+      { id: 'c', type: 'llm', config: { mode: 'classify', categories: 'a\nb' } },
+      { id: 'r', type: 'branch', config: { on: 'c.output',
+        cases: [{ when: 'a', to: 'ghost' }, { when: '*', to: 'd' }] } },
+      { id: 'd', type: 'deliver', config: { channel: 'in_app' } },
+    ],
+    [{ from: 'c', to: 'r' }, { from: 'r', to: 'd' }],
+  ));
+  assert.ok(codesOf(res).includes('BRANCH_CASE_BAD_TARGET'), `got: ${codesOf(res).join(', ')}`);
+});
+
+test('foreach: steps given as a JSON string still run', () => {
+  // The textarea in the builder hands `steps` over as a string, not an array.
+  const res = validator.validate(spec(
+    [
+      { id: 'rows', type: 'connector-action', config: { action: 'airtable_search_records' } },
+      { id: 'loop', type: 'foreach', config: {
+        over: 'rows.output',
+        steps: JSON.stringify([{ id: 's', type: 'llm', config: { prompt: 'Handle {{item}}' } }]),
+      } },
+      { id: 'd', type: 'deliver', config: { channel: 'in_app' } },
+    ],
+    [{ from: 'rows', to: 'loop' }, { from: 'loop', to: 'd' }],
+  ));
+  assert.ok(res.ok, `a JSON-string steps list must validate; got: ${codesOf(res).join(', ')}`);
 });

@@ -359,6 +359,10 @@ export class FlowTester {
           humanDecision: decisions[node.id] ?? null,
           // `foreach` needs this to scope its sub-steps' idempotency keys.
           workflowId: options.workflowId,
+          // `branch` needs this to tell "no such step" (a typo — fail loudly)
+          // from "a real step that didn't run on this leg" (it was skipped —
+          // take the catch-all, which is exactly what a catch-all is for).
+          nodeIds: new Set(nodes.map(n => n.id)),
         };
 
         // ── on_error: retry ───────────────────────────────────────────────
@@ -554,11 +558,21 @@ export class FlowTester {
     //     "proved" binding was passing for the wrong reason); and
     //   • an idempotency key of {{item}} resolved to "", which is falsy, so
     //     _executeNode skipped the dedupe check entirely and the loop wrote twice.
+    // …and a `branch`'s `on`, for the same reason. Substituting it turns
+    // "{{classify.output}}" into the classified VALUE ("urgent") before the node
+    // ever sees it — and a bare value is indistinguishable from a step id. The
+    // branch then tried to look up a step called "urgent" and killed the run.
+    // Data-dependent, too: "urgent" matched the id regex and crashed, while
+    // "needs review" (a space) did not. `on` names a step; it is a reference, not
+    // a template. resolveOn() dereferences it against ctx.outputs itself.
     const rawCfg = node.config ?? {};
     let cfg;
     if (type === 'foreach') {
       const { steps, ...rest } = rawCfg;
       cfg = { ...this._substitute(rest, ctx), steps };   // `steps` stay RAW
+    } else if (type === 'branch') {
+      const { on, ...rest } = rawCfg;
+      cfg = { ...this._substitute(rest, ctx), on };      // `on` stays RAW
     } else {
       cfg = this._substitute(rawCfg, ctx);
     }

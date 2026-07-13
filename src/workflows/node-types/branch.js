@@ -98,18 +98,27 @@ function resolveOn(on, ctx) {
   const inner = raw.replace(/^\{\{\s*|\s*\}\}$/g, '').trim();
   const m = /^([a-z0-9_-]+)(?:\.output)?$/i.exec(inner);
   if (m) {
-    if (ctx?.outputs?.has(m[1])) return ctx.outputs.get(m[1]);
-    // It NAMES a step, and that step produced nothing. Treating it as a literal
-    // here is what let a one-letter typo route 100% of traffic to the catch-all,
-    // silently, forever. Fail loudly instead. (The validator rejects this shape
-    // as BRANCH_BAD_ON — but the engine must not depend on the validator having
-    // run: specs already in the database predate the rule.)
+    const id = m[1];
+    if (ctx?.outputs?.has(id)) return ctx.outputs.get(id);
+
+    // The step EXISTS in the spec but produced nothing on this leg — an upstream
+    // branch skipped it. That is not an error: the value genuinely isn't there,
+    // so nothing can match, and the run takes the catch-all. Which is precisely
+    // what a mandatory catch-all is for. (Throwing here failed an entirely valid
+    // workflow — two branches where the second routes on a step the first ruled
+    // out. The validator accepts that shape, and should: it is well-defined.)
+    if (ctx?.nodeIds?.has(id)) return undefined;
+
+    // No step of that name exists at all — a typo. The validator rejects this as
+    // BRANCH_BAD_ON, but the engine must not depend on the validator having run:
+    // specs already in the database predate the rule. Fail loudly rather than
+    // fall through to the catch-all, which would silently misroute 100% of runs.
     throw new Error(
-      `branch routes on "${raw}", but no step "${m[1]}" produced a value. ` +
+      `branch routes on "${raw}", but no step "${id}" exists in this workflow. ` +
       'Refusing to fall through to the catch-all — that would silently misroute every run.',
     );
   }
-  // Not a step reference — a literal (already substituted).
+  // Not a step reference — a literal.
   return raw;
 }
 

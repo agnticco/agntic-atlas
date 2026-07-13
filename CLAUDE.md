@@ -358,12 +358,19 @@ refactor them without an explicit decision recorded here:
     (`NON_CONTENT_TYPES`, the `doneSkipped` split) could be **deleted entirely with the suite still
     green**. So: **every validator rule needs a POSITIVE case** (the good shape is *accepted*), and
     **every guard must be mutation-tested** — re-introduce the bug and confirm a test actually
-    fails. `tests/workflows/control-flow.test.js` kills **11/11 mutations**.
-    **And mutation-test the guards you add in the FIX, not just the ones you started with** — a
-    round-4 claim here of "7/7 killed" was false: it never re-tested the two guards that same fix
-    introduced (`checkpoint.ruledOut`, and not recomputing `lastOutput` on replay), and **both
-    survived deletion with the whole suite green**. Dropping `ruledOut` let a ruled-out branch run
-    and deliver on resume — verbatim the bug the commit was written to kill.
+    fails. **Do not quote a mutation score in a doc** — two rounds here published one ("7/7",
+    then "11/11") and an independent verifier falsified both by writing its own, wider list. A
+    score is a claim about tests you did not write. State the RULE and let the next verifier
+    re-derive the number.
+    **Mutation-test the guards you add in the FIX, not just the ones you started with.** Both false
+    scores came from exactly that: the round-4 fix introduced `checkpoint.ruledOut` and the
+    "don't recompute `lastOutput` on replay" rule, never re-tested them, and **both survived
+    deletion with the whole suite green** — dropping `ruledOut` let a ruled-out branch run and
+    deliver on resume, verbatim the bug that commit was written to kill.
+    **A test can be labelled `(pinned)` and not be pinned.** The `lastOutput` test said so in its
+    own name while a `draft` node in its fixture laundered the value and masked the mutation
+    entirely. Assert the DELIVERED BODY, put nothing between the step under test and the assertion,
+    and *run the mutation*.
   - **`foreach` sub-steps must go through the same POLICY path as any other node.** They called the
     raw dispatcher, which silently skipped **`idempotency` and `on_error.retry` for every step
     inside a loop** — inverting the guarantee in the worst possible place. A write in a loop is N
@@ -382,7 +389,20 @@ refactor them without an explicit decision recorded here:
     `BAD_TEMPLATE_REF` never fired; the engine took it as a literal, nothing matched, and the
     **mandatory catch-all then swallowed 100% of traffic — forever, silently, with
     `run_completed`**. The catch-all that exists to prevent a silent misroute was *masking* one.
-    Rejected at build time, and the engine now fails loudly rather than falling through.
+    Rejected at build time.
+  - **A `branch`'s `on` is a REFERENCE, not a template — it must stay RAW** (same carve-out as a
+    `foreach`'s `steps`). The first fix for `BRANCH_BAD_ON` shipped two regressions, both of which
+    crashed *valid* workflows, and both because `_runNode` substitutes config before the node sees
+    it:
+    - `on: "{{classify.output}}"` — the mainline shape — arrived as the classified **value**
+      (`"urgent"`), which is indistinguishable from a step id, so the engine looked up a step called
+      "urgent" and killed the run. **Data-dependent**, which is worse: `"urgent"` matched the id
+      regex and crashed; `"needs review"` (a space) did not. Not one of the then-49 tests used the
+      braced form.
+    - The engine must distinguish **"no such step"** (a typo → fail loudly) from **"a real step that
+      didn't run on this leg"** (an upstream branch skipped it → take the **catch-all**, which is
+      exactly what a mandatory catch-all is *for*). Throwing on the latter failed a workflow the
+      validator correctly accepts. `ctx.nodeIds` is what tells them apart.
   - **`scripts/gates/p12.sh` — one DESCRIPTION string changed** ("resumes from persisted steps" →
     "resumes from its checkpoint"). **No check was altered.** Recorded here because a diff against
     `scripts/` is exactly how a verifier detects a builder weakening their own gate — so it must

@@ -794,8 +794,10 @@ gaps) and a shape-derivation call.
   re-fired trigger with `idempotency` does not write twice; ✅ `human` pauses and resumes from the
   **checkpoint** without re-running — or re-paying for — earlier work, and what it delivers is
   byte-identical to what the person approved.
-  All in `tests/workflows/control-flow.test.js` (49 tests, and **every guard is mutation-tested**:
-  11 mutations, 11 caught — see the CLAUDE.md note; a green suite proved nothing five times running).
+  All in `tests/workflows/control-flow.test.js`. **Every guard is mutation-tested** — the bug is
+  re-introduced and a test must fail — because a green suite proved nothing six times running here.
+  Do not trust a mutation score quoted in a doc (two were published and both were falsified by an
+  independent verifier writing a wider list); re-derive it.
 
   **`live` and `ruledOut` are load-bearing checkpoint fields, not bookkeeping.** The edge liveness
   is RESTORED from the checkpoint and never re-derived: replaying `propagate()` for an already-done
