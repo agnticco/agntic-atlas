@@ -1,440 +1,465 @@
-# Converger v2 — outcome-first elicitation, typed shape, provable completeness
+# Converger v2 — build specification
 
-**Status:** proposed · **Author:** build session 2026-07-13 · **Supersedes:** nothing (P3 converger stays running until each increment lands)
-
----
-
-## 0. The thesis, in one page
-
-Today the converger asks *"what would you like to automate?"* — a **process** question — and
-then builds forward, one step at a time, until a hardcoded checklist says stop. It never
-states a destination, so it cannot know when it has arrived, cannot know what it failed to
-capture, and cannot tell you what it does not know.
-
-v2 inverts this:
-
-> **Elicit the outcome. Derive the shape. Fill in the action and the judgment.
-> Route what you don't know to a human.**
-
-Three properties fall out, and together they are the moat:
-
-1. **Provable completeness.** A typed decision model has *computable gaps* — input
-   combinations no rule covers. The converger stops asking when the model has no holes,
-   not when the LLM feels finished.
-2. **Safe by construction.** Every uncovered branch defaults to **human escalation**. The
-   workflow is complete on day one; the gaps become a backlog the user fills as real
-   escalations arrive.
-3. **Auditable judgment.** Decisions are captured as reviewable tables (typed inputs →
-   rules → output) whose *predicates may be LLM-evaluated*. Camunda has the completeness
-   math but cannot evaluate "sounds urgent". Pure-LLM tools can evaluate anything and prove
-   nothing. This is the only design that holds both ends.
-
-**Non-goal: a BPMN/DMN port.** We adopt the *semantics* (gateways must be exhaustive;
-decision tables must have no gaps), not the *serialization*. The proprietary JSON spec
-stays — see CLAUDE.md, "closed decisions". Emitting BPMN XML wins us nothing commercially
-and drags in a 500-page spec surface.
+**Status:** ready to implement · **Rev 2** (2026-07-13) · **Read first:**
+[`bpmn-dmn-foundations.md`](./bpmn-dmn-foundations.md) — it contains the theory this
+document assumes, and it *revised* rev 1 of this file in eight places.
 
 ---
 
-## 1. What is actually wrong today (evidence, not opinion)
+## 0. How to use this document
 
-Measured during the 2026-07-13 stress test (13 workflows built through the real UI).
+This is written for a coding agent picking up one increment cold.
 
-| # | Defect | Root cause | Evidence |
-|---|---|---|---|
-| 1 | Converger **silently drops a requested step** | Nothing declares what the finished workflow must produce, so nothing notices an omission | Asked for a note to Slack **and** email, confirmed twice; published spec had only `deliver_slack`. |
-| 2 | `timeMin: "{{today}}"` sent to Google Calendar → **400** | Node config is not type-checked; `{{today}}` is not a real template var (`_node-input.js` supports `{{prev}}`, `{{nodeId.output}}`, `{{date}}`, `{{time}}`) | `fetch_calendar` node config, run failed at execution time in production. |
-| 3 | Dead `"model":"claude-opus-4-5"` field on LLM nodes | Converger invents config keys; executor silently ignores unknown keys | `src/workflows/node-types/llm.js` never reads `config.model`. |
-| 4 | **Cannot tell a 2-node workflow is finished** | `scoreGap()` is a hardcoded checklist requiring trigger + *processing* + delivery | `src/converger/gap-scorer.js:12-41`. It demanded a "processing step" for a static Slack post, so the converger **invented an LLM node** to satisfy it. |
-| 5 | **Zero exception questions asked**, ever | There is no shape model to interrogate; no notion of a branch, a failure path, or an uncovered case | 13 builds; not one question about what happens if a step fails or an input is missing. |
-| 6 | Airtable not conversationally reachable | No `list_bases` / schema-read capability, so the user must paste an opaque base ID | Blocks the highest-value (write-shaped) workflows. |
+- **§1 is the current state** — the real contracts as they exist in `main` today. Do not
+  re-derive them; they were read out of the code on 2026-07-13.
+- **§2 is the target state** — the same contracts, after v2.
+- **§3–§8 are the deltas**, file by file, with before/after signatures.
+- **§9 sequences the work** into increments. Each has explicit **acceptance criteria** and a
+  gate. Do one increment per session, end at its gate.
+- **§10 is the list of things that must not break.** Check it before you open a PR.
 
-Defects 1–3 are all the same disease: **the converger invents structure that nothing
-validates.** Defects 4–5 are the same disease: **there is no model of "done".**
-
-### The engine's own limits (these bound what the converger can even express)
-
-- `src/workflows/flow-tester.js:66,108` — Kahn topological sort, then **every node runs.**
-  There is **no conditional execution**. A `branch` is currently inexpressible.
-- No iteration. "10 inbound emails → 10 records" cannot be expressed.
-- No durable human pause at *workflow* runtime. (The converger has `interrupt()`, the
-  executor does not.)
-- `summarize` / `extract` / `rewrite` are separate node types that are all "an LLM call with
-  a different prompt" — they inflate the vocabulary the converger reasons over and buy no
-  expressiveness.
+**Anchors are exported symbol names, not line numbers.** Per CLAUDE.md, line numbers in a brief
+are non-authoritative provenance — re-ground against the symbol.
 
 ---
 
-## 2. Target architecture
+## 1. CURRENT STATE (as of `main`, 2026-07-13)
 
-### 2.1 The spec, v2
+### 1.1 Converger — `src/converger/`
 
-`spec.outcome` is new and is the anchor. Everything else is derived from or checked against it.
+| File | Exports | Contract |
+|---|---|---|
+| `index.js` | `createConverger({ llm, capabilities, checkpointerDir, interactionStore, tenantId, userId })` → **`{ run(threadId, intent), resume(threadId, value), abandon(threadId), getState(threadId) }`**<br>`runHeadless({ intent, capabilities, llm, checkpointerDir })` | The only entry points the app uses. **Keep both signatures stable.** |
+| `elicitation-graph.js` | `buildElicitationGraph({ llm, checkpointerDir })` | A compiled `StateGraph`. Nodes: **`analyze` · `clarify` · `propose` · `ratify`**. Edges: `analyze →(cond) clarify\|propose\|ratify`; `clarify → analyze`; `propose → analyze`; `ratify →(cond) done`. |
+| `gap-scorer.js` | `scoreGap(draft)` → `{ needsTrigger, needsProcessing, needsDelivery, needsEdges, needsName, complete }`<br>`gapLabel(gap)` → string | **A hardcoded 5-item checklist.** This is the file v2 exists to replace. |
+| `spec-assembler.js` | `applyProposal(draft, proposal, confirmation)` → draft<br>`assembleSpec(draft)` → spec | Applies one atomic edit to the draft. |
+| `prompts.js` | `buildSystemPrompt(capabilities)`<br>`buildAnalyzePrompt({ intent, clarifications, capabilities })`<br>`buildProposePrompt({ intent, clarifications, draft, gap, setupResults })`<br>`buildModifyPrompt({ original, modification })` | System prompt is ~7.5k tokens for a fully-connected tenant; it is the cached prefix (v1.3.8). |
+| `interaction-store.js` | `startSession`, … | Persists the elicitation transcript. **This is where `provenance` should live.** |
+
+**Elicitation state shape** (`state.*` in the graph):
+```
+{ intent, capabilities, draft, clarifications, confirmationLog, setup_results, step, phase, spec, _pendingQuestion }
+```
+
+**Proposal vocabulary** — `proposal.component` ∈
+```
+trigger · node · edge · name · description · remove_node · remove_edge · setup_action
+```
+(see the `switch` in `applyProposal`). This is the complete set of atomic edits the converger
+can currently make.
+
+**Interrupt types** (the UI/API contract, consumed in `public/index.html`):
+```
+clarification · proposal · ratify · done
+```
+
+### 1.2 Engine — `src/workflows/`
+
+| File | Contract | Limitation that matters |
+|---|---|---|
+| `flow-tester.js` | **`async* run(flow, options)`** → async generator of events (`run_started`, step events, …) | **Kahn topological sort, then RUNS EVERY NODE.** No conditionals, no iteration, no pause. |
+| `node-type-registry.js` | `register({ type, label, description, icon, family, configSchema[], previewTemplate, run(cfg, ctx, services), validate? })` | The node-type contract. `configSchema` drives the inline editor **and** is the only declared shape of a node's config. |
+| `workflow-validator.js` | `validate(def)` → **`{ ok, errors[], warnings[], issues[] }`** (`ok = errors.length === 0`); issue = `{ severity, code, message, nodeId, field, hint }` | Existing codes incl. `MISSING_TRIGGER`, `MISSING_DELIVER`, `UNKNOWN_NODE_TYPE`, `MISSING_CONFIG`, `BAD_TEMPLATE_REF`, `EDGE_BAD_FROM/TO`. |
+| `node-types/` | `trigger` `llm` `summarize` `extract` `rewrite` `deliver` `connector-action` `search-web` `daily-digest` · **dead:** `tool` `mcp-tool` `fetch` | `summarize`/`extract`/`rewrite` are **prompt presets, not distinct execution semantics**. |
+| `node-types/_node-input.js` | Template resolution | Grammar: **`{{prev}}`, `{{<nodeId>.output}}`, `{{date}}`, `{{time}}`, `{{datetime}}`, `{{year}}`, `{{month}}`, `{{day}}`.** Nothing else. |
+
+**The engine is a dataflow DAG, not a process engine.** It is structurally closer to DMN's
+Decision Requirements Graph than to a BPMN process. See `bpmn-dmn-foundations.md` §4.
+
+### 1.3 Spec v1 (what the converger emits today)
+```jsonc
+{
+  "name": "…", "description": "…",
+  "triggers": [ { "type": "schedule|email|…", … } ],
+  "nodes":    [ { "id", "type", "label", "config": {…} } ],
+  "edges":    [ { "from", "to" } ]
+}
+```
+No outcome. No conditions. No decisions. No failure paths.
+
+### 1.4 Known defects this design must kill
+Measured 2026-07-13 across 13 workflows built through the real UI.
+
+| # | Defect | Root cause |
+|---|---|---|
+| 1 | Converger **silently dropped a requested delivery step** (asked for Slack **and** Gmail, confirmed twice; spec had only Slack) | Nothing declares what the finished workflow must produce |
+| 2 | ~~`{{today}}` reached Google → 400~~ | **FIXED** (`1601634`) — the run path now validates. Root cause was *the test-run path skipping the validator*, **not** a missing check. |
+| 3 | Dead `"model":"claude-opus-4-5"` on LLM nodes | Config keys are not checked against `configSchema` |
+| 4 | **Cannot tell a 2-node workflow is finished** — invented an LLM node to satisfy the checklist | `scoreGap()` demands a "processing" node |
+| 5 | **Zero exception questions**, ever | No shape to interrogate |
+| 6 | Airtable unreachable conversationally | No schema/base discovery capability |
+
+---
+
+## 2. TARGET STATE
+
+### 2.1 The elicitation order (REVISED — rev 1 had this backwards)
+
+Per Silver: decisions are the hardest part and come **before** the process; discovery happens
+**through examples**, not interrogation.
+
+```
+intent
+  → OUTCOME     "How would we know this worked?"        → testable assertions
+  → EXAMPLES    "Show me 3 real cases: in → expected"   → the SME's rows
+  → DECISIONS   induce tables from the examples          → typed, gap-analysed
+  → PROCESS     wire the graph around proven decisions   → derived, ~no user turns
+  → GAPS        "you haven't told me about these 3"      → default: escalate to human
+  → RATIFY
+```
+
+Two consequences worth stating loudly:
+- **The examples become the acceptance suite.** They are the assertions the test panel checks.
+- **The user answers far fewer questions**, because rules are *induced*, not interrogated.
+
+### 2.2 Spec v2
 
 ```jsonc
 {
   "version": 2,
   "name": "Inbound lead capture",
 
-  // NEW — the contract. What must be true when this is done.
-  "outcome": {
-    "statement": "Every inbound sales email produces a Leads record with Name, Company, Budget and Priority; anything over $50k also pings #sales-urgent.",
-    "assertions": [                       // machine-checkable; drives the test oracle
-      { "id": "a1", "kind": "record_exists",  "target": "airtable:Leads",
-        "fields": ["Name", "Company", "Budget", "Priority"] },
-      { "id": "a2", "kind": "message_sent",   "target": "slack:#sales-urgent",
-        "when": "budget_gt_50k" }         // references a branch id
+  "outcome": {                                  // NEW — the contract; the anchor
+    "statement": "Every inbound sales email produces a Leads record with Name, Company, Budget and Priority; over $50k also pings #sales-urgent.",
+    "assertions": [                             // machine-checkable → drives the test oracle
+      { "id": "a1", "kind": "record_exists", "target": "airtable:Leads",
+        "fields": ["Name","Company","Budget","Priority"] },
+      { "id": "a2", "kind": "message_sent",  "target": "slack:#sales-urgent",
+        "when": "priority = 'P1'" }
+    ],
+    "examples": [                               // NEW — the SME's rows; ALSO the test cases
+      { "given": { "subject": "Need 200 seats by Q3", "body": "…budget approx $80k…" },
+        "expect": { "Budget": 80000, "Priority": "P1", "slack": true } },
+      { "given": { "subject": "quick question about pricing" },
+        "expect": { "Priority": "P3", "slack": false } }
     ]
   },
 
-  "triggers": [ { "type": "email", "filter": "..." } ],
+  "triggers": [ { "type": "email", "filter": "…" } ],
 
   "nodes": [
     { "id": "extract_fields", "type": "llm", "mode": "extract",
       "config": { "fields": ["name","company","budget"] } },
 
-    // NEW — typed decision. Reviewable. Cells may be LLM-evaluated.
-    { "id": "score_priority", "type": "decision",
-      "inputs":  [ { "key": "budget",    "type": "number" },
-                   { "key": "tone",      "type": "enum",   "values": ["calm","urgent"],
-                     "evaluator": "llm" } ],   // ← fuzzy predicate, LLM-judged
-      "output":  { "key": "priority", "type": "enum", "values": ["P1","P2","P3"] },
-      "hitPolicy": "FIRST",
+    { "id": "score_priority", "type": "decision",          // NEW — DMN decision table
+      "inputs": [
+        { "key": "budget", "type": "number" },
+        { "key": "tone",   "type": "enum",                 // ⚠️ LLM input MUST be a closed enum
+          "values": ["calm","neutral","urgent"],
+          "evaluator": "llm",
+          "evaluatorPrompt": "Classify the sender's tone." }
+      ],
+      "output":    { "key": "priority", "type": "enum", "values": ["P1","P2","P3"] },
+      "hitPolicy": "FIRST",                                 // U | A | P | F | C
       "rules": [
-        { "when": { "budget": ">50000" },                  "then": "P1" },
-        { "when": { "tone": "urgent" },                    "then": "P1" },
-        { "when": { "budget": "10000..50000" },            "then": "P2" },
-        { "when": {},                                      "then": "P3" }   // catch-all
-      ]
-    },
+        { "when": { "budget": ">50000" },       "then": "P1" },
+        { "when": { "tone": "urgent" },         "then": "P1" },
+        { "when": { "budget": "[10000..50000]" },"then": "P2" },
+        { "when": { "budget": "-", "tone": "-" },"then": "P3" }   // catch-all ("-" = irrelevant)
+      ] },
 
-    // NEW — conditional gateway. MUST be exhaustive.
-    { "id": "budget_gt_50k", "type": "branch",
-      "on": "budget",
+    { "id": "route_priority", "type": "branch",             // NEW — routes on an EXISTING value
+      "on": "score_priority.output",
       "cases": [
-        { "when": ">50000", "to": "ping_sales" },
-        { "when": "*",      "to": "create_record" }   // catch-all is mandatory
+        { "when": "P1", "to": "ping_sales" },
+        { "when": "*",  "to": "create_record" }             // catch-all is MANDATORY
       ] },
 
     { "id": "create_record", "type": "connector-action",
-      "config": { "action": "airtable_create_record", "baseId": "...", "table": "Leads",
-                  "fields": { "Name": "{{extract_fields.name}}", "Priority": "{{score_priority.output}}" } },
+      "config": { "action": "airtable_create_record", "baseId": "…", "table": "Leads",
+                  "fields": { "Name": "{{extract_fields.name}}",
+                              "Priority": "{{score_priority.output}}" } },
       "idempotency": { "key": "{{extract_fields.email}}", "on_conflict": "update" },  // NEW
-      "on_error": { "retry": 2, "then": "escalate" } },                                // NEW
+      "on_error":    { "retry": 2, "then": "escalate" } },                             // NEW
 
-    { "id": "ping_sales", "type": "connector-action",
+    { "id": "ping_sales",   "type": "connector-action",
       "config": { "action": "slack_post", "target": "#sales-urgent" } },
 
-    // NEW — the landing zone for everything we don't know.
-    { "id": "human_review", "type": "human",
-      "config": { "assignee": "inbox", "prompt": "Budget could not be determined — set it?" } }
+    { "id": "human_review", "type": "human",                // NEW — where every gap lands
+      "config": { "assignee": "inbox", "prompt": "Budget couldn't be determined — set it?" } }
   ],
 
-  "edges": [ /* ... */ ],
-
-  // NEW — audit trail of elicitation. Feeds the SOP.
-  "provenance": [
-    { "assertion": "a1", "source": "user", "turn": 3, "quote": "...every lead ends up in Airtable" },
-    { "gap": "budget_unknown", "resolution": "escalate", "default": true }
-  ]
+  "edges": [ /* … */ ]
 }
 ```
 
-### 2.2 Node library — re-cut, not ballooned
+**Rule that keeps the moat (do not violate):** an input with `"evaluator": "llm"` **must** be
+`type: "enum"` with a closed `values` list. A free-text LLM input makes gap analysis
+undecidable — see `bpmn-dmn-foundations.md` §3.3 and §6. **The validator enforces this
+(`LLM_INPUT_NOT_ENUM`).**
 
-Two axes, opposite strategies. **The work axis is already solved** — `connector-action` +
-`CapabilityRegistry` means a new connector is a config edit, not a node type. Do not touch it.
+### 2.3 Node library — re-cut, not ballooned
 
 | | Today | v2 |
 |---|---|---|
-| **Work (open)** | `connector-action`, `llm`, `summarize`, `extract`, `rewrite`, `search-web`, `deliver`, `daily-digest` | `connector-action` (unchanged) · `llm` with `mode: summarize\|extract\|rewrite\|classify\|freeform` · `deliver` |
-| **Control (new, closed)** | — | **`branch`** · **`decision`** · **`foreach`** · **`human`** · **`wait`** |
-| **Attributes (new)** | — | `on_error: { retry, then: escalate\|route_to }` · `idempotency: { key, on_conflict }` — on *any* node |
-| **Delete** | `tool`, `mcp-tool`, `fetch` (dead — no `ToolRegistry`; see CLAUDE.md gotchas), `daily-digest` (a preset) | — |
+| **Work (open axis)** | `connector-action`, `llm`, `summarize`, `extract`, `rewrite`, `search-web`, `deliver`, `daily-digest` | `connector-action` *(unchanged — this is the open axis; **do not touch**)*<br>`llm` **+ `mode: summarize\|extract\|rewrite\|classify\|freeform`**<br>`deliver` |
+| **Control (new, closed)** | — | **`decision`** · **`branch`** · **`foreach`** · **`human`** · **`wait`** |
+| **Attributes (any node)** | — | `on_error: { retry, then: 'escalate'\|'route_to:<id>' }`<br>`idempotency: { key, on_conflict: 'skip'\|'update'\|'error' }` |
+| **Delete** | — | `tool`, `mcp-tool`, `fetch` *(dead — no ToolRegistry)*, `daily-digest` *(a preset)* |
 
-**Net node-type count barely moves.** We collapse three prompt-presets-masquerading-as-types
-into `llm.mode`, delete three dead types, and add five control primitives. Expressiveness goes
-from "straight line" to the full BPMN core.
+> **Hard rule: the converger COMPOSES from this closed vocabulary. It never DEFINES node types.**
+> Free-form node shapes make gap analysis, overlap detection and "you declared an output that
+> isn't wired" impossible — i.e. they delete the moat. Defects #1 and #3 are what a *partially*
+> open grammar already costs.
 
-> **Hard rule: the converger composes from this closed vocabulary. It never defines new node
-> types.** Free-form node shapes would make gap analysis, overlap detection, and
-> "you declared an output that isn't wired" *impossible* — i.e. they would delete the moat.
-> Defects 1–3 above are what a *partially* open grammar already costs us.
-
----
-
-## 3. Engine changes (`src/workflows/`)
-
-This is the largest block of work and it gates everything else.
-
-### 3.1 Conditional execution — `flow-tester.js` / executor
-Today: topo-sort, run every node. Needed: a node may be **skipped** because a branch did not
-select it.
-
-- Add an `active` set to the run context. A `branch` node evaluates its `on` input, picks
-  exactly one `case`, and marks the non-selected subtrees inactive.
-- A node whose *every* parent is inactive is skipped (status `skipped`, not `error`).
-- **`branch` must be exhaustive**: a `*` catch-all case is mandatory (validator-enforced,
-  §5). This is the BPMN gateway rule, and it is what makes "what if not?" un-skippable.
-
-### 3.2 Iteration — `foreach`
-- `foreach` declares `over` (a collection expression) and a `body` (a sub-graph id).
-- The executor runs the body once per item, with `{{item}}` bound; outputs collect into an array.
-- **Bounded**: `maxItems` (default 100) — a runaway `foreach` is a cost incident. This
-  interacts with the run meter: see §9.
-
-### 3.3 Durable human pause — `human`
-The converger already has `interrupt()` in the agent core; the **executor does not**.
-
-- New run status `awaiting_human` on `workflow_runs`.
-- The run persists at the pause point; the scheduler does not re-fire it.
-- Resume via a new endpoint + an **Approvals inbox** (reuse the existing Inbox surface —
-  `src/inbox/`, already delivering to the sidebar with an unread badge).
-- **Every uncovered branch and every `on_error: escalate` lands here.** This is the safety
-  net that makes "complete by construction" true rather than aspirational.
-
-### 3.4 Error / idempotency attributes
-- `on_error: { retry: N, then: 'escalate' | 'route_to:<nodeId>' }` on any node.
-  (Workflow-level retry already exists in `workflow-scheduler.js`; this is *per node* and
-  can escalate to a human instead of failing the run.)
-- `idempotency: { key, on_conflict: 'skip'|'update'|'error' }` on write nodes. **Without this
-  the write story is unsellable** — a re-fired trigger silently duplicating CRM records is
-  the fastest way to get uninstalled.
-
-### 3.5 Schema-aware connectors (unblocks the write story)
-`connector-action` capabilities gain an optional `describe()` returning the *target's* schema
-(Airtable base tables + field names/types; Sheets header row; etc.).
-
-- New capabilities: `airtable_list_bases`, `airtable_describe_table`, `sheets_describe`.
-- The converger reads the schema and maps `"the customer's budget"` → the `Deal Size` column
-  **itself**. Today the user must paste an opaque base ID — which is exactly where the
-  "just talk to it" promise dies.
-
----
-
-## 4. Converger changes (`src/converger/`)
-
-### 4.1 Graph: three phases, replacing the current single loop
-Current graph (`elicitation-graph.js:114-291`): `analyze → (clarify | propose) → analyze → ratify`.
-
-New graph:
-
+### 2.4 New proposal vocabulary
+`proposal.component` gains:
 ```
-intent
-  → OUTCOME     (elicit the contract; loop until assertions are testable)
-  → SHAPE       (derive the graph by backward-chaining from assertions; no user turns)
-  → FILL        (elicit rules/prompts/mappings per node; gap analysis loop)
-  → RATIFY      (confirm; emit spec v2)
+outcome · assertion · example · decision · rule · hit_policy · branch · foreach · human · on_error · idempotency
+```
+(existing: `trigger · node · edge · name · description · remove_node · remove_edge · setup_action`)
+
+### 2.5 New interrupt types
+```
+outcome_check   — "here's the contract I heard; is it right?"
+example_request — "show me 3 cases"
+decision_review — renders a TABLE, not prose
+gap_review      — "3 cases you haven't told me about" [Answer | Escalate (default) | Ignore]
+```
+(existing `clarification · proposal · ratify · done` stay.)
+
+---
+
+## 3. DELTA: `src/converger/`
+
+### `gap-scorer.js` → **rewrite** (this is the heart)
+
+```js
+// BEFORE
+scoreGap(draft) → { needsTrigger, needsProcessing, needsDelivery, needsEdges, needsName, complete }
+
+// AFTER
+scoreGap(spec, { capabilities }) → {
+  gaps: [ {
+    id, class: 'outcome'|'coverage'|'contract',
+    nodeId, message,
+    resolution: 'unanswered' | 'answered' | 'escalated',   // default → 'escalated'
+    decidable: boolean          // false when the domain is infinite (say so in the UI)
+  } ],
+  complete: boolean             // every gap answered OR explicitly escalated
+}
 ```
 
-- **`outcome` node (new).** Asks the question we never ask: *"How would we know this worked?
-  What would be true afterwards that isn't true now?"* Loops until every assertion is
-  machine-checkable (has a `kind`, a `target`, and a field/condition contract). This is the
-  hardest and most valuable node in the product; it is the interview a consultant charges for.
-- **`shape` node (new, mostly non-interactive).** Backward-chains from the assertions:
+Three gap classes:
+1. **outcome** — an `assertion` with no node that satisfies it. *(kills defect #1)*
+2. **coverage** — a `decision` table with uncovered input combinations (enumerable domains
+   only), a table whose `hitPolicy` is `UNIQUE` but has overlapping rules, or a `branch` with
+   no `*` case. *(kills defect #5)*
+3. **contract** — required config field unset; unknown config key; write node with no
+   `idempotency`; node with no `on_error`. *(kills defect #3)*
 
-  | the outcome demands | derived node |
-  |---|---|
-  | a record exists with fields F | terminal `connector-action` write, config schema declares F |
-  | F not present in the source | `llm mode:extract` |
-  | a field requires a judgment | **`decision`** |
-  | "…and if X also Y" | **`branch`** (+ second terminal) |
-  | "every X" | **`foreach`** |
-  | data must come from somewhere | source `connector-action` / trigger |
+**Gap analysis = the hyper-rectangle method** (Calvanese et al.). Enumerate the cross-product of
+enumerable input domains; a rule is a box; report uncovered regions. **Only decidable over
+enums / bounded ints / booleans** — mark everything else `decidable: false` and require a
+catch-all instead. **Do not imply a proof we cannot make.**
 
-  The shape is *derived*, not guessed. This is the core algorithmic change.
-- **`fill` node.** Per node, elicits content (rules, prompt text, field mapping, thresholds).
-  Runs **gap analysis** after each turn; asks *targeted* questions about uncovered cases.
-- **`ratify`** — largely as today, but now confirming outcome + shape + decisions + gaps.
+### `elicitation-graph.js` → new nodes
+```
+outcome   (new, interactive)   → loops until every assertion is machine-checkable
+examples  (new, interactive)   → asks for 3 concrete cases; induces rules from them
+decisions (new, mostly LLM)    → builds tables from examples; runs gap analysis; asks hit policy
+process   (new, non-interactive) → backward-chains the graph from assertions
+gaps      (new, interactive)   → presents the gap list; default resolution = escalate
+ratify    (existing)           → confirm; emit spec v2
+```
+Keep `analyze`/`clarify`/`propose` for the v1 path until increment C is green (see §9).
 
-### 4.2 `gap-scorer.js` — rewrite (this is the heart)
-Delete the 5-item checklist. Replace with a real oracle over three gap classes:
+### `spec-assembler.js`
+- `applyProposal` — add cases for the new components (§2.4).
+- `assembleSpec(draft)` — emit `version: 2`, `outcome{statement, assertions, examples}`.
 
-1. **Outcome gaps** — an assertion with no node that satisfies it.
-   *(Kills defect #1: "Slack AND email" = two assertions; a spec with one terminal fails.)*
-2. **Coverage gaps** — a `decision` table with input combinations no rule matches
-   (enumerable inputs only), or a `branch` with no catch-all.
-   *(Kills defect #5: the exception questions become derivable.)*
-3. **Contract gaps** — a required config field with no value; a template var that does not
-   exist; a write node with no `idempotency`; a node with no `on_error`.
-   *(Kills defects #2 and #3.)*
+### `prompts.js`
+- New: `buildOutcomePrompt()`, `buildExamplesPrompt()`, `buildDecisionPrompt()` (induce a table
+  from examples), `buildProcessPrompt()` (backward-chain).
+- **The system prompt must enumerate the closed node vocabulary AND the exact template grammar**
+  (`{{prev}}`, `{{<id>.output}}`, `{{date}}`…). Defect #3 exists because it doesn't.
 
-Every gap has a **default resolution: escalate to human.** `scoreGap()` returns
-`{ gaps: [...], complete: boolean }` where `complete` means *"every gap is either answered or
-explicitly escalated"* — never *"we stopped asking."*
-
-> **Honest limit:** gap analysis is only computable over **enumerable** input domains
-> (`enum`, numeric ranges, booleans). `tone: "urgent"` has no finite domain — for
-> LLM-evaluated inputs we can only check that a catch-all exists. Say this out loud in the
-> UI; do not imply a completeness proof we cannot make.
-
-### 4.3 `prompts.js`, `spec-assembler.js`
-- `buildOutcomePrompt()` (new), `buildShapePrompt()` (new), `buildFillPrompt()` (replaces
-  `buildProposePrompt`).
-- `assembleSpec()` emits `version: 2` + `outcome` + `provenance`.
-- **The system prompt must enumerate the closed node vocabulary and the exact template vars.**
-  Defects #2/#3 exist because it doesn't.
+### `interaction-store.js`
+- Store `provenance`: which turn/quote produced each assertion and rule; which gaps were
+  escalated by default. **Feeds the SOP.** Keep it in the store, not the spec.
 
 ---
 
-## 5. Validator (`src/workflows/workflow-validator.js`)
+## 4. DELTA: `src/workflows/` (engine)
 
-New error codes. Each one is a bug from §1 that becomes impossible to ship:
+### `flow-tester.js` — conditional execution
+Today: topo-sort → run every node. Needed: a node may be **skipped**.
 
-| Code | Rule | Kills |
+- Add an `active: Set<nodeId>` to the run context. Initially all nodes.
+- `branch` evaluates `on`, selects exactly **one** case, and marks the subtrees of the
+  non-selected cases inactive.
+- A node whose parents are **all** inactive → status `skipped` (**not** `error`).
+- **A spec with no `branch`/`foreach`/`human` must execute byte-identically to today.** This is
+  the non-regression contract; P2/P3 prove it.
+
+### New node types (`src/workflows/node-types/`)
+| Type | `run(cfg, ctx, services)` behaviour |
+|---|---|
+| `decision` | Evaluate `inputs` (LLM inputs = **classify into the declared enum**, one call per fuzzy input for auditability), match `rules` under `hitPolicy`, return the output value. Emit which rule fired → audit trail. |
+| `branch` | Evaluate `on`; select one `case`; deactivate the rest. |
+| `foreach` | Iterate `over` a collection, binding `{{item}}`; collect outputs. **`maxItems` (default 100)** — a runaway `foreach` over a web node is a cost incident. |
+| `human` | **Durable pause.** New run status `awaiting_human`; persist; resume via the Approvals inbox (reuse `src/inbox/`). |
+| `wait` | Timer. |
+
+### `llm.js` — add `mode`
+`mode: summarize | extract | rewrite | classify | freeform`. Then **delete** `summarize.js`,
+`extract.js`, `rewrite.js`, `daily-digest.js`, `tool.js`, `mcp-tool.js`, `fetch.js`, and remove
+them from `node-types/index.js`. Map the old types → `llm` + mode in a v1 compat shim.
+
+### Schema-aware connectors (unblocks the write story)
+New capabilities: `airtable_list_bases`, `airtable_describe_table`, `sheets_describe`.
+The converger reads the destination's field names and maps *"the customer's budget"* → the
+`Deal Size` column **itself**. Today the user must paste an opaque base ID — which is precisely
+where "just talk to it" dies.
+
+---
+
+## 5. DELTA: `workflow-validator.js`
+
+| New code | Rule | Kills |
 |---|---|---|
-| `UNSATISFIED_ASSERTION` | every `outcome.assertions[]` maps to ≥1 node that satisfies it | #1 (dropped step) |
-| `UNKNOWN_TEMPLATE_VAR` | every `{{...}}` resolves against `_node-input.js`'s grammar | #2 (`{{today}}` → 400) |
-| `UNKNOWN_CONFIG_KEY` | node config keys ⊆ the type's `configSchema` | #3 (dead `model` field) |
-| `NON_EXHAUSTIVE_BRANCH` | every `branch` has a `*` catch-all | #5 |
-| `DECISION_TABLE_GAP` | enumerable inputs fully covered, or catch-all present | #5 |
-| `WRITE_WITHOUT_IDEMPOTENCY` | *warning* on write capabilities lacking `idempotency` | duplicate-record risk |
+| `UNSATISFIED_ASSERTION` | every `outcome.assertions[]` maps to ≥1 node that satisfies it | **#1** |
+| `UNKNOWN_CONFIG_KEY` | node config keys ⊆ the type's `configSchema` | **#3** |
+| `LLM_INPUT_NOT_ENUM` | a `decision` input with `evaluator:'llm'` **must** be `type:'enum'` with `values` | **protects the moat** |
+| `NON_EXHAUSTIVE_BRANCH` | every `branch` has a `*` case | **#5** |
+| `DECISION_TABLE_GAP` | enumerable inputs fully covered, or a catch-all rule exists | **#5** |
+| `UNIQUE_HIT_OVERLAP` | `hitPolicy: UNIQUE` but rules overlap | **#5** |
+| `WRITE_WITHOUT_IDEMPOTENCY` | **warning** on write capabilities lacking `idempotency` | duplicate records |
 
-`UNKNOWN_CONFIG_KEY` is the single highest-leverage check in the list: it converts "the
-converger hallucinated a field" from a silent production failure into a build-time error.
-
----
-
-## 6. UI (`public/index.html`)
-
-The builder already has the right *bones* — the confirm-each-step signal line and the test
-panel are the best things in the product. v2 adds four surfaces:
-
-1. **Outcome card** (top of the build pane, above the steps). The agreed contract, in the
-   user's own words, pinned. Editable. This is the thing they sign off on.
-2. **Decision table review.** A `decision` node renders as a *table*, not prose. Reviewable
-   and signable — this is the artifact that a compliance buyer needs and a pure-LLM
-   competitor structurally cannot produce.
-3. **Gap list** — *"You haven't told me what to do in these 3 cases."* Each row: **Answer** ·
-   **Escalate to me** (the default) · **Ignore**. This is the visible manifestation of the
-   moat: the system telling you what it doesn't know.
-4. **Approvals inbox** — where escalations land at runtime. Reuse `src/inbox/`.
-
-**Test panel becomes the outcome oracle.** Today it asks *"does this look right?"*. With
-assertions it asserts: *a Leads record exists with 4 fields; #sales-urgent received a message.*
-Pass/fail against the contract — not vibes. This is a strict upgrade to the single most
-persuasive moment in the demo.
-
-**SOP export becomes the signed spec.** `sop-generator.js` / `sop-pdf.js` gain: outcome +
-decision tables + escalation policy + `provenance`. That is the consultant's deliverable, and
-it is what Sarah's replacement reads.
+`UNKNOWN_CONFIG_KEY` is the highest-leverage check: it turns "the converger hallucinated a
+field" from a silent production failure into a build-time error.
 
 ---
 
-## 7. Test suite & gates
+## 6. DELTA: API + UI
 
-Current converger gate: `scripts/gates/p3.sh` → `scripts/checks/p3-converger-run.mjs`,
-which asserts the converger reproduces the frozen canonical spec
-(`docs/specs/canonical-ups-slack.json`). **It must keep passing throughout** — it is the
-non-regression floor.
+- `POST /api/builder/sessions/:threadId/respond` — accept the new interrupt payloads (§2.5).
+- `public/index.html` — the switch on `iv.type` (currently `done|clarification|proposal|ratify`)
+  gains `outcome_check | example_request | decision_review | gap_review`.
 
-New:
+New surfaces:
+1. **Outcome card** — pinned above the steps. The contract, in the user's words. Editable.
+2. **Decision table review** — a `decision` renders as a **table**, not prose. *This is the
+   artifact a compliance buyer signs and a pure-LLM competitor cannot produce.*
+3. **Gap list** — *"You haven't told me what to do in these 3 cases."* Each row:
+   **Answer** · **Escalate to me** *(pre-selected default)* · **Ignore**.
+4. **Approvals inbox** — where escalations land at runtime (`src/inbox/`).
 
+**Test panel becomes the outcome oracle.** It stops asking *"does this look right?"* and starts
+asserting the `outcome.examples` — pass/fail against the contract. This is a strict upgrade to
+the single most persuasive moment in the demo.
+
+**SOP export** (`sop-generator.js`, `sop-pdf.js`) gains outcome + decision tables + escalation
+policy + provenance. That is the consultant's deliverable.
+
+---
+
+## 7. Spec versioning / compatibility
+
+- Executor branches on `spec.version`; **absent ⇒ 1**.
+- v1 specs keep running untouched. No migration. (1 live workflow in prod; 13 local.)
+- `outcome` is required only when `version === 2`.
+- New node types are additive to the registry; a v1 spec simply never uses them.
+
+---
+
+## 8. Cost
+
+Build is **$0.2215** today (measured, post-caching v1.3.8). v2 adds turns (outcome + examples +
+gaps) and a shape-derivation call.
+
+- Expect **$0.35–0.55/build**. Still 1–2 run-units. Re-derive `BUILD_RUN_COST` from measurement
+  when increment C lands; `scripts/checks/tier-caps.mjs` **already fails** if a build is
+  under-charged.
+- **`foreach` is the new cost risk.** 100 items × a `web_fetch` node ≈ a $20 run. `maxItems`
+  plus the per-plan daily USD ceiling (`tenant-guard.js`) are the brakes. **A `foreach` whose
+  body contains a web capability must be explicitly bounded in the UI**, not in a config file.
+
+---
+
+## 9. Increments
+
+> One deliverable per session, ending at a gate (CLAUDE.md working rules).
+
+### Increment A — validator hardening + node re-cut *(days)*
+**Do this first. It ships value even if everything after is cancelled.**
+- Add `UNKNOWN_CONFIG_KEY`.
+- `llm.mode`; delete `summarize`/`extract`/`rewrite`/`daily-digest`/`tool`/`mcp-tool`/`fetch`;
+  v1 compat shim maps old types → `llm`+mode.
+- **Acceptance:** the exact 2026-07-13 spec with `"model":"claude-opus-4-5"` is rejected with
+  `UNKNOWN_CONFIG_KEY`. P2/P3/E2E green. All 13 local workflows still validate.
+
+### Increment B — engine control flow *(the big engine lift)*
+- `active`-set + `branch` (+ exhaustiveness) · `on_error` · `idempotency`.
+- **Acceptance:** a spec with a `branch` runs only the selected path; a spec **without** one
+  executes byte-identically to today (P2/P3 prove it); a re-fired trigger with `idempotency`
+  does not duplicate a record.
+
+### Increment C — converger v2 core *(the moat)*
+- `outcome` + `examples` + `decisions` + `process` + `gaps` graph nodes.
+- `gap-scorer.js` rewrite. Spec v2. `UNSATISFIED_ASSERTION`, `LLM_INPUT_NOT_ENUM`.
+- Outcome card + gap list in the UI.
+- **Acceptance:** the "Slack AND email" case (defect #1) **cannot publish** — it fails
+  `UNSATISFIED_ASSERTION`. A 2-node workflow ratifies without inventing an LLM node
+  (defect #4). The converger asks ≥1 exception question (defect #5).
+
+### Increment D — `human` + Approvals inbox
+- Durable pause; escalation as the **default** gap resolution.
+- **Acceptance:** an unresolved gap publishes safely and routes to the inbox at runtime.
+
+### Increment E — `decision` node + table review UI + DMN gap analysis
+- **Acceptance:** a table with an uncovered enum combination is reported *before* publish;
+  `UNIQUE` + overlapping rules is rejected.
+
+### Increment F — `foreach` + schema-aware connectors
+- **Acceptance:** the flagship — *inbound email → extract → decide → Airtable record + Slack* —
+  is buildable **by conversation alone**, with no pasted base ID.
+
+### Increment G — test panel as outcome oracle; SOP carries outcome + tables + provenance
+
+---
+
+## 10. Invariants — check before opening a PR
+
+1. **`scripts/gates/p3.sh` is green.** The converger still reproduces the frozen canonical spec
+   (`docs/specs/canonical-ups-slack.json`). Structural equivalence + runnability — **never**
+   byte-equality; the converger is non-deterministic (CLAUDE.md, 2026-06-12).
+2. **A v1 spec executes byte-identically.** No `branch` ⇒ no behaviour change.
+3. **`tests/e2e/full-journey.test.js` 7/7.**
+4. **`scripts/checks/p11-cross-tenant-adversarial.mjs` passes.**
+5. **`scripts/checks/tier-caps.mjs` passes** — if the build got more expensive, `BUILD_RUN_COST`
+   must be re-derived.
+6. **No spec publishes with an unresolved gap that isn't explicitly escalated.**
+7. **No `decision` input has `evaluator:'llm'` without a closed enum.** This is the moat.
+
+### New tests
 | Layer | What | Where |
 |---|---|---|
-| **Unit** | `scoreGap()` over crafted specs: unsatisfied assertion, table gap, non-exhaustive branch, unknown template var, unknown config key | `tests/converger/gap-oracle.test.js` |
-| **Unit** | Executor: branch skips the non-selected subtree; `foreach` bounds at `maxItems`; `human` pauses and resumes | `tests/workflows/control-flow.test.js` |
-| **Golden** | A **corpus of outcome→spec pairs**. Assert *structural* equivalence + gap-freedom, **never** byte-equality — the converger is non-deterministic (see CLAUDE.md, P3 "exact" decision, 2026-06-12) | `tests/converger/golden/*.json` |
-| **Adversarial** | The `adversary` agent, extended: feed contradictory outcomes, unstateable outcomes, outcomes needing an impossible connector. **It must not silently drop an assertion** — that is the regression we most fear | `scripts/checks/converger-adversarial.mjs` |
-| **E2E** | Build the write-shaped flagship (email → extract → decide → Airtable + Slack) through the real UI; assert the record exists and the message was sent | extend `tests/e2e/full-journey.test.js` |
-| **Gate** | `scripts/gates/p12.sh`: p3 still green **+** gap-oracle unit **+** adversarial **+** the write-shaped E2E | `scripts/gates/p12.sh` |
-
-**Gate P12 fails closed**, per the constitution. And a new invariant worth a check of its own:
-*no spec may publish with an unresolved gap that isn't explicitly escalated.*
+| Unit | `scoreGap()` over crafted specs: unsatisfied assertion · table gap · UNIQUE overlap · non-exhaustive branch · unknown config key | `tests/converger/gap-oracle.test.js` |
+| Unit | Executor: `branch` skips the non-selected subtree; `foreach` bounds at `maxItems`; `human` pauses/resumes | `tests/workflows/control-flow.test.js` |
+| Golden | Corpus of `outcome → spec` pairs. Assert **structural** equivalence + gap-freedom. **Never byte-equality.** | `tests/converger/golden/*.json` |
+| Adversarial | Extend the `adversary` agent: contradictory outcomes; unstateable outcomes; an outcome needing an absent connector. **It must never silently drop an assertion.** | `scripts/checks/converger-adversarial.mjs` |
+| Gate | `p12.sh` = p3 green **+** gap-oracle **+** adversarial **+** the write-shaped E2E | `scripts/gates/p12.sh` |
 
 ---
 
-## 8. Migration & compatibility
+## 11. Open questions (decide before the increment that needs them)
 
-- **v1 specs keep running.** The executor branches on `spec.version`; absent = 1. No migration
-  of live workflows. (13 exist in the local corpus; 1 in prod.)
-- `outcome` is **optional** on v1, **required** on v2. The validator only enforces
-  `UNSATISFIED_ASSERTION` when `version === 2`.
-- New node types are additive to the registry — a v1 spec simply never uses them.
-- **The converger emits v2 from day one of increment C**; existing published workflows are
-  untouched until the user edits them.
-
----
-
-## 9. Cost impact
-
-Post-caching, a build is **$0.2215** (measured, v1.3.8). v2 adds turns (outcome elicitation +
-gap questions) and a shape-derivation call.
-
-- Estimated build cost: **$0.35–0.55** — i.e. back to roughly the *pre-caching* price, for a
-  dramatically better artifact. Still ~1–2 run-units.
-- **Charge it honestly**: `BUILD_RUN_COST` (currently 1) should be re-derived from measurement
-  once increment C lands, and `scripts/checks/tier-caps.mjs` will fail if a build is
-  under-charged (it already asserts this).
-- **`foreach` is the new cost risk.** A 100-item `foreach` over a web_fetch node is a
-  $20 run. `maxItems` (default 100) plus the per-plan daily USD ceiling
-  (`tenant-guard.js`) are the two brakes. **A `foreach` whose body contains a web capability
-  must be explicitly bounded by the user** — surface it in the UI, not in a config file.
+- **FEEL subset.** DMN's expression language already gives `>50000`, `[10000..50000]`, `-` with
+  battle-tested semantics. Adopt a constrained subset rather than invent one. **Blocks E.**
+- **Decision evaluation cost.** One LLM call for the whole table (cheap, less auditable) vs one
+  per fuzzy input (costlier, precisely attributable)? Lean per-input for the audit trail; measure.
+- **Practical table width.** Gap analysis is exponential in input count. Where does it become
+  unusable — 5 inputs? 7? This determines when the converger must **decompose** a decision into
+  sub-decisions (a DRG) rather than widen it. **Needs measurement, not a guess. Blocks E.**
+- **`foreach` nesting.** Start: **no.** One level.
 
 ---
 
-## 10. Sequencing — each increment ships value on its own
-
-> Constitution: one deliverable per session, ending at a gate; close a phase before starting
-> the next (`docs/COMMIT_CONVENTION.md`, CLAUDE.md working rules).
-
-| Inc | Deliverable | Ships value even if we stop here | Depends on |
-|---|---|---|---|
-| **A** | **Validator hardening**: `UNKNOWN_CONFIG_KEY`, `UNKNOWN_TEMPLATE_VAR`. Node-library re-cut (`llm.mode`; delete `tool`/`mcp-tool`/`fetch`/`daily-digest`). | Kills defects #2 and #3 outright. Days, not weeks. **Do this first.** | — |
-| **B** | **Engine control flow**: `branch` (+ exhaustiveness), `on_error`, `idempotency`. Executor `active`-set. | Conditionals + safe writes. Unblocks the whole write story. | A |
-| **C** | **Converger v2 core**: outcome node, shape derivation, gap oracle, spec v2, `UNSATISFIED_ASSERTION`. Outcome card + gap list in UI. | **The moat.** Defects #1, #4, #5 die here. | A, B |
-| **D** | **`human` + Approvals inbox**; escalation as the default gap resolution. | "Safe by construction" becomes true rather than a slogan. | B, C |
-| **E** | **`decision` node + table review UI**; DMN gap analysis over enumerable inputs. | The auditable, signable artifact — the enterprise unlock. | C |
-| **F** | **`foreach` + schema-aware connectors** (`airtable_list_bases`, `describe_table`). | The write-shaped flagship becomes buildable **by conversation alone**. | B, C |
-| **G** | Test panel as outcome oracle; SOP export carries outcome + tables + provenance. | The demo and the deliverable. | C, E |
-
-A is a few days. B–C is the bulk. D–G are each independently shippable.
-
----
-
-## 11. Risks, honestly
-
-1. **Re-introducing the interrogation.** We just made elicitation *cheap* (4 minutes). A
-   rigorous gap interview could become a 40-question slog and destroy the thing that beats a
-   consultant. **Mitigation:** build the happy path in one pass exactly as today; surface gaps
-   *afterwards* as a reviewable list with **escalate-to-human as the pre-selected default**.
-   The user answers zero questions if they don't want to.
-2. **Users can't state outcomes either.** *"I want my inbox under control"* is a wish, not a
-   contract. Phase 1 needs its own elicitation and it is genuinely hard. **This is the
-   highest-risk node in the design** — and also the most defensible, because it isn't a prompt
-   trick, it's the interview.
-3. **Fuzzy inputs break the completeness proof.** We can only compute gaps over enumerable
-   domains. **Do not oversell.** The UI must distinguish "provably covered" from
-   "catch-all present".
-4. **Executor blast radius.** `flow-tester.js` is described in CLAUDE.md as the best-built part
-   of the codebase. Conditional execution touches its core. **Mitigation:** `active`-set is
-   additive; a spec with no `branch` executes byte-identically to today. Gate on P2/P3
-   non-regression.
-5. **Scope.** This is a multi-week program, not a sprint. Increment A alone repays itself.
-
----
-
-## 12. Open questions
-
-- Does `decision` evaluate as **one LLM call over the whole table** (cheap, less auditable) or
-  **one call per fuzzy predicate** (costly, precisely attributable)? Lean per-predicate for
-  auditability; measure.
-- Where does `provenance` live — in the spec (portable, bloats it) or in
-  `interaction-store.js` (already stores the elicitation transcript)? Lean on the store, with
-  a reference from the spec.
-- `foreach` over a `branch` — do we allow nesting? Start: **no.** One level, revisit later.
-- Should the outcome contract be *editable after publish*, and does editing it force
-  re-derivation of the shape? Probably yes, and yes — but that is a v2.1 question.
-
----
-
-## 13. What this is really for
-
-Every one of the three headline properties exists to support one sentence, which is the thing
-no competitor can say:
+## 12. Why
 
 > **Atlas can tell you what it doesn't know about your process — and won't pretend otherwise.**
 
 Zapier moves records and cannot judge. Camunda can prove completeness and cannot evaluate
-"sounds urgent". A pure-LLM builder will confidently hand you a workflow with a hole in it and
-never mention the hole. This design is the only one that closes both.
+"sounds urgent". A pure-LLM builder will hand you a workflow with a hole in it and never mention
+the hole. This is the only design that closes both — and §10.7 is the line that keeps it true.
