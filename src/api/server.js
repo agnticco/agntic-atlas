@@ -755,6 +755,10 @@ export async function bootSpine() {
             tokensOut:   record.outputTokens,
             costUsd:     record.costUsd ?? 0,
             webSearches: record.webSearchRequests ?? 0,
+            // tokens_in is the uncached remainder once prompt caching is on;
+            // the cached prefix lives in these two columns.
+            cacheWrite:  record.cacheWriteTokens ?? 0,
+            cacheRead:   record.cacheReadTokens  ?? 0,
           });
         } catch { /* never crash a workflow over a cost log write */ }
       },
