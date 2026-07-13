@@ -21,6 +21,13 @@
 import { withTimeout } from '../utils/with-timeout.js';
 import { numEnv } from '../utils/env.js';
 import { liftV1Node } from './node-types/compat-v1.js';
+import { buildAsk } from './node-types/human.js';
+
+/**
+ * Control nodes. Their output is routing/audit metadata, not the work product,
+ * so they never become `lastOutput` — which is what `deliver` sends.
+ */
+const CONTROL_TYPES = new Set(['branch', 'human']);
 
 export class FlowTester {
   /**
@@ -32,7 +39,11 @@ export class FlowTester {
    * @param {import('./channel-registry.js').ChannelRegistry}  [options.channelRegistry]
    * @param {import('./node-type-registry.js').NodeTypeRegistry} [options.nodeTypes] — required for execution
    */
-  constructor({ sourceRegistry, scheduler, tools, llm, channelRegistry, nodeTypes } = {}) {
+  constructor({ sourceRegistry, scheduler, tools, llm, channelRegistry, nodeTypes, idempotencyStore = null } = {}) {
+    // Optional: only needed by specs that declare an `idempotency` attribute. A
+    // node that declares one with no store wired throws rather than silently
+    // failing to deduplicate (see _executeNode).
+    this.idempotencyStore = idempotencyStore;
     this.sourceRegistry  = sourceRegistry;
     this.scheduler       = scheduler;
     this.tools           = tools;
@@ -50,6 +61,9 @@ export class FlowTester {
    *   { type: 'run_completed', output }
    *   { type: 'run_failed', error }
    *
+   *   { type: 'step_skipped',  nodeId, reason }        — a branch didn't select it
+   *   { type: 'run_paused',    nodeId, ask }           — a `human` step is waiting
+   *
    * @param {object} flow — { nodes: [...], edges: [...] }
    * @param {object} [options]
    * @param {AbortSignal} [options.signal]
@@ -57,17 +71,77 @@ export class FlowTester {
    *                                              so the CostTracker can report this run's
    *                                              tokens/USD in isolation.
    * @param {string}      [options.costContext] — label for the cost ledger (e.g. a slug)
+   * @param {object}      [options.checkpoint]  — resume state from a paused run
+   *                                              (workflow_runs.checkpoint): full-fidelity
+   *                                              {outputs, skipped, live, ruledOut, lastOutput}.
+   *                                              NOT workflow_runs.steps — those carry the
+   *                                              display-shrunk event stream and resuming from
+   *                                              them delivers truncated content.
+   * @param {object}      [options.decisions]   — { [humanNodeId]: { decision, by, at, channel } }
+   *                                              the answers that unblock paused `human` steps.
    */
   async* run(flow, options = {}) {
     const nodes = flow.nodes ?? [];
     const edges = flow.edges ?? [];
     const order = this._topoSort(nodes, edges);
     const outputs = new Map();
+
+    // ── Resume (§7.4) ────────────────────────────────────────────────────────
+    // A paused run holds no compute. To continue it, we rehydrate from a
+    // CHECKPOINT the run emitted when it paused — no StateGraph checkpointer,
+    // because the DAG is deterministic and the checkpoint is a plain object.
+    //
+    // THE CHECKPOINT IS NOT THE PERSISTED STEP EVENTS. That was the original
+    // design, and it was wrong in a way that quietly corrupted the work product:
+    // `step_completed` carries a DISPLAY-SHRUNK output (_shrinkOutput truncates
+    // at 2000 chars and appends "…(truncated)", and JSON-encodes objects) so the
+    // event stream doesn't flood the UI. Resuming from that meant:
+    //
+    //   • a 3363-char drafted email came back as 2013 chars ending in
+    //     "…(truncated)" — the person approved one thing and the CUSTOMER GOT A
+    //     DIFFERENT, MUTILATED ONE, with no error and no warning; and
+    //   • every object output came back as a JSON string, so a downstream
+    //     {{step.output}} or a channel handler reading `.text` got a blob.
+    //
+    // 2000 characters is about 400 words. A routine drafted reply exceeds it. So
+    // the shrink stays where it belongs — the event stream, for the UI — and the
+    // checkpoint carries the FULL, un-shrunk values. It is written once, on
+    // pause, so it costs nothing on the runs that never pause.
+    // The checkpoint also carries the EDGE LIVENESS as it stood at the pause, and
+    // that is not a detail — it is the whole reason this is correct.
+    //
+    // The first design re-DERIVED liveness on resume by replaying propagate() for
+    // every already-done node. That is wrong, because propagate() lights ALL of a
+    // node's outgoing edges, while the original leg may have lit only SOME of them:
+    //
+    //   • a `branch` lights exactly one case — so replay revived the path it ruled out;
+    //   • an `on_error: route_to` step lights ONLY the error target — so replay
+    //     revived the HAPPY path of a step that had failed, and the run went on to
+    //     deliver as though the failure never happened.
+    //
+    // Liveness is a fact about what happened, not something to recompute from
+    // outputs. So the checkpoint RESTORES it, and replayed nodes propagate nothing.
+    const decisions   = options.decisions ?? {};
+    const doneOutputs = new Set();   // ran before the pause — don't re-run, don't re-propagate
+    // Ruled out before the pause. What keeps these nodes DEAD across the resume is
+    // the restored liveness (nothing lit them, so liveInto stays 0) — NOT this
+    // set. Its only job is to avoid emitting a second `step_skipped` for a node
+    // already recorded as skipped, which would otherwise be appended to
+    // `workflow_runs.steps` twice.
+    const doneSkipped = new Set();
+    const ckpt = options.checkpoint ?? null;
+    if (ckpt) {
+      for (const [id, out] of Object.entries(ckpt.outputs ?? {})) {
+        outputs.set(id, out);
+        doneOutputs.add(id);
+      }
+      for (const id of (ckpt.skipped ?? [])) doneSkipped.add(id);
+    }
     // Allow a caller (e.g. the scheduler's email-trigger path) to inject an
     // initial value that downstream nodes see as ctx.lastOutput before any
     // node has run. This is how a fetched email becomes the input to a
     // summarize or deliver node without a separate fetch step in the spec.
-    let lastOutput = options.initialContext ?? null;
+    let lastOutput = ckpt?.lastOutput ?? options.initialContext ?? null;
 
     // Reverse adjacency + transitive-ancestor resolver. Transform nodes
     // (summarize/rewrite/extract) and deliver use this so they can gather
@@ -101,11 +175,140 @@ export class FlowTester {
       },
     };
 
+    // ── Edge liveness — conditional execution (§4) ───────────────────────────
+    // A node is SKIPPED iff it has at least one incoming edge and NONE of them
+    // is live. An edge goes live when its source completes — EXCEPT out of a
+    // `branch`, where only the selected case's edge goes live.
+    //
+    // This is an edge-level model, not the node-level `active` set §4 sketches,
+    // because a node-level set gets JOINS wrong: a node downstream of both the
+    // taken and the untaken path would be wrongly skipped. With edges, a join
+    // runs as soon as ONE incoming edge is live, which is the correct semantics
+    // and the one BPMN uses.
+    //
+    // It is also why §11.2 holds STRUCTURALLY rather than by promise: with no
+    // `branch` in the spec, every edge goes live the instant its source
+    // completes, nothing is ever skipped, and this loop reduces to the old one.
+    const byId     = new Map(nodes.map(n => [n.id, n]));
+    const outEdges = new Map(nodes.map(n => [n.id, []]));
+    for (const e of edges) {
+      if (!e?.from || !e?.to) continue;
+      if (outEdges.has(e.from)) outEdges.get(e.from).push(e.to);
+    }
+    const hasIncoming = new Set(edges.filter(e => e?.to).map(e => e.to));
+    // Restored from the checkpoint on a resume — never re-derived. See the note
+    // in the resume block above.
+    const liveInto = new Map(nodes.map(n => [n.id, ckpt?.live?.[n.id] ?? 0]));
+
+    // Nodes a branch explicitly ruled out. Liveness alone isn't quite enough: if
+    // an untaken case target ALSO has an edge from some earlier node, that edge
+    // is live and the node would run anyway — the branch would have decided
+    // nothing. So a ruled-out target is dead regardless of its other parents.
+    // (The validator rejects that shape outright — BRANCH_TARGET_EXTRA_PARENT —
+    // but the engine must not depend on the validator having run: specs already
+    // in the database were saved before the rule existed.)
+    const ruledOut = new Set(ckpt?.ruledOut ?? []);
+
+    /** Light up this node's outgoing edges. A branch lights only the case it picked. */
+    const propagate = (nodeId, output) => {
+      const isBranch = byId.get(nodeId)?.type === 'branch';
+      let selected = null;
+      if (isBranch) {
+        // If we cannot read the selection we must NOT fall back to "light
+        // everything" — that would run the path the branch ruled out. Fail the run
+        // instead: silently taking every path is the worst possible answer to
+        // "which way did it go?".
+        //
+        // (A resumed run never reaches here for a done node — the checkpoint
+        // RESTORES the liveness and replayed nodes propagate nothing. An earlier
+        // version decoded a stringified output here, which was a patch on the
+        // symptom of a lossy checkpoint. That decode is gone with the disease.)
+        selected = output?.to ?? null;
+        if (!selected) {
+          throw new Error(
+            `branch "${nodeId}" produced no route (got: ${JSON.stringify(output)?.slice(0, 120)}). ` +
+            'Refusing to continue — taking every path would run the branch that was ruled out.',
+          );
+        }
+      }
+      for (const target of (outEdges.get(nodeId) ?? [])) {
+        if (selected !== null && target !== selected) {
+          ruledOut.add(target);   // the untaken path is dead, not merely unlit
+          continue;
+        }
+        liveInto.set(target, (liveInto.get(target) ?? 0) + 1);
+      }
+    };
+
     yield { type: 'run_started', runId };
 
     for (const node of order) {
       if (options.signal?.aborted) {
         yield { type: 'run_failed', error: 'aborted' };
+        return;
+      }
+
+      // Ruled out BEFORE the pause. It stays dark and relights nothing — its
+      // children must not come back to life just because the run was resumed.
+      // (This is the half that let a rejected draft get sent on resume.)
+      if (doneSkipped.has(node.id)) {
+        ruledOut.add(node.id);
+        continue;
+      }
+
+      // Not selected by an upstream branch (or every path into it died).
+      if (ruledOut.has(node.id) || (hasIncoming.has(node.id) && (liveInto.get(node.id) ?? 0) === 0)) {
+        doneSkipped.add(node.id);
+        yield { type: 'step_skipped', nodeId: node.id, reason: 'not on the selected branch' };
+        continue;   // its own outgoing edges stay dark
+      }
+
+      // Already ran, in the part of this run that happened before the pause.
+      // Don't re-run it — but DO relight its edges, so the graph downstream of
+      // the pause knows which paths are live. For a branch, that relights ONLY
+      // the case it originally picked (propagate decodes the persisted output).
+      if (doneOutputs.has(node.id)) {
+        // Deliberately does NOT propagate. The edges this node lit — which may be
+        // only SOME of its outgoing edges, if it is a branch or it failed with
+        // route_to — were restored from the checkpoint. Re-lighting them here is
+        // what revived ruled-out branches and the happy paths of failed steps.
+        // Do NOT recompute `lastOutput` while replaying already-done nodes. The
+        // checkpoint's own `lastOutput` is what the original leg actually had at
+        // the moment it paused, and it is authoritative — recomputing it from
+        // `outputs` re-derives it from values the original leg deliberately never
+        // promoted. Concretely: an `on_error: route_to` step stores the sentinel
+        // {error, failed:true} into `outputs` but never makes it `lastOutput`
+        // (the catch block doesn't touch it). Replaying it as `lastOutput` — it
+        // is an `llm` node, so CONTROL_TYPES doesn't exclude it — meant a
+        // `deliver` after the pause sent the customer the raw error blob
+        // {"error":"LLM step failed: card declined","failed":true}, with
+        // run_completed and no error. Same spec, same failure, only difference
+        // being a `human` step in between.
+        continue;
+      }
+
+      // ── The durable pause (§7.4) ──────────────────────────────────────────
+      // A `human` step with no answer yet stops the run here. Everything already
+      // computed is persisted by the caller (the scheduler appends every step),
+      // and the run holds NO compute while it waits — a pending approval is free.
+      if (node.type === 'human' && !decisions[node.id]) {
+        const askCfg = this._substitute(node.config ?? {}, { outputs, lastOutput });
+        yield {
+          type: 'run_paused',
+          nodeId: node.id,
+          ask: buildAsk(node, askCfg),
+          // THE CHECKPOINT — full fidelity, NOT the shrunk step events. This is
+          // what the run resumes on, so the content the person approves is the
+          // content that actually gets sent. See the note at the top of run().
+          checkpoint: {
+            outputs:  Object.fromEntries(outputs),
+            skipped:  [...doneSkipped],
+            // The edge liveness AS IT STOOD, not something to recompute later.
+            live:     Object.fromEntries(liveInto),
+            ruledOut: [...ruledOut],
+            lastOutput,
+          },
+        };
         return;
       }
 
@@ -150,13 +353,67 @@ export class FlowTester {
         const isSlowExternal = node.type === 'connector-action' || node.type === 'search_web';
         const effectiveBackstop = isSlowExternal ? Math.max(backstopMs, 300_000) : backstopMs;
         const nodeTimeout  = Math.max(effectiveBackstop, Number(node.config?.timeoutMs ?? 0) + 30_000);
-        const output = await withTimeout(
-          this._runNode(node, { outputs, lastOutput, costConfig: nodeCostConfig, ancestorOutputs }),
-          nodeTimeout,
-          `node ${node.id} (${node.type})`,
-        );
+
+        const nodeCtx = {
+          outputs, lastOutput,
+          costConfig: nodeCostConfig,
+          ancestorOutputs,
+          humanDecision: decisions[node.id] ?? null,
+          // `foreach` needs these to scope its sub-steps' idempotency keys.
+          tenantId:   options.tenantId,
+          workflowId: options.workflowId,
+          // `branch` needs this to tell "no such step" (a typo — fail loudly)
+          // from "a real step that didn't run on this leg" (it was skipped —
+          // take the catch-all, which is exactly what a catch-all is for).
+          nodeIds: new Set(nodes.map(n => n.id)),
+        };
+
+        // ── on_error: retry ───────────────────────────────────────────────
+        // `retry` is the number of EXTRA attempts, so retry:2 => up to 3 tries.
+        // Matches workflow.error_handling.retry.attempts (the scheduler's
+        // whole-run retry, P7) — same word, same meaning, one level down.
+        const policy   = node.on_error ?? {};
+        const attempts = Math.max(0, Math.floor(Number(policy.retry ?? 0))) + 1;
+
+        let output, lastErr = null;
+        for (let attempt = 1; attempt <= attempts; attempt++) {
+          try {
+            output = await withTimeout(
+              this._executeNode(node, nodeCtx, {
+                runId,
+                tenantId:   options.tenantId,
+                workflowId: options.workflowId,
+              }),
+              nodeTimeout,
+              `node ${node.id} (${node.type})`,
+            );
+            lastErr = null;
+            break;
+          } catch (err) {
+            lastErr = err;
+            if (attempt < attempts) {
+              yield {
+                type: 'step_retry', nodeId: node.id, attempt,
+                of: attempts, error: err.message ?? String(err),
+              };
+              const delayMs = Math.max(0, Number(policy.retry_delay_ms ?? 0));
+              if (delayMs) await new Promise(r => setTimeout(r, delayMs));
+            }
+          }
+        }
+        if (lastErr) throw lastErr;
+
         outputs.set(node.id, output);
-        lastOutput = output;
+        // A CONTROL node must not become `lastOutput`. A branch's output is
+        // {value, matched, to} and a human's is {decision, by, at, channel} —
+        // routing and audit metadata, not the work product. `deliver` sends
+        // `ctx.lastOutput`, so leaving them in means the step after an approval
+        // delivers the literal {"decision":"approve",…} to the customer instead
+        // of the reply they approved. `lastOutput` means "the last CONTENT".
+        // Restricted to the two types added in this increment, so no existing
+        // spec's behaviour can change (§11.2).
+        if (!CONTROL_TYPES.has(node.type)) lastOutput = output;
+        propagate(node.id, output);
         yield {
           type: 'step_completed',
           nodeId: node.id,
@@ -164,13 +421,44 @@ export class FlowTester {
           durationMs: Date.now() - t0,
         };
       } catch (err) {
+        const message = err.message ?? String(err);
         yield {
           type: 'step_failed',
           nodeId: node.id,
-          error: err.message ?? String(err),
+          error: message,
           durationMs: Date.now() - t0,
         };
-        yield { type: 'run_failed', error: `${node.id}: ${err.message ?? err}` };
+
+        // ── on_error: then ────────────────────────────────────────────────
+        const then = node.on_error?.then;
+
+        // `route_to:<id>` — a declared failure path. The run does NOT die; it
+        // continues down the error branch (e.g. to a human step, or a Slack
+        // "this broke" delivery). Only that edge is lit, so the happy path
+        // downstream stays dark.
+        if (typeof then === 'string' && then.startsWith('route_to:')) {
+          const target = then.slice('route_to:'.length).trim();
+          if (byId.has(target)) {
+            liveInto.set(target, (liveInto.get(target) ?? 0) + 1);
+            outputs.set(node.id, { error: message, failed: true });
+            yield { type: 'step_routed', nodeId: node.id, to: target, error: message };
+            continue;
+          }
+          yield { type: 'run_failed', error: `${node.id}: ${message} (on_error.route_to named "${target}", which is not a step)` };
+          return;
+        }
+
+        // `escalate` — the run still fails, but it is MARKED as needing a person
+        // rather than dying quietly in a log. Increment D turns this flag into a
+        // real Approvals-inbox item; until then it is an honest, visible failure.
+        // It deliberately does NOT pause: a pause nobody can answer is a hang,
+        // and the answering surface is D's job.
+        if (then === 'escalate') {
+          yield { type: 'run_failed', error: `${node.id}: ${message}`, escalated: true };
+          return;
+        }
+
+        yield { type: 'run_failed', error: `${node.id}: ${message}` };
         return;
       }
     }
@@ -183,6 +471,95 @@ export class FlowTester {
 
   // ── Node execution ────────────────────────────────────────────────────────
 
+  /**
+   * Run a node, honouring its `idempotency` attribute (§2.2).
+   *
+   *   idempotency: { key: "{{extract.email}}", on_conflict: "skip"|"update"|"error" }
+   *
+   * The problem it solves: a trigger re-fires (Gmail redelivers, a webhook is
+   * retried, the operator re-runs a workflow) and the connector action runs a
+   * SECOND time — creating a duplicate Airtable record, sending the customer a
+   * second email. Nothing in the engine prevented that; the key does.
+   *
+   * `skip` (the default) is the safe one: on a repeat key the node does not run
+   * at all and the FIRST run's output is returned, so downstream steps still see
+   * a record and the workflow completes normally. `update` re-runs (for actions
+   * that upsert). `error` fails loudly.
+   *
+   * A node that declares idempotency with no store wired is an ERROR, not a
+   * silent no-op — pretending to deduplicate is worse than not claiming to.
+   */
+  async _executeNode(node, ctx, { tenantId, workflowId, parentId = null, inLoop = false } = {}) {
+    // Inside a `foreach` there is no event stream to yield `step_retry` into and
+    // no edges for `route_to` to light, so the run() loop's retry wrapper can't
+    // serve loop sub-steps. Honour `retry` here instead — silently ignoring a
+    // declared retry is the same class of lie as silently ignoring idempotency.
+    // `then` is meaningless without edges and the validator rejects it in a loop.
+    if (inLoop) {
+      const policy   = node.on_error ?? {};
+      const attempts = Math.max(0, Math.floor(Number(policy.retry ?? 0))) + 1;
+      let lastErr = null;
+      for (let attempt = 1; attempt <= attempts; attempt++) {
+        try {
+          return await this._executeNode(node, ctx, { tenantId, workflowId, parentId });
+        } catch (err) {
+          lastErr = err;
+          const delayMs = Math.max(0, Number(policy.retry_delay_ms ?? 0));
+          if (attempt < attempts && delayMs) await new Promise(r => setTimeout(r, delayMs));
+        }
+      }
+      throw lastErr;
+    }
+
+    const idem = node.idempotency;
+    if (!idem?.key) return await this._runNode(node, ctx);
+
+    if (!this.idempotencyStore) {
+      throw new Error(
+        `step "${node.id}" declares idempotency but no idempotency store is wired into the executor. ` +
+        'Refusing to run — a step that claims to deduplicate and does not is worse than one that never claimed to.',
+      );
+    }
+
+    const key = String(this._substitute(String(idem.key), ctx) ?? '').trim();
+    if (!key) {
+      throw new Error(`step "${node.id}" has an idempotency key that resolved to nothing (${idem.key}).`);
+    }
+
+    // ── The scope MUST identify the tenant. FAIL CLOSED. ──────────────────
+    // This used to be `${workflowId ?? 'unscoped'}:${node.id}` — and NEITHER
+    // production caller passed workflowId, so every tenant's keys collapsed into
+    // ONE namespace, `unscoped:<nodeId>`, in a store with no tenant column. Node
+    // ids are generic ("create_record"), so tenant B's write was silently skipped
+    // and tenant B's step was handed TENANT A'S OUTPUT — which then becomes
+    // lastOutput and is delivered. A cross-tenant data leak, from a `??` default.
+    //
+    // The tests never saw it because every one of them hand-passed `workflowId`,
+    // an option no real caller sets. So: no default. A step that cannot be scoped
+    // REFUSES TO RUN, exactly as one with no store wired does. A silent fallback
+    // is not a safety net — it is the bug.
+    if (!tenantId || !workflowId) {
+      throw new Error(
+        `step "${node.id}" declares idempotency but the run has no ${!tenantId ? 'tenantId' : 'workflowId'}. ` +
+        'Refusing to run — an unscoped idempotency key is shared across tenants.',
+      );
+    }
+    const scope = `${tenantId}:${workflowId}:${parentId ? `${parentId}/` : ''}${node.id}`;
+    const onConflict = idem.on_conflict ?? 'skip';
+    const prior      = this.idempotencyStore.get(scope, key);
+
+    if (prior) {
+      if (onConflict === 'error') {
+        throw new Error(`step "${node.id}" has already run for "${key}" (idempotency on_conflict: error).`);
+      }
+      if (onConflict !== 'update') return prior.output;   // 'skip' — do not run again
+    }
+
+    const output = await this._runNode(node, ctx);
+    this.idempotencyStore.put(scope, key, output);
+    return output;
+  }
+
   async _runNode(rawNode, ctx) {
     // Lift v1 nodes to their v2 shape (summarize/extract/rewrite → llm + mode,
     // daily_digest → assemble). Specs written before the P12 node re-cut are
@@ -194,7 +571,35 @@ export class FlowTester {
     const type = node.type ?? 'noop';
     // Substitute template variables ({{prev}}, {{date}}, etc.) across the full
     // node config so every type's run() sees resolved strings.
-    const cfg  = this._substitute(node.config ?? {}, ctx);
+    //
+    // EXCEPT a `foreach`'s `steps`. Those are substituted PER ITEM, inside the
+    // loop, where {{item}} and {{index}} are actually bound. Substituting them
+    // here — with no item in scope — silently replaced {{item}} with an empty
+    // string before the loop ever ran, which meant:
+    //
+    //   • {{item}} never bound at all (the item only appeared in an `llm` prompt
+    //     by accident, via the auto-injection of lastOutput — so the test that
+    //     "proved" binding was passing for the wrong reason); and
+    //   • an idempotency key of {{item}} resolved to "", which is falsy, so
+    //     _executeNode skipped the dedupe check entirely and the loop wrote twice.
+    // …and a `branch`'s `on`, for the same reason. Substituting it turns
+    // "{{classify.output}}" into the classified VALUE ("urgent") before the node
+    // ever sees it — and a bare value is indistinguishable from a step id. The
+    // branch then tried to look up a step called "urgent" and killed the run.
+    // Data-dependent, too: "urgent" matched the id regex and crashed, while
+    // "needs review" (a space) did not. `on` names a step; it is a reference, not
+    // a template. resolveOn() dereferences it against ctx.outputs itself.
+    const rawCfg = node.config ?? {};
+    let cfg;
+    if (type === 'foreach') {
+      const { steps, ...rest } = rawCfg;
+      cfg = { ...this._substitute(rest, ctx), steps };   // `steps` stay RAW
+    } else if (type === 'branch') {
+      const { on, ...rest } = rawCfg;
+      cfg = { ...this._substitute(rest, ctx), on };      // `on` stays RAW
+    } else {
+      cfg = this._substitute(rawCfg, ctx);
+    }
 
     if (!this.nodeTypes) throw new Error('FlowTester constructed without a NodeTypeRegistry');
     const def = this.nodeTypes.get(type);
@@ -210,6 +615,23 @@ export class FlowTester {
       sourceRegistry:  this.sourceRegistry,
       channelRegistry: this.channelRegistry,
       scheduler:       this.scheduler,
+      // `foreach` executes its per-item steps through this. It MUST go through
+      // the same POLICY path as a top-level node, not the raw dispatcher.
+      //
+      // It used to call _runNode directly, which silently skipped BOTH
+      // `idempotency` and `on_error.retry` for every step inside a loop — and
+      // that inverted the guarantee in the worst possible place. A write in a
+      // loop is N writes per fire: the highest-risk write shape the engine has,
+      // and the whole reason `foreach` exists ("create a record per row"). It was
+      // the ONLY shape where declaring an idempotency key did nothing at all. A
+      // sub-step declaring a key with NO store wired cheerfully wrote twice,
+      // while the identical node at top level refused to run.
+      runSubNode: (subNode, subCtx) => this._executeNode(subNode, subCtx, {
+        tenantId:   ctx.tenantId,
+        workflowId: ctx.workflowId,
+        parentId:   node.id,     // scopes the idempotency key to THIS loop
+        inLoop:     true,
+      }),
     };
     // Expose the RAW (pre-substitution) config so a node can tell a
     // templated field from a static one. deliver uses rawConfig.body to
@@ -283,6 +705,11 @@ export class FlowTester {
         .replace(/\{\{\s*([a-z0-9_-]+)\.output\s*\}\}/gi, (_, id) =>
           this._stringifyForDelivery(ctx.outputs.get(id))
         )
+        // {{item}} / {{index}} — the current element inside a `foreach`. Only
+        // bound within a loop; the validator rejects them anywhere else, so an
+        // empty substitution here means a bug upstream, not a silent default.
+        .replace(/\{\{\s*item\s*\}\}/gi, () => this._stringifyForDelivery(ctx.item))
+        .replace(/\{\{\s*index\s*\}\}/gi, () => (ctx.index == null ? '' : String(ctx.index)))
         .replace(/\{\{\s*(date|time|datetime|year|month|day)\s*\}\}/gi, (_, key) => vars[key.toLowerCase()] ?? '');
     }
     if (Array.isArray(value)) return value.map(v => this._substitute(v, ctx));
@@ -308,3 +735,4 @@ export class FlowTester {
     return s.length > limit ? s.slice(0, limit) + '\n…(truncated)' : s;
   }
 }
+
