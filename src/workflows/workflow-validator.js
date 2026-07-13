@@ -21,6 +21,8 @@
  * @module src/workflows/workflow-validator.js
  */
 
+import { liftV1Nodes, isRemovedType, REMOVED_TYPES } from './node-types/compat-v1.js';
+
 /** Per-channel required fields on a deliver node's config (beyond `channel`). */
 const CHANNEL_REQUIRED = {
   webhook: ['url'],
@@ -49,7 +51,12 @@ export class WorkflowValidator {
    */
   validate(def = {}) {
     const issues = [];
-    const nodes  = Array.isArray(def.nodes) ? def.nodes : [];
+    // Lift v1 nodes (summarize/extract/rewrite → llm+mode, daily_digest →
+    // assemble) BEFORE anything else looks at them, so every check below sees a
+    // v2 node and there is exactly one shape to reason about. Types that were
+    // REMOVED rather than collapsed pass through unlifted and are rejected by
+    // name below. See ./node-types/compat-v1.js.
+    const nodes  = liftV1Nodes(Array.isArray(def.nodes) ? def.nodes : []);
     const edges  = Array.isArray(def.edges) ? def.edges : [];
 
     // ── 1. Top-level shape ────────────────────────────────────────────────
@@ -102,6 +109,20 @@ export class WorkflowValidator {
       }
       seenIds.add(node.id);
 
+      // Types deleted in the P12 node re-cut. These never ran — `tool`/`mcp_tool`
+      // threw "Tool registry unavailable" and `fetch` needed a registered source
+      // — so rejecting them here converts a 6am production failure into a
+      // build-time one. Reported by name, with what to use instead.
+      if (isRemovedType(node.type)) {
+        issues.push({
+          severity: 'error', code: 'REMOVED_NODE_TYPE',
+          message: `Step "${node.label || node.id}" uses "${node.type}", which is not a step type any more.`,
+          nodeId: node.id, field: 'type',
+          hint: REMOVED_TYPES[node.type],
+        });
+        continue;
+      }
+
       // known type (consult registry if available)
       const typeDef = this.nodeTypes?.get?.(node.type) ?? null;
       if (this.nodeTypes && !typeDef) {
@@ -114,10 +135,11 @@ export class WorkflowValidator {
         continue;
       }
 
+      const cfg = node.config ?? {};
+
       // required config — inferred from the type's configSchema (fields
       // without `optional: true` are required).
       const required = typeDef?.configSchema?.filter(f => !f.optional).map(f => f.key) ?? [];
-      const cfg = node.config ?? {};
       for (const key of required) {
         const v = cfg[key];
         if (v == null || (typeof v === 'string' && !v.trim())) {
@@ -126,6 +148,35 @@ export class WorkflowValidator {
             message: `"${node.label || node.id}" is a ${typeDef.label || node.type} step but is missing its ${key}.`,
             nodeId: node.id, field: `config.${key}`,
             hint: typeDef.configSchema.find(f => f.key === key)?.hint ?? this._requiredFieldHint(node.type, key),
+          });
+        }
+      }
+
+      // ── UNKNOWN_CONFIG_KEY ────────────────────────────────────────────
+      // A node's config keys must be a SUBSET of its type's configSchema.
+      //
+      // Without this, a converger that hallucinates a config field ships it:
+      // a real emitted spec carried `"model": "claude-opus-4-5"` on an llm
+      // node — a model that does not exist and a key in no schema — and the
+      // executor silently ignored it and ran the default model. Nobody found
+      // out. An unknown key is not a shrug; it means the spec asked for
+      // something the engine will not do, and the user will never be told.
+      //
+      // Scoped by configPolicy: 'open' types (connector-action) take params
+      // this schema cannot enumerate, because they are per-capability and the
+      // catalog is built at run time from the tenant's authorised connectors.
+      // Increment F validates those against each capability's own schema.
+      if (typeDef && typeDef.configPolicy !== 'open') {
+        const declared = new Set((typeDef.configSchema ?? []).map(f => f.key));
+        for (const key of Object.keys(cfg)) {
+          if (declared.has(key)) continue;
+          issues.push({
+            severity: 'error', code: 'UNKNOWN_CONFIG_KEY',
+            message: `"${node.label || node.id}" sets "${key}", which a ${typeDef.label || node.type} step has no such setting for — it would be silently ignored at run time.`,
+            nodeId: node.id, field: `config.${key}`,
+            hint: declared.size
+              ? `A ${typeDef.label || node.type} step accepts: ${[...declared].join(', ')}.`
+              : `A ${typeDef.label || node.type} step takes no configuration.`,
           });
         }
       }
@@ -251,51 +302,14 @@ export class WorkflowValidator {
 
   // ── Internals ─────────────────────────────────────────────────────────
 
+  /**
+   * The `fetch` / `tool` / `mcp_tool` branches that used to live here went away
+   * with the node types themselves (P12 Increment A) — they resolved ids against
+   * a `sourceRegistry` / `toolRegistry` that this build never instantiates. Those
+   * types are now rejected up front as REMOVED_NODE_TYPE.
+   */
   _checkTypeSpecific(node, issues) {
     const cfg = node.config ?? {};
-
-    if (node.type === 'fetch') {
-      const id = cfg.source;
-      if (id && this.sourceRegistry && !this.sourceRegistry.get(id)) {
-        issues.push({
-          severity: 'error', code: 'UNKNOWN_SOURCE',
-          message: `"${node.label || node.id}" references source "${id}", which isn't registered on this server.`,
-          nodeId: node.id, field: 'config.source',
-          hint: 'Check the Workflows page for available sources, or switch to a tool node with a search.',
-        });
-      }
-    }
-
-    if (node.type === 'tool') {
-      const name = cfg.tool;
-      if (name && this.toolRegistry) {
-        const tool = this.toolRegistry.get?.(name);
-        if (!tool) {
-          issues.push({
-            severity: 'error', code: 'UNKNOWN_TOOL',
-            message: `"${node.label || node.id}" uses tool "${name}", which isn't registered.`,
-            nodeId: node.id, field: 'config.tool',
-            hint: 'Browse MCPs & Tools on the Workflows page for the available list.',
-          });
-        }
-      }
-    }
-
-    if (node.type === 'mcp_tool') {
-      const server = cfg.server, tool = cfg.tool;
-      if (server && tool && this.toolRegistry) {
-        const namespaced = `${server}__${tool}`;
-        const registered = this.toolRegistry.get?.(namespaced);
-        if (!registered) {
-          issues.push({
-            severity: 'error', code: 'UNKNOWN_MCP_TOOL',
-            message: `"${node.label || node.id}" calls ${namespaced}, but that MCP tool isn't registered.`,
-            nodeId: node.id, field: 'config.tool',
-            hint: `Make sure the "${server}" MCP is connected and enabled, and exposes a tool named "${tool}". See the MCP Registry page.`,
-          });
-        }
-      }
-    }
 
     if (node.type === 'deliver') {
       const channelId = cfg.channel;

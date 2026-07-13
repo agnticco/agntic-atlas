@@ -1,19 +1,26 @@
 /**
- * daily_digest primitive — assemble a polished markdown document from a
- * title, intro paragraph, and a list of sections. No LLM call — pure
- * template assembly, so it's instant and free.
+ * assemble primitive — stitch a polished markdown document from a title, intro
+ * paragraph, and a list of sections. No LLM call: pure template assembly, so it
+ * is instant, free, and deterministic.
  *
- * Each section's `content` is meant to be a template reference to an
- * upstream transform (usually a Rewrite or Summarize node producing that
- * section's prose).
+ * Each section's `content` is meant to be a template reference to an upstream
+ * transform (usually an `llm` node producing that section's prose).
+ *
+ * Was `daily_digest` before P12 Increment A. It is the one node type in the
+ * re-cut that did NOT collapse into `llm`, because it is not an LLM node — its
+ * run() never touched `services.llm`. Folding it into `llm` would have turned a
+ * zero-cost string operation into a paid model call. The run() and config below
+ * are unchanged from `daily-digest.js`; only the name is honest now. v1 specs
+ * saying `daily_digest` are lifted to `assemble` by ./compat-v1.js.
  */
 
-export const dailyDigestNodeType = {
-  type: 'daily_digest',
-  label: 'Daily Digest (assembly)',
-  description: 'Stitches a title, intro, and multiple sections into one markdown document. No LLM cost — just layout.',
+export const assembleNodeType = {
+  type: 'assemble',
+  label: 'Assemble document',
+  description: 'Stitches a title, intro, and multiple sections into one markdown document. No AI cost — just layout.',
   icon: 'dashboard',
   family: 'assemble',
+  configPolicy: 'closed',
   configSchema: [
     { key: 'title', label: 'Title', type: 'text',
       placeholder: 'e.g. 🗞️ Daily Tech Briefing — {{date}}' },
@@ -65,10 +72,10 @@ export const dailyDigestNodeType = {
     try {
       sections = JSON.parse(cfg.sections || '[]');
     } catch (e) {
-      throw new Error(`daily_digest sections is invalid JSON: ${e.message}`);
+      throw new Error(`assemble sections is invalid JSON: ${e.message}`);
     }
     if (!Array.isArray(sections)) {
-      throw new Error('daily_digest sections must be a JSON array');
+      throw new Error('assemble sections must be a JSON array');
     }
     const outro = cfg.outro ? `\n\n---\n\n${cfg.outro}` : '';
 

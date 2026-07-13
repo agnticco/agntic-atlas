@@ -467,31 +467,28 @@ export class WorkflowScheduler {
 }
 
 /**
- * iter-9: collect distinct tool names referenced by a workflow's nodes.
+ * Collect the distinct capabilities a workflow reaches out through, for the
+ * run record's `tool_used` column. Static analysis (no per-step runtime
+ * tracking) — cheap, and directionally right.
  *
- * Static analysis (no per-step runtime tracking) — slightly less accurate
- * than dynamic tracking for conditional flows but cheap and "directionally
- * right" for the Frontend pivot. Returns a comma-joined alphabetical string,
- * or null if no tool/mcp_tool nodes are referenced.
+ * This used to read `tool` and `mcp_tool` nodes. Both were deleted in the P12
+ * node re-cut, because neither could ever run: there is no ToolRegistry in this
+ * build. So this had been reporting on two node types that never executed, and
+ * would now return null forever.
  *
- * Tool name format matches what Core's tool_call rows record:
- *   - `tool` node           → config.tool       (e.g. "web_search")
- *   - `mcp_tool` node       → "<server>__<tool>" (matches the validator's
- *                              namespacing convention)
- * Higher-level primitives (`summarize`, `rewrite`, `search-web`, `extract`,
- * etc.) and pure LLM/fetch/deliver nodes are NOT counted as tools — they
- * either wrap an LLM call or a source fetch, not a registered tool the
- * pivot would want to filter on.
+ * `connector-action` is the tool path in this build — it reaches a registered
+ * connector capability through the CapabilityRegistry — so that is what gets
+ * counted. LLM/assemble/deliver nodes are not tools: they wrap a model call or
+ * a delivery, not an outbound capability the console would want to filter on.
+ *
+ * @returns {string|null} comma-joined alphabetical capability ids, or null
  */
 function _collectToolsUsed(workflow) {
   const tools = new Set();
   for (const node of workflow?.nodes ?? []) {
-    if (node?.type === 'tool' && typeof node.config?.tool === 'string' && node.config.tool.trim()) {
-      tools.add(node.config.tool.trim());
-    } else if (node?.type === 'mcp_tool'
-               && typeof node.config?.server === 'string' && node.config.server.trim()
-               && typeof node.config?.tool   === 'string' && node.config.tool.trim()) {
-      tools.add(`${node.config.server.trim()}__${node.config.tool.trim()}`);
+    if (node?.type === 'connector-action'
+        && typeof node.config?.action === 'string' && node.config.action.trim()) {
+      tools.add(node.config.action.trim());
     }
   }
   return tools.size ? [...tools].sort().join(', ') : null;

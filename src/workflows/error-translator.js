@@ -205,7 +205,7 @@ const PATTERNS = [
   },
   {
     code: 'DIGEST_BAD_JSON',
-    match: /daily_digest sections is invalid JSON: (.+)/i,
+    match: /(?:assemble|daily_digest) sections is invalid JSON: (.+)/i,
     render: ([_, why], ctx) => ({
       title:       `${niceStep(ctx)} has malformed sections.`,
       explanation: `Sections must be a valid JSON array of {heading, content} entries. The parser said: ${why}.`,

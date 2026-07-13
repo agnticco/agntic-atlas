@@ -4,17 +4,34 @@
  * workflow automatically because it is generated on-demand from the stored spec.
  *
  * generateSopMarkdown(workflow) → string (Markdown)
+ *
+ * Reads specs straight from the store, so it sees v1 nodes (summarize/extract/
+ * rewrite/daily_digest) as often as v2 ones. It lifts each node before
+ * describing it — see ./node-types/compat-v1.js.
  */
+
+import { liftV1Node } from './node-types/compat-v1.js';
 
 const TYPE_LABELS = {
   email:     'Email trigger',
   schedule:  'Schedule trigger',
   manual:    'Manual trigger',
-  summarize: 'Summarize (LLM)',
-  llm:       'LLM prompt',
-  extract:   'Extract (LLM)',
-  rewrite:   'Rewrite (LLM)',
+  llm:       'AI step',
+  assemble:  'Assemble document',
   deliver:   'Deliver',
+};
+
+/**
+ * The P12 node re-cut collapsed summarize/extract/rewrite into `llm` + `mode`.
+ * An SOP is read by the customer, so a step that used to say "Summarize (LLM)"
+ * must not start saying "AI step" — the mode carries the meaning now.
+ */
+const LLM_MODE_LABELS = {
+  summarize: 'Summarize (AI)',
+  extract:   'Extract (AI)',
+  rewrite:   'Rewrite (AI)',
+  classify:  'Classify (AI)',
+  freeform:  'AI prompt',
 };
 
 const CHANNEL_LABELS = {
@@ -70,12 +87,16 @@ function connectorAction(node) {
 
 // Friendly "Type:" label for a step. Connector-action steps become
 // "Airtable — Create Record" instead of the raw `connector-action` slug.
-function stepTypeLabel(node) {
+function stepTypeLabel(rawNode) {
+  const node = liftV1Node(rawNode);
   if (node.type === 'connector-action') {
     const { connector, capability, action } = connectorAction(node);
     const cap = capability ? capability.replace(/\b\w/g, c => c.toUpperCase()) : '';
     if (connector && cap) return `${connector} — ${cap}`;
     return connector || action || 'Connector action';
+  }
+  if (node.type === 'llm') {
+    return LLM_MODE_LABELS[node.config?.mode ?? 'freeform'] ?? LLM_MODE_LABELS.freeform;
   }
   return typeLabel(node.type);
 }
@@ -104,23 +125,33 @@ function triggerConfig(trigger) {
   return lines.join('\n');
 }
 
-function nodeDescription(node) {
+function nodeDescription(rawNode) {
+  const node = liftV1Node(rawNode);
   const cfg = node.config ?? {};
   switch (node.type) {
-    case 'summarize':
-      return cfg.instructions
-        ? `Passes the upstream content to the language model with custom instructions: "${cfg.instructions}"`
-        : 'Passes the upstream content to the language model and produces a concise summary.';
     case 'llm':
-      return cfg.prompt
-        ? `Runs a language-model prompt: "${cfg.prompt.slice(0, 120)}${cfg.prompt.length > 120 ? '…' : ''}"`
-        : 'Runs a language-model prompt against the upstream content.';
-    case 'extract':
-      return 'Extracts structured fields from the upstream content using the language model.';
-    case 'rewrite':
-      return cfg.instructions
-        ? `Rewrites the upstream content: "${cfg.instructions}"`
-        : 'Rewrites the upstream content using the language model.';
+      switch (cfg.mode ?? 'freeform') {
+        case 'summarize':
+          return cfg.instructions
+            ? `Passes the upstream content to the language model with custom instructions: "${cfg.instructions}"`
+            : 'Passes the upstream content to the language model and produces a concise summary.';
+        case 'extract':
+          return 'Extracts structured fields from the upstream content using the language model.';
+        case 'rewrite':
+          return cfg.instructions
+            ? `Rewrites the upstream content: "${cfg.instructions}"`
+            : 'Rewrites the upstream content using the language model.';
+        case 'classify':
+          return `Sorts the upstream content into exactly one of: ${
+            String(cfg.categories ?? '').split(/[\n,]/).map(s => s.trim()).filter(Boolean).join(', ') || 'the listed categories'
+          }.`;
+        default:
+          return cfg.prompt
+            ? `Runs a language-model prompt: "${cfg.prompt.slice(0, 120)}${cfg.prompt.length > 120 ? '…' : ''}"`
+            : 'Runs a language-model prompt against the upstream content.';
+      }
+    case 'assemble':
+      return 'Stitches the upstream sections into a single document. No AI call — layout only.';
     case 'deliver': {
       // Method-aware — don't render every delivery as a generic "channel".
       const chan = cfg.channel ?? '';

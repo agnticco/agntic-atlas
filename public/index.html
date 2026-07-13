@@ -2115,6 +2115,25 @@
 </div>
 </x-dc>
 <script type="text/x-dc" data-dc-script>
+/**
+ * The EFFECTIVE type of a node, for display.
+ *
+ * P12 Increment A collapsed the summarize / extract / rewrite node types into
+ * one `llm` node carrying a `mode`, and renamed `daily_digest` to `assemble`.
+ * Every renderer below keys off the old names, and specs in the database still
+ * use them, so both spellings arrive here. This maps either one onto the name
+ * the renderers already understand — so a summarize step keeps rendering as
+ * "Summarize" instead of degrading to a generic "LLM" card.
+ *
+ * Mirrors src/workflows/node-types/compat-v1.js on the server.
+ */
+function effNodeType(n) {
+  const t = (n && n.type) || '';
+  if (t === 'llm') return ((n.config && n.config.mode) || 'freeform');
+  if (t === 'daily_digest') return 'assemble';
+  return t;
+}
+
 const TUTORIAL_SLIDES = [
   {
     title: 'Welcome to Atlas',
@@ -4466,11 +4485,13 @@ class Component extends DCLogic {
       if (t.type === 'email') return { title: t.label || 'New email arrives', desc: rat || 'The workflow fires each time a matching email lands in your inbox.' };
       return { title: t.label || this._titleCase(t.type || 'Trigger'), desc: rat || 'This is what starts the workflow.' };
     }
-    const s = spec, cfg = s.config || {}, ty = s.type || '', label = s.label;
+    const s = spec, cfg = s.config || {}, ty = effNodeType(s), label = s.label;
     if (ty === 'summarize') return { title: label || 'Summarize', desc: rat || 'Condenses the incoming content into a concise summary.' };
-    if (ty === 'llm') { const pr = cfg.prompt || cfg.instructions || ''; return { title: label || 'AI step', desc: rat || 'Runs an AI prompt on the incoming content.', prompt: pr || null }; }
     if (ty === 'extract') { const f = Array.isArray(cfg.fields) ? cfg.fields.map(x => (x && (x.name || x.key)) || x).filter(Boolean).join(', ') : ''; return { title: label || 'Extract', desc: rat || (f ? 'Pulls out: ' + f + '.' : 'Extracts structured data from the content.') }; }
     if (ty === 'rewrite') return { title: label || 'Rewrite', desc: rat || ('Rewrites the content' + (cfg.tone ? ' in a ' + cfg.tone + ' tone.' : '.')) };
+    if (ty === 'classify') { const cats = String(cfg.categories || '').split(/[\n,]/).map(x => x.trim()).filter(Boolean).join(', '); return { title: label || 'Classify', desc: rat || (cats ? 'Sorts the content into one of: ' + cats + '.' : 'Sorts the content into one of a fixed set of categories.') }; }
+    if (ty === 'assemble') return { title: label || 'Assemble', desc: rat || 'Stitches the upstream sections into one document. No AI call.' };
+    if (ty === 'freeform') { const pr = cfg.prompt || cfg.instructions || ''; return { title: label || 'AI step', desc: rat || 'Runs an AI prompt on the incoming content.', prompt: pr || null }; }
     if (ty === 'deliver') {
       const ch = cfg.channel || '';
       let dt, dd;
@@ -5004,11 +5025,13 @@ class Component extends DCLogic {
     return "Starts the workflow.";
   }
   _nodeDetail(n) {
-    const c = n.config || {}, ty = n.type;
-    if (ty === "llm") return this._clip(c.prompt || c.instructions, 150) || "Runs an AI prompt on the incoming content.";
+    const c = n.config || {}, ty = effNodeType(n);
+    if (ty === "freeform") return this._clip(c.prompt || c.instructions, 150) || "Runs an AI prompt on the incoming content.";
     if (ty === "summarize") return this._clip(c.instructions, 130) || "Condenses the incoming content into a short summary.";
     if (ty === "extract") { const f = Array.isArray(c.fields) ? c.fields.map(x => (x && (x.name || x.key)) || x).join(", ") : ""; return f ? ("Pulls out: " + this._clip(f, 110)) : "Extracts structured fields from the content."; }
     if (ty === "rewrite") return this._clip(c.instructions, 130) || ("Rewrites the content" + (c.tone ? (" in a " + c.tone + " tone.") : "."));
+    if (ty === "classify") { const k = String(c.categories || "").split(/[\n,]/).map(x => x.trim()).filter(Boolean).join(", "); return k ? ("Sorts into one of: " + this._clip(k, 110)) : "Sorts the content into one of a fixed set of categories."; }
+    if (ty === "assemble") return "Stitches the upstream sections into one document. No AI call.";
     if (ty === "deliver") return this._deliveryDetail(c);
     if (ty === "connector-action") {
       const a = this._connectorAction(n);
@@ -5912,10 +5935,11 @@ class Component extends DCLogic {
         const trg = (wf.triggers || [])[0];
         if (trg) items.push({ glyph: trg.type === "email" ? "✉" : "⏱", typeLabel: (trg.type || "trigger").toUpperCase(), label: trg.label || (trg.type === "email" ? "Email trigger" : "Schedule"), showArrow: false });
         (wf.nodes || []).forEach((n, i) => {
-          const tl = { summarize: "SUMMARIZE", llm: "LLM", extract: "EXTRACT", rewrite: "REWRITE", deliver: "DELIVER" };
+          const et = effNodeType(n);
+          const tl = { summarize: "SUMMARIZE", freeform: "AI STEP", extract: "EXTRACT", rewrite: "REWRITE", classify: "CLASSIFY", assemble: "ASSEMBLE", deliver: "DELIVER" };
           const isCA = n.type === "connector-action";
-          const typeLabel = isCA ? this._connectorActionLabel(n).toUpperCase() : (tl[n.type] || n.type.toUpperCase());
-          items.push({ glyph: n.type === "summarize" ? "Σ" : n.type === "deliver" ? this._deliverGlyph(n) : "λ", typeLabel, label: n.label || (isCA ? this._connectorActionLabel(n) : this._titleCase(n.type)), showArrow: true });
+          const typeLabel = isCA ? this._connectorActionLabel(n).toUpperCase() : (tl[et] || et.toUpperCase());
+          items.push({ glyph: et === "summarize" ? "Σ" : n.type === "deliver" ? this._deliverGlyph(n) : "λ", typeLabel, label: n.label || (isCA ? this._connectorActionLabel(n) : this._titleCase(et)), showArrow: true });
         });
         return items;
       })(),
@@ -5989,7 +6013,7 @@ class Component extends DCLogic {
             if (mx != null) pairs.push({ k: "Max results", v: String(mx) });
           }
           const connLabel = isCA ? this._connectorActionLabel(n) : tl(n.type);
-          items.push({ isTrigger: false, glyph: n.type === "summarize" ? "Σ" : n.type === "deliver" ? this._deliverGlyph(n) : "λ", tag: "STEP " + (i + 1), connector: connLabel, title: n.label || connLabel, desc: this._nodeDetail(n), configPairs: pairs, deps: up.join(", "), hasDeps: up.length > 0, showLine: i < nodes.length - 1 });
+          items.push({ isTrigger: false, glyph: effNodeType(n) === "summarize" ? "Σ" : n.type === "deliver" ? this._deliverGlyph(n) : "λ", tag: "STEP " + (i + 1), connector: connLabel, title: n.label || connLabel, desc: this._nodeDetail(n), configPairs: pairs, deps: up.join(", "), hasDeps: up.length > 0, showLine: i < nodes.length - 1 });
         });
         return items;
       })(),

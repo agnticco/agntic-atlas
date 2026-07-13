@@ -42,10 +42,25 @@ next() {
 }
 
 # Run a node test file; fail with its tail on error.
+#
+# --env-file-if-exists=.env is LOAD-BEARING, not convenience. tests/e2e/
+# full-journey.test.js SELF-SKIPS its converger test when ANTHROPIC_API_KEY is
+# unset — and then reports a cheerful "6 pass / 1 skip", where the skipped test
+# is the thing under test. Without the env file this gate ran the E2E with no
+# key and passed itself on a suite that had quietly not tested the converger.
+# That is how P11 was nearly closed on a false pass (CLAUDE.md, P11 note).
+#
+# So: load the env, AND fail closed on ANY skip. A skipped test is not a passed
+# test. If you have no ANTHROPIC_API_KEY, this gate cannot be closed — that is
+# the correct outcome, not an inconvenience to route around.
 run_test() {
   local f="$1" label="$2"
-  node --test "$f" >"/tmp/p12-$(basename "$f").log" 2>&1 \
-    || { tail -40 "/tmp/p12-$(basename "$f").log" >&2; fail "$label — $f did not pass"; }
+  local log="/tmp/p12-$(basename "$f").log"
+  node --env-file-if-exists=.env --test "$f" >"$log" 2>&1 \
+    || { tail -40 "$log" >&2; fail "$label — $f did not pass"; }
+  grep -qE '^# skipped 0$' "$log" \
+    || { grep -E '^# (pass|fail|skipped)' "$log" >&2
+         fail "$label — $f SKIPPED a test. A skipped test is not a passed test; the converger test self-skips without ANTHROPIC_API_KEY. Set it and re-run."; }
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
