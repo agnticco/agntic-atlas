@@ -111,6 +111,24 @@ const SUITES = [
   // The fan-out: a delivery's return value is a RECEIPT, not the work product.
   // Without this the CONTROL_TYPES `deliver` guard is unkillable by construction.
   'tests/workflows/fan-out.test.js',
+  // P12 Increment F — connector params checked against the capability's own schema.
+  // Without it, the `capSchema` / `capResolved` guards are unkillable by construction.
+  'tests/workflows/connector-schema.test.js',
+  // P12 Increment F — the test-adversary's pass. `destination-adversarial` DRIVES THE
+  // REAL GRAPH through the production call path (createConverger → run → resume); the
+  // other two pin the foreach config recursion and the truth of every capability's
+  // schema. Without them, `elicitation-graph.js` — F by line count — is swept with no
+  // suite that executes it, and every mutant in it is unkillable by construction.
+  'tests/converger/destination-adversarial.test.js',
+  'tests/workflows/foreach-config-adversarial.test.js',
+  'tests/workflows/capability-schema-truth.test.js',
+  // The elicitation graph's OWN branches — the destination resolution, the no-op
+  // guard, the trigger derivation, the clarify/modify paths. Widening TARGETS to
+  // elicitation-graph.js put 50 survivors on the board in one file; this executes
+  // the behavioural half of them. A file the sweep targets but no suite drives is a
+  // file whose mutants are unkillable by construction.
+  'tests/converger/graph-paths.test.js',
+  'tests/converger/destination-mapping.test.js',
 ];
 
 /**
@@ -154,6 +172,13 @@ const TARGETS = [
   // AI answer to the closed enum, and the one that refuses an unparseable
   // condition all live here.
   'src/workflows/node-types/decision.js',
+  // P12 Increment F. `elicitation-graph.js` holds the destination resolution, the
+  // column mapping and the example picker — the increment, by line count — and its
+  // mutation score was "NOT MEASURED". Four of the nine defects the review pair found
+  // lived in it. A file the sweep does not target is a file whose absence from the
+  // survivor list proves nothing.
+  'src/converger/elicitation-graph.js',
+  'src/workflows/node-types/connector-action.js',
 ];
 
 const args    = process.argv.slice(2);

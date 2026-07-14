@@ -4602,27 +4602,73 @@ class Component extends DCLogic {
       return;
     }
 
-    // ── example_request — the cases that become the test suite ────────────
-    // The picker that pulls three REAL emails from the user's inbox is Increment
-    // F. Until then: the model's proposed cases, kept by default, skippable in
-    // one click. Never a demand to type.
+    // ── example_request — THE PICKER (P12 Increment F, §6.4) ──────────────
+    // The cases that become the workflow's acceptance suite. When the trigger is
+    // email and Gmail is connected, `iv.source === 'gmail'` and these are the
+    // user's OWN three messages, fetched with the trigger's own filter — so they
+    // are drawn from exactly the population the workflow will run on.
+    //
+    // Each item is INDIVIDUALLY selectable, because the useful click is the one
+    // that DESELECTS: "that third one isn't really a lead". A negative example is
+    // the one that finds the bug, and it can only be given if the rows can be
+    // turned off one at a time.
+    //
+    // Provenance is stated out loud. A modelled example presented as if it came
+    // from the user's inbox would be a lie the user has no way to detect — so a
+    // real one says so, and a proposed one says that instead.
     if (iv.type === "example_request") {
       const self = this;
       const items = iv.items || [];
-      const summary = items.map((it, i) => (i + 1) + ". " + it.preview).join("\n");
+      const eid = "ex" + (this._pc = (this._pc || 0) + 1);
+      const isReal = iv.source === "gmail";
+
+      // Everything starts selected: the default is a real answer, and a user who
+      // does not care should still end up with a test suite.
+      const picked = {};
+      items.forEach(it => { picked[it.id] = true; });
+
+      const send = (type) => {
+        const ids = items.map(it => it.id).filter(id => picked[id]);
+        self.setState({
+          msgs: self.state.msgs.map(m => (m._id === eid ? { ...m, rows: [], options: [] } : m)),
+          thinking: true, inputMode: "locked",
+        });
+        self._send(type === "skip" ? { type: "skip" } : { type: "accept", ids });
+      };
+
+      const buildRows = () => items.map(it => ({
+        message: it.preview,
+        resolutionLabel: picked[it.id] ? "✓ using this one" : "not using this one",
+        options: [{
+          label: picked[it.id] ? "Don't use" : "Use",
+          style: "border:1px solid rgba(255,255,255,.14);background:transparent;color:rgba(255,255,255,.6);font-family:inherit;font-size:12px;padding:5px 12px;border-radius:999px;cursor:pointer",
+          onPick: () => {
+            picked[it.id] = !picked[it.id];
+            self.setState({ msgs: self.state.msgs.map(m => (m._id === eid ? { ...m, rows: buildRows() } : m)) });
+          },
+        }],
+      }));
+
       this.setState({
-        msgs: [...this.state.msgs,
-               { isAtlas: true, text: "I'll use these as the workflow's test cases:\n\n" + summary, hasReason: false },
-               { isClarify: true, q: "", chips: [
-                 { label: "Use these", onPick: () => {
-                   self.setState({ msgs: [...self.state.msgs, { isOperator: true, text: "Use these" }], thinking: true, inputMode: "locked" });
-                   self._send({ type: "accept" });
-                 } },
-                 { label: "Skip", onPick: () => {
-                   self.setState({ msgs: [...self.state.msgs, { isOperator: true, text: "Skip" }], thinking: true, inputMode: "locked" });
-                   self._send({ type: "skip" });
-                 } },
-               ] }],
+        msgs: [...this.state.msgs, {
+          // Reuses the gap-list row renderer (isGaps): one row per item, a label and
+          // a toggle. The shape is identical, so it needs no new template.
+          isGaps: true, _id: eid,
+          q: isReal
+            ? (items.length === 1
+                ? "I found this email in your inbox. Should the workflow run on ones like it?"
+                : "I found these " + items.length + " emails in your inbox. Which should the workflow run on?")
+            : "I'll use these as the workflow's test cases — tell me if any is wrong.",
+          rows: buildRows(),
+          acceptLabel: isReal ? "Use these" : "Use these",
+          onAcceptAll: () => send("accept"),
+        },
+        { isClarify: true, q: "", chips: [
+          { label: "Skip examples", onPick: () => {
+            self.setState({ msgs: [...self.state.msgs, { isOperator: true, text: "Skip" }] });
+            send("skip");
+          } },
+        ] }],
         thinking: false, inputMode: "clarify", phase: "building",
       });
       return;

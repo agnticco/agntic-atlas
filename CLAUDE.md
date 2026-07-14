@@ -928,6 +928,98 @@ refactor them without an explicit decision recorded here:
     Increment C's defect #1 and is already closed** (`UNSATISFIED_ASSERTION`: a spec that promises
     email and doesn't send it does not publish). Pinned by the same new suite so it cannot come back.
 
+- **Schema-aware connectors + the example picker (2026-07-14, P12 increment F)** — the write story
+  died at *"paste your Airtable base ID"*. F reads the destination instead of asking for it.
+  - **The last OPEN config hole is closed.** `connector-action` was the only node type on
+    `configPolicy: 'open'` — its params passed straight to the handler unchecked, so a hallucinated
+    `tableName` (Airtable's REST API really has one) shipped, the handler ignored it, and the record
+    went nowhere the user intended. Nothing needed inventing: **every capability already declared a
+    `configSchema`** and it was simply never consulted. The key set is now the node's own keys ∪ the
+    SELECTED CAPABILITY's params, resolved by the same function `deliver` uses — so they cannot
+    disagree about whether `baseId` is real. Plus `UNKNOWN_CONNECTOR_ACTION` (an action id that does
+    not exist was a 6am run-time throw) and **required capability params** (an
+    `airtable_create_record` with no `baseId` cannot run, and used to publish clean).
+  - **The check SKIPS when the capability cannot be resolved** (no registry ⇒ its key set is
+    UNKNOWABLE, and an unknowable key set is not a wrong one). That is safe only because the **gap
+    scorer fails closed** there (`CHANNELS_UNVERIFIED`). Skipping where it cannot run and failing
+    closed where it cannot check is what keeps `complete ⇒ publishable` true.
+  - **New capabilities:** `airtable_list_bases`, `airtable_describe_base` (field names, types, and a
+    select's closed `choices` — a decision table can take its enum straight from the system of
+    record), `sheets_describe` (tabs + header rows). **The `schema.bases:read` scope has been
+    requested since the Airtable connector shipped and used by NOTHING** — every tenant who connected
+    Airtable already consented, so this needed no re-auth and no migration. The door was built and
+    nobody opened it.
+  - **`{{step.field}}` — sub-field templates (ENGINE + VALIDATOR).** Without them there was **no
+    correct way to write a record at all**: an Airtable record is a map of column → value, each value
+    from a different part of the upstream extract, and with only `{{extract.output}}` the sole
+    expressible spec put the **whole JSON blob into every column**. The only way to write real
+    per-column values was a JSON-STRING `fields`, which let a model choose the column names at RUN
+    time — where **Airtable silently discards the ones that do not exist**. So the grammar was widened
+    and `UNCHECKABLE_WRITE_FIELDS` now refuses the uncheckable shape. *(This is why the "dotted
+    sub-fields are not supported" gotcha below is now corrected rather than deleted.)*
+  - **A WORKFLOW NEED NOT DELIVER.** `MISSING_DELIVER` counted `type === 'deliver'` and nothing else,
+    so *"inbound email → extract → create the record"* was rejected unless a pointless delivery was
+    bolted on. **The record IS the outcome.** Same failure as the five-item checklist that made the
+    converger invent an LLM step for a two-step workflow (defect #4). The rule is now "the workflow
+    has an EFFECT", answered by `isWriteNode` — which already recurses into `foreach`. *(Raised by the
+    operator. It also killed the reasoning that made gap-scorer's `routed` filter an "equivalent"
+    mutant: a write-only workflow has no `deliver`, so the connector-action arm of it is load-bearing.)*
+
+  **The review pair found NINE defects in F, and BOTH headline features were broken (round 2).**
+  1. **THE EXAMPLE PICKER NEVER RAN — in any session.** `examples` was the SECOND node in the graph
+     and `propose` is the only node that ever put a trigger in the draft, so `fetchRealExamples` read
+     `triggers: []` **every single time** and fell back to modelled cases **always**. "No typed
+     example" never once happened. Fixed by deriving the trigger in `process` (a trigger IS part of
+     the graph it backward-chains) and running `examples` after it. **converger-v2 §2.1's order
+     (outcome → examples → process) is corrected to outcome → process → examples.**
+  2. **WHEN THE COLUMN MAPPING WORKED, THE SPEC COULD NOT BE SAVED.** `destinations` rewrote the
+     NODE's columns and nothing rewrote `outcome.assertions[].fields` — so the node wrote `Deal Size`,
+     the contract still demanded `Budget`, and `UNSATISFIED_ASSERTION` blocked publish. **`complete ⇒
+     publishable` was FALSE precisely when the increment did its job** — the C blocker, reintroduced
+     by F's own headline feature. The mapper now returns a **rename map** and the contract is restated
+     in the table's own words. A promise with no real column is **not deleted** — it stays, fails
+     loudly, and the user is told which column their table lacks.
+  3. **A `foreach` LAUNDERED EVERY CHECK F ADDED.** The validator's loop walks `spec.nodes`; a loop's
+     steps live in `config.steps`. A connector-action inside a loop took a nonexistent action id, a
+     hallucinated param, a missing `tableId` and the dead `model` key — and validated **clean**.
+     **Newly reachable because F's own prompt teaches `foreach` for the first time**, with the example
+     *"create a record for every row"* — precisely the node whose params F had just started checking.
+     **Fourth time this exact laundering hop has been the defect.** Fixed with `_checkNodeConfig` —
+     ONE method, called for a top-level node and a sub-step alike. **A check on a node's config is a
+     check on EVERY node's config, wherever the node lives.**
+  4. The **outcome oracle was blind inside a `foreach`**, so the shape F *teaches* could not satisfy
+     its own `record_exists` assertion and could not publish. A loop is not an opaque box; it is N
+     copies of what is inside it.
+  5. **`isResolvedId` accepted a plausible hallucination.** An LLM asked for an id it cannot know does
+     not emit `appXXXXXXXXXXXXXX` — it emits `appABCDEFGHIJKLMN`, which passes any shape test. And the
+     whole `destinations` node was gated on that test, so **one guess skipped the base lookup, the
+     table lookup AND the column mapping.** A shape test cannot answer this; **only the LIST can**.
+  6. **A TOTAL column mismatch shipped verbatim** while a partial one was corrected — the worst case
+     took the only path with no defence, which is the shape of every defect in this phase.
+  7. **Every gap arrived with an EMPTY BOX.** `buildGapPrompt` listed gaps as "1., 2." and then asked
+     the model to answer keyed by `gapId` — a string it had never been shown. So no suggestion could
+     ever be matched, the paid call was discarded, and **a blocking gap was never routed back through
+     the propose loop**: "Accept all defaults" could not resolve a blocker. The one surface that makes
+     v2's extra rigour affordable was inert. *(Pre-existing since C.)*
+  8. **Three Slack schemas lied about REQUIREDNESS** (`slack_file.content`, `slack_topic.topic`,
+     `slack_reminder.text` all default from the upstream body), so F's new required-param check
+     **rejected shapes that run perfectly** — "summarize the thread and upload it as a file" stopped
+     publishing. **A schema that lies about requiredness rejects real workflows**: the Increment C
+     failure through a new door. Fixed in the SCHEMAS, not the check.
+  9. A **TRIGGER capability passed as an action id** (`gmail_new_message` has no handler — existing ≠
+     runnable), and **`tests/helpers/catalog.js` omitted `in_app`**, the DEFAULT delivery channel, so
+     every suite using it was blind to the commonest delivery in the product — flaw #2 living inside
+     the helper written to fix flaw #2.
+  - **The flagship's own fixture was wrong, and green.** `write-shaped.test.js` wrote
+    `{{extract.output}}` into every column — the whole JSON blob in each — and passed, because it
+    asserted the KEY was right and **never looked at the VALUE**. That is the "assert what it SENT,
+    not that it ran" lesson, sitting in the acceptance test for the increment whose entire purpose is
+    that defect.
+  - `mutation-sweep` TARGETS **widened to `src/converger/elicitation-graph.js`** — the destination
+    resolution, the column mapping and the example picker: **F by line count, and its mutation score
+    was "NOT MEASURED".** Four of the nine defects lived there. **A file the sweep does not target is
+    a file whose absence from the survivor list proves nothing.** 49 curated mutations, all killed.
+
 ## Support tickets (in-app feedback / bug reporting) — added 2026-07-08
 
 Users submit bugs/ideas/requests from a floating **Feedback** button in the operator
@@ -1208,15 +1300,44 @@ phase, not just this one.
   non-blocking `CONDITIONAL_UNPROVEN` gap. **D now materialises that gap into a real `human` gate**
   (`escalation.js`), which is an honest *escalation* of the condition — but it is still not a
   *proof*. Proving it needs `decision` (E) + the examples as a test suite (G).
-- **The `connector-action` config hole** — still the only node type with `configPolicy: 'open'`; its
-  params are unchecked. **Increment F** closes it by validating against each capability's own schema.
+- ~~**The `connector-action` config hole**~~ — **CLOSED by increment F.** Nothing is `configPolicy:
+  'open'` any more: a connector-action's params are validated against the SELECTED CAPABILITY's own
+  declared schema, by the same resolver `deliver` uses for its channel.
+
+*New, from F (the verifier's round-2 residuals — recorded, none blocking):*
+- **A LATCH THAT STOPS YOU ASKING MUST NEVER STOP YOU CHECKING.** The round-2 blocker:
+  `destinations` resolved the columns once, `applyProposal` REPLACES a node by id, and a blocking
+  gap routes back through `propose` — so any later propose round could put the invented column
+  straight back, and nothing re-checked it. **The gap loop even hands the model the motive**: the
+  blocking gap says *"you promised Company and nothing writes it"*, so the model obligingly
+  re-proposes the node with `Company` back on. The increment's own honest-failure path, converted
+  into a silent success by the loop that reported it. **A fact the next node can falsify is not an
+  invariant, it is a memory.** Fixed by caching the resolved destination (ask once) and
+  RE-CHECKING the columns on every pass (free — it reads state). **Mutation testing could not have
+  found this: there was no line to mutate. It was a MISSING re-check, and the sweep measures the
+  guards you wrote, never the one you didn't.**
+- **`{{item.naem}}` inside a `foreach` is unchecked** — it publishes, writes the column blank, and
+  says nothing. The item's shape is genuinely unknowable at build time, so this is consistent with
+  `BAD_TEMPLATE_FIELD`'s rule ("a source that declares nothing makes no claim") — but it is the same
+  silent-blank-column class, in the canonical bulk-write shape. Same for `{{look.subject}}` off a
+  connector read: **capabilities declare no OUTPUT schema**. Closing both needs output schemas on the
+  catalog — worth doing, and the natural home is G or a connector increment.
+- **`fields: {}` publishes when the assertion carries no `fields` array.** `fillDestination`'s
+  docstring claims a total mismatch "fails UNSATISFIED_ASSERTION" — true only if the model put a
+  `fields` array on the assertion. Otherwise it publishes and fails loudly at every run on
+  `airtableCreateRecord`'s empty-record guard. **The docstring over-claims; the behaviour is loud.**
+- `tests/workflows/validator-rules.test.js:42-52` still hand-rolls a `CHANNELS` map instead of using
+  `tests/helpers/catalog.js`.
 
 *New, from E:*
-- **A decision's `from` is not checked against what the upstream step actually produces.**
-  `DECISION_BAD_INPUT_REF` checks the reference's *shape*, and the engine throws loudly at run time if
-  the value is missing (and the failure escalates). But an `llm` in `extract` mode **declares** its
-  field names in `config.fields`, so `from: "extract.budgett"` is statically knowable as wrong and is
-  currently only found on the first real run. Cheap to close when F does schema-aware connectors.
+- ~~**A decision's `from` is not checked against what the upstream step produces.**~~ **CLOSED by
+  increment F** — `BAD_TEMPLATE_FIELD`. F's sub-field grammar ({{extract.budget}}) is what makes a
+  correct record expressible at all, and it WIDENED the silent-failure surface it was meant to close:
+  a typo'd `{{extract.budgett}}` resolved to an EMPTY STRING, so the column was written blank and the
+  run reported success. An `llm` in `extract` mode DECLARES its field names, so the typo is knowable
+  at build time and is now a build error. Where the source declares nothing (a connector read, a
+  freeform llm), its shape is genuinely unknown and **no claim is made** — an unknowable field name is
+  not a wrong one.
 - **The `decision_review` UI edits cells, `then`s and the hit policy — it cannot ADD or DELETE a rule.**
   Deliberate for E (the table is *reviewed*, not *authored* — §6.2.5, and the gap review is where a
   missing case gets answered), but a user who spots a rule that should not exist has to say so in chat.
@@ -1394,4 +1515,4 @@ Update as gates close. `git log --grep "^Gate:"` is the authoritative ledger.
 - [x] **P9** — value tracking: time-saved metrics per run, all-up ROI summary, customer-facing report
 - [x] **P10** — admin observability: standalone admin app, per-tenant usage + cost monitoring *(merged `601760c`; carries `Gate: P10` trailer + passing `scripts/gates/p10.sh`. Ledger backfilled by independent verifier: `docs/gates/p10.md`.)*
 - [x] **P11** — E2E validation + production hardening + VPS migration. **Closed 2026-07-13** (`b711b44`, `Gate: P11`, ledger `docs/gates/p11.md`). Built & merged long before (`d73b813`…`75891b7` + artifacts `2106f71`); the gate was un-closeable only because `scripts/gates/p11.sh` fail-closes when `PROD_HOST` is unset — it cannot smoke-test a VPS that doesn't exist. Prod went live, so `PROD_HOST=atlas.agntic.co bash scripts/gate.sh 11` finally runs. **Note for anyone re-running it:** the E2E suite *self-skips the converger test* without `ANTHROPIC_API_KEY` (`tests/e2e/full-journey.test.js`), so a bare run reports "6 pass / 1 skip" and the skipped one is Done-when #1. Run it with a key (7/7) or you are passing a gate you haven't proven.
-- [~] **P12** — **converger v2**: outcome contracts + BPMN/DMN shape (decisions, gap analysis) + the elicitation UI + the human approval gate. Build spec: [`docs/architecture/converger-v2.md`](docs/architecture/converger-v2.md) (theory: [`bpmn-dmn-foundations.md`](docs/architecture/bpmn-dmn-foundations.md)). Gate `scripts/gates/p12.sh` is **progressive** — it runs increments A–G in order and stops at the first unbuilt one, so `bash scripts/gate.sh 12` answers both *"is the phase closed?"* and *"which increment next?"*. **Increments A (validator hardening + node re-cut), B (engine control flow), C (converger v2 core + the outcome contract), D (the human approval gate) and E (the `decision` node + DMN gap analysis + the table review UI) are done** — the gate now stops at **F (`foreach` + schema-aware connectors + the example picker)**. Increments do NOT carry a `Gate:` trailer; only the phase's close does. Two invariants are load-bearing and must never be weakened: **`LLM_INPUT_NOT_ENUM`** (an LLM-evaluated decision input must classify into a *closed enum* — without it there is no completeness proof, and the completeness proof is the moat) and **`EMAIL_REPLY_APPROVAL`** (an approval parsed out of an email reply body authenticates *nothing*: `From:` is spoofable, and SPF/DKIM authenticate a sending domain, not a human intent — use a signed, hashed, single-use magic link).
+- [~] **P12** — **converger v2**: outcome contracts + BPMN/DMN shape (decisions, gap analysis) + the elicitation UI + the human approval gate. Build spec: [`docs/architecture/converger-v2.md`](docs/architecture/converger-v2.md) (theory: [`bpmn-dmn-foundations.md`](docs/architecture/bpmn-dmn-foundations.md)). Gate `scripts/gates/p12.sh` is **progressive** — it runs increments A–G in order and stops at the first unbuilt one, so `bash scripts/gate.sh 12` answers both *"is the phase closed?"* and *"which increment next?"*. **Increments A (validator hardening + node re-cut), B (engine control flow), C (converger v2 core + the outcome contract), D (the human approval gate), E (the `decision` node + DMN gap analysis + the table review UI) and F (schema-aware connectors + the example picker + `foreach` turned on) are done** — the gate now stops at **G (the zero-typing path + the SOP)**. Increments do NOT carry a `Gate:` trailer; only the phase's close does. Two invariants are load-bearing and must never be weakened: **`LLM_INPUT_NOT_ENUM`** (an LLM-evaluated decision input must classify into a *closed enum* — without it there is no completeness proof, and the completeness proof is the moat) and **`EMAIL_REPLY_APPROVAL`** (an approval parsed out of an email reply body authenticates *nothing*: `From:` is spoofable, and SPF/DKIM authenticate a sending domain, not a human intent — use a signed, hashed, single-use magic link).

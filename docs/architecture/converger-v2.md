@@ -123,13 +123,29 @@ Per Silver: decisions are the hardest part and come **before** the process; disc
 
 ```
 intent
-  → OUTCOME     "How would we know this worked?"        → testable assertions
-  → EXAMPLES    "Show me 3 real cases: in → expected"   → the SME's rows
-  → DECISIONS   induce tables from the examples          → typed, gap-analysed
-  → PROCESS     wire the graph around proven decisions   → derived, ~no user turns
-  → GAPS        "you haven't told me about these 3"      → default: escalate to human
+  → OUTCOME       "How would we know this worked?"        → testable assertions
+  → PROCESS       wire the graph + derive the TRIGGER      → derived, ~no user turns
+  → EXAMPLES      "pick 3 real ones from your inbox"       → the SME's rows
+  → (analyze ⇄ clarify | propose)
+  → DESTINATIONS  read the real bases / tables / columns   → clicks, never a pasted id
+  → DECISIONS     review the induced table                 → typed, gap-analysed
+  → GAPS          "you haven't told me about these 3"      → default: escalate to human
   → RATIFY
 ```
+
+> **CORRECTED (Increment F): PROCESS comes BEFORE EXAMPLES.** Rev 1 drew
+> `outcome → examples → process`, and that order **silently made the example picker
+> unreachable**. The picker searches the user's inbox with **the trigger's own filter** — and
+> nothing had put a trigger in the draft yet (only `propose` did, much later), so
+> `fetchRealExamples` read `triggers: []` in **every session**, fell back to modelled cases
+> **every time**, and *"no typed example"* never once happened. The trigger is not an
+> afterthought to be proposed later: it is the **entry point of the graph**, derivable from the
+> same contract every other node is derived from, so `process` derives it.
+>
+> `DESTINATIONS` is new in F: it reads the tenant's real Airtable bases, tables and columns and
+> resolves them into the draft (§6.2.3 — *never ask for something we can read*). It runs before
+> `decisions` (the table under review must be the one whose columns were just resolved) and
+> before `gaps` (the gap list must be about the draft AS CORRECTED).
 
 Two consequences worth stating loudly:
 - **The examples become the acceptance suite.** They are the assertions the test panel checks.
@@ -506,11 +522,32 @@ feed a `decision`, because it classifies into a **closed enum** (`categories`) i
 free text. `llm.js` rejects an off-enum answer at run time rather than passing it downstream — an
 unclassifiable input is exactly the case a decision must escalate on. See §11.7.
 
-### Schema-aware connectors (unblocks the write story)
-New capabilities: `airtable_list_bases`, `airtable_describe_table`, `sheets_describe`.
+### Schema-aware connectors (unblocks the write story) — ✅ **DONE (Increment F)**
+New capabilities: `airtable_list_bases`, `airtable_describe_base`, `sheets_describe`.
 The converger reads the destination's field names and maps *"the customer's budget"* → the
 `Deal Size` column **itself**. Today the user must paste an opaque base ID — which is precisely
 where "just talk to it" dies.
+
+**Why the mapping is not optional, and why it must restate the CONTRACT too:**
+
+> **Airtable SILENTLY IGNORES an unknown field name.** Post `{"Budget": 80000}` to a table whose
+> column is `Deal Size` and the record **is created**, the column is **empty**, `run_completed`
+> fires, and the workflow reports success **forever**. The user finds out when a quarter of their
+> leads have no budgets.
+
+So `destinations` rewrites the node's columns — **and `outcome.assertions[].fields` with them**.
+Rewriting only the node leaves the contract promising `Budget` while the node writes `Deal Size`,
+and `UNSATISFIED_ASSERTION` then blocks publish **on the success path**: `complete ⇒ publishable`
+is false precisely when the mapping did its job. A promised column the table does **not** have is
+**never quietly dropped** — it stays, it fails loudly, and the user is told which column is missing.
+
+**And it needed a grammar change.** An Airtable record is a map of column → value, each value from
+a different part of the upstream extract. With only `{{extract.output}}` there was **no correct
+shape**: the object form put the whole JSON blob into every column, and the only way to write real
+per-column values was a JSON-string `fields`, which let a model pick the column names at **run
+time** — where the wrong ones are silently discarded. `{{step.field}}` now exists (engine +
+validator), `UNCHECKABLE_WRITE_FIELDS` refuses the uncheckable shape, and `BAD_TEMPLATE_FIELD`
+catches a typo'd field against what the upstream step **declares** it produces.
 
 ---
 
@@ -538,6 +575,27 @@ where "just talk to it" dies.
 | `DECISION_TOO_WIDE` | **warning** at >4 inputs — decompose (§12) | an unreviewable, unauditable table | **DONE (E)** |
 | `DECISION_BAD_HIT_POLICY` · `DUPLICATE_DECISION_INPUT` · `DECISION_BAD_INPUT_REF` | structural | — | **DONE (E)** |
 | `DECISION_IN_FOREACH` | a `decision` inside a loop — nothing in a loop can ROUTE on its answer (routing needs edges; a loop has none), so it is a structural no-op **and** its output would become the iteration's work product | the decided value delivered to the customer, once per row | **DONE (E)** |
+
+#### A WORKFLOW NEED NOT DELIVER (Increment F — raised by the operator)
+
+`MISSING_DELIVER` counted `type === 'deliver'` and nothing else, so a workflow whose whole job is to
+**move data** — *inbound email → extract → create the Airtable record* — was **rejected** unless a
+pointless delivery was bolted onto the end. **The record IS the outcome.**
+
+That is the same failure as the five-item checklist that made the converger invent an LLM step for a
+genuinely two-step workflow (defect #4, killed in C): a checklist shaped like one workflow, imposed on
+every workflow. Workflows take all shapes.
+
+The rule is now **"the workflow has an EFFECT"**, answered by `isWriteNode` — a `deliver`, a
+create/send `connector-action`, or a `foreach` containing one (it recurses) — the same predicate the
+approval rules use, so *"what counts as an effect"* has exactly one definition. A workflow that reads
+and thinks and never acts is still rejected.
+
+*(Consequence worth knowing: this killed the reasoning that made `gap-scorer`'s `routed` filter an
+"equivalent" mutant — "every publishable spec has a deliver, so it is never empty". A write-only
+workflow has no `deliver`, so the `connector-action` arm of that filter is **load-bearing**, and a
+spec whose connector params nobody could check would otherwise be certified complete and then
+rejected at publish.)*
 
 #### The moat has TWO doors, and the second is where the deciding happens (Increment E)
 
@@ -1171,8 +1229,8 @@ A `decision` is a **control node**: its output (`{value, text, rule, inputs}` �
 row fired) never becomes `lastOutput` and is never fed to a transform, exactly as `branch` and `human`
 are not. A `deliver` after a decision sends the draft, not the audit record.
 
-### Increment F — `foreach` + schema-aware connectors + the example picker
-- `airtable_list_bases` · `airtable_describe_table` · `sheets_describe`.
+### Increment F — `foreach` + schema-aware connectors + the example picker — ✅ **DONE**
+- `airtable_list_bases` · `airtable_describe_base` · `sheets_describe`.
 - **UI:** the example picker (`example_request`) — *"pick 3 real emails"* from `gmail_search`;
   destination fields chosen from the **read** schema, never a pasted base ID. This is
   principle §6.2.3 (*never ask for something we can read*) made concrete.

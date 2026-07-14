@@ -368,6 +368,38 @@ function makeChatToolExecutor(spine, req, sessionId) {
   };
 }
 
+/**
+ * Let the CONVERGER call a connector capability at BUILD time. (P12 Increment F.)
+ *
+ * This is what turns "paste your Airtable base ID" into a click. The converger
+ * cannot know a tenant's base ids, table names or column headers — but the tenant's
+ * OAuth token can read all three, and we already hold it. §6.2.3: never ask for
+ * something we can read.
+ *
+ * It reuses `injectCapabilityCredentials` — the SAME credential path the chat tool
+ * executor and the engine use — so a capability invoked from the builder is
+ * authorised exactly as it is anywhere else. A second credential path would be a
+ * second place for a tenant's token to leak into the wrong tenant's call.
+ *
+ * Read-only by construction is NOT enforced here and does not need to be: the
+ * converger only ever calls the `*_list_*` / `*_describe_*` capabilities (see
+ * elicitation-graph.js), and a capability that writes is one the USER approves as a
+ * step in their workflow, not one the builder fires while they are still talking.
+ */
+function makeCapabilityInvoker(spine, req, sessionId) {
+  return async function invokeCapability(capabilityId, params = {}) {
+    const registry = spine.engine?.capabilityRegistry;
+    const handler  = registry?.getHandler(capabilityId);
+    if (!handler) throw new Error(`Unknown capability: ${capabilityId}`);
+    const cap    = registry.get(capabilityId);
+    const config = { ...params };
+    await injectCapabilityCredentials(cap, config, { auth: spine.auth, tenant: req.tenant, user: req.user });
+    const out = await handler({ config, body: null, title: null, sessionId });
+    logEvent('builder.capability.ok', { tenant: req.tenant?.id ?? null, capability: capabilityId });
+    return out;
+  };
+}
+
 // ── Home dashboard ("Data" layout) metric helpers ───────────────────────────
 // All derived from real run rows — no fabricated values. See the run-log schema
 // in workflow-store.js (started_at/completed_at/status/is_test/time_saved_minutes).
@@ -1131,6 +1163,9 @@ Rules:
     const converger = createConverger({
       llm:              spine.llm,
       capabilities,
+      // The converger reads the tenant's real Airtable bases, tables and columns
+      // (and their real emails) instead of asking them to be typed. §6.2.3.
+      invokeCapability: makeCapabilityInvoker(spine, req, threadId),
       interactionStore: spine.interactionStore,
       tenantId:         req.tenant.id,
       userId:           req.user?.id,

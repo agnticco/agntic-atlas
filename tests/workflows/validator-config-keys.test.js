@@ -23,9 +23,16 @@ import { readFileSync } from 'node:fs';
 import { NodeTypeRegistry } from '../../src/workflows/node-type-registry.js';
 import { registerBuiltInNodeTypes } from '../../src/workflows/node-types/index.js';
 import { WorkflowValidator } from '../../src/workflows/workflow-validator.js';
+import { realCatalog } from '../helpers/catalog.js';
 
 const nodeTypes = registerBuiltInNodeTypes(new NodeTypeRegistry());
-const validator = new WorkflowValidator({ nodeTypes });
+// THE REAL CATALOG, as production wires it (server.js buildEngine). Without it a
+// capability's params are unknowable, so the validator does not judge them — and
+// this suite's own `deliver.message` pin (defect #3) was passing for that reason
+// rather than because `message` is not one of Slack's declared params. A check
+// that exercises a configuration production never uses cannot see what production
+// sees (CLAUDE.md, architectural flaw #2).
+const validator = new WorkflowValidator({ nodeTypes, channelRegistry: realCatalog() });
 
 /** Wrap nodes in the minimum shape validate() accepts (trigger + deliver present). */
 const spec = (nodes, edges = []) => ({

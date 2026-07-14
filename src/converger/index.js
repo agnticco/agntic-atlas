@@ -64,8 +64,13 @@ export function createConverger({
   interactionStore = null,
   tenantId         = null,
   userId           = null,
+  // Call a connector capability at BUILD time (P12 Increment F). This is what lets
+  // the converger READ the tenant's Airtable bases / table columns / real emails
+  // rather than asking them to be typed (§6.2.3). Absent ⇒ the graph degrades to
+  // asking, which is exactly what it did before F — never to guessing.
+  invokeCapability = null,
 } = {}) {
-  const graph = buildElicitationGraph({ llm, checkpointerDir });
+  const graph = buildElicitationGraph({ llm, checkpointerDir, invokeCapability });
 
   // Each converger turn = ~3 node executions (analyze + propose/clarify + interrupt).
   const cfg = (threadId) => ({ configurable: { threadId }, recursionLimit: 300 });

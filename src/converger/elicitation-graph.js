@@ -68,6 +68,252 @@ export const DRAFT_DEFAULT = {
   errorHandling: {},
 };
 
+// ── Schema-aware destinations (P12 Increment F) ───────────────────────────────
+
+/** Does this node reach into the named connector? */
+function usesConnector(node, connector) {
+  const id = node?.type === 'connector-action' ? node.config?.action
+           : node?.type === 'deliver'          ? node.config?.channel
+           : null;
+  return typeof id === 'string' && id.startsWith(`${connector}_`);
+}
+
+/**
+ * Is this base id one the TENANT ACTUALLY HAS?
+ *
+ * The first version asked a different and much weaker question — "does this LOOK
+ * like a base id?" — and an LLM asked for an id it cannot know does not produce
+ * `appXXXXXXXXXXXXXX`. It produces something PLAUSIBLE: `appABCDEFGHIJKLMN` passes
+ * a shape test perfectly. And because the whole `destinations` node was gated on
+ * that test, one plausible hallucination skipped the base lookup, the table lookup
+ * AND the column mapping — the entire increment — and the fake id rode into the
+ * ratified spec. (Found by the test-adversary.)
+ *
+ * A shape test cannot answer this. Only the LIST can: an id is resolved iff it is
+ * one of the bases the connector just told us the tenant has. That is decidable,
+ * and it is the same discipline as §11.7 — do not guess at a domain you can read.
+ */
+function isKnownBase(v, bases) {
+  const s = String(v ?? '').trim();
+  if (!s || s.includes('{{') || s.includes('<')) return false;
+  return (bases ?? []).some(b => b.id === s);
+}
+
+/**
+ * Restate the outcome's promise in the REAL column names.
+ *
+ * `destinations` rewrites the NODE's columns. If the outcome's assertion still
+ * promises the old ones, the node writes `Deal Size`, the contract demands `Budget`,
+ * UNSATISFIED_ASSERTION fires, and the spec CANNOT PUBLISH — on the success path,
+ * exactly when the mapping did its job. `complete ⇒ publishable` was false precisely
+ * when the increment worked. (Found by the test-adversary.)
+ *
+ * A promise the workflow now genuinely keeps must be a promise the contract can
+ * recognise. But an assertion field with NO real column is NOT quietly deleted —
+ * that would be the silent drop this whole phase exists to kill, performed by the
+ * very code meant to prevent it. It stays, it fails UNSATISFIED_ASSERTION, and the
+ * user is told which column their table does not have.
+ */
+function rewriteAssertionFields(outcome, renames, columns) {
+  if (!outcome || !renames || !Object.keys(renames).length) return outcome ?? null;
+  const real = new Set(columns.map(c => String(c.name).toLowerCase()));
+
+  const assertions = (outcome.assertions ?? []).map((a) => {
+    if (!/airtable/i.test(String(a?.target ?? '')) || !Array.isArray(a?.fields)) return a;
+    const fields = a.fields.map((f) => {
+      if (real.has(String(f).toLowerCase())) return f;   // already a real column
+      // The mapping model told us what this promise is called in the real table
+      // ("Budget" → "Deal Size"). Restate the promise in the world's own words.
+      const hit = renames[f] ?? Object.entries(renames)
+        .find(([intended]) => String(intended).toLowerCase() === String(f).toLowerCase())?.[1];
+      // NO counterpart ⇒ LEAVE IT UNCHANGED. Deleting it would be the silent drop
+      // this phase exists to kill, performed by the code meant to prevent it. It
+      // stays, UNSATISFIED_ASSERTION fires, and the user is told which column their
+      // table does not have.
+      return hit ?? f;
+    });
+    return { ...a, fields };
+  });
+  return { ...outcome, assertions };
+}
+
+/**
+ * A write node's columns, whatever shape they were written in.
+ *
+ * `fields` can arrive as an OBJECT or as a JSON STRING — the Airtable handler parses
+ * a string (`typeof fields === 'string' ? JSON.parse(fields)`) and the capability's
+ * own schema advertises the textarea form. And THREE separate guards each asked
+ * `typeof fields === 'object'` in their own hand-copied line:
+ *
+ *   · the harvest   — what the mapper is asked to map
+ *   · the rewrite   — what gets the real columns written into it
+ *   · the RE-CHECK  — the fix for the previous blocker
+ *
+ * Every one of them FAILED OPEN on a string. So a JSON-string `fields` was resolved
+ * (base id written in) and its columns were never looked at: the spec published,
+ * Airtable silently discarded the invented column, and the record was created with
+ * it empty. `run_completed`. Forever.
+ *
+ * Worse, the previous round's fix made the oracle PARSE a string `fields` — which was
+ * right on its own terms and made the shape pass MORE checks, all of them trivially
+ * self-satisfied, because the node's invented column names and the assertion's
+ * invented column names HAVE THE SAME AUTHOR. Fail-open-and-silent became
+ * fail-open-and-CONFIDENT. (Found by the independent verifier.)
+ *
+ * Three call sites with one copied predicate is exactly how that happens. There is one
+ * reader now, and the writer NORMALISES the string away.
+ */
+function readFields(config) {
+  let f = config?.fields;
+  if (typeof f === 'string') {
+    try { f = JSON.parse(f); } catch { return null; }
+  }
+  return f && typeof f === 'object' && !Array.isArray(f) ? f : null;
+}
+
+/**
+ * Write the resolved destination into every node that needed one.
+ *
+ * `columnsRead` is the load-bearing argument. When we HAVE read the table's columns,
+ * the node's `fields` are replaced by the mapped ones — INCLUDING when the mapping
+ * produced nothing at all.
+ *
+ * The first version only rewrote when the mapping was non-null, so a PARTIAL mismatch
+ * was corrected and a TOTAL mismatch shipped VERBATIM: every column the model invented
+ * survived into the spec, Airtable silently ignored all of them, and the record was
+ * created empty. The worst case took the only path with no defence — which is the
+ * shape of every defect in this phase. (Found by the test-adversary.)
+ *
+ * Writing `{}` instead is not a silent drop: `fields` is what the outcome's assertion
+ * is checked against, so a node that now writes NO columns fails UNSATISFIED_ASSERTION
+ * against a contract still promising `Name` and `Budget`. The spec does not publish and
+ * the user is told their table has neither column — which is the truth, and the thing
+ * they need to know.
+ */
+function fillDestination(nodes, { baseId, tableId, fields, columnsRead = false }) {
+  return nodes.map((n) => {
+    if (!usesConnector(n, 'airtable')) return n;
+    const config = { ...(n.config ?? {}), baseId };
+    if (tableId) config.tableId = tableId;
+    // Only touch `fields` where the node HAS them (a create/update). A search or a
+    // delete has none, and inventing some would be a config key nothing reads.
+    // NORMALISES the string form away: what goes back is always an object, so every
+    // later reader (and every later guard) sees the same shape.
+    if (columnsRead && readFields(config)) {
+      config.fields = fields ?? {};
+    }
+    return { ...n, config };
+  });
+}
+
+/**
+ * Map the fields the draft INTENDED onto the columns that ACTUALLY EXIST.
+ *
+ * This is the whole point of reading the schema, and skipping it would be worse
+ * than not reading it at all: **Airtable silently ignores an unknown field name.**
+ * Post `{ "Budget": 80000 }` to a table whose column is `Deal Size` and the record
+ * is created, the column is empty, `run_completed` fires, and the workflow reports
+ * success forever. The user finds out when a quarter's leads have no budgets.
+ *
+ * A column the draft wants and the table does NOT have is left OUT rather than
+ * guessed at — and it stays in the outcome's assertions, so `UNSATISFIED_ASSERTION`
+ * reports it as a promise the workflow cannot keep. That is the honest failure: the
+ * spec does not publish, and the user is told which column is missing.
+ */
+async function mapFieldsToColumns({ llm, sessionId, nodes, columns, outcome, table }) {
+  const none = { fields: null, renames: {}, unmapped: [] };
+  const wanted = {};
+  for (const n of nodes) {
+    const f = readFields(n?.config);
+    if (f) Object.assign(wanted, f);
+  }
+  if (!Object.keys(wanted).length || !columns.length) return none;
+
+  const colList = columns.map(c => `- ${c.name} (${c.type}${c.choices?.length ? `: ${c.choices.join(' | ')}` : ''})`).join('\n');
+  const parsed = await llmJson(llm, [
+    new SystemMessage('You map a workflow\'s intended fields onto the REAL columns of a table. You never invent a column. You reply with JSON only.'),
+    new HumanMessage(
+      `The workflow wants to write these fields into the table "${table}":\n${JSON.stringify(Object.keys(wanted), null, 2)}\n\n` +
+      `The table's REAL columns are:\n${colList}\n\n` +
+      `Outcome: ${outcome?.statement ?? '(none)'}\n\n` +
+      'For EACH intended field, give the REAL column it belongs in — or null if the table has no such column.\n' +
+      'Return {"map": { "<intended field>": "<REAL column name>" | null }}.\n' +
+      'Use ONLY column names from the list above. A name that is not on the list is SILENTLY IGNORED by ' +
+      'Airtable — the record is created, the column is empty, and nobody is ever told. ' +
+      'If nothing fits, answer null; do not invent a column.',
+    ),
+  ], tierCfg('fast', sessionId));
+
+  const raw = parsed?.map;
+  if (!raw || typeof raw !== 'object') return none;
+
+  // TRUST NOTHING THE MAPPING MODEL RETURNS. It is an LLM being asked about a closed
+  // set; a column it invents here is the exact defect this function exists to
+  // prevent, just introduced by us instead of by the author.
+  const real = new Map(columns.map(c => [c.name.toLowerCase(), c.name]));
+  const renames  = {};
+  const fields   = {};
+  const unmapped = [];
+  for (const [intended, value] of Object.entries(wanted)) {
+    const proposed = raw[intended];
+    const column   = proposed == null ? null : real.get(String(proposed).toLowerCase()) ?? null;
+    if (!column) { unmapped.push(intended); continue; }
+    renames[intended] = column;
+    fields[column]    = value;          // the VALUE the author wrote — we rename the column, never the data
+  }
+  return Object.keys(fields).length
+    ? { fields, renames, unmapped }
+    : { fields: null, renames: {}, unmapped: Object.keys(wanted) };
+}
+
+/**
+ * Three REAL emails from the user's own inbox, to be picked from. (Increment F.)
+ *
+ * converger-v2 §6.4 calls this "the biggest single unlock", and the reasoning is
+ * worth keeping: asked to invent test cases, people invent EASY ones. The case that
+ * finds the bug is the awkward real message — the forwarded thread, the one with the
+ * budget in the signature, the one that is not really a lead at all — and nobody
+ * types that from memory. We have `gmail_search` and we have their token.
+ *
+ * The trigger's own filter IS the query. That is the point: the examples are drawn
+ * from exactly the population the workflow will run on, so an example that does not
+ * match the trigger cannot appear (and if the trigger's filter is wrong, the picker
+ * shows the wrong emails — which is itself the fastest way to find that out).
+ *
+ * Returns `{ items: [], source: null }` when there is no live source. The caller
+ * then falls back to the model's proposed cases, which are clearly LABELLED as
+ * proposals — never dressed up as the user's real mail.
+ */
+async function fetchRealExamples({ invokeCapability, triggers, capabilities }) {
+  const none = { items: [], source: null, query: null };
+  if (!invokeCapability) return none;
+
+  const emailTrigger = (Array.isArray(triggers) ? triggers : []).find(t => t?.type === 'email');
+  if (!emailTrigger) return none;
+
+  // Gmail must actually be connected — `capabilities.channels` is the live, per-tenant
+  // catalog, so this is a fact rather than a hope.
+  const hasGmail = (capabilities?.channels ?? []).some(c => c?.id === 'gmail_search' || String(c?.id ?? '').startsWith('gmail_'));
+  if (!hasGmail) return none;
+
+  const query = String(emailTrigger.filter ?? '').trim() || 'newer_than:30d';
+  try {
+    const res = await invokeCapability('gmail_search', { query, maxResults: 3 });
+    const msgs = res?.messages ?? res?.results ?? (Array.isArray(res) ? res : []);
+    const items = msgs.slice(0, 3).map((m, i) => ({
+      id: m.id ?? `real${i + 1}`,
+      // The label is what the user READS before clicking. Subject + sender is what
+      // they recognise an email by; a message id is not.
+      label: `${m.subject ?? '(no subject)'} — ${m.from ?? 'unknown sender'}`,
+      given: { subject: m.subject ?? '', from: m.from ?? '', body: m.snippet ?? m.body ?? '' },
+      real:  true,   // provenance: this came from their inbox, not from a model
+    })).filter(e => e.given.subject || e.given.body);
+    return items.length ? { items, source: 'gmail', query } : none;
+  } catch {
+    return none;   // an unreadable inbox is a reason to ask, never a reason to invent
+  }
+}
+
 // ── Tier config helper ────────────────────────────────────────────────────────
 // Build an invoke config that routes through ModelPool to the requested tier.
 // Always call llm.invoke(messages, tierCfg(name, sessionId)) rather than
@@ -84,7 +330,7 @@ function tierCfg(tierName, sessionId) {
  * @param {{ llm: ModelPool, checkpointerDir?: string }} opts
  * @returns {CompiledGraph}
  */
-export function buildElicitationGraph({ llm, checkpointerDir = './memory/converger' }) {
+export function buildElicitationGraph({ llm, checkpointerDir = './memory/converger', invokeCapability = null }) {
   const graph = new StateGraph({
     stateSchema: {
       // Plain defaults (no reducer — replacement semantics)
@@ -103,6 +349,18 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
       gapRounds:         0,
       sufficiencyChecks: 0,
       _missingNote:      null,
+      // The last accepted proposal was a NO-OP (see `propose`). Read by `analyze`.
+      _noProgress:       false,
+      // The destination (Airtable base + table + columns) has been resolved from the
+      // live connector once (P12 Increment F). Without this the gap loop would
+      // re-enter `destinations` on its way back to ratify and ask "which base?"
+      // again — and a question asked twice is a question people learn to click past.
+      destinationsResolved: false,
+      // The resolved destination: { baseId, table, columns }. Cached so the connector
+      // is asked ONCE — and so the columns are available to RE-CHECK the write node on
+      // every later pass, because a propose round after the resolution can put an
+      // invented column straight back (spec-assembler replaces a node by id).
+      destination:          null,
       // The decision tables have been shown to the user once (P12 Increment E).
       // The gap loop can re-enter `decisions` on its way back to ratify, and
       // re-asking someone to review a table they just reviewed is how a review
@@ -264,23 +522,42 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
   // "Show me a case." The SME's rows — which become the ACCEPTANCE SUITE, not
   // just colour. Skipping is one click and is a legitimate answer.
   //
-  // The example PICKER (pull three real emails from the user's actual inbox via
-  // gmail_search, and let them click) is Increment F. Until then this offers the
-  // model's proposed cases and a skip, and never demands typing.
+  // THE PICKER (P12 Increment F, §6.4 — "the biggest single unlock"). Do NOT ask a
+  // user to invent test cases: they invent EASY ones, and the case that finds the
+  // bug is the awkward real one they would never think to type. We hold their Gmail
+  // token. So when the workflow triggers on email, we go and READ three real
+  // messages and let them click — zero typing, and the examples are true.
+  //
+  // Falls back to the model's proposed cases when there is no live source (no Gmail,
+  // a non-email trigger, a lookup failure). Inventing a plausible-looking "real"
+  // email would be worse than proposing an obviously-modelled one, because the user
+  // would believe it came from their inbox.
   graph.addNode('examples', async (state, cfg) => {
     const sessionId = cfg?.configurable?.threadId;
 
-    const parsed = await llmJson(llm, [
-      new SystemMessage(buildSystemPrompt(state.capabilities)),
-      new HumanMessage(buildExamplesPrompt({ intent: state.intent, outcome: state.draft?.outcome })),
-    ], tierCfg('fast', sessionId));
+    const real = await fetchRealExamples({
+      invokeCapability, triggers: state.draft?.triggers, capabilities: state.capabilities,
+    });
 
-    const proposed = (parsed?.examples ?? []).filter(e => e?.given);
+    let proposed = real.items;
+    let source   = real.source;
+    let query    = real.query;
+
+    if (!proposed.length) {
+      const parsed = await llmJson(llm, [
+        new SystemMessage(buildSystemPrompt(state.capabilities)),
+        new HumanMessage(buildExamplesPrompt({ intent: state.intent, outcome: state.draft?.outcome })),
+      ], tierCfg('fast', sessionId));
+      proposed = (parsed?.examples ?? []).filter(e => e?.given);
+      source   = null;
+      query    = null;
+    }
     if (!proposed.length) return { phase: 'process' };
 
     const confirmation = await interrupt({
       type:        'example_request',
-      source:      null,               // Increment F fills this from a live connector
+      source,                          // 'gmail' when these are the user's OWN emails
+      query,                           // …and the search that found them, so it is auditable
       items:       proposed.map((e, i) => ({ id: e.id ?? `e${i + 1}`, preview: e.label ?? JSON.stringify(e.given), raw: e })),
       allowManual: true,
       allowSkip:   true,
@@ -316,10 +593,10 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
   // Where the shape is not derivable (an Airtable write needs a base and a table
   // — Increment F reads those from the connector), nothing is invented: the
   // assertion simply stays an open gap and the propose loop fills it.
-  graph.addNode('process', async (state) => {
+  graph.addNode('process', async (state, cfg) => {
     const draft = state.draft ?? { ...DRAFT_DEFAULT };
     const assertions = draft.outcome?.assertions ?? [];
-    if (!assertions.length) return { phase: 'analyzing' };
+    if (!assertions.length) return { phase: 'examples' };
 
     const nodes = [...(draft.nodes ?? [])];
     const derived = [];
@@ -330,13 +607,42 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
       nodes.push(node);
       derived.push({ assertionId: a.id, nodeId: node.id });
     }
-    if (!derived.length) return { phase: 'analyzing' };
+
+    // ── THE TRIGGER IS PART OF THE GRAPH THIS NODE BACKWARD-CHAINS ───────────
+    //
+    // It was not, and the omission silently disabled half of Increment F. The
+    // EXAMPLE PICKER reads the trigger's own filter to know WHICH emails to fetch —
+    // and `examples` ran BEFORE anything had ever put a trigger in the draft (only
+    // `propose` did, much later), so `draft.triggers` was `[]` every single time.
+    // `fetchRealExamples` therefore returned nothing in EVERY session, the fallback
+    // fired always, and "no typed example" never once happened. The picker was
+    // unreachable code that looked like a feature. (Found by the test-adversary.)
+    //
+    // A trigger is not an afterthought to be proposed later: it is the entry point
+    // of the graph, and it is derivable from the same contract every other node here
+    // is derived from. So it is derived HERE, and `examples` now runs AFTER this
+    // node, with a real filter to search on.
+    let triggers = Array.isArray(draft.triggers) ? draft.triggers : [];
+    if (!triggers.length) {
+      const t = await llmJson(llm, [
+        new SystemMessage('You pick the event that STARTS a workflow. JSON only.'),
+        new HumanMessage(
+          `Intent: "${state.intent}"\nOutcome: ${draft.outcome?.statement ?? ''}\n\n` +
+          'What starts this workflow? Return {"trigger":{"type":"email"|"schedule"|"manual"|"connector_event","filter":"<a Gmail search query, for an email trigger — e.g. to:leads@acme.com>","cron":"<for a schedule>"}}. ' +
+          'For an email trigger the filter is a REAL Gmail search query: it is used to find the actual messages this workflow will run on.',
+        ),
+      ], tierCfg('fast', cfg?.configurable?.threadId));
+      const trig = t?.trigger;
+      if (trig?.type) triggers = [trig];
+    }
+
+    if (!derived.length && !triggers.length) return { phase: 'examples' };
 
     return {
-      draft: { ...draft, nodes },
-      confirmationLog: [{ step: state.step, type: 'process', derived }],
+      draft: { ...draft, nodes, triggers },
+      confirmationLog: [{ step: state.step, type: 'process', derived, triggers }],
       step:  state.step + 1,
-      phase: 'analyzing',
+      phase: 'examples',
     };
   });
 
@@ -387,6 +693,12 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
       }
       return { phase: 'gapping' };
     }
+
+    // The last accepted proposal changed NOTHING (the model re-proposed an edge the
+    // draft already had; applyProposal dedupes, so the draft came back identical).
+    // The model has nothing left to add — asking it again just produces the same
+    // proposal, and asking the USER again makes them click the same card twice.
+    if (state._noProgress) return { phase: 'gapping', _noProgress: false };
 
     if ((state.proposeRounds ?? 0) >= MAX_PROPOSE_ROUNDS) return { phase: 'gapping' };
 
@@ -487,6 +799,38 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
 
     if (confirmation?.type === 'accept') {
       newDraft = applyProposal(state.draft, proposal, confirmation);
+
+      // ── A PROPOSAL THAT CHANGES NOTHING IS NOT A PROPOSAL ─────────────────
+      //
+      // `applyProposal` DEDUPES: an edge that already exists is not added again
+      // (spec-assembler.js). So when the model proposes an edge the draft already
+      // has, the draft comes back IDENTICAL — the model then sees the same draft,
+      // proposes the same edge, and the loop spins until MAX_PROPOSE_ROUNDS burns
+      // out. Observed against the live model: **fourteen consecutive identical
+      // "add this connection" proposals**, each one a card the user has to click.
+      //
+      // It was invisible because the gap loop was inert (its suggestions were never
+      // matched, so a blocking gap never re-entered `propose`) — so the spin ran
+      // ONCE, fitted inside the headless step cap, and nobody looked. Fixing the gap
+      // loop doubled the propose rounds and pushed it over, which is how it surfaced.
+      //
+      // A no-op accept means the model has nothing left to add. Take it at its word
+      // and move on to the gaps, rather than asking the user to confirm the same
+      // thing again. The propose loop's job is to CHANGE the draft; a round that
+      // cannot is a round that must not repeat.
+      //
+      // …and it must be recorded in STATE, not in `phase`: the edge out of `propose`
+      // is an UNCONDITIONAL one to `analyze`, which recomputes the phase from the
+      // draft — so a `phase: 'gapping'` set here is simply overwritten, and the loop
+      // spins on regardless. `analyze` reads this flag and stops.
+      if (JSON.stringify(newDraft) === JSON.stringify(state.draft)) {
+        return {
+          confirmationLog: [{ ...logEntry, noop: true }],
+          _noProgress:     true,
+          step:            state.step + 1,
+          phase:           'analyzing',
+        };
+      }
     } else if (confirmation?.type === 'modify') {
       // Apply modification: ask LLM to merge the user's override into the proposal
       const modSysmsg  = new SystemMessage(buildSystemPrompt(state.capabilities));
@@ -515,6 +859,199 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
       confirmationLog: [logEntry],
       step:            state.step + 1,
       phase:           'analyzing',
+    };
+  });
+
+  // ── destinations ───────────────────────────────────────────────────────────
+  // "Which base? Which table?" — as CLICKS, never as a pasted id. (Increment F.)
+  //
+  // This is §6.2.3 (*never ask for something we can read*) made concrete, and it is
+  // where "just talk to it" previously died: a workflow that writes to Airtable
+  // needs `appXXXXXXXXXXXXXX` and an exact table name, and no amount of conversation
+  // can produce them. The model cannot know them; the user has to go and look them
+  // up. So the builder stopped being a builder and became a form.
+  //
+  // We hold the tenant's OAuth token, and it can read all of it. So:
+  //
+  //   0 bases  → say so plainly (they connected an empty Airtable)
+  //   1 base   → TAKE IT. Zero-typing (§6.2.4): a question with one possible answer
+  //              is not a question, it is a speed bump.
+  //   N bases  → chips. `choices[]` is the SHARED interrupt primitive (§6.3), so
+  //              this needs no new client surface — the composer already renders it.
+  //
+  // …and the same for tables. Then the table's REAL columns go into the draft, so
+  // the record lands in `Deal Size` rather than in a column the model invented.
+  //
+  // NO INVOKER ⇒ WE ASK, WE NEVER GUESS. Without a live connector this node is a
+  // pass-through and the ordinary propose loop asks the user for the id, exactly as
+  // it did before F. Degrading to a question is honest; degrading to a made-up base
+  // id would write a customer's lead into nothing.
+  const AIRTABLE_ID_KEYS = { baseId: 'airtable', spreadsheetId: 'sheets' };
+
+  graph.addNode('destinations', async (state, cfg) => {
+    const sessionId = cfg?.configurable?.threadId;
+    const nodes = state.draft?.nodes ?? [];
+
+    // Which steps write to Airtable? ALL of them are candidates — we do NOT ask
+    // whether the model's base id "looks real" first, because a plausible-looking
+    // hallucination (`appABCDEFGHIJKLMN`) passes any shape test, and gating the whole
+    // node on that test let one guess skip the base lookup, the table lookup and the
+    // column mapping. Ask the connector; it knows. (Found by the test-adversary.)
+    const airtableNodes = nodes.filter(n => usesConnector(n, 'airtable'));
+    if (!airtableNodes.length || !invokeCapability) return { phase: 'gapping' };
+
+    // ── THE LATCH STOPS US ASKING AGAIN. IT MUST NOT STOP US CHECKING AGAIN. ──
+    //
+    // `destinationsResolved` used to skip this node entirely on re-entry, and that
+    // was a hole straight back to the defect the increment exists to kill:
+    //
+    //   · `applyProposal` REPLACES a node by id (spec-assembler.js).
+    //   · A BLOCKING gap routes back through `propose`.
+    //   · So any propose round AFTER the resolution can rewrite the write node's
+    //     `fields` — and nothing re-checked them against the real table.
+    //
+    // And the gap loop HANDS THE MODEL THE MOTIVE. The blocking gap says "you
+    // promised Company and nothing writes it", so the model obligingly re-proposes
+    // the node with `Company` back on it. The honest failure this increment
+    // designed — an unmappable column stays in the contract and fails loudly — is
+    // converted into a SILENT SUCCESS by the very loop that reported it. It
+    // publishes; Airtable ignores the column; the record is created with it empty;
+    // `run_completed`. Forever. (Found by the independent verifier.)
+    //
+    // The invariant — "this write's columns have been checked against the real
+    // table" — was established once and never re-established. A fact that can be
+    // falsified by the next node is not an invariant, it is a memory.
+    //
+    // So: the RESOLVED DESTINATION is cached (no second lookup, no second "which
+    // base?" — a question asked twice is one people learn to click past), and the
+    // COLUMNS ARE RE-CHECKED on every pass. Re-checking is free: it reads state.
+    const cached = state.destination;
+    if (cached?.columns) {
+      const real = new Set(cached.columns.map(c => String(c.name).toLowerCase()));
+      const drifted = airtableNodes.some((n) => {
+        const f = readFields(n.config);
+        // A `fields` we cannot read AT ALL is drift too: it is a write whose columns
+        // nobody has checked, which is the whole thing we are guarding against.
+        if (!f) return typeof n.config?.fields === 'string';
+        return Object.keys(f).some(k => !real.has(String(k).toLowerCase()));
+      });
+      if (!drifted) return { phase: 'gapping' };
+
+      // A column crept back in. Re-map against the columns we already read, and
+      // restate the contract — exactly as on the first pass.
+      const { fields: mapped, renames, unmapped } = await mapFieldsToColumns({
+        llm, sessionId, nodes: airtableNodes, columns: cached.columns,
+        outcome: state.draft?.outcome, table: cached.table,
+      });
+      return {
+        draft: {
+          ...state.draft,
+          outcome: rewriteAssertionFields(state.draft?.outcome, renames, cached.columns),
+          nodes: fillDestination(nodes, {
+            baseId: cached.baseId, tableId: cached.table, fields: mapped, columnsRead: true,
+          }),
+        },
+        confirmationLog: [{ step: state.step, type: 'destination_rechecked', unmapped }],
+        step:  state.step + 1,
+        phase: 'gapping',
+      };
+    }
+    if (state.destinationsResolved) return { phase: 'gapping' };
+
+    // ── 1. The base ──────────────────────────────────────────────────────────
+    let bases;
+    try {
+      bases = (await invokeCapability('airtable_list_bases'))?.bases ?? [];
+    } catch (err) {
+      // A connector that cannot be read is not a connector that can be guessed at.
+      // Fall through to the ordinary loop, which ASKS.
+      return { phase: 'gapping', confirmationLog: [{ step: state.step, type: 'destination_lookup_failed', error: String(err?.message ?? err) }] };
+    }
+    if (!bases.length) return { phase: 'gapping' };
+
+    // A base id the model already put in the draft is honoured ONLY if the tenant
+    // actually has it. Anything else is a guess, and a guess writes the customer's
+    // lead into a base that does not exist.
+    const already = airtableNodes.map(n => n.config?.baseId).find(b => isKnownBase(b, bases));
+    let base = already ? bases.find(b => b.id === already) : bases[0];
+    if (bases.length > 1) {
+      const answer = await interrupt({
+        type: 'clarification',
+        question: 'Which Airtable base should this write to?',
+        choices: bases.map((b, i) => ({ id: b.id, label: b.name, selected: i === 0 })),
+        step: state.step,
+      });
+      base = bases.find(b => b.id === answer?.id || b.name === answer?.answer) ?? bases[0];
+    }
+
+    // ── 2. The table, and its REAL columns ───────────────────────────────────
+    let tables = [];
+    try {
+      tables = (await invokeCapability('airtable_describe_base', { baseId: base.id }))?.tables ?? [];
+    } catch { /* fall through: we have a base, and the loop can still ask for a table */ }
+    if (!tables.length) {
+      return {
+        draft: { ...state.draft, nodes: fillDestination(nodes, { baseId: base.id }) },
+        destinationsResolved: true, step: state.step + 1, phase: 'gapping',
+      };
+    }
+
+    let table = tables[0];
+    if (tables.length > 1) {
+      const answer = await interrupt({
+        type: 'clarification',
+        question: `Which table in "${base.name}"?`,
+        choices: tables.map((t, i) => ({ id: t.id, label: t.name, selected: i === 0 })),
+        step: state.step,
+      });
+      table = tables.find(t => t.id === answer?.id || t.name === answer?.answer) ?? tables[0];
+    }
+
+    // ── 3. Map the promised fields onto the columns that ACTUALLY EXIST ───────
+    // One cheap call. The alternative is the model inventing `Budget` when the
+    // column is called `Deal Size`, which Airtable accepts by silently ignoring —
+    // the record is created, the field is empty, and the run reports success.
+    const columns = table.fields ?? [];
+    const { fields: mapped, renames, unmapped } = await mapFieldsToColumns({
+      llm, sessionId, nodes: airtableNodes, columns,
+      outcome: state.draft?.outcome, table: table.name,
+    });
+
+    // ── 4. THE OUTCOME MUST BE REWRITTEN TOO ─────────────────────────────────
+    //
+    // Rewriting the NODE's columns and leaving the outcome's assertion promising the
+    // old ones is a dead end with the lights on: the node now writes `Deal Size`, the
+    // contract still promises `Budget`, UNSATISFIED_ASSERTION fires, and the spec
+    // CANNOT PUBLISH — on the SUCCESS path, when the mapping did exactly its job.
+    // `complete ⇒ publishable` was false precisely when the increment worked. That is
+    // the Increment C blocker, reintroduced by F's headline feature.
+    //
+    // The contract is a promise about the REAL world, and we have just learned what
+    // the real world's columns are called. So the promise is restated in the world's
+    // own words — and the restatement is logged, because silently editing a user's
+    // contract is exactly the sin the outcome exists to prevent.
+    // (Found by the test-adversary.)
+    const outcome = rewriteAssertionFields(state.draft?.outcome, renames, columns);
+
+    return {
+      draft: {
+        ...state.draft,
+        outcome,
+        nodes: fillDestination(nodes, { baseId: base.id, tableId: table.name, fields: mapped, columnsRead: true }),
+      },
+      destination: { baseId: base.id, table: table.name, columns },
+      confirmationLog: [{
+        step: state.step, type: 'destination_resolved',
+        base: { id: base.id, name: base.name }, table: table.name,
+        columns: columns.map(c => c.name), mapped, renames,
+        // A field the table simply does not have. Said out loud: it stays in the
+        // outcome, fails UNSATISFIED_ASSERTION, and the user is told — rather than
+        // being quietly dropped by the code written to stop things being dropped.
+        unmapped,
+      }],
+      destinationsResolved: true,
+      step:  state.step + 1,
+      phase: 'gapping',
     };
   });
 
@@ -812,23 +1349,35 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
   graph.setEntryPoint('outcome');
 
   graph.addConditionalEdges('outcome', (state) => {
-    if (state.phase === 'examples')  return 'examples';
+    if (state.phase === 'examples')  return 'process';   // …which then runs examples
     if (state.phase === 'analyzing') return 'analyze';   // no contract could be formed — v1 path
     return 'outcome';                                     // asked a question; re-derive with the answer
   });
 
-  graph.addEdge('examples', 'process');
-  graph.addEdge('process', 'analyze');
+  // ORDER CORRECTED (Increment F): outcome → PROCESS → EXAMPLES → analyze.
+  //
+  // §2.1 drew it outcome → examples → process, and that order silently made the
+  // example picker unreachable: the picker searches the user's inbox with THE
+  // TRIGGER'S OWN FILTER, and nothing had put a trigger in the draft yet — so it
+  // read `triggers: []` in every session and fell back to modelled cases every
+  // time. `process` derives the trigger (it is the entry point of the graph it
+  // backward-chains), so examples now runs with a real query to search on.
+  graph.addEdge('process', 'examples');
+  graph.addEdge('examples', 'analyze');
 
   graph.addConditionalEdges('analyze', (state) => {
-    if (state.phase === 'gapping')    return 'decisions';   // …which falls straight
-    if (state.phase === 'ratifying')  return 'ratify';      //   through to `gaps`
-    if (state.phase === 'clarifying') return 'clarify';     //   when nothing decides
-    return 'propose';
+    if (state.phase === 'gapping')    return 'destinations'; // …→ decisions → gaps,
+    if (state.phase === 'ratifying')  return 'ratify';       //   each a pass-through
+    if (state.phase === 'clarifying') return 'clarify';      //   when it has nothing
+    return 'propose';                                        //   to do
   });
 
   graph.addEdge('clarify', 'analyze');
   graph.addEdge('propose', 'analyze');
+  // destinations → decisions → gaps. The order is load-bearing in both places:
+  // the table under review must be the one whose columns were just resolved, and
+  // the gap list must be about the draft AS CORRECTED by both.
+  graph.addEdge('destinations', 'decisions');
   graph.addEdge('decisions', 'gaps');
 
   graph.addConditionalEdges('gaps', (state) => {
