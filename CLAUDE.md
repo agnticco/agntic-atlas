@@ -899,6 +899,35 @@ refactor them without an explicit decision recorded here:
     the whole suite still green. **Mutation-test the guards you add in the fix, not just the ones you
     started with.** Fifth occurrence of that exact lesson; it is now 35 curated mutations, all killed.
 
+- **Multiple destinations — a delivery's return value is a RECEIPT, not the work product
+  (2026-07-14).** Surfaced by a load-bearing test and reported as *"the workflow only did the Slack
+  send"*. The report's premise was wrong in an instructive way, and re-grounding it before writing the
+  brief is the only reason the right thing got fixed:
+  - **The engine DOES fan out.** One `deliver` per destination, each edged from the content step; both
+    run. That was never broken, and `prompts.js` has always taught it.
+  - **What broke is what the SECOND destination received.** `deliver` was in `_node-input.js`'s
+    `NON_CONTENT_TYPES` (so an `llm` never ingests a receipt) but **not** in `flow-tester.js`'s
+    `CONTROL_TYPES`, which is the set that governs `lastOutput`. So the first delivery's receipt
+    (`{delivered, ts}`) became `lastOutput`, and the second `deliver` — which builds its body from
+    `ctx.lastOutput` — **shipped the first one's receipt to the customer**: Slack got the summary,
+    Gmail got `{"delivered":true,"ts":"…"}`. With `run_completed`, no error, and the run marked
+    success. From outside it looks exactly like *"only the Slack one worked"*.
+  - **It also means `run.output` has been the last channel's receipt all along** — which is what the
+    console shows, what the Inbox stores, and what `output-validator.js` inspects for an empty body or
+    a leaked template. Those checks have been reading the wrong thing; `EMPTY_BODY` could never fire
+    correctly. Fixing `lastOutput` fixes them by construction.
+  - Fix: **`deliver` joins `CONTROL_TYPES`** — fourth member, same class as `branch`/`human`/`decision`.
+    The receipt is not deleted, it is simply not the work product: the deliver node's own
+    `step_completed` still carries the `ts`, which is what the **P3 gate** reads to prove runnability
+    (it reads `step_completed`, not `run_completed` — checked before touching it).
+  - `tests/workflows/fan-out.test.js` (new, in the gate + both mutation lists) **asserts what each
+    destination RECEIVED**, not that a delivery ran — a test that only checks "two deliveries happened"
+    passes on the broken engine. The defect is *asymmetric* (destination #1 is always fine), so the
+    suite also runs the edges in the reverse order and with three destinations.
+  - **The other half of the original report — the converger DROPPING a requested destination — is
+    Increment C's defect #1 and is already closed** (`UNSATISFIED_ASSERTION`: a spec that promises
+    email and doesn't send it does not publish). Pinned by the same new suite so it cannot come back.
+
 ## Support tickets (in-app feedback / bug reporting) — added 2026-07-08
 
 Users submit bugs/ideas/requests from a floating **Feedback** button in the operator

@@ -108,6 +108,9 @@ const SUITES = [
   // customer once per row, free text laundered into the table through a non-LLM enum
   // input, and a classifier returning the value the model NEGATED.
   'tests/workflows/decision-adversarial.test.js',
+  // The fan-out: a delivery's return value is a RECEIPT, not the work product.
+  // Without this the CONTROL_TYPES `deliver` guard is unkillable by construction.
+  'tests/workflows/fan-out.test.js',
 ];
 
 /**
