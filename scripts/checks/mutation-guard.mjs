@@ -148,7 +148,11 @@ const MUTATIONS = [
   // ── the approval gate's only integrity constraint in B ───────────────────
   { file: 'src/workflows/node-types/human.js',
     name: 'human accepts an answer outside the declared set',
-    find: '    if (allowed.length && !allowed.includes(String(provided.decision))) {', repl: '    if (false) {' },
+    // Anchor re-grounded (P12 Increment D): the `run()` allow-check dropped its
+    // `allowed.length &&` guard when `allowedDecisions()` began ALWAYS returning a
+    // non-empty set (approve|reject|timeout). Same line, same defect under
+    // mutation (a human accepting an off-enum answer) — just the current text.
+    find: '    if (!allowed.includes(String(provided.decision))) {', repl: '    if (false) {' },
   { file: 'src/workflows/node-types/human.js',
     name: 'human defaults to approved when no decision was given',
     find: '    if (!provided || !provided.decision) {', repl: '    if (false) {' },

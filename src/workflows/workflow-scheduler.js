@@ -18,6 +18,7 @@ import { translateError } from './error-translator.js';
 import { validateRunOutput } from './output-validator.js';
 import { deadlineFrom } from './duration.js';
 import { normalizeDecisions, TIMEOUT_DECISION } from './node-types/human.js';
+import { timeoutAuthorizesWrite } from './workflow-validator.js';
 
 const TICK_INTERVAL_MS = 60_000;
 
@@ -575,11 +576,39 @@ export class WorkflowScheduler {
       const ask = run.pending_ask ?? {};
       const then = ask.timeout?.then == null ? null : String(ask.timeout.then);
       const allowed = new Set(normalizeDecisions(ask.decisions));
-      const decision = (then && allowed.has(then)) ? then : TIMEOUT_DECISION;
+      let decision = (then && allowed.has(then)) ? then : TIMEOUT_DECISION;
+
+      // SILENCE IS NOT CONSENT (F3). The validator now rejects `then: 'approve'`
+      // at build time, but a spec ALREADY IN THE DATABASE predates that rule — and
+      // the engine must not rely on the validator having run (the
+      // BRANCH_TARGET_EXTRA_PARENT doctrine). So trace what this decision would
+      // actually do: if it routes to a real send or write, the system would be
+      // approving on a person's behalf. Downgrade to `timeout` (which the mandatory
+      // catch-all handles) rather than perform it. The sweeper is INCAPABLE of
+      // auto-authorising an action nobody approved.
+      const workflow = this.workflowStore.get(run.workflow_id);
+      if (workflow && decision !== TIMEOUT_DECISION
+          && timeoutAuthorizesWrite({ nodes: workflow.nodes, edges: workflow.edges }, run.paused_node, decision)) {
+        log.warn(`[workflow-scheduler] pause on run ${run.id.slice(0, 8)}: timeout "${decision}" would act with nobody's approval — resolving as "${TIMEOUT_DECISION}" instead`);
+        decision = TIMEOUT_DECISION;
+      }
 
       log.info(`[workflow-scheduler] pause on run ${run.id.slice(0, 8)} expired — resolving as "${decision}"`);
       try {
         if (this._onTimeout) await this._onTimeout({ run, ask, decision });
+        // `then: 'escalate'` must actually TELL A PERSON (found by the verifier,
+        // R3). `escalate` is not one of the node's decisions, so it resolves as
+        // `timeout` (routing to the catch-all) — which is the safe path, but on its
+        // own it is silent, and the whole point of `escalate` over `reject` is that
+        // somebody hears about it. Put it in the owner's Approvals list.
+        if (then === 'escalate' && this._notifyEscalation && workflow) {
+          try {
+            await this._notifyEscalation({
+              workflow, run, nodeId: run.paused_node,
+              error: 'Nobody answered this approval in time — it was escalated.',
+            });
+          } catch (e) { log.warn(`[workflow-scheduler] timeout escalation notice failed: ${e.message}`); }
+        }
         await this.resumeRun(run, { decision, by: 'system:timeout', channel: 'timeout' });
       } catch (e) {
         log.error(`[workflow-scheduler] timeout sweep failed for run ${run.id.slice(0, 8)}: ${e.message}`);

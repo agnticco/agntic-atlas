@@ -910,9 +910,17 @@ Therefore:
 | Code | Rule | Severity |
 |---|---|---|
 | `HUMAN_WITHOUT_TIMEOUT` | a `human` node **must** declare `timeout` | **error** — a pause with no timeout is a workflow that hangs forever |
-| `WEAK_APPROVAL_FOR_WRITE` | a write capability gated by a `medium`-trust channel alone | **error** |
+| `HUMAN_BAD_TIMEOUT` | `timeout.then` is not one of the node's answers OR would perform a real send/write on silence | **error** — silence is not consent; a timeout may say *don't* (`reject`) or `escalate`, never *do it* |
+| `HUMAN_ANSWER_NOT_ROUTED` | a `human` whose decision **no `branch` routes on** — the step after it runs whatever the answer was | **error** — a human alone is not a gate; it must feed a `branch` on `{{<id>.decision}}` |
+| `WEAK_APPROVAL_FOR_WRITE` | a write capability (incl. **a write inside a `foreach`**) gated by a `medium`-trust channel alone | **error** |
 | `APPROVAL_CHANNEL_NOT_CONNECTED` | `channels[].type` not in the tenant's connected catalog | **error** |
 | `EMAIL_REPLY_APPROVAL` | `email_reply` used at all | **error** — see §7.2 |
+
+> **A `branch` may route on `<id>.decision` only when `<id>` is a `human` node** (the value's domain is
+> `approve\|reject\|timeout`, via `closedDomainOf`). The reference grammar (`branch.js` `ON_REF`) and all
+> three validator parsers (`BRANCH_BAD_ON`, `_checkDecisionInputs`/the moat, `BRANCH_CASE_NOT_IN_ENUM`)
+> share one definition — teach one and leave the others behind, and the moat has a hole
+> (found: the D verifier + adversary, round 2).
 
 ---
 

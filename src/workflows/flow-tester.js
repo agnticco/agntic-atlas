@@ -22,6 +22,7 @@ import { withTimeout } from '../utils/with-timeout.js';
 import { numEnv } from '../utils/env.js';
 import { liftV1Node } from './node-types/compat-v1.js';
 import { buildAsk } from './node-types/human.js';
+import { ON_REF } from './node-types/branch.js';
 
 /**
  * Control nodes. Their output is routing/audit metadata, not the work product,
@@ -218,8 +219,28 @@ export class FlowTester {
     };
 
     /** Light up this node's outgoing edges. A branch lights only the case it picked. */
+    // Is `targetId` a `branch` that routes on `humanId`'s decision? That is the
+    // ONLY successor a `human` may light — see the human block in propagate().
+    const isGateFor = (humanId, targetId) => {
+      const t = byId.get(targetId);
+      if (t?.type !== 'branch') return false;
+      const ref = String(t.config?.on ?? '').trim().replace(/^\{\{\s*|\s*\}\}$/g, '').trim();
+      return ON_REF.exec(ref)?.[1] === humanId;
+    };
+
     const propagate = (nodeId, output) => {
-      const isBranch = byId.get(nodeId)?.type === 'branch';
+      const node = byId.get(nodeId);
+      const isBranch = node?.type === 'branch';
+      // A `human` NODE ALONE IS NOT A GATE (P12 Increment D — found by the
+      // verifier + the test-adversary, F2). A human only REPORTS its decision, so
+      // nothing stops the next step running whatever the answer was: `draft → ask
+      // → send` DELIVERS A REJECTED DRAFT to the customer. The answer only means
+      // something if a `branch` routes on it — so a human lights ONLY an outgoing
+      // edge to a branch that routes on THIS human. Any other successor stays dark
+      // (it is the ungated shape the validator now rejects; but a spec already in
+      // the database predates that rule, and the engine must not rely on the
+      // validator having run — the BRANCH_TARGET_EXTRA_PARENT doctrine).
+      const isHuman = node?.type === 'human';
       // A FAILURE PATH IS NOT A SUCCESSOR (P12 Increment D).
       //
       // `on_error: { then: 'route_to:handler' }` needs an edge node→handler, and
@@ -263,6 +284,8 @@ export class FlowTester {
         // its own failure to the same handler, and that leg must still be able to
         // light it.
         if (target === errorTarget) continue;
+        // A human lights only the branch that reads its answer. See above.
+        if (isHuman && !isGateFor(nodeId, target)) continue;
         liveInto.set(target, (liveInto.get(target) ?? 0) + 1);
       }
     };

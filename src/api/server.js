@@ -997,9 +997,16 @@ export async function bootSpine() {
     resumeRun: (run, answer) => engine.workflowScheduler.resumeRun(run, answer),
     // Block Kit buttons. Posts as the TENANT's bot, never the operator's: an
     // approval must be asked in the workspace whose data it concerns.
+    //
+    // `getSlackToken` (with the cipher), NOT `getSlackGrant`. `getSlackGrant`
+    // returns { connected, scopes, account } and has NO botToken — so reading
+    // `?.botToken` off it is always undefined, and the token silently fell back to
+    // the operator's env SLACK_BOT_TOKEN. A tenant with its own connected
+    // workspace would have its approval posted into the OPERATOR's Slack (found by
+    // the verifier, R1). This is the same decrypt path server.js:353 already uses.
     postSlack: async ({ tenantId, channel, text, blocks }) => {
       let token;
-      try { token = getSlackGrant({ oauthTokenStore: auth.oauthTokenStore, tenantId })?.botToken; }
+      try { token = getSlackToken({ oauthTokenStore: auth.oauthTokenStore, cipher: auth.tokenCipher, tenantId })?.botToken; }
       catch { /* no grant */ }
       token ??= process.env.SLACK_BOT_TOKEN;
       if (!token) throw new Error('Slack is not connected for this workspace');
@@ -1165,9 +1172,15 @@ export function createApp(spine) {
     res.setHeader('X-Request-Id', req.id);
     res.on('finish', () => {
       if (req.path.startsWith('/assets/') || req.path === '/favicon.ico') return;
+      // Redact the raw approval token from the logged path (R1310, found by the
+      // verifier, R2). The ApprovalStore keeps only the token's SHA-256 hash on
+      // disk precisely so a leak yields no usable link — writing the plaintext
+      // token into ./memory/logs/atlas-events.log undoes that. Single-use + TTL
+      // limit the blast radius, but the log has no business holding a credential.
+      const path = req.path.replace(/^(\/approvals\/)[^/]+/, '$1<token>');
       logEvent('http', {
         reqId: req.id,
-        method: req.method, path: req.path, status: res.statusCode, ms: Date.now() - t0,
+        method: req.method, path, status: res.statusCode, ms: Date.now() - t0,
         tenant: req.tenant?.id ?? null, user: req.user?.id ?? null,
       });
     });
