@@ -23,9 +23,12 @@
 
 import { CapabilityRegistry }      from '../../src/connectors/capability-registry.js';
 import { ChannelRegistry }         from '../../src/workflows/channel-registry.js';
+import { registerBuiltInChannels } from '../../src/workflows/index.js';
 import { registerSlackChannel }    from '../../src/connectors/slack/index.js';
 import { registerGoogleChannels }  from '../../src/connectors/google/index.js';
 import { registerAirtableChannels } from '../../src/connectors/airtable/index.js';
+import { registerFilesystemCapabilities } from '../../src/connectors/filesystem.js';
+import { registerWebCapabilities } from '../../src/connectors/web/index.js';
 
 /**
  * @returns {ChannelRegistry} the real catalog, with every capability forced
@@ -42,9 +45,17 @@ export function realCatalog() {
   const caps     = new CapabilityRegistry();
   const channels = new ChannelRegistry(caps);
 
+  // EVERYTHING buildEngine() registers, in its order. The first version registered
+  // only slack/google/airtable — and therefore omitted `in_app`, which is `deliver`'s
+  // DEFAULT channel (`cfg.channel ?? 'in_app'`). So every suite using this helper was
+  // blind to the commonest delivery in the product: flaw #2 living inside the helper
+  // written to fix flaw #2. (Found by the test-adversary.)
+  registerBuiltInChannels(channels, {});          // in_app + webhook
   registerSlackChannel(channels);
   registerGoogleChannels(caps);
   registerAirtableChannels(caps);
+  registerFilesystemCapabilities(caps, {});
+  registerWebCapabilities(caps, { llm: null });
   const get = channels.get.bind(channels);
   // isReady() is false without live tokens, which would make every spec fail on
   // CHANNEL_UNAVAILABLE and tell us nothing about the keys. Availability is a

@@ -128,8 +128,16 @@ const flagship = (over = {}) => ({
       action: 'airtable_create_record',
       baseId: 'appAAAAAAAAAAAAA1',
       tableId: 'Leads',
-      // THE REAL COLUMNS — "Deal Size", not "Budget"; "Account", not "Company".
-      fields: { Name: '{{extract.output}}', Account: '{{extract.output}}', 'Deal Size': '{{extract.output}}', Priority: '{{score.output}}' },
+      // THE REAL COLUMNS — "Deal Size", not "Budget"; "Account", not "Company" — and
+      // ONE TEMPLATE PER COLUMN. The first version of this fixture wrote
+      // `{{extract.output}}` into every column, which is the WHOLE JSON BLOB in each:
+      //     Name = {"name":"Dana","company":"Acme","budget":80000}
+      // …and the test passed, because it asserted the KEY was right and never looked
+      // at the VALUE. That is the "assert what it SENT, not that it ran" lesson, and it
+      // was sitting in the acceptance test for the increment whose entire purpose is
+      // this defect. The per-field template grammar ({{step.field}}) exists so that the
+      // correct shape is expressible at all. (Found by the independent verifier.)
+      fields: { Name: '{{extract.name}}', Account: '{{extract.company}}', 'Deal Size': '{{extract.budget}}', Priority: '{{score.output}}' },
     }, idempotency: { key: '{{extract.output}}', on_conflict: 'skip' } },
     { id: 'announce', type: 'deliver', label: 'Tell #sales-urgent', config: { channel: 'slack', target: '#sales-urgent' } },
   ],
@@ -249,7 +257,13 @@ describe('the flagship runs: email in → record + Slack out', () => {
     assert.equal(created[0].table, 'Leads');
     assert.ok('Deal Size' in created[0].fields,
       'the record must use the column that EXISTS. "Budget" would be accepted by Airtable and silently ignored.');
-    assert.equal(created[0].fields.Priority, 'P1', 'the decision fed the record');
+
+    // ASSERT THE VALUES, not just the column names. A record whose every column holds
+    // the entire extract blob has the right KEYS and is still garbage — and that is
+    // exactly what this fixture used to produce, green.
+    assert.deepEqual(created[0].fields, {
+      Name: 'Dana', Account: 'Acme', 'Deal Size': '80000', Priority: 'P1',
+    }, 'each column gets ITS OWN value — not the whole JSON blob in every one');
 
     assert.equal(posted.length, 1, 'and #sales-urgent was told');
     assert.equal(/"value"|"rule"/.test(String(posted[0])), false,

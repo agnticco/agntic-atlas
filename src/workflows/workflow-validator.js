@@ -153,146 +153,12 @@ export class WorkflowValidator {
         continue;
       }
 
-      // known type (consult registry if available)
-      const typeDef = this.nodeTypes?.get?.(node.type) ?? null;
-      if (this.nodeTypes && !typeDef) {
-        issues.push({
-          severity: 'error', code: 'UNKNOWN_NODE_TYPE',
-          message: `Step "${node.id}" uses an unsupported type "${node.type}".`,
-          nodeId: node.id, field: 'type',
-          hint: `Allowed: ${this.nodeTypes.typeIds().join(', ')}.`,
-        });
-        continue;
-      }
-
-      const cfg = node.config ?? {};
-
-      // required config — inferred from the type's configSchema (fields
-      // without `optional: true` are required).
-      //
-      // For a `connector-action` and a `deliver`, "required" also includes the
-      // SELECTED CAPABILITY's own required params (P12 Increment F). An
-      // `airtable_create_record` with no `baseId` is not a workflow with a small
-      // omission — it is one that cannot possibly run, and it used to publish
-      // clean and fail at 3am against a real customer's trigger.
-      const capSchema = this._capabilitySchemaFor(node, cfg);
-      const schema    = [...(typeDef?.configSchema ?? []), ...capSchema];
-      const required  = schema.filter(f => !f.optional).map(f => f.key);
-      for (const key of [...new Set(required)]) {
-        const v = cfg[key];
-        if (v == null || (typeof v === 'string' && !v.trim())) {
-          issues.push({
-            severity: 'error', code: 'MISSING_CONFIG',
-            message: `"${node.label || node.id}" is a ${typeDef?.label || node.type} step but is missing its ${key}.`,
-            nodeId: node.id, field: `config.${key}`,
-            hint: schema.find(f => f.key === key)?.hint ?? this._requiredFieldHint(node.type, key),
-          });
-        }
-      }
-
-      // ── UNKNOWN_CONFIG_KEY ────────────────────────────────────────────
-      // A node's config keys must be a SUBSET of its type's configSchema.
-      //
-      // Without this, a converger that hallucinates a config field ships it:
-      // a real emitted spec carried `"model": "claude-opus-4-5"` on an llm
-      // node — a model that does not exist and a key in no schema — and the
-      // executor silently ignored it and ran the default model. Nobody found
-      // out. An unknown key is not a shrug; it means the spec asked for
-      // something the engine will not do, and the user will never be told.
-      //
-      // NOTHING IS 'open' ANY MORE (P12 Increment F). `connector-action` was the
-      // last one, on the reasoning that its params are per-capability and this
-      // schema cannot enumerate them. True — and beside the point: every
-      // CAPABILITY declares its own `configSchema`, so the key set is simply
-      // "the node's own keys ∪ the selected capability's", exactly as `deliver`
-      // has resolved its channel's keys since Increment C. The schema was there
-      // all along and was never consulted. `configPolicy` is kept because a
-      // future type may genuinely need it, and because a check that cannot be
-      // scoped is a check that gets deleted the first time it is inconvenient.
-      //
-      // ── AND IT ONLY RUNS WHEN THE CAPABILITY CAN BE RESOLVED ──────────────
-      //
-      // A `deliver` / `connector-action` whose capability we cannot look up has an
-      // UNKNOWABLE key set — and an unknowable key set is not a wrong one. Judging
-      // it anyway rejects `baseId` on an Airtable action purely because the caller
-      // had no registry, which is a false rejection produced by the checker's own
-      // configuration rather than by anything in the spec.
-      //
-      // That is safe to skip precisely because it never happens in production:
-      // publish always wires the registry (server.js), and the GAP SCORER REFUSES
-      // TO CERTIFY a spec it could not check (CHANNELS_UNVERIFIED). Skipping here
-      // and failing closed there is the split that keeps `complete ⇒ publishable`
-      // true without making the validator unusable to every caller that has no
-      // catalog. (P12 Increment F — the same rule `_checkHumanNode` already applies
-      // to approval channels.)
-      // Ask the REGISTRY whether it knows the capability — do not infer it from
-      // `capSchema.length`, because a capability that genuinely takes no params has
-      // an empty schema and is perfectly well resolved. Inferring "resolved" from
-      // "has keys" would silently stop checking exactly the capabilities whose key
-      // set is `{}` — i.e. the ones where ANY key is a hallucination.
-      const capBearing  = node.type === 'deliver' ? cfg.channel
-                        : node.type === 'connector-action' ? cfg.action
-                        : null;
-      const capResolved = !capBearing || !!this._resolveCapability(capBearing);
-
-      if (typeDef && typeDef.configPolicy !== 'open' && capResolved) {
-        const declared = new Set((typeDef.configSchema ?? []).map(f => f.key));
-
-        // A `deliver` node's config is deliver's OWN keys plus the SELECTED
-        // CHANNEL's — because a delivery channel is a capability with its own
-        // parameters, and the channel is the only place they can be declared.
-        //
-        // Increment A missed this and it was a live defect: `sheets_append`'s
-        // handler reads `config.spreadsheetId` and `config.range`
-        // (src/connectors/google/index.js:694) and `airtable_create_record`
-        // reads baseId/tableId/fields — none of which `deliver` declares, so
-        // EVERY delivery to a Sheet or an Airtable base was rejected at publish
-        // with UNKNOWN_CONFIG_KEY. The converger's own system prompt renders
-        // those exact shapes from the channel catalog and tells the model to
-        // emit them, so the builder was instructing users to build workflows it
-        // would then refuse to save. (slack/gmail escaped only because their
-        // keys happen to overlap deliver's own.)
-        //
-        // This is a narrowing of the schema's LIE, not a widening of the check:
-        // an undeclared key is still an error, `model` is still rejected, and
-        // `message` is still rejected. The keys now checked against are simply
-        // the true ones. Where the channel cannot be resolved (no registry
-        // wired), its params are unknowable — so they are not judged, exactly as
-        // connector-action's are not.
-        // …and a `connector-action`'s config is ITS own keys plus the SELECTED
-        // CAPABILITY's, for exactly the same reason. Same resolver, keyed on
-        // `action` instead of `channel` (P12 Increment F).
-        for (const f of capSchema) declared.add(f.key);
-
-        for (const key of Object.keys(cfg)) {
-          if (declared.has(key)) continue;
-          issues.push({
-            severity: 'error', code: 'UNKNOWN_CONFIG_KEY',
-            message: `"${node.label || node.id}" sets "${key}", which a ${typeDef.label || node.type} step has no such setting for — it would be silently ignored at run time.`,
-            nodeId: node.id, field: `config.${key}`,
-            hint: declared.size
-              ? `A ${typeDef.label || node.type} step accepts: ${[...declared].join(', ')}.`
-              : `A ${typeDef.label || node.type} step takes no configuration.`,
-          });
-        }
-      }
-
-      // type-specific semantic checks
-      this._checkTypeSpecific(node, issues);
-
-      // Custom per-type validator (e.g. daily_digest's JSON parse check)
-      if (typeof typeDef?.validate === 'function') {
-        try {
-          const extra = typeDef.validate(node) ?? [];
-          for (const e of extra) issues.push(e);
-        } catch (err) {
-          issues.push({
-            severity: 'error', code: 'VALIDATOR_ERROR',
-            message: `"${node.label || node.id}" failed type-specific validation: ${err.message}.`,
-            nodeId: node.id, field: null,
-          });
-        }
-      }
+      // Every config check for this node — required keys, UNKNOWN_CONFIG_KEY,
+      // the capability's own params, the type-specific rules. ONE implementation,
+      // because a `foreach` sub-step is a node too and must be checked identically
+      // (P12 Increment F — it was not, and every check F added stopped at the
+      // loop's edge).
+      if (!this._checkNodeConfig(node, issues)) continue;
     }
 
     // ── 3. Trigger + deliver presence ─────────────────────────────────────
@@ -304,7 +170,23 @@ export class WorkflowValidator {
     // event-triggered specs whose entry step is seeded from the trigger event.
     const triggerCount = nodes.filter(n => n.type === 'trigger').length;
     const hasTriggerDefinition = Array.isArray(def.triggers) && def.triggers.length > 0;
-    const deliverCount = nodes.filter(n => n.type === 'deliver').length;
+    // ── A WORKFLOW NEEDS AN EFFECT, NOT A `deliver` NODE ────────────────────
+    //
+    // This counted `type === 'deliver'` and nothing else, so a workflow whose whole
+    // job is to MOVE DATA — inbound email → extract → create an Airtable record —
+    // was rejected unless a pointless delivery was bolted onto the end. The record
+    // IS the outcome. Demanding a `deliver` on top of it is the same failure as the
+    // old five-item checklist that made the converger invent an LLM step for a
+    // genuinely two-step workflow (defect #4, killed in Increment C): a checklist
+    // shaped like one workflow, imposed on every workflow.
+    //
+    // A workflow is complete when it DOES something outside Atlas. `isWriteNode`
+    // already answers exactly that question — a `deliver`, a create/send
+    // connector-action, or a `foreach` containing one (it recurses) — and it is the
+    // same predicate the approval rules use, so "what counts as an effect" has one
+    // definition. (Raised by the operator: workflows take all shapes.)
+    const effectNodes = nodes.filter(n => isWriteNode(n));
+    const deliverCount = effectNodes.length;
     if (triggerCount === 0 && !hasTriggerDefinition) {
       issues.push({
         severity: 'error', code: 'MISSING_TRIGGER',
@@ -315,10 +197,12 @@ export class WorkflowValidator {
     }
     if (deliverCount === 0) {
       issues.push({
+        // The code is kept (it is machine-read by the UI and the gap scorer), but the
+        // rule it names is broader than its name: what is missing is an EFFECT.
         severity: 'error', code: 'MISSING_DELIVER',
-        message: 'The workflow needs at least one destination (a deliver step).',
+        message: 'The workflow never does anything — it reads and thinks, but nothing leaves Atlas.',
         nodeId: null, field: null,
-        hint: 'Add a deliver step at the end — to the Inbox, a webhook, or another channel.',
+        hint: 'End it with something real: deliver the result somewhere, or create/update a record. A workflow whose output nobody receives has no output.',
       });
     }
 
@@ -940,6 +824,30 @@ export class WorkflowValidator {
       // The checks below must see it, or the highest-risk write shape in the
       // engine (N writes per fire) is the only one nobody warns about.
       if (node?.type === 'foreach') {
+        // ── EVERY CONFIG CHECK RECURSES INTO THE LOOP (P12 Increment F) ────────
+        //
+        // The validator's node loop walks `spec.nodes`; a loop's steps live in
+        // `config.steps`, so every check written for a top-level node stopped at the
+        // loop's edge. A `connector-action` INSIDE a foreach took a nonexistent
+        // action id, a hallucinated param, a missing `tableId`, an unknown column and
+        // the dead `model` key — and validated clean, scored complete. The identical
+        // node one level up is rejected on all five.
+        //
+        // This is the laundering hop CLAUDE.md names four times now (BRANCH_IN_FOREACH,
+        // the sub-loop's own CONTROL_SUBSTEP_TYPES, `isWriteNode`'s recursion in D4,
+        // and this). It is NEWLY reachable because Increment F's own prompt teaches
+        // `foreach` for the first time — with the example "create a record for every
+        // row", which is precisely an `airtable_create_record` inside a loop: the exact
+        // node whose params F had just started checking. F taught the model to emit the
+        // one shape where none of its checks could see. (Found by the verifier + the
+        // test-adversary.)
+        //
+        // A RULE, not a patch: a check on a node's CONFIG is a check on every node's
+        // config, wherever the node lives. `_checkNodeConfig` is the one place that
+        // knows how, and both call sites use it.
+        for (const sub of normalizeSteps(node.config?.steps)) {
+          this._checkNodeConfig(sub, issues, { inForeach: node });
+        }
         for (const sub of normalizeSteps(node.config?.steps)) {
           if (sub?.on_error?.then) {
             issues.push({
@@ -1156,6 +1064,163 @@ export class WorkflowValidator {
     }
   }
 
+  /**
+   * EVERY CONFIG CHECK FOR ONE NODE, wherever that node lives.
+   *
+   * Extracted from validate()'s node loop (P12 Increment F) because a `foreach`'s
+   * sub-steps are real nodes — they run, they write, they take connector params —
+   * and the loop only ever walked `spec.nodes`. So a `connector-action` inside a
+   * loop took a nonexistent action id, a hallucinated param and the dead `model`
+   * key, and validated CLEAN, while the identical node one level up was rejected on
+   * all three. Every check written for a node must be a check on every node.
+   *
+   * @returns {boolean} false when the node is so broken that later checks would be
+   *          noise (unknown type) — the caller skips it, exactly as the loop did.
+   */
+  _checkNodeConfig(node, issues, { inForeach = null } = {}) {
+    // known type (consult registry if available)
+    const typeDef = this.nodeTypes?.get?.(node.type) ?? null;
+    if (this.nodeTypes && !typeDef) {
+      issues.push({
+        severity: 'error', code: 'UNKNOWN_NODE_TYPE',
+        message: `Step "${node.id}" uses an unsupported type "${node.type}".`,
+        nodeId: node.id, field: 'type',
+        hint: `Allowed: ${this.nodeTypes.typeIds().join(', ')}.`,
+      });
+      return false;
+    }
+
+    const cfg = node.config ?? {};
+
+    // required config — inferred from the type's configSchema (fields
+    // without `optional: true` are required).
+    //
+    // For a `connector-action` and a `deliver`, "required" also includes the
+    // SELECTED CAPABILITY's own required params (P12 Increment F). An
+    // `airtable_create_record` with no `baseId` is not a workflow with a small
+    // omission — it is one that cannot possibly run, and it used to publish
+    // clean and fail at 3am against a real customer's trigger.
+    const capSchema = this._capabilitySchemaFor(node, cfg);
+    const schema    = [...(typeDef?.configSchema ?? []), ...capSchema];
+    const required  = schema.filter(f => !f.optional).map(f => f.key);
+    for (const key of [...new Set(required)]) {
+      const v = cfg[key];
+      if (v == null || (typeof v === 'string' && !v.trim())) {
+        issues.push({
+          severity: 'error', code: 'MISSING_CONFIG',
+          message: `"${node.label || node.id}" is a ${typeDef?.label || node.type} step but is missing its ${key}.`,
+          nodeId: node.id, field: `config.${key}`,
+          hint: schema.find(f => f.key === key)?.hint ?? this._requiredFieldHint(node.type, key),
+        });
+      }
+    }
+
+    // ── UNKNOWN_CONFIG_KEY ────────────────────────────────────────────
+    // A node's config keys must be a SUBSET of its type's configSchema.
+    //
+    // Without this, a converger that hallucinates a config field ships it:
+    // a real emitted spec carried `"model": "claude-opus-4-5"` on an llm
+    // node — a model that does not exist and a key in no schema — and the
+    // executor silently ignored it and ran the default model. Nobody found
+    // out. An unknown key is not a shrug; it means the spec asked for
+    // something the engine will not do, and the user will never be told.
+    //
+    // NOTHING IS 'open' ANY MORE (P12 Increment F). `connector-action` was the
+    // last one, on the reasoning that its params are per-capability and this
+    // schema cannot enumerate them. True — and beside the point: every
+    // CAPABILITY declares its own `configSchema`, so the key set is simply
+    // "the node's own keys ∪ the selected capability's", exactly as `deliver`
+    // has resolved its channel's keys since Increment C. The schema was there
+    // all along and was never consulted. `configPolicy` is kept because a
+    // future type may genuinely need it, and because a check that cannot be
+    // scoped is a check that gets deleted the first time it is inconvenient.
+    //
+    // ── AND IT ONLY RUNS WHEN THE CAPABILITY CAN BE RESOLVED ──────────────
+    //
+    // A `deliver` / `connector-action` whose capability we cannot look up has an
+    // UNKNOWABLE key set — and an unknowable key set is not a wrong one. Judging
+    // it anyway rejects `baseId` on an Airtable action purely because the caller
+    // had no registry, which is a false rejection produced by the checker's own
+    // configuration rather than by anything in the spec.
+    //
+    // That is safe to skip precisely because it never happens in production:
+    // publish always wires the registry (server.js), and the GAP SCORER REFUSES
+    // TO CERTIFY a spec it could not check (CHANNELS_UNVERIFIED). Skipping here
+    // and failing closed there is the split that keeps `complete ⇒ publishable`
+    // true without making the validator unusable to every caller that has no
+    // catalog. (P12 Increment F — the same rule `_checkHumanNode` already applies
+    // to approval channels.)
+    // Ask the REGISTRY whether it knows the capability — do not infer it from
+    // `capSchema.length`, because a capability that genuinely takes no params has
+    // an empty schema and is perfectly well resolved. Inferring "resolved" from
+    // "has keys" would silently stop checking exactly the capabilities whose key
+    // set is `{}` — i.e. the ones where ANY key is a hallucination.
+    const capBearing  = node.type === 'deliver' ? cfg.channel
+                      : node.type === 'connector-action' ? cfg.action
+                      : null;
+    const capResolved = !capBearing || !!this._resolveCapability(capBearing);
+
+    if (typeDef && typeDef.configPolicy !== 'open' && capResolved) {
+      const declared = new Set((typeDef.configSchema ?? []).map(f => f.key));
+
+      // A `deliver` node's config is deliver's OWN keys plus the SELECTED
+      // CHANNEL's — because a delivery channel is a capability with its own
+      // parameters, and the channel is the only place they can be declared.
+      //
+      // Increment A missed this and it was a live defect: `sheets_append`'s
+      // handler reads `config.spreadsheetId` and `config.range`
+      // (src/connectors/google/index.js:694) and `airtable_create_record`
+      // reads baseId/tableId/fields — none of which `deliver` declares, so
+      // EVERY delivery to a Sheet or an Airtable base was rejected at publish
+      // with UNKNOWN_CONFIG_KEY. The converger's own system prompt renders
+      // those exact shapes from the channel catalog and tells the model to
+      // emit them, so the builder was instructing users to build workflows it
+      // would then refuse to save. (slack/gmail escaped only because their
+      // keys happen to overlap deliver's own.)
+      //
+      // This is a narrowing of the schema's LIE, not a widening of the check:
+      // an undeclared key is still an error, `model` is still rejected, and
+      // `message` is still rejected. The keys now checked against are simply
+      // the true ones. Where the channel cannot be resolved (no registry
+      // wired), its params are unknowable — so they are not judged, exactly as
+      // connector-action's are not.
+      // …and a `connector-action`'s config is ITS own keys plus the SELECTED
+      // CAPABILITY's, for exactly the same reason. Same resolver, keyed on
+      // `action` instead of `channel` (P12 Increment F).
+      for (const f of capSchema) declared.add(f.key);
+
+      for (const key of Object.keys(cfg)) {
+        if (declared.has(key)) continue;
+        issues.push({
+          severity: 'error', code: 'UNKNOWN_CONFIG_KEY',
+          message: `"${node.label || node.id}" sets "${key}", which a ${typeDef.label || node.type} step has no such setting for — it would be silently ignored at run time.`,
+          nodeId: node.id, field: `config.${key}`,
+          hint: declared.size
+            ? `A ${typeDef.label || node.type} step accepts: ${[...declared].join(', ')}.`
+            : `A ${typeDef.label || node.type} step takes no configuration.`,
+        });
+      }
+    }
+
+    // type-specific semantic checks
+    this._checkTypeSpecific(node, issues);
+
+    // Custom per-type validator (e.g. daily_digest's JSON parse check)
+    if (typeof typeDef?.validate === 'function') {
+      try {
+        const extra = typeDef.validate(node) ?? [];
+        for (const e of extra) issues.push(e);
+      } catch (err) {
+        issues.push({
+          severity: 'error', code: 'VALIDATOR_ERROR',
+          message: `"${node.label || node.id}" failed type-specific validation: ${err.message}.`,
+          nodeId: node.id, field: null,
+        });
+      }
+    }
+    return true;
+  }
+
   // ── Internals ─────────────────────────────────────────────────────────
 
   /**
@@ -1209,16 +1274,67 @@ export class WorkflowValidator {
   _checkTypeSpecific(node, issues) {
     const cfg = node.config ?? {};
 
+    // ── UNCHECKABLE_WRITE_FIELDS (P12 Increment F) ─────────────────────────
+    //
+    // THE COLUMN NAMES OF A WRITE MUST BE KNOWN AT BUILD TIME. Airtable SILENTLY
+    // IGNORES a field name that is not a column: the record is created, the column
+    // is empty, `run_completed` fires, and the workflow reports success forever.
+    // The user finds out when a quarter of their leads have no budgets.
+    //
+    // Everything else in this increment — reading the real columns, mapping onto
+    // them, checking them against the outcome — rests on being able to SEE the
+    // column names in the spec. A `fields` that is a TEMPLATE string
+    // (`fields: "{{extract.output}}"`) hands that decision to a model at RUN time,
+    // where nothing can check it and nothing will ever be told. It is the same
+    // unbounded-domain argument as §11.7, applied to columns instead of to a
+    // decision input.
+    //
+    // It was also, until now, the ONLY way to write correct per-column values —
+    // the template grammar could not express `{{extract.budget}}`, so the object
+    // form could only put the whole JSON blob into every column. That is fixed in
+    // the same commit; the correct shape now exists, so the uncheckable one can be
+    // refused. (Found by the independent verifier.)
+    if (node.type === 'connector-action' || node.type === 'deliver') {
+      const f = cfg.fields;
+      if (typeof f === 'string' && /\{\{/.test(f)) {
+        issues.push({
+          severity: 'error', code: 'UNCHECKABLE_WRITE_FIELDS',
+          message: `"${node.label || node.id}" builds its record's COLUMN NAMES from a template, so nobody can check them until it runs — and a column that doesn't exist is silently ignored, leaving it empty with no error.`,
+          nodeId: node.id, field: 'config.fields',
+          hint: 'Write the columns out: { "Name": "{{extract.name}}", "Deal Size": "{{extract.budget}}" }. One template per column, not one template for the whole record.',
+        });
+      } else if (typeof f === 'string') {
+        try { JSON.parse(f); } catch {
+          issues.push({
+            severity: 'error', code: 'UNCHECKABLE_WRITE_FIELDS',
+            message: `"${node.label || node.id}" has a record whose fields can't be read — it isn't valid JSON, so it would fail at run time.`,
+            nodeId: node.id, field: 'config.fields',
+            hint: 'Use an object: { "Name": "{{extract.name}}" }.',
+          });
+        }
+      }
+    }
+
     // A connector-action naming a capability that does not exist threw at RUN time
     // ("Connector action X is not available in this build") — i.e. at 6am, against
     // a real customer's trigger, in a log nobody reads. The catalog is right here
     // at build time; ask it then. Mirrors UNKNOWN_CHANNEL exactly. (Increment F.)
     if (node.type === 'connector-action' && cfg.action && this.channelRegistry) {
       const cap = this.channelRegistry.get?.(cfg.action);
-      if (!cap) {
+      // A TRIGGER capability is not an action. `gmail_new_message` exists in the
+      // catalog and has NO `handle` — it is the thing that STARTS a workflow, not a
+      // step inside one — so it resolved here, published clean, and threw "has no
+      // handler" at run time. It was also a converger/publish divergence: the
+      // scorer's catalog is `getAll()` (step + delivery only) and rejected it, while
+      // publish accepted it. Existing ≠ runnable. (Found by the test-adversary.)
+      const runnable = !cap ? false
+        : (Array.isArray(cap.positions) ? cap.positions.some(p => p === 'step' || p === 'delivery') : true);
+      if (!cap || !runnable) {
         issues.push({
           severity: 'error', code: 'UNKNOWN_CONNECTOR_ACTION',
-          message: `"${node.label || node.id}" runs the connector action "${cfg.action}", which isn't a capability this workspace has.`,
+          message: cap
+            ? `"${node.label || node.id}" runs "${cfg.action}", but that is a TRIGGER — it starts a workflow, it isn't a step you can run inside one.`
+            : `"${node.label || node.id}" runs the connector action "${cfg.action}", which isn't a capability this workspace has.`,
           nodeId: node.id, field: 'config.action',
           hint: 'Pick a connector action from the catalog — or connect the connector that provides it.',
         });
@@ -1308,7 +1424,11 @@ export class WorkflowValidator {
     // where edges are available — caller will recompute. For simplicity,
     // check each node's config strings against STATIC_VARS ∪ seenIds.
 
-    const refRe = /\{\{\s*([a-z0-9_-]+)(?:\.output)?\s*\}\}/gi;
+    // {{stepId}} · {{stepId.output}} · {{stepId.field}} — the last is P12 Increment F.
+    // Without a sub-field form, an Airtable record (a MAP of column → value, each
+    // value from a different part of the upstream extract) has NO correct spelling:
+    // the only expressible spec puts the whole JSON blob into every column.
+    const refRe = /\{\{\s*([a-z0-9_-]+)(?:\.[a-z0-9_-]+)?\s*\}\}/gi;
 
     // A foreach's per-item steps may reference each other by id. Those ids are
     // nested inside config, so they never reach the top-level `seenIds`.
@@ -1345,7 +1465,10 @@ export class WorkflowValidator {
     // date tokens; anything else (e.g. {{node.results[*].id}}) is passed through
     // literally and fails at runtime. Catch it at build time instead.
     const anyRe = /\{\{\s*([^}]+?)\s*\}\}/g;
-    const okRe  = /^[a-z0-9_-]+(\.output)?$/i;
+    // A SINGLE dotted sub-field is now supported ({{extract.budget}}); array indexing,
+    // wildcards and deeper paths ({{node.results[*].id}}, {{a.b.c}}) are still NOT —
+    // the engine resolves one level and would pass anything else through literally.
+    const okRe  = /^[a-z0-9_-]+(\.[a-z0-9_-]+)?$/i;
     for (const node of nodes) {
       const strings = this._collectStrings(templateScannable(node));
       for (const s of strings) {

@@ -662,19 +662,29 @@ Return JSON only, using ONE of these two shapes:
 // ── Gap prompt — suggest an answer for each open gap ─────────────────────────
 
 export function buildGapPrompt({ intent, gaps }) {
+  // THE GAP IDS MUST BE IN THE PROMPT. They were not: the gaps were listed as
+  // "1., 2., 3." and the model was then asked to answer keyed by `gapId` — a string
+  // like `gap_unsatisfied_assertion_save_3` that it had never been shown. So it could
+  // not produce one, `suggestionFor()` returned null for EVERY gap, the paid call was
+  // discarded, and every row reached the user with an empty box. Worse, a BLOCKING gap
+  // is only routed back through the propose loop when it has an answer — so it never
+  // was, and "Accept all defaults" could not resolve a blocker at all. The one surface
+  // that makes v2's extra rigour affordable was inert. (Found by the test-adversary.)
   return `This workflow has cases nobody has decided about yet.
 
 INTENT: "${intent}"
 
-OPEN GAPS:
-${gaps.map((g, i) => `  ${i + 1}. [${g.class}] ${g.message}`).join('\n')}
+OPEN GAPS (answer each by its exact id):
+${gaps.map(g => `  - id: ${g.id}\n    [${g.class}] ${g.message}${g.hint ? `\n    hint: ${g.hint}` : ''}`).join('\n')}
 
 For each, suggest the single most likely answer, in plain language a non-technical person would
 click without hesitation. Be concrete and short (a few words). If the honest answer is "a person
 should look at this", say so — that is a good answer, not a failure.
 
+Use the EXACT id shown above for each gap — it is how your answer is matched back.
+
 Return JSON only:
-{"suggestions":[{"gapId":"<id>","answer":"<short plain-language answer>"}]}`;
+{"suggestions":[{"gapId":"<the exact id from the list above>","answer":"<short plain-language answer>"}]}`;
 }
 
 // ── Modify prompt — merge user override into a proposal ──────────────────────
