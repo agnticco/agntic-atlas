@@ -895,6 +895,65 @@ by this file — not a subagent. The other three are subagents in `.claude/agent
   from bypassing the commit-msg / pre-push hooks. Don't weaken the check scripts
   to force a pass either; if a check is wrong, fix it and record why here.
 
+### Review calibration — the INCREMENT loop (decided 2026-07-13, operator)
+
+The apparatus above was written for **phase gates**. Applied unchanged to every
+*increment*, it cost more than it bought: P12-C spent ~35 minutes of wall-clock on
+review that was **duplicated work**, not extra assurance. The three rules below
+buy that back. They change **when** and **how much** is re-run — they do **not**
+remove the independent check, because on the one increment where the moat itself
+was broken, the Builder's own suite was green and he would have merged it.
+
+**1. The verifier BLOCKS on user-reachable, silent defects. Everything else is a
+RESIDUAL.**
+A defect blocks the merge iff it is **(a) reachable in production** by a user or
+another tenant, **AND (b) silent** (no error is surfaced — it looks like success)
+**or destructive** (data loss, cross-tenant leak, money moved). Everything else —
+data hygiene, an unreachable code path, a cosmetic inconsistency — is a
+**residual**, not a failure.
+- The verifier must still **LIST every defect it finds**. It may never omit one
+  because it isn't a blocker. Suppressing a finding to speed a merge is the
+  failure mode this rule is most likely to cause, and it is forbidden.
+- Residuals are **recorded in this file** with `file:line` and **carried into the
+  next increment's brief**. A residual ledger is a debt ledger, not a shrug.
+- *(P12-C calibration: D1 — a spec scoring `complete` that then refuses to publish
+  — was correctly a blocker. D5 — a `spec_version` column left at 2 with no
+  contract in it, which nothing reads and no client can reach — should have been a
+  residual.)*
+
+**2. The gate is run ONCE, by the BUILDER. The verifier does NOT re-run it.**
+The Builder runs `bash scripts/gate.sh <phase>` and records **the log and the SHA
+it was run at**. The verifier's job is to confirm `git rev-parse HEAD` **matches
+that SHA** and that the log shows the expected stop point — not to recompute a
+20-minute deterministic result. **It re-runs the gate only if the tree has moved.**
+- This is not a trust concession: the gate is **hook-enforced at push** for any
+  gate-closing commit, and re-running it *cannot* be a fresh signal at the same
+  SHA. (It can, in fact, be a *worse* one — P3 and the converger-adversarial check
+  call a live model, so a re-run can flake and burn a round on noise.)
+- **What the verifier must still do itself, always:** targeted **mutation** of the
+  guards the increment ADDED (~2 minutes, and it is the one thing a log cannot
+  fake), plus an independent attempt to **break the increment's stated
+  invariants**. That is where every real finding in this phase came from — not
+  from re-running the suite.
+- **The full `mutation-sweep` is the Builder's to run, not the verifier's.** The
+  verifier reads its **survivor list** — which is the honest coverage report — and
+  says whether the Builder read past something. *(In P12-C the sweep named the
+  exact line of the blocker as a survivor, and the Builder read past it.)*
+
+**3. `test-adversary` and `verifier` run in PARALLEL, not in series.**
+Both are read-only with respect to `src/`, so they cannot race. Spawn them
+together after the build.
+- If the adversary finds a defect the Builder then fixes in `src/`, the verifier
+  gets **the fix diff as a delta message** — it does not restart. (`SendMessage`
+  resumes it with its context intact.)
+- The Builder still **fixes** what the adversary finds. The adversary never
+  touches `src/`; the verifier never touches `src/`.
+
+**What did NOT change, and must not:** the verifier is fresh, independent, and did
+not write the code; it may still FAIL the merge; and a gate still closes only
+through its check. Velocity is bought by removing *duplication*, never by removing
+*the second pair of eyes*.
+
 ## Phase status
 
 Update as gates close. `git log --grep "^Gate:"` is the authoritative ledger.
