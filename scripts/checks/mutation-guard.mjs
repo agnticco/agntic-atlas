@@ -55,6 +55,8 @@ const SUITES = [
   // fixed. These are the suites that pin them.
   'tests/workflows/decision-adversarial.test.js',
   'tests/workflows/decision-pinning.test.js',
+  // Multiple destinations: what each one RECEIVED, not that delivery ran.
+  'tests/workflows/fan-out.test.js',
 ];
 
 /**
@@ -105,16 +107,16 @@ const MUTATIONS = [
   // customer instead of the draft, exactly as `branch` and `human` did.
   { file: 'src/workflows/flow-tester.js',
     name: 'CONTROL_TYPES loses `branch` (router bookkeeping delivered to the customer)',
-    find: "const CONTROL_TYPES = new Set(['branch', 'human', 'decision']);",
-    repl: "const CONTROL_TYPES = new Set(['human', 'decision']);" },
+    find: "const CONTROL_TYPES = new Set(['branch', 'human', 'decision', 'deliver']);",
+    repl: "const CONTROL_TYPES = new Set(['human', 'decision', 'deliver']);" },
   { file: 'src/workflows/flow-tester.js',
     name: 'CONTROL_TYPES loses `human` (approval record delivered to the customer)',
-    find: "const CONTROL_TYPES = new Set(['branch', 'human', 'decision']);",
-    repl: "const CONTROL_TYPES = new Set(['branch', 'decision']);" },
+    find: "const CONTROL_TYPES = new Set(['branch', 'human', 'decision', 'deliver']);",
+    repl: "const CONTROL_TYPES = new Set(['branch', 'decision', 'deliver']);" },
   { file: 'src/workflows/flow-tester.js',
     name: 'CONTROL_TYPES loses `decision` (the audit record delivered to the customer)',
-    find: "const CONTROL_TYPES = new Set(['branch', 'human', 'decision']);",
-    repl: "const CONTROL_TYPES = new Set(['branch', 'human']);" },
+    find: "const CONTROL_TYPES = new Set(['branch', 'human', 'decision', 'deliver']);",
+    repl: "const CONTROL_TYPES = new Set(['branch', 'human', 'deliver']);" },
   { file: 'src/workflows/node-types/_node-input.js',
     name: 'NON_CONTENT_TYPES loses `branch`/`human` (control output fed to an AI step)',
     find: "new Set(['trigger', 'deliver', 'branch', 'human', 'decision'])",
@@ -238,6 +240,12 @@ const MUTATIONS = [
     name: 'the engine reads an UNDECLARED enum literal as a plain no-match (and not(<undeclared>) as matching EVERYTHING)',
     find: '  if (declared.length && wanted.some(w => !declared.includes(w.toLowerCase()))) {',
     repl: '  if (false) {' },
+  // ── Multiple destinations (found by a load-bearing test, 2026-07-14) ──────
+  { file: 'src/workflows/flow-tester.js',
+    name: "CONTROL_TYPES loses `deliver` (the SECOND destination in a fan-out ships the FIRST one's receipt)",
+    find: "const CONTROL_TYPES = new Set(['branch', 'human', 'decision', 'deliver']);",
+    repl: "const CONTROL_TYPES = new Set(['branch', 'human', 'decision']);" },
+
   { file: 'src/workflows/node-types/decision.js',
     name: 'pickCategory crosses a non-ASCII letter ("urgentísimo" classifies as "urgent")',
     find: "  return new RegExp(`(?:^|[^\\\\p{L}\\\\p{N}_-])${esc}(?:[^\\\\p{L}\\\\p{N}_-]|$)`, 'iu');",
