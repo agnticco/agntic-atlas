@@ -23,7 +23,8 @@
 import { test, describe } from 'node:test';
 import assert             from 'node:assert/strict';
 
-import { decisionNodeType, tableOf, normalizeHitPolicy, HIT_POLICIES } from '../../src/workflows/node-types/decision.js';
+import { decisionNodeType, tableOf, normalizeHitPolicy, HIT_POLICIES, pickCategory } from '../../src/workflows/node-types/decision.js';
+import { llmNodeType }   from '../../src/workflows/node-types/llm.js';
 import { matchesCondition } from '../../src/workflows/decision-analysis.js';
 import { WorkflowValidator } from '../../src/workflows/workflow-validator.js';
 import { NodeTypeRegistry }  from '../../src/workflows/node-type-registry.js';
@@ -633,6 +634,101 @@ describe('an EMPTY extracted field says so, in those words', () => {
       assert.match(err.message, /tone/);
       return true;
     });
+  });
+});
+
+// ── 6d. The residuals the verifier left, closed ─────────────────────────────
+
+describe('llm mode `classify` — THE OTHER sanctioned door into a decision (§11.7)', () => {
+  // E-R6: reverting llm.js's call site to the old substring scan survived the
+  // ENTIRE suite. The moat names llm+classify as the sanctioned way an LLM feeds a
+  // branch — so it is the guard most worth pinning, and it was the one nothing
+  // pinned. decision.js's copy was pinned; the call site in the other file was not.
+  const classify = (raw) => llmNodeType.run(
+    { mode: 'classify', categories: ['approve', 'reject'] },
+    { lastOutput: 'a refund request', ancestorOutputs: [] },
+    { llm: { invoke: async () => ({ content: raw }) } },
+  );
+
+  test('a NEGATED answer never classifies as the value it negates', async () => {
+    // "I would reject this — do not approve." The old scan took the first category
+    // appearing anywhere, in declaration order → `approve`. If that feeds a branch
+    // in front of a refund, the refund goes out.
+    const out = await classify('I would reject this — do not approve.').catch(e => e);
+    assert.notEqual(out, 'approve',
+      'the model said REJECT; returning `approve` is not an off-enum failure, it is the WRONG MEMBER of the set — and every downstream check passes it');
+    assert.ok(out instanceof Error || out === 'reject');
+  });
+
+  test('an exact answer still classifies (the guard is not "reject everything")', async () => {
+    assert.equal(await classify('reject'), 'reject');
+    assert.equal(await classify('Category: approve'), 'approve', 'a preamble is fine — one category, unambiguously');
+  });
+
+  test('an ambiguous answer throws rather than picking one', async () => {
+    await assert.rejects(() => classify('could be approve, could be reject'), /not one of|which is not/);
+  });
+});
+
+describe('the moat reads the table the way the REST of the system reads it', () => {
+  test('a JSON-STRING config.inputs cannot smuggle a free-text AI input past publish', () => {
+    // E-R7. `listOf` deliberately parses the textarea's JSON, and tableOf /
+    // _checkDecisionTables / closedDomainOf all honour that spelling — but the
+    // moat's build-time half used a private `Array.isArray` read, so the string
+    // spelling silently skipped it. Two readers of one table is two answers to
+    // "what does this table say".
+    const t = {
+      inputs: JSON.stringify([{ key: 'tone', type: 'string', evaluator: 'llm' }]),
+      output: { key: 'p', type: 'enum', values: ['P1', 'P3'] },
+      hitPolicy: 'FIRST',
+      rules: JSON.stringify([{ when: { tone: '-' }, then: 'P3' }]),
+    };
+    const res = validator.validate(spec(t));
+    assert.ok(res.errors.some(e => e.code === 'LLM_INPUT_NOT_ENUM'),
+      `the moat must fire on every spelling the system reads; got: ${res.issues.map(i => i.code).join(', ')}`);
+  });
+});
+
+describe('one grammar: the analyser and the engine agree, or the proof is about another program', () => {
+  const tone = { key: 'tone', type: 'enum', values: ['urgent', 'calm'] };
+
+  test('an UNDECLARED literal is unreadable to BOTH — including inside not()', () => {
+    // E-R10. The analyser called these unreadable; the engine read "bogus" as a
+    // plain no-match and — worse — read not(bogus) as MATCHING EVERYTHING. The
+    // validator happens to reject such a table first, but a guard that only works
+    // because another check already refused the input is not a guard.
+    assert.equal(matchesCondition('bogus', tone, 'urgent').ok, false);
+    assert.equal(matchesCondition('urgent, bogus', tone, 'urgent').ok, false);
+    assert.equal(matchesCondition('not(bogus)', tone, 'calm').ok, false,
+      'not(<undeclared>) matched EVERY value — the most expensive way to be wrong');
+  });
+
+  test('POSITIVE: declared literals still evaluate, in every form', () => {
+    assert.equal(matchesCondition('urgent', tone, 'urgent').matched, true);
+    assert.equal(matchesCondition('urgent, calm', tone, 'calm').matched, true);
+    assert.equal(matchesCondition('not(urgent)', tone, 'calm').matched, true);
+    assert.equal(matchesCondition('URGENT', tone, 'urgent').matched, true, 'and case-insensitively, as the engine has always done');
+  });
+});
+
+describe('pickCategory does not cross a non-ASCII letter', () => {
+  test('"urgentísimo" is not "urgent"', () => {
+    // E-R8. `\w` is ASCII-only, so an ASCII word boundary sees urgent|ísimo and
+    // returns a member of the set the model never named — the exact class the
+    // function exists to kill. A workflow triaging Spanish mail is not an edge case.
+    assert.equal(pickCategory('urgentísimo', ['urgent', 'calm']), null);
+    assert.equal(pickCategory('urgent', ['urgent', 'calm']), 'urgent');
+    assert.equal(pickCategory('Es urgent, creo', ['urgent', 'calm']), 'urgent', 'a real boundary still matches');
+  });
+
+  test('a category with regex metacharacters is a LITERAL, not a pattern', () => {
+    assert.equal(pickCategory('P1+', ['P1+', 'P2']), 'P1+');
+    assert.equal(pickCategory('v1x0', ['v1.0', 'v2']), null, 'the dot must not act as a wildcard');
+  });
+
+  test('a value that is a PREFIX of another stays reachable', () => {
+    assert.equal(pickCategory('Decision: ship_hold', ['ship', 'ship_hold']), 'ship_hold');
+    assert.equal(pickCategory('Decision: high-risk', ['high', 'high-risk']), 'high-risk');
   });
 });
 
