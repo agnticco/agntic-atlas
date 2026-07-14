@@ -313,6 +313,8 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
       gapRounds:         0,
       sufficiencyChecks: 0,
       _missingNote:      null,
+      // The last accepted proposal was a NO-OP (see `propose`). Read by `analyze`.
+      _noProgress:       false,
       // The destination (Airtable base + table + columns) has been resolved from the
       // live connector once (P12 Increment F). Without this the gap loop would
       // re-enter `destinations` on its way back to ratify and ask "which base?"
@@ -651,6 +653,12 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
       return { phase: 'gapping' };
     }
 
+    // The last accepted proposal changed NOTHING (the model re-proposed an edge the
+    // draft already had; applyProposal dedupes, so the draft came back identical).
+    // The model has nothing left to add — asking it again just produces the same
+    // proposal, and asking the USER again makes them click the same card twice.
+    if (state._noProgress) return { phase: 'gapping', _noProgress: false };
+
     if ((state.proposeRounds ?? 0) >= MAX_PROPOSE_ROUNDS) return { phase: 'gapping' };
 
     const clarificationCount = (state.clarifications ?? []).length;
@@ -750,6 +758,38 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
 
     if (confirmation?.type === 'accept') {
       newDraft = applyProposal(state.draft, proposal, confirmation);
+
+      // ── A PROPOSAL THAT CHANGES NOTHING IS NOT A PROPOSAL ─────────────────
+      //
+      // `applyProposal` DEDUPES: an edge that already exists is not added again
+      // (spec-assembler.js). So when the model proposes an edge the draft already
+      // has, the draft comes back IDENTICAL — the model then sees the same draft,
+      // proposes the same edge, and the loop spins until MAX_PROPOSE_ROUNDS burns
+      // out. Observed against the live model: **fourteen consecutive identical
+      // "add this connection" proposals**, each one a card the user has to click.
+      //
+      // It was invisible because the gap loop was inert (its suggestions were never
+      // matched, so a blocking gap never re-entered `propose`) — so the spin ran
+      // ONCE, fitted inside the headless step cap, and nobody looked. Fixing the gap
+      // loop doubled the propose rounds and pushed it over, which is how it surfaced.
+      //
+      // A no-op accept means the model has nothing left to add. Take it at its word
+      // and move on to the gaps, rather than asking the user to confirm the same
+      // thing again. The propose loop's job is to CHANGE the draft; a round that
+      // cannot is a round that must not repeat.
+      //
+      // …and it must be recorded in STATE, not in `phase`: the edge out of `propose`
+      // is an UNCONDITIONAL one to `analyze`, which recomputes the phase from the
+      // draft — so a `phase: 'gapping'` set here is simply overwritten, and the loop
+      // spins on regardless. `analyze` reads this flag and stops.
+      if (JSON.stringify(newDraft) === JSON.stringify(state.draft)) {
+        return {
+          confirmationLog: [{ ...logEntry, noop: true }],
+          _noProgress:     true,
+          step:            state.step + 1,
+          phase:           'analyzing',
+        };
+      }
     } else if (confirmation?.type === 'modify') {
       // Apply modification: ask LLM to merge the user's override into the proposal
       const modSysmsg  = new SystemMessage(buildSystemPrompt(state.capabilities));
