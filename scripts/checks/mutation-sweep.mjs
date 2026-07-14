@@ -58,6 +58,27 @@ const SUITES = [
   // table, duplicate assertion ids dropping an assertion, a phantom gap on
   // `integer` domains, and a null node crashing publish with a 500.
   'tests/converger/moat-adversarial.test.js',
+  // P12 Increment D — the approval gate. Without this suite in the list, every
+  // mutant the sweep generates in approval-store.js / approval-service.js / the
+  // scheduler's resume path is unkillable BY CONSTRUCTION (no test that could
+  // catch it is ever run), and the survivor list would report D's guards as
+  // untested when in fact they were merely unexecuted. A mutant is only killable
+  // by a suite the sweep RUNS.
+  'tests/approvals/approval-store.test.js',
+  // The ASK — Block Kit, the magic-link email, the in-app item — and each
+  // channel's answer coming back. These paths were covered ONLY by
+  // scripts/checks/approval-adversarial.mjs, which the sweep does not run, so it
+  // reported the whole Slack/email surface as unkillable. It was right to: a
+  // mutant is only killable by a suite that EXECUTES it, and "some other script
+  // covers it" is how a guard ends up pinned by nothing.
+  'tests/approvals/approval-channels.test.js',
+  // The scheduler had NO unit tests at all — and it is the choke point every real
+  // run passes through: the retry wrapper, the monthly-run PLAN CAP, the
+  // suspended-tenant gate, and (since D) the pause and the resume. Widening
+  // TARGETS to it, as the round-9 residual asked, made that visible immediately:
+  // `if (allowed === false)` — the plan cap itself — could be inverted with the
+  // whole suite still green.
+  'tests/workflows/scheduler.test.js',
 ];
 
 /**
@@ -84,6 +105,16 @@ const TARGETS = [
   'src/workflows/outcome-oracle.js',
   'src/workflows/decision-analysis.js',
   'src/converger/gap-scorer.js',
+  // P12 Increment D — the approval gate. Closes the residual the round-9 verifier
+  // recorded ("TARGETS excludes workflow-scheduler.js — widen it when a later
+  // increment touches that file"), because D touches it: the resume path, the
+  // timeout sweeper, and the ask deliverer all live there. These files decide
+  // whether an approval can be FORGED, whether an unanswered one can quietly
+  // become a yes, and whether one answer can resume a run twice — the sweep must
+  // be able to tell whether anything would notice if they stopped working.
+  'src/approvals/approval-store.js',
+  'src/approvals/approval-service.js',
+  'src/workflows/workflow-scheduler.js',
 ];
 
 const args    = process.argv.slice(2);
@@ -149,12 +180,25 @@ function mutantsFor(file) {
   return out;
 }
 
+/**
+ * Run EVERY suite in ONE node process, not one process per suite.
+ *
+ * Same suites, same pass/fail rule — `node --test a b c` exits non-zero if any
+ * test in any file fails, exactly as the old loop did. This is a speed fix, not a
+ * weakening, and it is worth spelling out because a diff against `scripts/` is how
+ * a verifier catches a builder loosening their own gate.
+ *
+ * Why it matters: the old loop paid a full node startup PER SUITE, and a
+ * SURVIVING mutant pays for all of them (it only short-circuits on a failure — and
+ * a survivor, by definition, never fails). Increment D took SUITES from 7 to 10,
+ * so every survivor went from 7 startups to 10 — and the sweep runs inside the
+ * PHASE GATE. A gate slow enough to be annoying is a gate people start skipping,
+ * which protects nothing. Node's own runner also executes the files concurrently,
+ * so this is a large win rather than a marginal one.
+ */
 function suitesPass() {
-  for (const s of SUITES) {
-    try { execFileSync('node', ['--test', s], { stdio: 'pipe' }); }
-    catch { return false; }
-  }
-  return true;
+  try { execFileSync('node', ['--test', ...SUITES], { stdio: 'pipe' }); return true; }
+  catch { return false; }
 }
 
 // ── Run ──────────────────────────────────────────────────────────────────────

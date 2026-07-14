@@ -209,9 +209,31 @@ export class FlowTester {
     // in the database were saved before the rule existed.)
     const ruledOut = new Set(ckpt?.ruledOut ?? []);
 
+    /** The step this node routes FAILURES to, if it declares one. */
+    const errorTargetOf = (nodeId) => {
+      const then = byId.get(nodeId)?.on_error?.then;
+      return (typeof then === 'string' && then.startsWith('route_to:'))
+        ? then.slice('route_to:'.length).trim()
+        : null;
+    };
+
     /** Light up this node's outgoing edges. A branch lights only the case it picked. */
     const propagate = (nodeId, output) => {
       const isBranch = byId.get(nodeId)?.type === 'branch';
+      // A FAILURE PATH IS NOT A SUCCESSOR (P12 Increment D).
+      //
+      // `on_error: { then: 'route_to:handler' }` needs an edge node→handler, and
+      // the validator REQUIRES one (ON_ERROR_ROUTE_NO_EDGE) because the engine
+      // lights that edge to enter the error path. But propagate() lit EVERY
+      // outgoing edge on SUCCESS — including that one. So the only shape the
+      // validator accepts is the shape that misfires: the error handler ran on
+      // every successful run, silently, with run_completed and no error. A
+      // "this broke" Slack post on every healthy run; and, once D exists, an
+      // approval gate meant only for failures pausing every single run.
+      //
+      // The error edge is lit in exactly one place — the catch block's
+      // `route_to` handler below — and nowhere else.
+      const errorTarget = errorTargetOf(nodeId);
       let selected = null;
       if (isBranch) {
         // If we cannot read the selection we must NOT fall back to "light
@@ -236,6 +258,11 @@ export class FlowTester {
           ruledOut.add(target);   // the untaken path is dead, not merely unlit
           continue;
         }
+        // The declared failure path. This node SUCCEEDED, so it stays dark — but
+        // it is only unlit, never `ruledOut`: another step may legitimately route
+        // its own failure to the same handler, and that leg must still be able to
+        // light it.
+        if (target === errorTarget) continue;
         liveInto.set(target, (liveInto.get(target) ?? 0) + 1);
       }
     };

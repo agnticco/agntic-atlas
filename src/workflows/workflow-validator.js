@@ -22,8 +22,11 @@
  */
 
 import { liftV1Nodes, isRemovedType, REMOVED_TYPES } from './node-types/compat-v1.js';
-import { normalizeCases, CATCH_ALL } from './node-types/branch.js';
+import { normalizeCases, CATCH_ALL, ON_REF } from './node-types/branch.js';
 import { normalizeSteps } from './node-types/foreach.js';
+import { normalizeChannels, allowedDecisions } from './node-types/human.js';
+import { isStrong, FORBIDDEN_CHANNELS } from './approval-channels.js';
+import { parseDuration } from './duration.js';
 import { checkOutcome, missingFields, ASSERTION_KINDS } from './outcome-oracle.js';
 
 /** Per-channel required fields on a deliver node's config (beyond `channel`). */
@@ -39,12 +42,17 @@ export class WorkflowValidator {
    * @param {import('../tools/tool-registry.js').ToolRegistry} [deps.toolRegistry]
    * @param {import('./channel-registry.js').ChannelRegistry}  [deps.channelRegistry]
    * @param {import('./node-type-registry.js').NodeTypeRegistry} [deps.nodeTypes]
+   * @param {{has:Function,list:Function}} [deps.approvalChannels] — which approval
+   *        channels this workspace can actually ask over (approval-channels.js).
+   *        Null = this caller cannot see the catalog, so the connectedness check
+   *        skips here and the GAP SCORER fails closed instead. See _checkHumanNode.
    */
-  constructor({ sourceRegistry = null, toolRegistry = null, channelRegistry = null, nodeTypes = null } = {}) {
-    this.sourceRegistry  = sourceRegistry;
-    this.toolRegistry    = toolRegistry;
-    this.channelRegistry = channelRegistry;
-    this.nodeTypes       = nodeTypes;
+  constructor({ sourceRegistry = null, toolRegistry = null, channelRegistry = null, nodeTypes = null, approvalChannels = null } = {}) {
+    this.sourceRegistry    = sourceRegistry;
+    this.toolRegistry      = toolRegistry;
+    this.channelRegistry   = channelRegistry;
+    this.nodeTypes         = nodeTypes;
+    this.approvalChannels  = approvalChannels;
   }
 
   /**
@@ -637,8 +645,29 @@ export class WorkflowValidator {
         // MANDATORY catch-all then swallows 100% of traffic — forever, silently,
         // with run_completed and no warning. The catch-all that exists to prevent
         // a silent misroute ends up MASKING one.
+        // The SAME reference grammar the engine resolves (branch.js ON_REF). If
+        // these two ever disagree, the validator accepts a reference the engine
+        // cannot read — and the engine's answer to a reference it cannot read is
+        // the catch-all, on every run, silently.
         const onRef = String(node.config?.on ?? '').trim().replace(/^\{\{\s*|\s*\}\}$/g, '').trim();
-        const onId  = /^([a-z0-9_-]+)(?:\.output)?$/i.exec(onRef)?.[1] ?? null;
+        const onMatch = ON_REF.exec(onRef);
+        const onId    = onMatch?.[1] ?? null;
+        const onField = onMatch?.[2]?.toLowerCase() ?? null;
+
+        // `.decision` names a field only a `human` node has. On anything else the
+        // engine throws rather than misroute — so catch it at build time, where it
+        // is a sentence instead of a broken run.
+        if (onId && onField === 'decision' && seenIds.has(onId)) {
+          const src = nodes.find(n => n?.id === onId);
+          if (src && src.type !== 'human') {
+            issues.push({
+              severity: 'error', code: 'BRANCH_BAD_ON',
+              message: `"${node.label || node.id}" routes on "${node.config.on}", but "${onId}" is not a step that asks a person — only a human step produces a decision.`,
+              nodeId: node.id, field: 'config.on',
+              hint: `Route on "${onId}.output" instead, or point it at the human step whose answer you meant.`,
+            });
+          }
+        }
         if (!onRef) {
           issues.push({
             severity: 'error', code: 'MISSING_CONFIG',
@@ -748,6 +777,13 @@ export class WorkflowValidator {
         }
       }
 
+      // ── The approval gate (P12 Increment D, converger-v2 §7.7) ────────────
+      // An approval anyone can forge is not an approval, and a pause nobody can
+      // answer is a hang. Both are build errors, not run-time surprises.
+      if (node?.type === 'human') {
+        this._checkHumanNode(node, nodes, edges, issues);
+      }
+
       // A `foreach` sub-step is a real step: it writes, and it can be retried.
       // The checks below must see it, or the highest-risk write shape in the
       // engine (N writes per fire) is the only one nobody warns about.
@@ -762,8 +798,7 @@ export class WorkflowValidator {
             });
           }
           const act = String(sub?.config?.action ?? '');
-          if (sub?.type === 'connector-action' && !sub.idempotency?.key
-              && /(^|_)(create|append|send|post|add|insert)(_|$)/i.test(act)) {
+          if (sub?.type === 'connector-action' && !sub.idempotency?.key && isWritingAction(act)) {
             issues.push({
               severity: 'warning', code: 'WRITE_WITHOUT_IDEMPOTENCY',
               message: `"${sub.id || act}" writes ("${act}") inside a loop and has no idempotency key — if the trigger fires twice it writes every row twice.`,
@@ -781,7 +816,7 @@ export class WorkflowValidator {
       // a customer record is a support ticket, not a theory.
       if (node?.type === 'connector-action' && !node.idempotency?.key) {
         const action = String(node.config?.action ?? '');
-        if (/(^|_)(create|append|send|post|add|insert)(_|$)/i.test(action)) {
+        if (isWritingAction(action)) {
           issues.push({
             severity: 'warning', code: 'WRITE_WITHOUT_IDEMPOTENCY',
             message: `"${node.label || node.id}" writes ("${action}") but has no idempotency key, so if the trigger fires twice it will write twice.`,
@@ -790,6 +825,118 @@ export class WorkflowValidator {
           });
         }
       }
+    }
+  }
+
+  /**
+   * The `human` approval gate (converger-v2 §7.7). Needs the edge list — "does
+   * this approval guard a write?" is a question about what lies DOWNSTREAM of
+   * it, which a node's own validate(node) hook cannot see.
+   */
+  _checkHumanNode(node, nodes, edges, issues) {
+    const label = node.label || node.id;
+    const channels = normalizeChannels(node.config?.channels);
+
+    // ── EMAIL_REPLY_APPROVAL (§11.8) ────────────────────────────────────────
+    // The hard rule of this increment. Parsing "yes" out of a reply body
+    // authenticates NOTHING: `From:` is trivially spoofable, SPF/DKIM
+    // authenticate a sending DOMAIN and not a human INTENT, and a forwarded
+    // thread is full of the word "yes". There is no safe configuration of it, so
+    // it is not a channel with a low score — it is rejected outright.
+    for (const ch of channels) {
+      if (FORBIDDEN_CHANNELS.includes(String(ch?.type))) {
+        issues.push({
+          severity: 'error', code: 'EMAIL_REPLY_APPROVAL',
+          message: `"${label}" would take its approval from an email reply. That authenticates nobody — a sender address is trivially forged, and a forwarded thread is full of the word "yes".`,
+          nodeId: node.id, field: 'config.channels',
+          hint: 'Use { "type": "email" } instead: the person gets a signed, single-use link that expires. Or ask in Slack or the in-app inbox, which prove who clicked.',
+        });
+      }
+    }
+
+    // ── APPROVAL_CHANNEL_NOT_CONNECTED ──────────────────────────────────────
+    // A question asked over a channel this workspace has not connected is a
+    // question nobody is ever asked — and the run waits for the answer forever.
+    //
+    // `approvalChannels` is null when the caller cannot see the catalog. The
+    // check then SKIPS, exactly as the `deliver` channel checks already do — and
+    // the gap scorer refuses to certify the spec at all (CHANNELS_UNVERIFIED),
+    // so nothing can score `complete` on a check that quietly did not run. That
+    // split is deliberate: skipping here and failing closed there is what keeps
+    // `complete ⇒ publishable` true without making the validator unusable to
+    // every caller that has no registry.
+    if (this.approvalChannels) {
+      for (const ch of channels) {
+        const type = String(ch?.type ?? '');
+        if (!type || FORBIDDEN_CHANNELS.includes(type)) continue;   // reported above
+        if (!this.approvalChannels.has(type)) {
+          issues.push({
+            severity: 'error', code: 'APPROVAL_CHANNEL_NOT_CONNECTED',
+            message: `"${label}" asks over ${type}, which isn't connected for this workspace — the question would never reach anyone, and the run would wait for an answer that cannot come.`,
+            nodeId: node.id, field: 'config.channels',
+            hint: `Connect ${type}, or ask somewhere available: ${this.approvalChannels.list().join(', ')}.`,
+          });
+        }
+      }
+    }
+
+    if (!channels.length) {
+      issues.push({
+        severity: 'error', code: 'APPROVAL_CHANNEL_NOT_CONNECTED',
+        message: `"${label}" pauses for a person but doesn't say where to ask them, so nobody would ever see the question.`,
+        nodeId: node.id, field: 'config.channels',
+        hint: 'Add at least one channel, e.g. { "type": "inbox" } — the in-app Approvals list.',
+      });
+    }
+
+    // ── HUMAN_WITHOUT_TIMEOUT ───────────────────────────────────────────────
+    // A pause with no timeout is a workflow that hangs forever. It does not fail,
+    // it does not complete, and nothing ever tells anyone — the single most
+    // expensive thing a durable pause can do.
+    const timeout = node.config?.timeout;
+    const after   = typeof timeout === 'object' && timeout ? timeout.after : null;
+    if (!after || !parseDuration(after)) {
+      issues.push({
+        severity: 'error', code: 'HUMAN_WITHOUT_TIMEOUT',
+        message: `"${label}" waits for a person but never gives up. If nobody answers, this run waits forever — no error, no output, and nobody is told.`,
+        nodeId: node.id, field: 'config.timeout',
+        hint: 'Add timeout: { "after": "48h", "then": "reject" } — say what should happen when nobody answers.',
+      });
+    } else {
+      // A `then` nobody declared is the BRANCH_BAD_ON failure through another
+      // door: the engine cannot honour an answer that is not in the node's own
+      // closed set, so a typo ("aprove") would silently resolve as `timeout` and
+      // the run would take a path the author never wrote.
+      const then = timeout.then == null ? null : String(timeout.then);
+      const allowed = [...allowedDecisions(node.config?.decisions), 'escalate'];
+      if (then != null && !allowed.includes(then)) {
+        issues.push({
+          severity: 'error', code: 'HUMAN_BAD_TIMEOUT',
+          message: `"${label}" says that when nobody answers it should "${then}" — but that isn't one of its possible answers, so the run would take a path you didn't write.`,
+          nodeId: node.id, field: 'config.timeout',
+          hint: `Use one of: ${allowed.join(', ')}.`,
+        });
+      }
+    }
+
+    // ── WEAK_APPROVAL_FOR_WRITE (§7.2) ──────────────────────────────────────
+    // The channel must be at least as strong as the action is risky. `email`
+    // proves only POSSESSION OF THE LINK — mailbox access, and the link is
+    // forwardable. That is fine for "is this summary any good?"; it is not fine
+    // for the step that sends the customer an email or creates the record.
+    //
+    // An error, not a warning: the whole point of the gate is that somebody
+    // ACCOUNTABLE said yes, and a forwarded link cannot tell you who did.
+    const guarded = [...descendantsOf(node.id, edges)]
+      .map(id => nodes.find(n => n?.id === id))
+      .filter(n => n && isWriteNode(n));
+    if (guarded.length && channels.length && !channels.some(ch => isStrong(ch?.type))) {
+      issues.push({
+        severity: 'error', code: 'WEAK_APPROVAL_FOR_WRITE',
+        message: `"${label}" approves "${guarded[0].label || guarded[0].id}", which writes or sends for real — but the only way to answer it is an emailed link. Anyone the mail is forwarded to could approve it, and the record would say the wrong person did.`,
+        nodeId: node.id, field: 'config.channels',
+        hint: 'Add { "type": "slack" } or { "type": "inbox" }: both prove who clicked. Keep the email link as well if you like — the first valid answer wins.',
+      });
     }
   }
 
@@ -912,7 +1059,7 @@ export class WorkflowValidator {
     for (const node of nodes) {
       const vars = varsFor(node);
       const ids  = idsFor(node);
-      const strings = this._collectStrings(node.config);
+      const strings = this._collectStrings(templateScannable(node));
       for (const s of strings) {
         let m;
         while ((m = refRe.exec(s)) !== null) {
@@ -938,7 +1085,7 @@ export class WorkflowValidator {
     const anyRe = /\{\{\s*([^}]+?)\s*\}\}/g;
     const okRe  = /^[a-z0-9_-]+(\.output)?$/i;
     for (const node of nodes) {
-      const strings = this._collectStrings(node.config);
+      const strings = this._collectStrings(templateScannable(node));
       for (const s of strings) {
         let m;
         while ((m = anyRe.exec(s)) !== null) {
@@ -998,6 +1145,73 @@ export class WorkflowValidator {
  * a source whose values are not declarable, you have not extended the moat — you
  * have deleted it.
  */
+/**
+ * The config a node's TEMPLATE checks may look at.
+ *
+ * A `branch`'s `on` is excluded, because it is not a template — it is a
+ * REFERENCE, with its own grammar (branch.js ON_REF), its own resolver, and its
+ * own error code (BRANCH_BAD_ON). The engine never substitutes it: doing so would
+ * replace the reference with the VALUE, which is indistinguishable from a step id
+ * (CLAUDE.md — the `"urgent"` crash).
+ *
+ * Scanning it as a template made the one shape converger-v2 §7.1 documents —
+ * `on: "{{approve_send.decision}}"`, the natural way to route on an approval —
+ * fail publish with BAD_TEMPLATE_REF ("dotted sub-fields are not supported"),
+ * which is a true sentence about templates and a false one about this key.
+ */
+function templateScannable(node) {
+  if (node?.type !== 'branch') return node?.config;
+  const { on, ...rest } = node.config ?? {};
+  return rest;
+}
+
+/**
+ * An action that CREATES something in someone else's system. The regex is the
+ * one WRITE_WITHOUT_IDEMPOTENCY has always used; it is named here so the approval
+ * rules and the idempotency rule cannot drift apart about what "a write" is.
+ */
+export function isWritingAction(action) {
+  return /(^|_)(create|append|send|post|add|insert)(_|$)/i.test(String(action ?? ''));
+}
+
+/**
+ * A node whose effect leaves this system and cannot be taken back: a connector
+ * action that creates/sends, or ANY `deliver` (a delivery is a send — that is
+ * what it is for).
+ *
+ * Deliberately WIDER than the predicate WRITE_WITHOUT_IDEMPOTENCY uses, and the
+ * difference is not an oversight. Idempotency is about writing the same record
+ * TWICE, so it only concerns systems of record. Approval strength is about
+ * whether the person who said yes can be identified at all — and an email sent
+ * to a customer on a forwarded link's say-so is exactly as unrecallable as a row
+ * in their CRM.
+ */
+export function isWriteNode(node) {
+  if (!node || typeof node !== 'object') return false;
+  if (node.type === 'deliver') return true;
+  if (node.type === 'connector-action') return isWritingAction(node.config?.action);
+  return false;
+}
+
+/** Every node reachable from `startId` by following edges forward. */
+export function descendantsOf(startId, edges = []) {
+  const next = new Map();
+  for (const e of edges) {
+    if (!e?.from || !e?.to) continue;
+    if (!next.has(e.from)) next.set(e.from, []);
+    next.get(e.from).push(e.to);
+  }
+  const seen = new Set();
+  const stack = [...(next.get(startId) ?? [])];
+  while (stack.length) {
+    const id = stack.pop();
+    if (seen.has(id)) continue;
+    seen.add(id);
+    for (const n of (next.get(id) ?? [])) stack.push(n);
+  }
+  return seen;
+}
+
 function closedDomainOf(node) {
   if (!node || typeof node !== 'object') return null;
 
