@@ -426,3 +426,132 @@ export function nodeForAssertion(assertion, { capabilities = {} } = {}) {
   // than becoming a node with a made-up id in it.
   return null;
 }
+
+// ── The RUNTIME oracle (P12 Increment G) ─────────────────────────────────────
+//
+// `satisfiesAssertion` above answers a BUILD-time question: does the SPEC contain
+// a node that CAN produce this effect? The test panel asks the RUN-time twin: on
+// this sample input, DID the effect actually happen? A build-time yes and a
+// run-time no is the most valuable thing a test panel can show — the workflow is
+// shaped right and still doesn't deliver, which is exactly the case a person needs
+// to see before it goes live.
+//
+// It reads the run's DELIVERIES (each `{delivered, channel, target, ts, …}` — what
+// a deliver/write node returns) rather than re-deriving anything. The check is the
+// same connector-aliasing this file already owns, applied to what a run PRODUCED
+// instead of to what a spec DECLARES — one definition of "slack:#ops", used both
+// ways.
+
+/**
+ * The CANONICAL connector key for a name that may be a key OR an alias.
+ * `mail` and `email` both canonicalise to `gmail`, so a `mail:` assertion and a
+ * `gmail_send` delivery compare equal without either side having to know the
+ * other's spelling.
+ */
+function canonicalConnector(name) {
+  const n = String(name ?? '').toLowerCase();
+  if (CONNECTOR_ALIASES[n]) return n;                       // already a key
+  for (const [key, aliases] of Object.entries(CONNECTOR_ALIASES)) {
+    if (aliases.includes(n)) return key;
+  }
+  return n;
+}
+
+/** The connector a delivery went to, from its `channel` (e.g. `gmail_send` → gmail). */
+function deliveryConnector(delivery) {
+  const ch = String(delivery?.channel ?? '').toLowerCase();
+  // A delivery names its channel (`slack`, `gmail_send`, `airtable_create_record`,
+  // `in_app`); the connector is that channel's own prefix/alias.
+  for (const [connector, aliases] of Object.entries(CONNECTOR_ALIASES)) {
+    if (aliases.some(a => ch === a || ch.startsWith(`${a}_`))) return connector;
+  }
+  const head = ch.split('_')[0];
+  return canonicalConnector(head || ch);
+}
+
+/** Did this run produce the effect this assertion promises? */
+export function checkAssertionAtRuntime(assertion, deliveries = []) {
+  const defect = assertionDefect(assertion);
+  if (defect) return { ok: false, reason: `can't check — ${defect}` };
+
+  const { connector, locator } = splitTarget(assertion.target);
+  const wantConnector = canonicalConnector(connector);
+  const wantLocator   = normLocator(locator);
+
+  for (const d of deliveries) {
+    if (!d?.delivered) continue;
+    if (deliveryConnector(d) !== wantConnector) continue;
+    // No locator on the assertion ⇒ "some delivery to this connector" is enough.
+    if (!wantLocator) return { ok: true, detail: describeDelivery(d) };
+    // The delivery names its own destination in one of a few keys; a template
+    // locator (resolved at run time) matches anything, exactly as at build time.
+    const got = normLocator(d.target ?? d.to ?? d.user ?? d.channelName ?? d.slackChannel ?? '');
+    if (isTemplate(locator) || got === wantLocator || (got && wantLocator && got.includes(wantLocator))) {
+      return { ok: true, detail: describeDelivery(d) };
+    }
+  }
+  return { ok: false, reason: `nothing reached ${assertion.target}` };
+}
+
+/** A one-line, human description of what a delivery did — shown in the test panel. */
+function describeDelivery(d) {
+  const where = d.target ?? d.to ?? d.user ?? d.slackChannel ?? d.channel ?? '';
+  return `${d.channel ?? 'delivered'}${where ? ` → ${where}` : ''}${d.ts ? ` (${d.ts})` : ''}`;
+}
+
+/**
+ * Evaluate one example's RUN against the outcome contract. (P12 Increment G.)
+ *
+ * The CONTRACT is machine-checkable and generic — every workflow has one, and it
+ * is the same three kinds everywhere — so it is GATED: an assertion the run did
+ * not satisfy is a real failure.
+ *
+ * The example's `expect` is the SME's own words, freeform and different in every
+ * workflow (`{priority: 'P1', urgent: true}`), so it is SHOWN, NOT GATED: nothing
+ * workflow-agnostic can truthfully judge a key whose meaning it does not know, and
+ * a check that pretends to is exactly the false-confidence this phase exists to
+ * kill. It is displayed against what the run produced, for a person to read.
+ *
+ * @param {object} spec        — the workflow spec (reads spec.outcome.assertions)
+ * @param {object} example     — { id?, label?, given, expect? }
+ * @param {object} runResult   — { completed, deliveries, steps, error? } from a run
+ */
+export function evaluateExampleRun(spec, example, runResult) {
+  const assertions = Array.isArray(spec?.outcome?.assertions) ? spec.outcome.assertions : [];
+  const deliveries = Array.isArray(runResult?.deliveries) ? runResult.deliveries : [];
+
+  const contract = assertions.map(a => ({
+    id: a.id ?? null,
+    target: a.target,
+    kind: a.kind,
+    ...checkAssertionAtRuntime(a, deliveries),
+  }));
+
+  // The run itself failing is a contract failure — a workflow that errored on this
+  // input did not keep any promise.
+  const ran = runResult?.completed === true && !runResult?.error;
+  const contractPassed = ran && contract.every(c => c.ok);
+
+  return {
+    exampleId: example?.id ?? null,
+    label:     example?.label ?? null,
+    given:     example?.given ?? null,
+    ran,
+    error:     runResult?.error ?? null,
+    contractPassed,
+    contract,                                   // GATED — the machine-checkable promise
+    expect:    example?.expect ?? null,         // SHOWN, not gated — the SME's own words
+    produced:  summariseRun(runResult),         // …next to what actually happened
+  };
+}
+
+/** What a run produced, in a shape the test panel can lay beside `expect`. */
+function summariseRun(runResult) {
+  const out = {};
+  for (const s of (runResult?.steps ?? [])) {
+    let o = s.output;
+    if (typeof o === 'string') { try { o = JSON.parse(o); } catch { continue; } }
+    if (o && typeof o === 'object' && !Array.isArray(o) && !o.delivered) Object.assign(out, o);
+  }
+  return out;
+}

@@ -1213,6 +1213,18 @@ Deploying is outward-facing: do it only when the operator asks. Committing/pushi
 
 ## Working rules
 
+- **EVERY live UI verification is done in a VISIBLE browser the operator can watch
+  (rule set 2026-07-14, operator).** When driving the real app with Chrome DevTools
+  (or claude-in-chrome) to prove a change works, do it in a **headed, foregrounded**
+  window — never headless, never a background tab the operator can't see. Narrate
+  each step *before* the tool call ("clicking Build it", "filling the base field"),
+  and **save each screenshot to disk** (`save_to_disk: true` / a `filePath`) so the
+  frame lands in the conversation rather than only in the agent's context. The point
+  is that the operator watches the verification happen in real time — "the scripts
+  pass" is not the same as a person seeing the button work (the D `Approve`-button
+  Content-Type bug proved that), and the operator seeing it is not the same as the
+  agent claiming it. If a headed window cannot be opened, say so and stop, rather
+  than silently falling back to a check the operator cannot witness.
 - **One deliverable per session, ending at a gate.** Rehydrate from this file +
   the module map, not from scrollback. Don't span a phase boundary in one session.
 - **The doc is the memory — keep it true, in the same commit.** Fresh sessions only
