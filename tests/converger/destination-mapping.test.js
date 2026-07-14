@@ -98,6 +98,107 @@ async function converge(map) {
   return { spec, save };
 }
 
+/**
+ * The verifier's blocker, driven end-to-end. The outcome promises Name AND Company;
+ * the table only has Name. After `destinations` drops Company, the blocking gap tells
+ * the model "you promised Company and nothing writes it" — and this model does the
+ * obvious thing: it puts Company back.
+ */
+async function convergeWithGapLoop() {
+  const invokeCapability = async (id, params = {}) => {
+    if (id === 'airtable_list_bases')    return { bases: [{ id: REAL_BASE, name: 'Sales CRM' }] };
+    if (id === 'airtable_describe_base') return { baseId: params.baseId, tables: [
+      { id: 'tblLeads', name: 'Leads', fields: COLUMNS.map((name, i) => ({ id: `f${i}`, name, type: 'singleLineText', choices: [] })) },
+    ] };
+    if (id === 'gmail_search') return { messages: [] };
+    throw new Error(`unstubbed: ${id}`);
+  };
+  const J = (o) => ({ content: JSON.stringify(o) });
+  const draftIn = (p) => { const m = /CURRENT DRAFT:\n(\{[\s\S]*?\n\})\n/.exec(p); try { return JSON.parse(m[1]); } catch { return {}; } };
+
+  const llm = { invoke: async (msgs) => {
+    const p = String(msgs[msgs.length - 1].content);
+    if (p.includes('OUTCOME CONTRACT')) return J({ candidates: [{ id: 'c1', statement: 'Leads are saved with the company.',
+      assertions: [{ id: 'a1', kind: 'record_exists', target: 'airtable:Leads', fields: ['Name', 'Company'] }] }] });
+    if (p.includes('What starts this workflow'))      return J({ trigger: { type: 'email', filter: 'to:leads@acme.com' } });
+    if (p.includes('CONCRETE example cases'))         return J({ examples: [] });
+    if (p.includes('Analyze this automation intent')) return J({ ready: true });
+    if (p.includes('Is this workflow FINISHED'))      return J({ complete: true });
+    if (p.includes('cases nobody has decided about')) {
+      const ids = [...p.matchAll(/^ {2}- id: (\S+)$/gm)].map(m => m[1]);
+      return J({ suggestions: ids.map(id => ({ gapId: id, answer: 'write the company too' })) });
+    }
+    if (p.includes('REAL columns are')) return J({ map: { Name: 'Name', Company: null } });   // no such column
+    if (p.includes('Build the next component')) {
+      const d = draftIn(p);
+      const save = (d.nodes ?? []).find(n => n.id === 'save');
+      // THE MOTIVE: the gap says the contract promises Company and nothing writes it,
+      // so the model puts Company back on the node. This is the obvious, cooperative
+      // thing for a model to do — which is exactly why it must not work.
+      if (!save || !('Company' in (save.config?.fields ?? {}))) {
+        return J({ component: 'node', spec: { id: 'save', type: 'connector-action', label: 'Save',
+          config: { action: 'airtable_create_record', baseId: 'appPLACEHOLDER', tableId: 'Leads',
+                    fields: { Name: '{{extract.name}}', Company: '{{extract.company}}' } },
+          idempotency: { key: '{{extract.name}}', on_conflict: 'skip' } } });
+      }
+      if (!(d.nodes ?? []).some(n => n.id === 'extract')) return J({ component: 'node', spec: { id: 'extract', type: 'llm', label: 'E',
+        config: { mode: 'extract', fields: 'name: the name\ncompany: the company' } } });
+      if (!(d.edges ?? []).some(e => e.from === 'extract' && e.to === 'save')) return J({ component: 'edge', spec: { from: 'extract', to: 'save' } });
+      return J({ component: 'name', spec: 'Leads' });
+    }
+    return J({});
+  } };
+
+  const conv = createConverger({ llm, capabilities: CAPS, invokeCapability, checkpointerDir: scratch() });
+  const reply = { outcome_check: () => ({ id: 'c1' }), example_request: () => ({ type: 'skip' }),
+                  proposal: () => ({ type: 'accept' }), clarification: () => ({ answer: 'yes' }),
+                  gap_review: () => ({ acceptDefaults: true }), ratify: () => ({ type: 'approve' }) };
+  let iv;
+  try { await conv.run('gl', 'save leads with their company'); iv = { type: 'done' }; }
+  catch (err) { iv = err.interruptValue ?? err; }
+  let last = null;
+  for (let i = 0; i < 60 && iv?.type !== 'done'; i++) {
+    if (iv.type === 'ratify') last = iv;
+    iv = await conv.resume('gl', (reply[iv.type] ?? (() => ({ type: 'accept' })))(iv));
+  }
+  const spec = iv?.spec ?? last?.spec ?? null;
+  return { spec, save: (spec?.nodes ?? []).find(n => n.id === 'save') };
+}
+
+describe('the columns are RE-CHECKED, not checked once', () => {
+  test('a column the GAP LOOP puts back does not survive', async () => {
+    // The blocker the independent verifier found, and the nastiest shape in this
+    // increment because the loop hands the model the MOTIVE:
+    //
+    //   1. `destinations` resolves the columns and correctly drops `Company` (the
+    //      table has no such column). The contract still promises it, so
+    //      UNSATISFIED_ASSERTION fires — blocking, exactly as designed.
+    //   2. That blocking gap routes back through `propose`.
+    //   3. The model closes the gap the only way the message suggests: it
+    //      re-proposes the write node WITH `Company` back on it.
+    //   4. `applyProposal` REPLACES the node by id. The latch says "already
+    //      resolved", so nothing re-maps and nothing re-checks.
+    //
+    // It publishes. Airtable silently ignores `Company`: the record is created, the
+    // column is empty, `run_completed`. Forever. The increment's own honest-failure
+    // path, converted into a silent success by the loop that reported it.
+    //
+    // A fact that the next node can falsify is not an invariant, it is a memory. The
+    // latch stops us ASKING twice; it must never stop us CHECKING twice.
+    const { spec, save } = await convergeWithGapLoop();
+
+    const written = Object.keys(save?.config?.fields ?? {});
+    assert.deepEqual(written.filter(k => !COLUMNS.includes(k)), [],
+      `the spec writes ${JSON.stringify(written)} into a table whose only columns are ${JSON.stringify(COLUMNS)}`);
+
+    // …and it must not have published on the strength of it.
+    const res = validator.validate(spec);
+    assert.ok(!res.ok || !spec.outcome.assertions[0].fields.includes('Company'),
+      'either the promise is dropped from the contract (it cannot be kept) or the spec does not publish — ' +
+      'what it must NEVER do is publish while writing a column that does not exist');
+  });
+});
+
 describe('the mapping model is not trusted', () => {
   test('a column the MAPPER invents is never written', async () => {
     // It maps `budget` onto a column that does not exist. If we take its word for it,

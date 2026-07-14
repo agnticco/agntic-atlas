@@ -320,6 +320,11 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
       // re-enter `destinations` on its way back to ratify and ask "which base?"
       // again — and a question asked twice is a question people learn to click past.
       destinationsResolved: false,
+      // The resolved destination: { baseId, table, columns }. Cached so the connector
+      // is asked ONCE — and so the columns are available to RE-CHECK the write node on
+      // every later pass, because a propose round after the resolution can put an
+      // invented column straight back (spec-assembler replaces a node by id).
+      destination:          null,
       // The decision tables have been shown to the user once (P12 Increment E).
       // The gap loop can re-enter `decisions` on its way back to ratify, and
       // re-asking someone to review a table they just reviewed is how a review
@@ -857,9 +862,61 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
     // node on that test let one guess skip the base lookup, the table lookup and the
     // column mapping. Ask the connector; it knows. (Found by the test-adversary.)
     const airtableNodes = nodes.filter(n => usesConnector(n, 'airtable'));
-    if (!airtableNodes.length || !invokeCapability || state.destinationsResolved) {
-      return { phase: 'gapping' };
+    if (!airtableNodes.length || !invokeCapability) return { phase: 'gapping' };
+
+    // ── THE LATCH STOPS US ASKING AGAIN. IT MUST NOT STOP US CHECKING AGAIN. ──
+    //
+    // `destinationsResolved` used to skip this node entirely on re-entry, and that
+    // was a hole straight back to the defect the increment exists to kill:
+    //
+    //   · `applyProposal` REPLACES a node by id (spec-assembler.js).
+    //   · A BLOCKING gap routes back through `propose`.
+    //   · So any propose round AFTER the resolution can rewrite the write node's
+    //     `fields` — and nothing re-checked them against the real table.
+    //
+    // And the gap loop HANDS THE MODEL THE MOTIVE. The blocking gap says "you
+    // promised Company and nothing writes it", so the model obligingly re-proposes
+    // the node with `Company` back on it. The honest failure this increment
+    // designed — an unmappable column stays in the contract and fails loudly — is
+    // converted into a SILENT SUCCESS by the very loop that reported it. It
+    // publishes; Airtable ignores the column; the record is created with it empty;
+    // `run_completed`. Forever. (Found by the independent verifier.)
+    //
+    // The invariant — "this write's columns have been checked against the real
+    // table" — was established once and never re-established. A fact that can be
+    // falsified by the next node is not an invariant, it is a memory.
+    //
+    // So: the RESOLVED DESTINATION is cached (no second lookup, no second "which
+    // base?" — a question asked twice is one people learn to click past), and the
+    // COLUMNS ARE RE-CHECKED on every pass. Re-checking is free: it reads state.
+    const cached = state.destination;
+    if (cached?.columns) {
+      const real = new Set(cached.columns.map(c => String(c.name).toLowerCase()));
+      const drifted = airtableNodes.some(n =>
+        n.config?.fields && typeof n.config.fields === 'object' &&
+        Object.keys(n.config.fields).some(k => !real.has(String(k).toLowerCase())));
+      if (!drifted) return { phase: 'gapping' };
+
+      // A column crept back in. Re-map against the columns we already read, and
+      // restate the contract — exactly as on the first pass.
+      const { fields: mapped, renames, unmapped } = await mapFieldsToColumns({
+        llm, sessionId, nodes: airtableNodes, columns: cached.columns,
+        outcome: state.draft?.outcome, table: cached.table,
+      });
+      return {
+        draft: {
+          ...state.draft,
+          outcome: rewriteAssertionFields(state.draft?.outcome, renames, cached.columns),
+          nodes: fillDestination(nodes, {
+            baseId: cached.baseId, tableId: cached.table, fields: mapped, columnsRead: true,
+          }),
+        },
+        confirmationLog: [{ step: state.step, type: 'destination_rechecked', unmapped }],
+        step:  state.step + 1,
+        phase: 'gapping',
+      };
     }
+    if (state.destinationsResolved) return { phase: 'gapping' };
 
     // ── 1. The base ──────────────────────────────────────────────────────────
     let bases;
@@ -942,6 +999,7 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
         outcome,
         nodes: fillDestination(nodes, { baseId: base.id, tableId: table.name, fields: mapped, columnsRead: true }),
       },
+      destination: { baseId: base.id, table: table.name, columns },
       confirmationLog: [{
         step: state.step, type: 'destination_resolved',
         base: { id: base.id, name: base.name }, table: table.name,
