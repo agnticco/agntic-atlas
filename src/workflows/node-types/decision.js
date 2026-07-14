@@ -256,8 +256,18 @@ export const decisionNodeType = {
     }
 
     // ── 1. Resolve every input to a value ─────────────────────────────────
+    //
+    // A malformed input or rule REFUSES TO RUN. It is not skipped, and the table
+    // is not quietly evaluated without it: a dropped input is a dimension the
+    // author believes is being decided on and is not, and a dropped rule makes
+    // every remaining rule broader than it was written. Both would produce a
+    // confident answer from a table nobody wrote. The engine does not rely on the
+    // validator having run — a spec in the database predates every rule.
     const resolved = {};
     for (const input of inputs) {
+      if (!input || typeof input !== 'object' || !String(input.key ?? '').trim()) {
+        throw new Error(`decision has an input with no key (${JSON.stringify(input)}) — refusing to decide without it.`);
+      }
       resolved[input.key] = String(input?.evaluator ?? '').toLowerCase() === 'llm'
         ? await classifyInput(input, ctx, services)
         : coerce(readInput(input, ctx), input);
@@ -266,6 +276,9 @@ export const decisionNodeType = {
     // ── 2. Match, under the hit policy ────────────────────────────────────
     const matched = [];
     rules.forEach((rule, index) => {
+      if (!rule || typeof rule !== 'object' || Array.isArray(rule) || !rule.when || typeof rule.when !== 'object') {
+        throw new Error(`decision rule ${index + 1} has no readable conditions — refusing to decide from a table it cannot read.`);
+      }
       let hit = true;
       for (const input of inputs) {
         const cond = rule.when?.[input.key];
@@ -335,7 +348,7 @@ const DECISION_FROM = /^([a-z0-9_-]+)(?:\.([a-z0-9_-]+))?$/i;
 export function tableOf(node) {
   const cfg = node?.config ?? {};
   return {
-    inputs:    listOf(cfg.inputs    ?? node?.inputs).filter(i => i?.key),
+    inputs:    listOf(cfg.inputs    ?? node?.inputs),
     output:    objOf(cfg.output     ?? node?.output),
     rules:     listOf(cfg.rules     ?? node?.rules),
     hitPolicy: normalizeHitPolicy(cfg.hitPolicy ?? node?.hitPolicy),
@@ -361,12 +374,29 @@ export function normalizeHitPolicy(raw) {
   return alias[p] ?? p;
 }
 
+/**
+ * A LIST READER IS FAITHFUL. It parses the textarea's JSON and it does nothing
+ * else — in particular it does NOT drop the entries it dislikes.
+ *
+ * It used to filter out anything that was not a plain object, which quietly
+ * re-created Increment C's defect #2 one layer up. `decision-analysis.js` opens
+ * with a guard whose whole purpose is that a rule it cannot read must never look
+ * like a rule that covers everything — and a `null` stripped HERE never reached
+ * that guard. The analyser was then handed a table with one fewer rule than the
+ * author wrote, and certified ITS coverage: a clean bill of health for a table
+ * nobody had. The same filter dropped an input with no `key`, so an input the user
+ * declared simply vanished and the validator's own "an input with no key" check
+ * became dead code.
+ *
+ * A malformed entry is a fact about the spec. Reporting it is the validator's job
+ * (and refusing to run on it is the executor's). Hiding it is nobody's.
+ */
 function listOf(raw) {
   let v = raw;
   if (typeof v === 'string') {
     try { v = JSON.parse(v); } catch { return []; }
   }
-  return Array.isArray(v) ? v.filter(x => x && typeof x === 'object' && !Array.isArray(x)) : [];
+  return Array.isArray(v) ? [...v] : [];
 }
 
 function objOf(raw) {
