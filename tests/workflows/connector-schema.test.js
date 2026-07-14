@@ -188,6 +188,59 @@ describe('a record whose COLUMN NAMES are chosen at run time is rejected', () =>
   });
 });
 
+// ── 2c. A field that the upstream step does not produce ─────────────────────
+
+describe('a template naming a field the step does not produce is caught', () => {
+  const withExtract = (tpl) => ({
+    name: 'T', version: 1, triggers: [{ type: 'email' }],
+    nodes: [
+      { id: 'extract', type: 'llm', label: 'X', config: { mode: 'extract', fields: 'name: the name\nbudget: the budget' } },
+      { id: 'act', type: 'connector-action', label: 'Act', config: {
+        action: 'airtable_create_record', baseId: 'appX', tableId: 'Leads', fields: { Name: tpl } } },
+    ],
+    edges: [{ from: 'extract', to: 'act' }],
+  });
+
+  test('a TYPO\'d field is a build error, not a silently blank column', () => {
+    // The sub-field grammar F added is what makes a correct record expressible — and
+    // it WIDENED the silent-failure surface it was meant to close: {{extract.budgett}}
+    // resolves to an EMPTY STRING, so the column is written blank, the run reports
+    // success, and nobody is told. Exactly the defect this phase kills, re-created by
+    // its own fix. An `llm` in extract mode DECLARES its fields, so the typo is knowable.
+    const codes = validator.validate(withExtract('{{extract.budgett}}')).errors.map(e => e.code);
+    assert.ok(codes.includes('BAD_TEMPLATE_FIELD'), `got: ${codes.join(', ')}`);
+  });
+
+  test('POSITIVE: a field the step DOES declare is accepted', () => {
+    assert.deepEqual(validator.validate(withExtract('{{extract.budget}}')).errors.map(e => e.code), []);
+    assert.deepEqual(validator.validate(withExtract('{{extract.output}}')).errors.map(e => e.code), [],
+      '`.output` is the whole output and is always legal');
+  });
+
+  test('a source that declares NOTHING makes no claim — an unknowable field is not a wrong one', () => {
+    // A connector read or a freeform llm has an output shape nobody wrote down. We do
+    // not invent a rule about it: refusing what we cannot check would reject valid work.
+    const freeform = {
+      name: 'T', version: 1, triggers: [{ type: 'email' }],
+      nodes: [
+        { id: 'think', type: 'llm', label: 'T', config: { mode: 'freeform', prompt: 'think' } },
+        { id: 'act', type: 'connector-action', label: 'Act', config: {
+          action: 'airtable_create_record', baseId: 'appX', tableId: 'Leads', fields: { Name: '{{think.whatever}}' } } },
+      ],
+      edges: [{ from: 'think', to: 'act' }],
+    };
+    assert.deepEqual(validator.validate(freeform).errors.map(e => e.code), []);
+  });
+
+  test('a `fields` string that is not valid JSON is caught, and says so', () => {
+    const e = errsOn({ action: 'airtable_create_record', baseId: 'appX', tableId: 'Leads', fields: 'Name, Budget' })
+      .find(x => x.code === 'UNCHECKABLE_WRITE_FIELDS');
+    assert.ok(e, 'a record whose fields cannot be read would fail at run time');
+    assert.match(e.message, /can't be read|valid JSON/i,
+      'and the message must name the real problem — this arm is NOT the templated-columns one');
+  });
+});
+
 // ── 3. …and it must not judge what it cannot resolve ────────────────────────
 
 describe('an UNRESOLVABLE capability has an unknowable key set, and is not judged', () => {
