@@ -410,6 +410,175 @@ describe('the DMN analysis runs at PUBLISH, not only in the converger', () => {
   });
 });
 
+// ── 6b. The structural checks, each pinned on its own ───────────────────────
+//
+// The generated mutation sweep reported EVERY branch of decision.validate() as a
+// survivor: the whole structural half of the check could be deleted with the suite
+// still green. A validator rule nothing pins is a rule the next person can remove
+// without anything noticing, which is how a check becomes decoration.
+
+describe('a malformed table is REPORTED, never crashed on and never shrugged at', () => {
+  const only = (cfg) => validator.validate(spec(cfg)).issues
+    .filter(i => i.nodeId === 'score').map(i => i.code);
+
+  test('no inputs', () => {
+    assert.ok(only({ ...table(), inputs: [] }).includes('MISSING_CONFIG'));
+  });
+
+  test('an input with no key', () => {
+    const t = table();
+    t.inputs = [{ type: 'number' }];
+    const res = validator.validate(spec(t));
+    assert.ok(res.errors.some(e => /no key/.test(e.message)));
+  });
+
+  test('an input with no type — its domain is unknown, so coverage cannot be checked', () => {
+    const t = table();
+    t.inputs = [{ key: 'budget' }];
+    assert.ok(validator.validate(spec(t)).errors.some(e => /what kind of value/.test(e.message)));
+  });
+
+  test('a `from` that is not a step reference', () => {
+    const t = table();
+    t.inputs[0].from = 'extract.budget.deep[0]';
+    assert.ok(only(t).includes('DECISION_BAD_INPUT_REF'));
+  });
+
+  test('no output', () => {
+    const t = table();
+    delete t.output;
+    assert.ok(validator.validate(spec(t)).errors.some(e => /doesn't say what it decides/.test(e.message)));
+  });
+
+  test('an output with fewer than two values decides nothing', () => {
+    const t = table({ output: { key: 'priority', type: 'enum', values: ['P1'] } });
+    assert.ok(validator.validate(spec(t)).errors.some(e => /fewer than two possible answers/.test(e.message)));
+  });
+
+  test('no rules', () => {
+    assert.ok(validator.validate(spec(table({ rules: [] }))).errors.some(e => /no rules/.test(e.message)));
+  });
+
+  test('a rule that is not an object, or has no `when`', () => {
+    assert.ok(only(table({ rules: [null] })).includes('DECISION_BAD_CONDITION'));
+    assert.ok(only(table({ rules: [{ then: 'P1' }] })).includes('DECISION_BAD_CONDITION'));
+  });
+
+  test('a rule with no `then` — it matches and then decides nothing', () => {
+    assert.ok(validator.validate(spec(table({ rules: [{ when: { budget: '-', tone: '-' } }] })))
+      .errors.some(e => /doesn't say what to decide/.test(e.message)));
+  });
+
+  test('and a null node still does not crash the validator', () => {
+    const bad = spec(table());
+    bad.nodes.push(null);
+    assert.doesNotThrow(() => validator.validate(bad));
+  });
+});
+
+describe('the engine refuses a table it cannot read, rather than evaluating what is left', () => {
+  test('no inputs or no rules ⇒ throw', async () => {
+    await assert.rejects(() => run({ inputs: [], rules: [], output: { key: 'x', values: ['a', 'b'] } }, ctxWith({})),
+      /nothing to decide/);
+  });
+
+  test('a MALFORMED RULE stops the run — it is never skipped', async () => {
+    // Skipping it makes every remaining rule broader than it was written, and the
+    // table decides confidently from something nobody authored. This is C's
+    // defect #2 ("a malformed rule silently covered the whole table") arriving at
+    // the executor instead of the analyser.
+    const t = {
+      inputs: [{ key: 'n', type: 'number' }],
+      output: { key: 'r', type: 'enum', values: ['x', 'y'] },
+      hitPolicy: 'FIRST',
+      rules: [null, { when: { n: '-' }, then: 'y' }],
+    };
+    await assert.rejects(() => run(t, ctxWith({ n: 1 })), /no readable conditions/);
+  });
+
+  test('a KEYLESS INPUT stops the run — the dimension does not just vanish', async () => {
+    const t = {
+      inputs: [{ type: 'number' }],
+      output: { key: 'r', type: 'enum', values: ['x', 'y'] },
+      hitPolicy: 'FIRST',
+      rules: [{ when: {}, then: 'y' }],
+    };
+    await assert.rejects(() => run(t, ctxWith({ n: 1 })), /no key/);
+  });
+
+  test('and the ANALYSER sees the malformed rule too — no coverage claim is made', () => {
+    const t = table({ rules: [null, ...table().rules] });
+    const res = validator.validate(spec(t));
+    assert.ok(res.errors.some(e => e.code === 'DECISION_BAD_CONDITION'),
+      'the reader must hand the analyser the table the author WROTE, malformed rows and all');
+    assert.equal(res.issues.some(i => i.code === 'DECISION_TABLE_GAP'), false,
+      'and NO coverage claim may be made about a table we cannot read — not even a negative one');
+  });
+});
+
+describe('coercion — a value read out of an upstream step is text until proven otherwise', () => {
+  const boolTable = {
+    inputs: [{ key: 'vip', type: 'boolean' }],
+    output: { key: 'lane', type: 'enum', values: ['fast', 'normal'] },
+    hitPolicy: 'FIRST',
+    rules: [{ when: { vip: 'true' }, then: 'fast' }, { when: { vip: '-' }, then: 'normal' }],
+  };
+
+  test('a boolean input reads true/false, and the STRINGS "true"/"yes" too', async () => {
+    assert.equal((await run(boolTable, ctxWith({ vip: true }))).value, 'fast');
+    assert.equal((await run(boolTable, ctxWith({ vip: 'true' }))).value, 'fast');
+    assert.equal((await run(boolTable, ctxWith({ vip: 'yes' }))).value, 'fast');
+    assert.equal((await run(boolTable, ctxWith({ vip: false }))).value, 'normal');
+  });
+
+  test('a boolean input handed something else throws rather than deciding on a guess', async () => {
+    await assert.rejects(() => run(boolTable, ctxWith({ vip: 'maybe' })), /needs true or false/);
+  });
+
+  test('a plain (non-AI) enum input is compared as a string, not coerced to a number', async () => {
+    const t = {
+      inputs: [{ key: 'tier', type: 'enum', values: ['free', 'pro'] }],
+      output: { key: 'lane', type: 'enum', values: ['fast', 'normal'] },
+      hitPolicy: 'FIRST',
+      rules: [{ when: { tier: 'pro' }, then: 'fast' }, { when: { tier: '-' }, then: 'normal' }],
+    };
+    assert.equal((await run(t, ctxWith({ tier: 'pro' }))).value, 'fast');
+    assert.equal((await run(t, ctxWith({ tier: 'free' }))).value, 'normal');
+  });
+});
+
+describe('a `from` says WHICH way it failed — the two paths are not interchangeable', () => {
+  const numeric = () => ({
+    inputs: [{ key: 'budget', type: 'number', from: 'extract.budget' }],
+    output: { key: 'priority', type: 'enum', values: ['P1', 'P3'] },
+    hitPolicy: 'FIRST',
+    rules: [{ when: { budget: '>50000' }, then: 'P1' }, { when: { budget: '-' }, then: 'P3' }],
+  });
+
+  test('the STEP never ran ⇒ "produced no output on this run"', async () => {
+    await assert.rejects(
+      () => run(numeric(), ctxWith(null, { outputs: new Map() })),
+      /produced no output on this run/,
+    );
+  });
+
+  test('the step ran but has no such FIELD ⇒ "produced no \\"budget\\""', async () => {
+    // A different sentence, because it is a different mistake: one is a broken
+    // graph, the other is a typo'd field name. Collapsing them tells the user to
+    // look in the wrong place.
+    await assert.rejects(
+      () => run(numeric(), ctxWith(null, { outputs: new Map([['extract', { total: 9 }]]) })),
+      /produced no "budget"/,
+    );
+  });
+
+  test('a whole-step reference (no field) reads the step\'s output', async () => {
+    const cfg = numeric();
+    cfg.inputs[0].from = 'extract';
+    assert.equal((await run(cfg, ctxWith(null, { outputs: new Map([['extract', 90000]]) }))).value, 'P1');
+  });
+});
+
 // ── 7. A branch may route on a decision — and only on a single-hit one ──────
 
 describe('the branch allowlist (closedDomainOf)', () => {
@@ -539,12 +708,31 @@ describe('tableOf', () => {
     // Rejecting the shape and refusing to LOOK at it are different things. A
     // top-level table is un-runnable, but its AI-judged input is still a moat
     // violation, and the user must be told both.
-    const t = tableOf({ ...table(), config: {} });
+    const t = tableOf({ ...table({ hitPolicy: 'UNIQUE' }), config: {} });
     assert.equal(t.inputs.length, 2);
+    assert.equal(t.rules.length, 4);
+    assert.equal(t.output.key, 'priority', 'every part of the table, not just the inputs');
+    assert.equal(t.hitPolicy, 'UNIQUE', 'a UNIQUE table read as FIRST would never be checked for overlap');
   });
 
-  test('an input with no key is dropped rather than crashing the analysis', () => {
-    assert.equal(tableOf({ config: { inputs: [{ type: 'number' }, { key: 'ok', type: 'number' }] } }).inputs.length, 1);
+  test('a JSON-string OUTPUT parses too (the same textarea path as the rules)', () => {
+    const t = tableOf({ config: { output: JSON.stringify({ key: 'p', type: 'enum', values: ['a', 'b'] }) } });
+    assert.equal(t.output.key, 'p');
+  });
+
+  test('THE READER IS FAITHFUL: it does not drop the entries it dislikes', () => {
+    // It used to filter out anything that wasn't a plain object with a key — which
+    // quietly re-created C's defect #2 one layer up. decision-analysis.js opens
+    // with a guard whose whole purpose is that a rule it cannot READ must never
+    // look like a rule that covers EVERYTHING; a `null` stripped here never
+    // reached that guard, and the analyser certified the coverage of a table with
+    // one fewer rule than the author wrote. A keyless input vanished the same way.
+    const t = tableOf({ config: {
+      inputs: [{ type: 'number' }, { key: 'ok', type: 'number' }],
+      rules:  [null, { when: { ok: '-' }, then: 'x' }],
+    } });
+    assert.equal(t.inputs.length, 2, 'a keyless input is a FACT ABOUT THE SPEC — reporting it is the validator\'s job, hiding it is nobody\'s');
+    assert.equal(t.rules.length, 2);
   });
 
   test('a JSON-string table (the textarea path) parses', () => {
