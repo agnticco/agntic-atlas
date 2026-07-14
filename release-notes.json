@@ -1,5 +1,13 @@
 [
   {
+    "version": "1.3.12",
+    "date": "2026-07-14",
+    "title": "Multiple destinations now deliver correctly",
+    "notes": [
+      "If a workflow sends its result to more than one place — say Slack and email — every destination now receives the actual content. Previously the second destination could receive a delivery receipt instead of your workflow's output."
+    ]
+  },
+  {
     "version": "1.3.2",
     "date": "2026-07-08",
     "title": "Send us bugs & feedback in-app",
