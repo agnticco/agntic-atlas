@@ -544,6 +544,45 @@ refactor them without an explicit decision recorded here:
     Checks ADDED, never weakened** — recorded because a diff against `scripts/` is how a verifier
     detects a builder quietly weakening their own gate, so it must never be silent.
 
+- **The independent verifier then FAILED increment C, and was right (2026-07-13, round 2).** The
+  headline invariant was false and **the check written to prove it could not fail**. Third time this
+  phase; the lesson keeps arriving in a new costume.
+  - **`complete ⇒ publishable` was FALSE with no channel catalog.** The validator's channel checks
+    sit behind `if (channelId && this.channelRegistry)` — so with no registry `UNKNOWN_CHANNEL` and
+    `CHANNEL_UNAVAILABLE` **silently do not run**, while publish (which always has one,
+    `server.js:542`) still enforces them. A `deliver` to a hallucinated `channel:'discord'` scored
+    **complete** and then failed to publish: the builder says done, the save button says no.
+    It **disabled itself exactly when it mattered** — `builder.js` built the catalog after three
+    network-bound connector lookups inside a *"non-fatal"* catch, so an expired refresh token dropped
+    it, and in that same state the model has no catalog in its prompt either and is at its **most**
+    likely to invent a channel id. **A check that silently degrades is not a safety net; it is the
+    bug** (the `?? 'unscoped'` lesson, third occurrence). `scoreGap` now **refuses to certify**
+    without a catalog (`CHANNELS_UNVERIFIED`, blocking) and `builder.js` guarantees one.
+    **Refusing to certify is always available; certifying without checking is not.**
+  - **The check that was supposed to catch it was structurally incapable of failing.**
+    `converger-adversarial.mjs` check 6 (*"complete ⇒ publishable"*) **scored with no capabilities
+    and validated with no `channelRegistry`** — both sides equally blind, so the divergence was
+    invisible **by construction**. Production validates *with* a registry. That is **architectural
+    flaw #2, verbatim**: *a check that exercises a configuration production never uses cannot see the
+    bug production has.* The generated sweep had even listed the exact line (`gap-scorer.js`
+    `byId.get(id) ?? null`) as a **survivor**, and the builder read past it.
+    **Rule: a check must construct its subject the way PRODUCTION constructs it. If your test hands
+    in something production omits — or omits something production hands in — it is testing a program
+    nobody runs.** `p3-converger-run.mjs` was fixed the same way: it drove the converger with no
+    channel catalog at all.
+  - **`BRANCH_CASE_NOT_IN_ENUM` (new).** A branch on a `classify` whose cases name values the
+    classifier **cannot produce** (`"HIGH"` when the categories are `urgent|normal`) validated clean
+    and scored complete. Every run takes the catch-all — silently, forever, with `run_completed` —
+    while the converger reports the workflow finished. **We forced the domain closed precisely so
+    membership would be DECIDABLE, and then never decided it.** Closing a domain and not checking
+    against it is a completeness claim nobody made good on. `closedDomainOf()` is now the single
+    definition of "what values can this node emit", shared by the allowlist and the case check, so
+    the two cannot drift.
+  - Also: `ratify` shipped a finished-looking draft with unresolved **blocking** gaps (the user found
+    out on a failed save) — it now carries `publishable` + `blockers`; and the outcome-candidate
+    filter silently dropped a requested connector (**defect #1 relocated from the spec into the
+    candidate list**) — it now says what it refused to promise, and why.
+
 ## Support tickets (in-app feedback / bug reporting) — added 2026-07-08
 
 Users submit bugs/ideas/requests from a floating **Feedback** button in the operator

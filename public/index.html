@@ -4403,6 +4403,10 @@ class Component extends DCLogic {
         });
         self._send({ type: "accept", id: c.id });
       };
+      // What we refused to promise, and why. A destination the user asked for and
+      // did not get MUST be said out loud — dropping it in silence is defect #1
+      // relocated from the spec into the candidate list.
+      const notice = iv.notice ? [{ isAtlas: true, text: iv.notice, hasReason: false }] : [];
       const cards = cands.map((c, i) => ({
         statement: c.statement,
         hint: (c.assertions || []).map(a => (a.kind || "").replace(/_/g, " ") + " → " + (a.target || "")).join("   ·   "),
@@ -4414,7 +4418,7 @@ class Component extends DCLogic {
         onPick: () => pick(c),
       }));
       this.setState({
-        msgs: [...this.state.msgs, ...lead,
+        msgs: [...this.state.msgs, ...lead, ...notice,
                { isOutcome: true, q: "Here's what I think this needs to deliver. Which is right?", cards }],
         thinking: false, inputMode: "clarify", phase: "building",
       });
@@ -4613,7 +4617,13 @@ class Component extends DCLogic {
 
     if (iv.type === "ratify") {
       const _reset = () => this.reset();
-      const msgs = this.state.msgs.map(m => m._id === this._slId ? { ...m, complete: true, onReset: _reset } : m);
+      let msgs = this.state.msgs.map(m => m._id === this._slId ? { ...m, complete: true, onReset: _reset } : m);
+      // The converger reached the end without closing everything. Say what is
+      // still blocking publish, here — not on a failed save the user cannot read.
+      if (iv.publishable === false && (iv.blockers || []).length) {
+        msgs = [...msgs, { isAtlas: true, hasReason: false,
+          text: "Before this can go live:\n\n" + iv.blockers.map(b => "• " + b.message).join("\n") }];
+      }
       this._slId = null;
       this.setState({
         spec: iv.spec, phase: "proposed", thinking: false, inputMode: "change",

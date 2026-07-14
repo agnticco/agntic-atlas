@@ -166,6 +166,40 @@ export function scoreGap(spec = {}, { capabilities = {}, validator = null } = {}
     });
   });
 
+  // ── 2a. FAIL CLOSED when we cannot check what publish will check ─────────
+  //
+  // `complete ⇒ publishable` is the property this whole loop rests on. It is
+  // FALSE the moment the scorer performs fewer checks than publish does — and
+  // that is exactly what happened without a channel catalog: `channelView()`
+  // returns null, the validator's `if (channelId && this.channelRegistry)` guard
+  // (workflow-validator.js, _checkTypeSpecific) silently skips UNKNOWN_CHANNEL and
+  // CHANNEL_UNAVAILABLE, and a spec delivering to a hallucinated `channel:
+  // 'discord'` scores COMPLETE — then publish rejects it. A dead end the user
+  // cannot argue their way out of.
+  //
+  // Worse, it disables itself precisely when it is most needed: `builder.js`
+  // builds the catalog after three network-bound connector lookups inside a
+  // "non-fatal" catch, so an expired refresh token drops the catalog — and in
+  // that same state the model has no catalog in its prompt either, making it MOST
+  // likely to invent a channel id.
+  //
+  // A silent degradation of a check is not a safety net; it IS the bug (CLAUDE.md
+  // — the `?? 'unscoped'` tenant fallback). So: if a spec delivers somewhere and
+  // we cannot see the catalog, we refuse to call it complete. Refusing to certify
+  // is always available; certifying without checking is not.
+  // (Found by the independent verifier.)
+  const hasCatalog = Array.isArray(capabilities?.channels) && capabilities.channels.length > 0;
+  const routed = nodes.filter(n => n?.type === 'deliver' && n.config?.channel);
+  if (!hasCatalog && routed.length) {
+    gaps.push({
+      id: 'gap_channels_unverified', class: 'contract', nodeId: null,
+      code: 'CHANNELS_UNVERIFIED', severity: 'error',
+      message: 'I can\'t confirm the delivery destinations are real and connected — the connector catalog isn\'t loaded, so I won\'t claim this workflow is finished.',
+      hint: 'Reconnect the connectors (or reload the page) and try again.',
+      resolution: 'unanswered', decidable: false, blocking: true,
+    });
+  }
+
   // ── 2b. The exception questions (defect #5: the converger asked ZERO, ever) ──
 
   // Nothing says what happens when a step FAILS. Today the run stops and the

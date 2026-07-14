@@ -312,3 +312,95 @@ describe('FINDING 5 — a null node makes validate() THROW instead of reporting 
     assert.ok(result.errors.some(e => e.code === 'MALFORMED_NODE'));
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// The independent VERIFIER's findings (P12 Increment C, round 2). Every one of
+// these reached candidate state behind a fully green suite — including a green
+// `converger-adversarial` check that was structurally incapable of seeing D1.
+// ─────────────────────────────────────────────────────────────────────────────
+
+import { WorkflowValidator as WV2 }        from '../../src/workflows/workflow-validator.js';
+import { NodeTypeRegistry as NTR2 }        from '../../src/workflows/node-type-registry.js';
+import { registerBuiltInNodeTypes as RBN2 } from '../../src/workflows/node-types/index.js';
+import { scoreGap as scoreGap2 }           from '../../src/converger/gap-scorer.js';
+
+const CHANS = [
+  { id: 'slack',         available: true, configSchema: [{ key: 'target' }] },
+  { id: 'inbox_deliver', available: true, configSchema: [{ key: 'subject' }] },
+];
+/** The validator PRODUCTION uses — with a channel registry (server.js:542). */
+const prodV = () => new WV2({
+  nodeTypes: RBN2(new NTR2()),
+  channelRegistry: { get: (id) => CHANS.find(c => c.id === id) ?? null },
+});
+
+describe('VERIFIER D1 — complete ⇒ publishable, with the channel catalog', () => {
+  const discordSpec = {
+    version: 2, name: 'Hallucinated channel',
+    outcome: { assertions: [{ id: 'a1', kind: 'message_sent', target: 'slack:#ops' }] },
+    triggers: [{ type: 'email' }],
+    nodes: [
+      { id: 'ok', type: 'deliver', label: 'Slack',   config: { channel: 'slack', target: '#ops' } },
+      { id: 'no', type: 'deliver', label: 'Discord', config: { channel: 'discord', target: '#ops' } },
+    ],
+    edges: [],
+  };
+
+  test('a spec with a channel that does not exist is NOT scored complete', () => {
+    // It used to be: the scorer had no catalog, so the validator's
+    // `if (channelId && this.channelRegistry)` guard silently skipped
+    // UNKNOWN_CHANNEL — while publish (which HAS a registry) still enforced it.
+    // The converger said "done"; the save button said no.
+    assert.equal(scoreGap2(discordSpec, { capabilities: { channels: CHANS } }).complete, false);
+    assert.equal(prodV().validate(discordSpec).ok, false);
+  });
+
+  test('with NO catalog the scorer REFUSES to certify rather than skipping the check', () => {
+    // Refusing to certify is always available. Certifying without checking is not.
+    const r = scoreGap2(discordSpec, { capabilities: {} });
+    assert.equal(r.complete, false, 'a scorer that cannot see the catalog must not call a spec finished');
+    assert.ok(r.gaps.some(g => g.code === 'CHANNELS_UNVERIFIED' && g.blocking));
+  });
+
+  test('CONTROL: a real channel, with a catalog, still scores complete', () => {
+    const good = { ...discordSpec, nodes: [discordSpec.nodes[0]] };
+    assert.equal(scoreGap2(good, { capabilities: { channels: CHANS } }).complete, true);
+    assert.equal(prodV().validate(good).ok, true);
+  });
+});
+
+describe('VERIFIER D2 — a branch case the classifier can never produce', () => {
+  const triage = (cases) => ({
+    version: 2, name: 'Triage',
+    outcome: { assertions: [{ id: 'a1', kind: 'message_sent', target: 'slack:#ops' }] },
+    triggers: [{ type: 'email' }],
+    nodes: [
+      { id: 'c',  type: 'llm', label: 'Classify', config: { mode: 'classify', categories: 'urgent\nnormal' } },
+      { id: 'r',  type: 'branch', label: 'Route', config: { on: 'c.output', cases } },
+      { id: 'up', type: 'deliver', label: 'Urgent', config: { channel: 'slack', target: '#ops' } },
+      { id: 'dn', type: 'deliver', label: 'Normal', config: { channel: 'inbox_deliver', subject: 'FYI' } },
+    ],
+    edges: [{ from: 'c', to: 'r' }, { from: 'r', to: 'up' }, { from: 'r', to: 'dn' }],
+  });
+
+  test('a case naming a value outside the closed enum is REJECTED', () => {
+    // "HIGH" is not one of urgent|normal, so it can never match: the mandatory
+    // catch-all would swallow 100% of traffic, forever, with run_completed — the
+    // exact silent misroute the moat exists to prevent. We forced the domain
+    // closed precisely so membership became DECIDABLE; not deciding it was a
+    // completeness claim nobody checked.
+    const codes = prodV().validate(triage([{ when: 'HIGH', to: 'up' }, { when: '*', to: 'dn' }]))
+      .errors.map(e => e.code);
+    assert.ok(codes.includes('BRANCH_CASE_NOT_IN_ENUM'), `got: ${codes.join(', ') || '(none)'}`);
+  });
+
+  test('CONTROL: cases drawn from the enum are accepted', () => {
+    const r = prodV().validate(triage([{ when: 'urgent', to: 'up' }, { when: '*', to: 'dn' }]));
+    assert.equal(r.ok, true, `a valid branch must publish; got: ${r.errors.map(e => e.code).join(', ')}`);
+  });
+
+  test('CONTROL: matching is case-insensitive — "Urgent" is not a typo', () => {
+    const r = prodV().validate(triage([{ when: 'Urgent', to: 'up' }, { when: '*', to: 'dn' }]));
+    assert.equal(r.ok, true);
+  });
+});

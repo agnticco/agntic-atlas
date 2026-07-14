@@ -303,13 +303,39 @@ scoreGap(spec, { capabilities }) → {
 >   time**, and a spec that cannot publish never has a run time. Calling that "escalated" would be a
 >   lie told in the language of safety.
 >
-> Which buys the property the whole loop rests on, **by construction**:
+> Which buys the property the whole loop rests on:
 >
 > > **`complete ⇒ publishable`.**
 >
 > Without it the converger can declare a workflow finished that `POST /api/builder/workflows` then
 > rejects — a dead end the user cannot argue their way out of: the builder says done, the save button
 > says no.
+
+> ⚠️ **AND IT ONLY HOLDS IF THE SCORER FAILS CLOSED.** This section used to claim the property held
+> "by construction". It did not, and the independent verifier produced the counter-example.
+>
+> `scoreGap` judges a spec with the validator — but the validator's channel checks
+> (`UNKNOWN_CHANNEL`, `CHANNEL_UNAVAILABLE`) sit behind `if (channelId && this.channelRegistry)`, so
+> **with no channel catalog they silently do not run**, while publish — which always has a registry
+> (`server.js:542`) — still enforces them. A `deliver` to a hallucinated `channel: 'discord'`
+> therefore scored **complete**, and then failed to publish.
+>
+> It disabled itself exactly when it mattered most: `builder.js` builds the catalog *after* three
+> network-bound connector lookups inside a *"non-fatal"* catch, so an expired refresh token dropped
+> it — and in that same state the model has no catalog in its prompt either, making it **most** likely
+> to invent a channel id.
+>
+> **A check that silently degrades is not a safety net; it is the bug** (CLAUDE.md — the
+> `?? 'unscoped'` tenant fallback). So the scorer now **refuses to certify** when it cannot see the
+> catalog (`CHANNELS_UNVERIFIED`, blocking), and `builder.js` guarantees one.
+> **Refusing to certify is always available. Certifying without checking is not.**
+>
+> And the check built to *prove* this property — `converger-adversarial.mjs` check 6 — was
+> **structurally incapable of failing**: it scored with no capabilities and validated with no
+> registry, so both sides were equally blind and the divergence was invisible *by construction*.
+> That is CLAUDE.md architectural flaw #2 verbatim — *a check that exercises a configuration
+> production never uses cannot see the bug production has*. It now validates the way production
+> validates.
 
 **The contract and outcome gaps ARE the validator's issues**, classified — `gap-scorer.js` does not
 re-implement them. That is deliberate: a converger holding its own private opinion of "complete"
