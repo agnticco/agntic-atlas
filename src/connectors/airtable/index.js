@@ -333,7 +333,7 @@ export function registerAirtableChannels(capabilityRegistry) {
     configSchema: [
       { key: 'baseId',  label: 'Base ID',          type: 'string',   optional: false },
       { key: 'tableId', label: 'Table name or ID', type: 'string',   optional: false },
-      { key: 'fields',  label: 'Fields (JSON)',     type: 'textarea', optional: false, hint: '{"Field Name": "value"}' },
+      { key: 'fields',  label: 'Fields',            type: 'object',   optional: false, hint: 'An OBJECT of column → value: { "Name": "{{extract.name}}" }. One template per column — a JSON string is refused, because its column names cannot be checked against the real table.' },
     ],
     isReady: ready,
     handle: makeHandle((api, config) => airtableCreateRecord(api, config)),
@@ -349,7 +349,7 @@ export function registerAirtableChannels(capabilityRegistry) {
       { key: 'baseId',   label: 'Base ID',          type: 'string',   optional: false },
       { key: 'tableId',  label: 'Table name or ID', type: 'string',   optional: false },
       { key: 'recordId', label: 'Record ID',        type: 'string',   optional: false },
-      { key: 'fields',   label: 'Fields (JSON)',     type: 'textarea', optional: false, hint: '{"Field Name": "new value"}' },
+      { key: 'fields',   label: 'Fields',            type: 'object',   optional: false, hint: 'An OBJECT of column → value: { "Name": "{{extract.name}}" }. One template per column.' },
     ],
     isReady: ready,
     handle: makeHandle((api, config) => airtableUpdateRecord(api, config)),
