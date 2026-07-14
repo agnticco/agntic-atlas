@@ -305,6 +305,26 @@ export function matchesCondition(cond, input, value) {
   }
   const wanted = raw.split(',').map(s => s.trim()).filter(Boolean);
   if (!wanted.length) return { ok: false, matched: false };
+
+  // A LITERAL NAMING A VALUE THE ENUM NEVER DECLARED IS UNREADABLE — the same
+  // verdict `coveredAtoms` gives it, because these two functions are the two
+  // halves of ONE grammar and this file's header says the day they disagree is the
+  // day the proof describes a program nobody is running.
+  //
+  // They still disagreed here. The analyser called `"bogus"` unreadable; the engine
+  // read it happily as "no match" — and read `not(bogus)` as MATCHING EVERYTHING.
+  // Today the validator rejects such a table before either can run (so it was not
+  // reachable), but `run()`'s own `if (!ok) throw` exists precisely to stop a rule
+  // the engine cannot read, and for this whole class that throw could never fire.
+  // A guard that depends on another check having already refused the input is not a
+  // guard. (Found by the independent verifier, E-R10.)
+  const declared = Array.isArray(input?.values)
+    ? input.values.filter(v => v != null).map(v => String(v).toLowerCase())
+    : [];
+  if (declared.length && wanted.some(w => !declared.includes(w.toLowerCase()))) {
+    return { ok: false, matched: false };
+  }
+
   const v = String(value ?? '').trim().toLowerCase();
   return { ok: true, matched: wanted.some(w => w.toLowerCase() === v) };
 }

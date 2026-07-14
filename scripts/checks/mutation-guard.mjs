@@ -222,6 +222,26 @@ const MUTATIONS = [
     name: 'a comma list silently drops its undeclared members (the rule covers less than its author believes)',
     find: '  if (wanted.some(w => !declared(w))) return { atoms: new Set(), ok: false };',
     repl: '  if (false) return { atoms: new Set(), ok: false };' },
+
+  // ── The residuals the independent verifier left after the E fix ────────────
+  // Each of these was CORRECT CODE PINNED BY NOTHING — deletable with the whole
+  // suite green. That is the state a guard is in right before someone deletes it.
+  { file: 'src/workflows/node-types/llm.js',
+    name: 'llm classify reverts to the substring scan (THE sanctioned LLM→decision door: a negated answer classifies as the value it negates)',
+    find: '      const picked = pickCategory(raw, categories);',
+    repl: "      const picked = categories.find(c => c.toLowerCase() === String(raw).trim().toLowerCase()) ?? categories.find(c => String(raw).toLowerCase().includes(c.toLowerCase()));" },
+  { file: 'src/workflows/workflow-validator.js',
+    name: 'the moat re-reads the table privately (a JSON-string config.inputs skips LLM_INPUT_NOT_ENUM)',
+    find: '        const inputs = tableOf(node).inputs;',
+    repl: "        const inputs = Array.isArray(node.inputs) ? node.inputs : Array.isArray(node.config?.inputs) ? node.config.inputs : [];" },
+  { file: 'src/workflows/decision-analysis.js',
+    name: 'the engine reads an UNDECLARED enum literal as a plain no-match (and not(<undeclared>) as matching EVERYTHING)',
+    find: '  if (declared.length && wanted.some(w => !declared.includes(w.toLowerCase()))) {',
+    repl: '  if (false) {' },
+  { file: 'src/workflows/node-types/decision.js',
+    name: 'pickCategory crosses a non-ASCII letter ("urgentísimo" classifies as "urgent")',
+    find: "  return new RegExp(`(?:^|[^\\\\p{L}\\\\p{N}_-])${esc}(?:[^\\\\p{L}\\\\p{N}_-]|$)`, 'iu');",
+    repl: "  return new RegExp(`(?:^|[^\\\\w-])${esc}(?:[^\\\\w-]|$)`, 'i');" },
 ];
 
 const read  = (f) => readFileSync(f, 'utf8');

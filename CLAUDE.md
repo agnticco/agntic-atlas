@@ -1196,10 +1196,21 @@ phase, not just this one.
   decision does not *claim* to gate, and its value is legitimately usable in a template), but recorded
   because `prompts.js` teaches decision→branch and the silent-no-op class is exactly what this phase
   exists to kill. Revisit if a real workflow ever ships one.
-- **`decision-analysis.js` and `workflow-validator.js` share a FEEL-A grammar in two functions**
-  (`coveredAtoms` for the proof, `matchesCondition` for the engine). Defect #6 above was them
-  disagreeing. They now agree, and both are swept — but they are still two functions, and the honest
-  fix is one. Collapse them when F touches the analyser.
+- **`decision-analysis.js` holds the FEEL-A grammar in TWO functions** (`coveredAtoms` for the proof,
+  `matchesCondition` for the engine). They have now disagreed **twice** — on case-sensitivity (defect
+  #6) and on undeclared enum literals (E-R10: the analyser called `"bogus"` unreadable while the engine
+  read `not(bogus)` as matching *everything*). Both are fixed and both are mutation-guarded, but they
+  are still two functions, and every future divergence is a coverage proof about a program nobody runs.
+  **Collapse them into one when F touches the analyser.**
+- **`pickCategory` refuses a preambled answer when one declared value CONTAINS another**
+  (`['review','needs review']` + *"Decision: needs review"* → two word-boundary hits → ambiguous →
+  throw). Fail-closed and loud, so it escalates rather than misclassifies — but the exact answer works
+  and the preambled one does not. Recorded, not fixed: guessing between two declared values the model
+  arguably named is the very thing that made the old fallback dangerous.
+- **`tests/e2e/onboarding.test.js` has ~5 failing tests at baseline** (workspace provisioning, slug
+  dedupe, team invites, seat limits) — **pre-existing, unrelated to P12, and NOT in any gate's list**.
+  Confirmed by the test-adversary and the verifier independently, on a clean tree. They also flake
+  (one run showed 6). Someone should own these; they are a broken window in the E2E suite.
 
 **⚠️ PROCESS HAZARD, found by the verifier (2026-07-14): do NOT run the test-adversary and the verifier
 in parallel if BOTH are told to run `mutation-sweep`.** The sweep rewrites `src/` in place, so one

@@ -624,10 +624,19 @@ export function pickCategory(raw, values) {
   return hits.length === 1 ? hits[0] : null;
 }
 
-/** `\b` around a value, with the value's own regex metacharacters escaped. */
+/**
+ * A word boundary around a value, with the value's own regex metacharacters
+ * escaped so a category like `P1+` or `v1.0` cannot act as a pattern.
+ *
+ * UNICODE-AWARE, deliberately: `\w` is ASCII-only, so an ASCII boundary treats
+ * `urgentísimo` as `urgent` + a boundary + `ísimo` and the classifier returns
+ * `urgent` — a member of the set the model did not name, which is the exact class
+ * this function exists to kill. A workflow triaging Spanish or German mail is not
+ * an edge case. (Found by the independent verifier, E-R8.)
+ */
 function wordBoundary(value) {
   const esc = String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  return new RegExp(`(?:^|[^\\w-])${esc}(?:[^\\w-]|$)`, 'i');
+  return new RegExp(`(?:^|[^\\p{L}\\p{N}_-])${esc}(?:[^\\p{L}\\p{N}_-]|$)`, 'iu');
 }
 
 export { IRRELEVANT };
