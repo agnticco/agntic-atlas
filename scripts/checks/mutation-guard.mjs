@@ -57,6 +57,8 @@ const SUITES = [
   'tests/workflows/decision-pinning.test.js',
   // Multiple destinations: what each one RECEIVED, not that delivery ran.
   'tests/workflows/fan-out.test.js',
+  // P12 Increment F — the last open config hole, closed.
+  'tests/workflows/connector-schema.test.js',
 ];
 
 /**
@@ -167,7 +169,19 @@ const MUTATIONS = [
     find: '        } else if (!edgeSet.has(edgeKey(node.id, target))) {', repl: '        } else if (true) {' },
   { file: 'src/workflows/workflow-validator.js',
     name: 'UNKNOWN_CONFIG_KEY disabled (a hallucinated config key ships)',
-    find: "      if (typeDef && typeDef.configPolicy !== 'open') {", repl: '      if (false) {' },
+    find: "      if (typeDef && typeDef.configPolicy !== 'open' && capResolved) {", repl: '      if (false) {' },
+  // …and the half of it Increment F added: a connector-action's params are checked
+  // against the SELECTED CAPABILITY's own schema. Dropping it re-opens the last open
+  // config hole — `tableName` on an Airtable create ships, the handler ignores it,
+  // and the record lands in a table nobody chose.
+  { file: 'src/workflows/workflow-validator.js',
+    name: 'connector-action params stop being checked against the capability schema',
+    find: '        for (const f of capSchema) declared.add(f.key);',
+    repl: '        for (const f of []) declared.add(f.key);' },
+  { file: 'src/workflows/workflow-validator.js',
+    name: 'the capability check judges what it CANNOT resolve (false rejections with no registry)',
+    find: '      const capResolved = !capBearing || !!this._resolveCapability(capBearing);',
+    repl: '      const capResolved = true;' },
 
   // ── control node blob leaking from INSIDE a loop (round 8) ───────────────
   { file: 'src/workflows/node-types/foreach.js',
