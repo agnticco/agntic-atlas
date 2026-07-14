@@ -22,21 +22,35 @@ export const connectorActionNodeType = {
   description: 'Runs a connector capability mid-workflow (e.g. Slack lookup, channel history) and passes its result to the next step.',
   icon: 'plug',
   family: 'action',
-  // The ONLY open-schema node type. Its params are per-capability — an Airtable
-  // search takes baseId/tableId/filterByFormula, a Sheets read takes
-  // spreadsheetId/range — and this schema cannot enumerate them ahead of time,
-  // because the capability catalog is built at run time from whichever
-  // connectors a tenant has authorised. So UNKNOWN_CONFIG_KEY does not apply
-  // here: params pass through to the handler, exactly as the note above says.
-  // Increment F closes this properly by validating params against the
-  // capability's OWN declared schema ("schema-aware connectors"). Until then
-  // this is a real, bounded hole in the config check, and it is the only one.
-  configPolicy: 'open',
+  // CLOSED as of P12 Increment F — this was the last open-schema node type, and
+  // the last hole in UNKNOWN_CONFIG_KEY.
+  //
+  // The reason it was open is real: an Airtable search takes baseId/tableId, a
+  // Sheets read takes spreadsheetId/range, and THIS schema cannot enumerate them —
+  // the catalog is built at run time from whichever connectors a tenant has
+  // authorised. But it does not follow that nobody can check them. Every
+  // capability ALREADY declares its own `configSchema` (capability-registry.js),
+  // and the validator already resolves a `deliver` node's channel schema the same
+  // way. So the checkable key set is:
+  //
+  //     this node's OWN keys   ∪   the SELECTED CAPABILITY's declared params
+  //
+  // …which is exactly how `deliver` has worked since Increment C. Nothing needed
+  // inventing; the schema was already there and simply was not consulted.
+  //
+  // The node's own keys are `action` and `title`, because those are the only two
+  // `run()` reads (below). `target` used to be declared here and is NOT read by
+  // run() — it is a *capability* param (Slack declares it), and declaring it here
+  // meant the node's schema lied in both directions at once: it named a key
+  // nothing in this file consumes, and omitted `title`, which it does. A schema
+  // that lists keys nothing reads turns the check into theatre — that is the state
+  // that let `"model": "claude-opus-4-5"` ship (CLAUDE.md, Increment A).
+  configPolicy: 'closed',
   configSchema: [
     { key: 'action', label: 'Action', type: 'string', optional: false,
-      hint: 'A registered connector capability id, e.g. "slack_history", "slack_lookup_user".' },
-    { key: 'target', label: 'Channel / target', type: 'string', optional: true,
-      hint: 'Action-specific: the channel, user, or resource the action operates on.' },
+      hint: 'A registered connector capability id, e.g. "slack_history", "airtable_create_record".' },
+    { key: 'title', label: 'Title', type: 'string', optional: true,
+      hint: 'Optional heading passed to the capability alongside the upstream content.' },
   ],
   previewTemplate: 'Runs the {action} connector action.',
   run: async (cfg, ctx, services) => {

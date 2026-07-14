@@ -434,7 +434,7 @@ describe('WRITE_WITHOUT_IDEMPOTENCY', () => {
 
   test('a write with no idempotency key warns', () => {
     const spec = withStep({ id: 'save', type: 'connector-action', label: 'Save',
-                            config: { action: 'airtable_create_record', baseId: 'app1', tableId: 'Leads' } });
+                            config: { action: 'airtable_create_record', baseId: 'app1', tableId: 'Leads', fields: { Name: '{{prev}}' } } });
     const issue = run(spec).issues.find(i => i.code === 'WRITE_WITHOUT_IDEMPOTENCY');
     assert.ok(issue);
     assert.equal(issue.severity, 'warning', 'plenty of writes are naturally idempotent — this must not block publish');
@@ -447,7 +447,7 @@ describe('WRITE_WITHOUT_IDEMPOTENCY', () => {
     // fires is a warning nobody reads.
     const spec = withStep({ id: 'save', type: 'connector-action', label: 'Save',
                             idempotency: { key: '{{trigger.output}}', on_conflict: 'skip' },
-                            config: { action: 'airtable_create_record', baseId: 'app1', tableId: 'Leads' } });
+                            config: { action: 'airtable_create_record', baseId: 'app1', tableId: 'Leads', fields: { Name: '{{prev}}' } } });
     assert.equal(codes(spec).includes('WRITE_WITHOUT_IDEMPOTENCY'), false);
   });
 

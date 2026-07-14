@@ -442,6 +442,45 @@ export async function sheetsRead(gapi, { spreadsheetId, range = 'Sheet1' }) {
   return { values: data.values ?? [], rows: (data.values ?? []).length };
 }
 
+/**
+ * sheets_describe — the spreadsheet's SHAPE: its sheet/tab names, and the COLUMN
+ * HEADERS of each. (P12 Increment F.)
+ *
+ * `sheets_append` takes a raw `values` array of arrays — positional, and therefore
+ * unwritable by anyone who cannot see the header row. Asking a user to tell us
+ * their column order in a chat window is asking for something we can simply READ
+ * (converger-v2 §6.2.3), and it is the reason the write story stalls on Sheets the
+ * same way it stalls on Airtable's base id.
+ *
+ * Returns a header list per sheet, so the converger can map "the customer's
+ * budget" onto the column that is actually there — and can tell the user when the
+ * column they named does not exist, rather than silently appending it into the
+ * wrong position.
+ */
+export async function sheetsDescribe(gapi, { spreadsheetId }) {
+  if (!spreadsheetId) throw new Error('sheets_describe: spreadsheetId is required.');
+  // One call: the sheet names + the first row of each, which is the header row by
+  // universal convention. `includeGridData` with a 1-row window keeps the payload
+  // small on a spreadsheet with 100k rows.
+  const meta = await gapi('GET', `/sheets/v4/spreadsheets/${spreadsheetId}`, {
+    params: { fields: 'properties.title,sheets.properties.title' },
+  });
+  const sheets = (meta.sheets ?? []).map(s => s.properties?.title).filter(Boolean);
+
+  const described = [];
+  for (const title of sheets) {
+    // A sheet with no header row (or an empty sheet) reports [] rather than
+    // inventing column names — an empty answer is honest; a guessed one is not.
+    let headers = [];
+    try {
+      const row = await gapi('GET', `/sheets/v4/spreadsheets/${spreadsheetId}/values/${encodeURIComponent(`${title}!1:1`)}`);
+      headers = (row.values?.[0] ?? []).map(h => String(h).trim()).filter(Boolean);
+    } catch { /* an unreadable tab is not a fatal error for the others */ }
+    described.push({ sheet: title, headers });
+  }
+  return { spreadsheetId, title: meta.properties?.title ?? null, sheets: described };
+}
+
 /** sheets_append — append rows. */
 export async function sheetsAppend(gapi, { spreadsheetId, range = 'Sheet1', values }) {
   const rows = typeof values === 'string' ? JSON.parse(values) : values;
@@ -664,6 +703,18 @@ export function registerGoogleChannels(capabilityRegistry) {
     requiredScopes: ['https://www.googleapis.com/auth/drive'],
     isReady: ready,
     handle: makeHandle((gapi, config) => driveListFiles(gapi, { query: config.query, maxResults: config.maxResults })),
+  });
+
+  capabilityRegistry.register({
+    id: 'sheets_describe', connector: 'google', positions: ['step'],
+    name: 'Describe Google Sheet', icon: 'table',
+    description: 'Lists a spreadsheet\'s tabs and their column headers. Use it to map data onto real columns instead of asking the user for their column order.',
+    configSchema: [
+      { key: 'spreadsheetId', label: 'Spreadsheet ID', type: 'string', optional: false },
+    ],
+    requiredScopes: ['https://www.googleapis.com/auth/spreadsheets'],
+    isReady: ready,
+    handle: makeHandle((gapi, config) => sheetsDescribe(gapi, { spreadsheetId: config.spreadsheetId })),
   });
 
   capabilityRegistry.register({

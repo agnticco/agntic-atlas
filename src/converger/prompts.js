@@ -220,6 +220,12 @@ ${stepSummary(capabilities)}
   • At most FOUR inputs. Past that, split it into two decisions and feed the first one's answer into the second as an input.
   • An input combination no rule covers is reported before publish (DECISION_TABLE_GAP) and, at run time, the step FAILS rather than guessing — so the case reaches a person instead of vanishing. Prefer a catch-all rule.
   Do NOT reach for a decision when one llm mode:"classify" would do. One input, one judgement ⇒ classify. Several inputs, or a number ⇒ decision.
+- foreach: Do the SAME STEPS ONCE PER ITEM in a list. config: { over: "<stepId>.output" (the step that produced the list), steps: [ { id, type, config }, … ] (the per-item steps), maxItems: 100 }.
+  Use it when the trigger or a step yields MANY things and each needs the same treatment — "create a record for every row", "reply to each new message". Inside the loop, {{item}} is the current element and {{index}} is its position.
+  HARD RULES, all enforced at publish time:
+  • {{item}} / {{index}} are bound ONLY inside a loop. Anywhere else they are rejected (BAD_TEMPLATE_REF).
+  • NO branch, NO human, NO decision and NO nested foreach inside a loop — a loop has no edges, so nothing inside it can route on an answer. Decide and route OUTSIDE the loop, on a value the loop produced.
+  • A write inside a loop is N writes per fire — the riskiest shape there is. Give it idempotency: { "key": "{{item}}", "on_conflict": "skip" }, or a re-fired trigger duplicates every row.
 - branch: Route the workflow down exactly ONE path, based on a value an earlier step produced. config: { on: "<stepId>.output", cases: [ { when: "<value>", to: "<stepId>" }, … , { when: "*", to: "<stepId>" } ] }.
   HARD RULES, all enforced at publish time:
   • The catch-all { "when": "*" } is MANDATORY. Without it an unexpected value matches nothing and the workflow SILENTLY does nothing.
@@ -238,6 +244,18 @@ ${stepSummary(capabilities)}
   AVAILABLE DELIVERY DESTINATIONS (these are the only ones connected/runnable right now — never invent one):
 ${deliverySummary(capabilities)}
   Guidance: a "#channel" goes to channel "slack" with target. A DM / "send it to me" / "message <person>" goes to channel "slack_dm" with user = their email or @handle. If the user wants a Slack channel but hasn't named one, ask which channel.${slackChannelsBlock(capabilities)}
+
+NEVER ASK FOR SOMETHING WE CAN READ:
+- DO NOT ask the user for an Airtable base ID, a table name, a spreadsheet ID, or a
+  column/field name. You cannot know them and neither can they, off the top of their head —
+  and the builder RESOLVES them from the connector itself (it lists their real bases, reads
+  the table's real columns, and fills them in). Emit the node with a placeholder baseId and
+  the fields you INTEND to write, keyed by what they mean ("Budget", "Company"); the builder
+  replaces them with the columns that actually exist.
+- Asking someone to paste "appXXXXXXXXXXXXXX" into a chat window is the moment a conversational
+  builder stops being conversational. If you find yourself about to ask for an opaque id, don't.
+- The same goes for example data: do not ask the user to type a sample email. The builder pulls
+  three REAL ones from their inbox and lets them pick.
 
 HOW INPUT ENTERS THE WORKFLOW:
 - Workflows are event-driven. The TRIGGER provides the input — e.g. an email trigger
@@ -644,19 +662,29 @@ Return JSON only, using ONE of these two shapes:
 // ── Gap prompt — suggest an answer for each open gap ─────────────────────────
 
 export function buildGapPrompt({ intent, gaps }) {
+  // THE GAP IDS MUST BE IN THE PROMPT. They were not: the gaps were listed as
+  // "1., 2., 3." and the model was then asked to answer keyed by `gapId` — a string
+  // like `gap_unsatisfied_assertion_save_3` that it had never been shown. So it could
+  // not produce one, `suggestionFor()` returned null for EVERY gap, the paid call was
+  // discarded, and every row reached the user with an empty box. Worse, a BLOCKING gap
+  // is only routed back through the propose loop when it has an answer — so it never
+  // was, and "Accept all defaults" could not resolve a blocker at all. The one surface
+  // that makes v2's extra rigour affordable was inert. (Found by the test-adversary.)
   return `This workflow has cases nobody has decided about yet.
 
 INTENT: "${intent}"
 
-OPEN GAPS:
-${gaps.map((g, i) => `  ${i + 1}. [${g.class}] ${g.message}`).join('\n')}
+OPEN GAPS (answer each by its exact id):
+${gaps.map(g => `  - id: ${g.id}\n    [${g.class}] ${g.message}${g.hint ? `\n    hint: ${g.hint}` : ''}`).join('\n')}
 
 For each, suggest the single most likely answer, in plain language a non-technical person would
 click without hesitation. Be concrete and short (a few words). If the honest answer is "a person
 should look at this", say so — that is a good answer, not a failure.
 
+Use the EXACT id shown above for each gap — it is how your answer is matched back.
+
 Return JSON only:
-{"suggestions":[{"gapId":"<id>","answer":"<short plain-language answer>"}]}`;
+{"suggestions":[{"gapId":"<the exact id from the list above>","answer":"<short plain-language answer>"}]}`;
 }
 
 // ── Modify prompt — merge user override into a proposal ──────────────────────
