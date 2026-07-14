@@ -388,3 +388,18 @@ test('a timeout of `then: escalate` actually TELLS A PERSON (R3)', async () => {
   assert.deepEqual(h.sent, [], 'and it still does not send — escalate routes to the catch-all');
   assert.equal(h.ws.listAwaitingHuman({ tenantId: 't' }).length, 0, 'the pause is resolved, not left hanging');
 });
+
+test('a NON-escalate timeout does NOT notify — escalation is not fired on every timeout', async () => {
+  // Kills the mutant that makes `if (then === 'escalate' && ...)` always true:
+  // a `reject` timeout resolves silently down its declared path, with no
+  // escalation notice. Only `escalate` tells a person.
+  const h = pausedApprovalRun('reject');
+  const escalations = [];
+  h.scheduler.registerEscalationNotifier(async (ctx) => { escalations.push(ctx); });
+
+  await h.scheduler._executeFlow(h.wf, { trigger: 'scheduled' });
+  h.ws.db.prepare("UPDATE workflow_runs SET pause_expires_at = ?").run(new Date(Date.now() - 1000).toISOString());
+  await h.scheduler.sweepTimeouts();
+
+  assert.equal(escalations.length, 0, 'a plain `reject` timeout must not page anyone');
+});

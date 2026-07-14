@@ -79,6 +79,13 @@ const SUITES = [
   // `if (allowed === false)` — the plan cap itself — could be inverted with the
   // whole suite still green.
   'tests/workflows/scheduler.test.js',
+  // The moat + the human-gate + the catch-all guards (F1–F5) live here. Without
+  // it in the sweep, the guards it pins — HUMAN_ANSWER_NOT_ROUTED, the `.decision`
+  // moat, the silent-timeout write refusal at workflow-scheduler.js:603 — read as
+  // unpinned survivors. "Some other suite (the gate) runs it" is exactly how a
+  // guard ends up pinned by nothing the SWEEP can see. A mutant is only killable
+  // by a suite the sweep RUNS.
+  'tests/approvals/gate-adversarial.test.js',
 ];
 
 /**
