@@ -216,9 +216,17 @@ function suitesPass() {
   //
   // `killSignal: 'SIGKILL'` because a mutant that hangs on a timer will ignore
   // SIGTERM; `--test-force-exit` so the child tears down even with a live handle.
+  //
+  // 30s, not 120s. A full clean run of all suites is ~0.15s wall (they execute
+  // concurrently), so 30s is ~200x headroom — no slow-but-passing suite trips it.
+  // The old 120s was calibrated against a wrong guess (2-4s); the real cost of the
+  // cap is that EVERY hang-inducing mutant (one that makes a test await something
+  // that never resolves) pays it, and there are ~20, so 120s turned a ~2-minute
+  // sweep into a ~45-minute one. A hang is still a FAILURE (correct kill); this
+  // only bounds how long we wait to record it.
   try {
     execFileSync('node', ['--test', '--test-force-exit', ...SUITES],
-      { stdio: 'pipe', timeout: 120_000, killSignal: 'SIGKILL' });
+      { stdio: 'pipe', timeout: 30_000, killSignal: 'SIGKILL' });
     return true;
   } catch { return false; }
 }

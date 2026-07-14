@@ -499,3 +499,21 @@ test('parseDuration reads what the validator accepts, and refuses what it reject
   assert.equal(parseDuration(''),     null);
   assert.equal(parseDuration(null),   null);
 });
+
+// The store durably persists to a real file (not just :memory:), creating the
+// parent dir — the path a production boot takes.
+test('an ApprovalStore on a real nested file path persists a token across instances', async () => {
+  const { mkdtempSync } = await import('node:fs');
+  const { join } = await import('node:path');
+  const { tmpdir } = await import('node:os');
+  const dbPath = join(mkdtempSync(join(tmpdir(), 'appr-')), 'nested', 'approvals.sqlite');
+
+  const first = new ApprovalStore({ dbPath }).init();
+  const { approve } = first.issue({ tenantId: 't1', runId: 'r1', nodeId: 'n1', decisions: ['approve', 'reject'] });
+  first.close();
+
+  const second = new ApprovalStore({ dbPath }).init();   // after a restart
+  assert.ok(second.peek(approve), 'the token written before the restart is still valid');
+  assert.equal(second.consume(approve).decision, 'approve');
+  second.close();
+});

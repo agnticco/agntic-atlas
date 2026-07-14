@@ -617,3 +617,63 @@ test('a branch routing on `.decision` of a NON-human step is rejected', () => {
   };
   assert.ok(!codes(ok).includes('BRANCH_BAD_ON'), 'a human .decision routes fine');
 });
+
+// ── P12 Increment D — human-gate branches (mutation-sweep coverage) ───────────
+import { approvalChannelView } from '../../src/workflows/approval-channels.js';
+const Vappr = () => new WorkflowValidator({ nodeTypes: nodeTypes(), channelRegistry, approvalChannels: approvalChannelView(['inbox', 'slack', 'email']) });
+const humanSpec = (askOverrides = {}, edges = null, extraNodes = []) => ({
+  name: 'x', kind: 'flow',
+  triggers: [{ type: 'schedule', config: { cron: '0 9 * * *' } }],
+  nodes: [
+    { id: 'draft', type: 'llm', config: { mode: 'freeform', prompt: 'd' } },
+    { id: 'ask',   type: 'human', config: { prompt: 'ok?', decisions: ['approve', 'reject'], channels: [{ type: 'inbox' }], timeout: { after: '48h', then: 'reject' }, ...askOverrides } },
+    { id: 'gate',  type: 'branch', config: { on: '{{ask.decision}}', cases: [{ when: 'approve', to: 'd' }, { when: '*', to: 'no' }] } },
+    { id: 'd',     type: 'deliver', config: { channel: 'in_app' } },
+    { id: 'no',    type: 'assemble', config: { title: 'no', sections: '[]' } },
+    ...extraNodes,
+  ],
+  edges: edges ?? [{ from: 'draft', to: 'ask' }, { from: 'ask', to: 'gate' }, { from: 'gate', to: 'd' }, { from: 'gate', to: 'no' }],
+});
+const apprCodes = (spec) => Vappr().validate(spec).issues.filter(i => i.severity === 'error').map(i => i.code);
+
+describe('a human node with NO channels', () => {
+  test('is rejected — a question with nowhere to go reaches nobody', () => {
+    assert.ok(apprCodes(humanSpec({ channels: [] })).includes('APPROVAL_CHANNEL_NOT_CONNECTED'));
+  });
+  test('a human WITH a channel is accepted (positive)', () => {
+    assert.ok(!apprCodes(humanSpec()).includes('APPROVAL_CHANNEL_NOT_CONNECTED'));
+  });
+});
+
+describe('HUMAN_ANSWER_NOT_ROUTED vs a terminal human', () => {
+  test('a TERMINAL human (no successors) is fine — nothing runs after it to gate', () => {
+    // Kills the mutant that makes `if (successors.length)` always true: a human
+    // with no outgoing edges must NOT be flagged as ungated.
+    const spec = {
+      name: 'x', kind: 'flow',
+      triggers: [{ type: 'schedule', config: { cron: '0 9 * * *' } }],
+      nodes: [
+        { id: 'draft', type: 'llm', config: { mode: 'freeform', prompt: 'd' } },
+        { id: 'ack',   type: 'human', config: { prompt: 'seen?', decisions: ['approve', 'reject'], channels: [{ type: 'inbox' }], timeout: { after: '48h', then: 'reject' } } },
+      ],
+      edges: [{ from: 'draft', to: 'ack' }],
+    };
+    assert.ok(!apprCodes(spec).includes('HUMAN_ANSWER_NOT_ROUTED'), 'a terminal human gates nothing');
+  });
+});
+
+describe('DUPLICATE_ASSERTION_ID', () => {
+  test('two outcome assertions sharing an id are rejected', () => {
+    const spec = {
+      name: 'x', kind: 'flow', version: 2,
+      outcome: { statement: 's', assertions: [
+        { id: 'a', kind: 'message_sent', target: 'slack:#x' },
+        { id: 'a', kind: 'message_sent', target: 'slack:#y' },
+      ] },
+      triggers: [{ type: 'schedule', config: { cron: '0 9 * * *' } }],
+      nodes: [{ id: 'd', type: 'deliver', config: { channel: 'in_app' } }],
+      edges: [],
+    };
+    assert.ok(apprCodes(spec).includes('DUPLICATE_ASSERTION_ID'), 'a colliding id silently drops an assertion — reject it');
+  });
+});
