@@ -316,6 +316,26 @@
 
       <!-- ░ CONVERSATION (center) ░ · the build dialogue: submitIntent → POST /plan, advance → POST /plan/step, proposal actions = planner turns -->
       <section style="flex:1;min-width:0;background:#0A0A0A;display:flex;flex-direction:column">
+
+        <!-- PINNED OUTCOME CARD — P12 Increment C.
+             The contract, held above the conversation for the rest of the session.
+             It is what every later turn is measured against, and what the workflow
+             will be refused publication for not delivering — so it must never
+             scroll away (converger-v2 §6.4). -->
+        <sc-if value="{{ outcomePin }}" hint-placeholder-val="{{ false }}">
+          <div style="flex:none;margin:14px 28px 0;padding:12px 16px;border:1px solid rgba(240,191,107,.24);background:rgba(240,191,107,.05);border-radius:12px">
+            <div style="display:flex;align-items:center;gap:8px;margin-bottom:5px">
+              <div style="font-size:10.5px;letter-spacing:.09em;text-transform:uppercase;color:rgba(240,191,107,.75);font-weight:600">What this must deliver</div>
+            </div>
+            <div style="font-size:13.5px;line-height:1.5;color:rgba(255,255,255,.88)">{{ outcomePin.statement }}</div>
+            <div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:8px">
+              <sc-for list="{{ outcomePin.assertions }}" as="a" hint-placeholder-count="2">
+                <div style="font-size:11.5px;font-family:ui-monospace,monospace;color:rgba(255,255,255,.5);border:1px solid rgba(255,255,255,.1);border-radius:999px;padding:3px 10px">{{ a.label }}</div>
+              </sc-for>
+            </div>
+          </div>
+        </sc-if>
+
         <div class="ab-scroll" ref="{{ scrollRef }}" style="flex:1;overflow-y:auto;padding:0 28px 34px;-webkit-mask-image:linear-gradient(to bottom,transparent 0%,#000 18%);mask-image:linear-gradient(to bottom,transparent 0%,#000 18%)">
           <div style="max-width:1100px;margin:0 auto;min-height:100%;display:flex;flex-direction:column;justify-content:flex-end;gap:26px;padding-top:80px">
 
@@ -366,6 +386,57 @@
                       <sc-for list="{{ item.chips }}" as="chip" hint-placeholder-count="3">
                         <button onClick="{{ chip.onPick }}" style="border:1px solid rgba(240,191,107,.4);background:rgba(240,191,107,.08);color:#f3cd86;font-family:inherit;font-size:14px;font-weight:500;padding:10px 18px;border-radius:999px;cursor:pointer" style-hover="background:rgba(240,191,107,.16)">{{ chip.label }}</button>
                       </sc-for>
+                    </div>
+                  </div>
+                </div>
+              </sc-if>
+
+              <!-- OUTCOME CARDS (outcome_check) — P12 Increment C.
+                   "Which did you mean?" The user RECOGNISES rather than RECALLS: the
+                   most likely contract is pre-selected, so Enter is always a valid
+                   answer and the cost of a turn is a click, not a sentence. -->
+              <sc-if value="{{ item.isOutcome }}" hint-placeholder-val="{{ false }}">
+                <div style="display:flex;gap:13px;align-items:flex-start;animation:msgIn .45s ease both">
+                  <div style="flex:none;width:32px;height:32px"></div>
+                  <div style="min-width:0;flex:1">
+                    <div style="font-size:15px;line-height:1.5;color:#fff;font-weight:500">{{ item.q }}</div>
+                    <div style="display:flex;flex-direction:column;gap:10px;margin-top:14px">
+                      <sc-for list="{{ item.cards }}" as="card" hint-placeholder-count="2">
+                        <button onClick="{{ card.onPick }}" style="{{ card.style }}" style-hover="border-color:rgba(240,191,107,.55)">
+                          <div style="font-size:14px;line-height:1.5;color:#fff;font-weight:500;margin-bottom:6px">{{ card.statement }}</div>
+                          <div style="font-size:12px;line-height:1.5;color:rgba(255,255,255,.45);font-family:ui-monospace,monospace">{{ card.hint }}</div>
+                        </button>
+                      </sc-for>
+                    </div>
+                  </div>
+                </div>
+              </sc-if>
+
+              <!-- GAP LIST (gap_review) — P12 Increment C.
+                   "Here are the cases you haven't told me about." Every row is
+                   pre-resolved to ESCALATE — a person deals with it — so the user can
+                   publish a provably-complete workflow having answered nothing. That is
+                   what lets v2 demand more rigour WITHOUT demanding more typing. -->
+              <sc-if value="{{ item.isGaps }}" hint-placeholder-val="{{ false }}">
+                <div style="display:flex;gap:13px;align-items:flex-start;animation:msgIn .45s ease both">
+                  <div style="flex:none;width:32px;height:32px"></div>
+                  <div style="min-width:0;flex:1">
+                    <div style="font-size:15px;line-height:1.5;color:#fff;font-weight:500">{{ item.q }}</div>
+                    <div style="display:flex;flex-direction:column;gap:8px;margin-top:14px">
+                      <sc-for list="{{ item.rows }}" as="row" hint-placeholder-count="2">
+                        <div style="border:1px solid rgba(255,255,255,.09);border-radius:12px;padding:13px 15px;background:rgba(255,255,255,.02)">
+                          <div style="font-size:13.5px;line-height:1.5;color:rgba(255,255,255,.86)">{{ row.message }}</div>
+                          <div style="display:flex;flex-wrap:wrap;gap:8px;margin-top:10px;align-items:center">
+                            <div style="font-size:12px;color:rgba(255,255,255,.4)">{{ row.resolutionLabel }}</div>
+                            <sc-for list="{{ row.options }}" as="opt" hint-placeholder-count="2">
+                              <button onClick="{{ opt.onPick }}" style="{{ opt.style }}">{{ opt.label }}</button>
+                            </sc-for>
+                          </div>
+                        </div>
+                      </sc-for>
+                    </div>
+                    <div style="display:flex;gap:10px;margin-top:14px">
+                      <button onClick="{{ item.onAcceptAll }}" style="border:1px solid rgba(240,191,107,.45);background:rgba(240,191,107,.14);color:#f3cd86;font-family:inherit;font-size:14px;font-weight:600;padding:10px 20px;border-radius:999px;cursor:pointer" style-hover="background:rgba(240,191,107,.22)">{{ item.acceptLabel }}</button>
                     </div>
                   </div>
                 </div>
@@ -2568,7 +2639,7 @@ class Component extends DCLogic {
     if (tid) { fetch('/api/builder/sessions/' + tid, { method: 'DELETE', headers: this._H() }).catch(function(e) {}); }
     this.setState({
       phase: "chat", intent: null, threadId: null, msgs: [], inputMode: "chat",
-      inputValue: "", thinking: false, spec: null, testState: "idle", runSteps: [],
+      inputValue: "", thinking: false, spec: null, outcome: null, testState: "idle", runSteps: [],
       runStepIndex: 0, failIndex: -1, deliveries: [], runOutput: null, runError: "", workflowId: null, isEditing: false, isDraftBuild: false, editingIntro: null,
       renamingWfId: null, renamingValue: "", draftName: null,
       connectionsOpen: false, accountOpen: false, profileOpen: false, connectionsClosing: false, accountClosing: false,
@@ -4265,7 +4336,9 @@ class Component extends DCLogic {
     this.setState({
       phase: "building", intent, inputValue: "", thinking: true, inputMode: "locked",
       msgs: [...this.state.msgs, { isNote: true, text: "Great — let's build it. I'll propose each piece; confirm or tweak as we go." }],
-      spec: null, threadId: null, testState: "idle"
+      // The pinned outcome belongs to ONE build. Carrying it into the next one
+      // would show the user a contract they never agreed to for this workflow.
+      spec: null, threadId: null, testState: "idle", outcome: null
     });
     fetch("/api/builder/sessions", { method: "POST", headers: this._H(), body: JSON.stringify({ intent }) })
       .then(r => this._readJson(r))
@@ -4297,13 +4370,146 @@ class Component extends DCLogic {
     if (iv.type === "clarification") {
       const lead = iv.intro ? [{ isAtlas: true, text: iv.intro, hasReason: false }] : [];
       const msgs = [...this.state.msgs, ...lead, { isAtlas: true, text: iv.question || "Quick question:", hasReason: false }];
-      if (Array.isArray(iv.options) && iv.options.length) {
-        msgs.push({ isClarify: true, q: "", chips: iv.options.map(o => ({ label: String(o), onPick: () => {
-          this.setState({ msgs: [...this.state.msgs, { isOperator: true, text: String(o) }], thinking: true, inputMode: "locked" });
-          this._send({ type: "clarification", answer: String(o) });
+      // `choices[]` is the SHARED primitive (converger-v2 §6.3): ANY interrupt may
+      // carry it, and a client that ignores it still shows the composer. This is
+      // how a clarification stops being a blank text box. `options` is v1's
+      // narrower spelling and still works.
+      const opts = Array.isArray(iv.choices) && iv.choices.length
+        ? iv.choices.map(c => ({ label: String(c.label != null ? c.label : c), value: String(c.label != null ? c.label : c) }))
+        : (Array.isArray(iv.options) ? iv.options.map(o => ({ label: String(o), value: String(o) })) : []);
+      if (opts.length) {
+        msgs.push({ isClarify: true, q: "", chips: opts.map(o => ({ label: o.label, onPick: () => {
+          this.setState({ msgs: [...this.state.msgs, { isOperator: true, text: o.value }], thinking: true, inputMode: "locked" });
+          this._send({ type: "clarification", answer: o.value });
         } })) });
       }
       this.setState({ msgs, thinking: false, inputMode: "clarify", phase: "building" });
+      return;
+    }
+
+    // ── outcome_check — the contract (P12 Increment C) ────────────────────
+    // 2-3 candidate readings of what the user meant. The first is the model's
+    // best guess and is pre-selected, so a click (or Enter) is always a valid
+    // answer. The user RECOGNISES; they do not have to RECALL and articulate.
+    if (iv.type === "outcome_check") {
+      const self = this;
+      const cands = iv.candidates || [];
+      const lead = iv.intro ? [{ isAtlas: true, text: iv.intro, hasReason: false }] : [];
+      const pick = (c) => {
+        self.setState({
+          outcome: { statement: c.statement, assertions: c.assertions || [] },
+          msgs: [...self.state.msgs, { isOperator: true, text: c.statement }],
+          thinking: true, inputMode: "locked",
+        });
+        self._send({ type: "accept", id: c.id });
+      };
+      const cards = cands.map((c, i) => ({
+        statement: c.statement,
+        hint: (c.assertions || []).map(a => (a.kind || "").replace(/_/g, " ") + " → " + (a.target || "")).join("   ·   "),
+        // The first card is the default — visibly so, or "pre-selected" is a lie.
+        style: "text-align:left;width:100%;font-family:inherit;cursor:pointer;padding:13px 16px;border-radius:12px;"
+             + (i === 0
+                ? "border:1px solid rgba(240,191,107,.45);background:rgba(240,191,107,.08)"
+                : "border:1px solid rgba(255,255,255,.1);background:rgba(255,255,255,.02)"),
+        onPick: () => pick(c),
+      }));
+      this.setState({
+        msgs: [...this.state.msgs, ...lead,
+               { isOutcome: true, q: "Here's what I think this needs to deliver. Which is right?", cards }],
+        thinking: false, inputMode: "clarify", phase: "building",
+      });
+      return;
+    }
+
+    // ── example_request — the cases that become the test suite ────────────
+    // The picker that pulls three REAL emails from the user's inbox is Increment
+    // F. Until then: the model's proposed cases, kept by default, skippable in
+    // one click. Never a demand to type.
+    if (iv.type === "example_request") {
+      const self = this;
+      const items = iv.items || [];
+      const summary = items.map((it, i) => (i + 1) + ". " + it.preview).join("\n");
+      this.setState({
+        msgs: [...this.state.msgs,
+               { isAtlas: true, text: "I'll use these as the workflow's test cases:\n\n" + summary, hasReason: false },
+               { isClarify: true, q: "", chips: [
+                 { label: "Use these", onPick: () => {
+                   self.setState({ msgs: [...self.state.msgs, { isOperator: true, text: "Use these" }], thinking: true, inputMode: "locked" });
+                   self._send({ type: "accept" });
+                 } },
+                 { label: "Skip", onPick: () => {
+                   self.setState({ msgs: [...self.state.msgs, { isOperator: true, text: "Skip" }], thinking: true, inputMode: "locked" });
+                   self._send({ type: "skip" });
+                 } },
+               ] }],
+        thinking: false, inputMode: "clarify", phase: "building",
+      });
+      return;
+    }
+
+    // ── gap_review — "the cases you haven't told me about" ────────────────
+    // THE surface (converger-v2 §6.4). Every row arrives pre-resolved, and
+    // "Accept all defaults" is one click: a user can publish a provably-complete
+    // workflow having answered NOTHING, because the default for every unknown is
+    // "a person deals with it" — which is safe, correct, and honest.
+    if (iv.type === "gap_review") {
+      const self = this;
+      const gaps = iv.gaps || [];
+      const gid = "gaps" + (this._pc = (this._pc || 0) + 1);
+
+      const defaults = {};
+      gaps.forEach(g => { defaults[g.id] = g.defaultResolution || (g.blocking ? "answer" : "escalate"); });
+
+      const send = (resolutions) => {
+        const answers = {};
+        gaps.forEach(g => {
+          if (resolutions[g.id] === "answer" && g.suggestedAnswer) answers[g.id] = g.suggestedAnswer;
+        });
+        self.setState({
+          msgs: self.state.msgs.map(m => (m._id === gid ? { ...m, rows: (m.rows || []).map(r => ({ ...r, options: [] })) } : m)),
+          thinking: true, inputMode: "locked",
+        });
+        self._send({ type: "accept_defaults", resolutions, answers });
+      };
+
+      const buildRows = (resolutions) => gaps.map(g => {
+        const cur = resolutions[g.id];
+        const label = cur === "escalate" ? "→ a person decides"
+                    : cur === "ignore"   ? "→ ignored"
+                    : ("→ " + (g.suggestedAnswer || "answer it"));
+        // A BLOCKING gap gets no "escalate" button, because escalating it would be
+        // a lie: escalation promises a person handles it AT RUN TIME, and a spec
+        // that cannot publish never has a run time.
+        const choices = g.blocking ? [] : ["escalate", "answer", "ignore"];
+        return {
+          message: g.message,
+          resolutionLabel: label,
+          options: choices.filter(c => c !== cur).map(c => ({
+            label: c === "escalate" ? "Send to a person" : c === "answer" ? "Use the suggestion" : "Ignore",
+            style: "border:1px solid rgba(255,255,255,.14);background:transparent;color:rgba(255,255,255,.6);font-family:inherit;font-size:12px;padding:5px 12px;border-radius:999px;cursor:pointer",
+            onPick: () => {
+              const next = { ...resolutions, [g.id]: c };
+              self.setState({ msgs: self.state.msgs.map(m => (m._id === gid ? { ...m, rows: buildRows(next), _res: next } : m)) });
+            },
+          })),
+        };
+      });
+
+      this.setState({
+        msgs: [...this.state.msgs, {
+          isGaps: true, _id: gid, _res: defaults,
+          q: gaps.length === 1
+            ? "There's one case nobody has decided about yet."
+            : "There are " + gaps.length + " cases nobody has decided about yet.",
+          rows: buildRows(defaults),
+          acceptLabel: "Accept all defaults",
+          onAcceptAll: () => {
+            const m = self.state.msgs.find(x => x._id === gid);
+            send((m && m._res) || defaults);
+          },
+        }],
+        thinking: false, inputMode: "clarify", phase: "building",
+      });
       return;
     }
 
@@ -5376,6 +5582,16 @@ class Component extends DCLogic {
 
       // conversation
       thread: this.buildThread(), thinking: S.thinking, scrollRef: (el) => { this.el = el; },
+
+      // The outcome contract, pinned above the thread (P12 Increment C). It is
+      // the thing the workflow will be REFUSED PUBLICATION for not delivering,
+      // so it stays on screen rather than scrolling away into history.
+      outcomePin: S.outcome && S.outcome.statement ? {
+        statement: S.outcome.statement,
+        assertions: (S.outcome.assertions || []).map((a) => ({
+          label: (a.kind || '').replace(/_/g, ' ') + ' → ' + (a.target || ''),
+        })),
+      } : null,
       chatInputRef: (el) => {
         this._chatInputEl = el;
         // R16: restore a typed-but-unsent new-workflow intent on mount (once).
