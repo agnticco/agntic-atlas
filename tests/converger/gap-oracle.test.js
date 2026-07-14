@@ -211,7 +211,7 @@ describe('outcome gaps: an assertion no node satisfies', () => {
   test('adding the email node satisfies it — the check is not just "reject everything"', () => {
     const spec = slackAndEmail();
     spec.nodes.push({ id: 'mail', type: 'deliver', label: 'Email rep',
-                      config: { channel: 'gmail_send', to: 'rep@acme.com' } });
+                      config: { channel: 'gmail_send', to: 'rep@acme.com', subject: 'New lead' } });
     spec.edges.push({ from: 'draft', to: 'mail' });
     const result = score(spec);
     assert.equal(has(result, 'UNSATISFIED_ASSERTION'), false);
@@ -898,7 +898,7 @@ describe('complete ⇒ publishable, through WorkflowService + WorkflowStore', ()
     nodes: [
       { id: 'draft', type: 'llm',     label: 'Draft', config: { mode: 'summarize' } },
       { id: 'post',  type: 'deliver', label: 'Slack', config: { channel: 'slack', target: '#sales' } },
-      { id: 'mail',  type: 'deliver', label: 'Email', config: { channel: 'gmail_send', to: 'rep@acme.com' } },
+      { id: 'mail',  type: 'deliver', label: 'Email', config: { channel: 'gmail_send', to: 'rep@acme.com', subject: 'New lead' } },
     ],
     edges: [{ from: 'draft', to: 'post' }, { from: 'draft', to: 'mail' }],
     status: 'active',
