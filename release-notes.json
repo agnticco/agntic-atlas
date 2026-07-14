@@ -1,5 +1,13 @@
 [
   {
+    "version": "1.4.0",
+    "date": "2026-07-14",
+    "title": "Build Airtable workflows by clicking, not by pasting IDs",
+    "notes": [
+      "Atlas now reads your Airtable directly: it lists your real bases, reads the real column names, and maps your data onto the columns that actually exist. No more hunting for an opaque base ID. It also refuses to publish a workflow that would write to a column your table doesn't have — previously that record was created with the column silently empty."
+    ]
+  },
+  {
     "version": "1.3.12",
     "date": "2026-07-14",
     "title": "Multiple destinations now deliver correctly",
