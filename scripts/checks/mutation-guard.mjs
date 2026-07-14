@@ -59,6 +59,9 @@ const SUITES = [
   'tests/workflows/fan-out.test.js',
   // P12 Increment F — the last open config hole, closed.
   'tests/workflows/connector-schema.test.js',
+  'tests/converger/destination-adversarial.test.js',
+  'tests/converger/destination-mapping.test.js',
+  'tests/workflows/foreach-config-adversarial.test.js',
 ];
 
 /**
@@ -169,19 +172,19 @@ const MUTATIONS = [
     find: '        } else if (!edgeSet.has(edgeKey(node.id, target))) {', repl: '        } else if (true) {' },
   { file: 'src/workflows/workflow-validator.js',
     name: 'UNKNOWN_CONFIG_KEY disabled (a hallucinated config key ships)',
-    find: "      if (typeDef && typeDef.configPolicy !== 'open' && capResolved) {", repl: '      if (false) {' },
+    find: "    if (typeDef && typeDef.configPolicy !== 'open' && capResolved) {", repl: '    if (false) {' },
   // …and the half of it Increment F added: a connector-action's params are checked
   // against the SELECTED CAPABILITY's own schema. Dropping it re-opens the last open
   // config hole — `tableName` on an Airtable create ships, the handler ignores it,
   // and the record lands in a table nobody chose.
   { file: 'src/workflows/workflow-validator.js',
     name: 'connector-action params stop being checked against the capability schema',
-    find: '        for (const f of capSchema) declared.add(f.key);',
-    repl: '        for (const f of []) declared.add(f.key);' },
+    find: '      for (const f of capSchema) declared.add(f.key);',
+    repl: '      for (const f of []) declared.add(f.key);' },
   { file: 'src/workflows/workflow-validator.js',
     name: 'the capability check judges what it CANNOT resolve (false rejections with no registry)',
-    find: '      const capResolved = !capBearing || !!this._resolveCapability(capBearing);',
-    repl: '      const capResolved = true;' },
+    find: '    const capResolved = !capBearing || !!this._resolveCapability(capBearing);',
+    repl: '    const capResolved = true;' },
 
   // ── control node blob leaking from INSIDE a loop (round 8) ───────────────
   { file: 'src/workflows/node-types/foreach.js',
@@ -259,6 +262,35 @@ const MUTATIONS = [
     name: "CONTROL_TYPES loses `deliver` (the SECOND destination in a fan-out ships the FIRST one's receipt)",
     find: "const CONTROL_TYPES = new Set(['branch', 'human', 'decision', 'deliver']);",
     repl: "const CONTROL_TYPES = new Set(['branch', 'human', 'decision']);" },
+
+  // ── P12 Increment F: the nine defects the review pair found ───────────────
+  { file: 'src/workflows/workflow-validator.js',
+    name: 'the config checks stop recursing into a foreach (a loop launders every one of them)',
+    find: '          this._checkNodeConfig(sub, issues, { inForeach: node });',
+    repl: '          void sub;' },
+  { file: 'src/workflows/workflow-validator.js',
+    name: 'UNCHECKABLE_WRITE_FIELDS disabled (a templated `fields` picks its columns at RUN time)',
+    find: "      if (typeof f === 'string' && /\\{\\{/.test(f)) {",
+    repl: '      if (false) {' },
+  { file: 'src/workflows/outcome-oracle.js',
+    name: 'the outcome oracle goes blind inside a foreach (the shape F teaches cannot satisfy its own assertion)',
+    find: "  if (node.type === 'foreach') {", repl: '  if (false) {' },
+  { file: 'src/workflows/outcome-oracle.js',
+    name: 'a JSON-string `fields` makes NO claim (the assertion passes on invented columns)',
+    find: "  if (typeof fields === 'string') {\n    try { fields = JSON.parse(fields); } catch { return null; }\n  }",
+    repl: '  if (typeof fields === \'string\') return null;' },
+  { file: 'src/converger/elicitation-graph.js',
+    name: 'fillDestination ships the hallucinated columns when NOTHING maps',
+    find: '    if (columnsRead && config.fields && typeof config.fields === \'object\') {\n      config.fields = fields ?? {};',
+    repl: '    if (columnsRead && config.fields && fields && typeof config.fields === \'object\') {\n      config.fields = fields;' },
+  { file: 'src/converger/elicitation-graph.js',
+    name: 'the outcome is NOT restated in the real column names (complete but unpublishable — on the SUCCESS path)',
+    find: '    const outcome = rewriteAssertionFields(state.draft?.outcome, renames, columns);',
+    repl: '    const outcome = state.draft?.outcome;' },
+  { file: 'src/converger/elicitation-graph.js',
+    name: 'the mapping model is trusted (it invents a column and we write it)',
+    find: '    const column   = proposed == null ? null : real.get(String(proposed).toLowerCase()) ?? null;',
+    repl: '    const column   = proposed == null ? null : String(proposed);' },
 
   { file: 'src/workflows/node-types/decision.js',
     name: 'pickCategory crosses a non-ASCII letter ("urgentísimo" classifies as "urgent")',

@@ -114,6 +114,14 @@ const SUITES = [
   // P12 Increment F — connector params checked against the capability's own schema.
   // Without it, the `capSchema` / `capResolved` guards are unkillable by construction.
   'tests/workflows/connector-schema.test.js',
+  // P12 Increment F — the test-adversary's pass. `destination-adversarial` DRIVES THE
+  // REAL GRAPH through the production call path (createConverger → run → resume); the
+  // other two pin the foreach config recursion and the truth of every capability's
+  // schema. Without them, `elicitation-graph.js` — F by line count — is swept with no
+  // suite that executes it, and every mutant in it is unkillable by construction.
+  'tests/converger/destination-adversarial.test.js',
+  'tests/workflows/foreach-config-adversarial.test.js',
+  'tests/workflows/capability-schema-truth.test.js',
 ];
 
 /**
@@ -157,6 +165,13 @@ const TARGETS = [
   // AI answer to the closed enum, and the one that refuses an unparseable
   // condition all live here.
   'src/workflows/node-types/decision.js',
+  // P12 Increment F. `elicitation-graph.js` holds the destination resolution, the
+  // column mapping and the example picker — the increment, by line count — and its
+  // mutation score was "NOT MEASURED". Four of the nine defects the review pair found
+  // lived in it. A file the sweep does not target is a file whose absence from the
+  // survivor list proves nothing.
+  'src/converger/elicitation-graph.js',
+  'src/workflows/node-types/connector-action.js',
 ];
 
 const args    = process.argv.slice(2);

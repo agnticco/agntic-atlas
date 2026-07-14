@@ -52,6 +52,8 @@
  * @module src/workflows/outcome-oracle.js
  */
 
+import { normalizeSteps } from './node-types/foreach.js';
+
 /** The closed set. An assertion outside it is MALFORMED, never "assumed fine". */
 export const ASSERTION_KINDS = ['message_sent', 'record_exists', 'document_exists'];
 
@@ -126,6 +128,26 @@ const DOC_CONNECTORS = new Set(['docs', 'drive']);
 export function nodeEffect(node) {
   if (!node || typeof node !== 'object') return null;
 
+  // A `foreach` HAS the effects of the steps inside it. (P12 Increment F.)
+  //
+  // It returned null, so the shape Increment F's own prompt teaches — "create a
+  // record for every row" — could not satisfy its own `record_exists` assertion and
+  // therefore COULD NOT PUBLISH. The only way out was to delete the assertion,
+  // which leaves the loop's write both unpromised by the outcome and (until this
+  // increment) unchecked by the validator: the worst of both. A loop is not an
+  // opaque box; it is N copies of what is inside it, and what is inside it is
+  // exactly what the outcome is about. (Found by the test-adversary.)
+  //
+  // The first sub-step with a recognisable effect wins — the assertion asks "does
+  // anything here write to airtable:Leads", and one write inside a loop is a write.
+  if (node.type === 'foreach') {
+    for (const sub of normalizeSteps(node.config?.steps)) {
+      const eff = nodeEffect(sub);
+      if (eff) return eff;
+    }
+    return null;
+  }
+
   if (node.type === 'deliver') {
     const channel = String(node.config?.channel ?? '').trim();
     const eff = CHANNEL_EFFECTS[channel];
@@ -192,6 +214,17 @@ function collectLocators(config) {
  * would block a valid spec.
  */
 function readFieldNames(fields) {
+  // A JSON-STRING `fields` still names its columns, and the Airtable handler parses
+  // it (`typeof fields === 'string' ? JSON.parse(fields)`), so refusing to read it
+  // here was a FAIL-OPEN: the oracle made "no claim", the assertion counted as
+  // satisfied, and a spec writing entirely invented columns published clean. The
+  // shape we genuinely cannot check — a TEMPLATE string, where the column names are
+  // chosen by a model at RUN time — is rejected outright by the validator
+  // (UNCHECKABLE_WRITE_FIELDS), so it never reaches here.
+  // (Found by the independent verifier + the test-adversary.)
+  if (typeof fields === 'string') {
+    try { fields = JSON.parse(fields); } catch { return null; }
+  }
   if (!fields || typeof fields !== 'object' || Array.isArray(fields)) return null;
   const keys = Object.keys(fields);
   return keys.length ? keys : null;

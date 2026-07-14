@@ -333,7 +333,7 @@ export function registerSlackChannel(registry, { fetchImpl = fetch } = {}) {
     description: 'Uploads text content as a file or snippet to a channel.',
     configSchema: [
       { key: 'target',   label: 'Channel',   type: 'string',   optional: false },
-      { key: 'content',  label: 'Content',   type: 'textarea', optional: false },
+      { key: 'content',  label: 'Content',   type: 'textarea', optional: true,  hint: 'Defaults to the previous step\'s output.' },
       { key: 'title',    label: 'Title',     type: 'string',   optional: true  },
       { key: 'filename', label: 'Filename',  type: 'string',   optional: true, hint: 'e.g. report.txt' },
     ],
@@ -415,7 +415,7 @@ export function registerSlackChannel(registry, { fetchImpl = fetch } = {}) {
     description: 'Sets the topic of a Slack channel.',
     configSchema: [
       { key: 'target', label: 'Channel', type: 'string',   optional: false },
-      { key: 'topic',  label: 'Topic',   type: 'textarea', optional: false },
+      { key: 'topic',  label: 'Topic',   type: 'textarea', optional: true,  hint: 'Defaults to the previous step\'s output.' },
     ],
     isReady: ready,
     deliver: async ({ config, body }) => {
@@ -455,7 +455,7 @@ export function registerSlackChannel(registry, { fetchImpl = fetch } = {}) {
     id: 'slack_reminder', name: 'Slack Set Reminder', icon: 'slack', actionOnly: true,
     description: 'Creates a reminder for a user. NOTE: requires a user OAuth token — not available with a bot token alone.',
     configSchema: [
-      { key: 'text', label: 'Reminder text', type: 'textarea', optional: false },
+      { key: 'text', label: 'Reminder text', type: 'textarea', optional: true,  hint: 'Defaults to the previous step\'s output.' },
       { key: 'time', label: 'When',          type: 'string',   optional: false, hint: 'Unix timestamp or natural language e.g. "in 30 minutes"' },
       { key: 'user', label: 'User ID',       type: 'string',   optional: true  },
     ],
@@ -826,7 +826,7 @@ export function registerSlackChannel(registry, { fetchImpl = fetch } = {}) {
     id: 'slack_reminder', name: 'Slack Set Reminder', icon: 'slack', actionOnly: true,
     description: 'Create a reminder for the authorized user (or another user). Requires a user OAuth token.',
     configSchema: [
-      { key: 'text', label: 'Reminder text', type: 'textarea', optional: false },
+      { key: 'text', label: 'Reminder text', type: 'textarea', optional: true,  hint: 'Defaults to the previous step\'s output.' },
       { key: 'time', label: 'When',          type: 'string',   optional: false, hint: 'Unix timestamp or natural language e.g. "in 30 minutes"' },
       { key: 'user', label: 'User ID',       type: 'string',   optional: true  },
     ],

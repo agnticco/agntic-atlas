@@ -61,6 +61,26 @@ import { ON_REF } from './node-types/branch.js';
  */
 const CONTROL_TYPES = new Set(['branch', 'human', 'decision', 'deliver']);
 
+/**
+ * One named field of a step's output. The output of an `llm` in `extract` mode is a
+ * JSON object; the output of a connector read is an object; and a step that returned
+ * a JSON *string* is still carrying an object, so parse it rather than pretending it
+ * has no fields.
+ *
+ * Returns `undefined` when the field genuinely is not there — which the caller turns
+ * into an empty string, not into the literal template. A `{{extract.budget}}` whose
+ * budget the model could not find must render as nothing, not as the text
+ * "{{extract.budget}}" arriving in a customer's CRM.
+ */
+function pickField(out, field) {
+  let o = out;
+  if (typeof o === 'string') {
+    try { o = JSON.parse(o); } catch { return undefined; }
+  }
+  if (!o || typeof o !== 'object' || Array.isArray(o)) return undefined;
+  return o[field];
+}
+
 export class FlowTester {
   /**
    * @param {object} options
@@ -794,9 +814,29 @@ export class FlowTester {
       };
       return value
         .replace(/\{\{\s*prev\s*\}\}/g, () => this._stringifyForDelivery(ctx.lastOutput))
-        .replace(/\{\{\s*([a-z0-9_-]+)\.output\s*\}\}/gi, (_, id) =>
-          this._stringifyForDelivery(ctx.outputs.get(id))
-        )
+        // {{stepId.output}} — the whole output — and {{stepId.field}}, ONE named
+        // field of it. (P12 Increment F.)
+        //
+        // The sub-field form is not a convenience; without it the write story has no
+        // correct shape at all. An Airtable record is a MAP of column → value, and
+        // every value has to come from a different part of the upstream extract. With
+        // only `{{extract.output}}` available, the sole expressible spec puts the
+        // ENTIRE JSON BLOB into every column — `Name` and `Deal Size` both receiving
+        // {"name":"Dana","budget":80000} — which publishes, runs, and reports success.
+        // The only way to write correct per-column values was a JSON-STRING `fields`,
+        // which let the model pick column names at run time, and Airtable silently
+        // discards the ones that do not exist. (Found by the independent verifier.)
+        .replace(/\{\{\s*([a-z0-9_-]+)\.([a-z0-9_-]+)\s*\}\}/gi, (_, id, field) => {
+          // A reference that resolves to nothing renders as EMPTY, exactly as
+          // {{id.output}} always has. That is what lets the engine SEE an empty
+          // idempotency key and refuse to run — leave the literal `{{…}}` in place
+          // instead and the key becomes a non-empty string that dedupes on the
+          // template text itself, which is a dedupe that never dedupes anything.
+          const out = ctx.outputs.get(id);
+          if (field.toLowerCase() === 'output') return this._stringifyForDelivery(out);
+          const v = pickField(out, field);
+          return v === undefined ? '' : this._stringifyForDelivery(v);
+        })
         // {{item}} / {{index}} — the current element inside a `foreach`. Only
         // bound within a loop; the validator rejects them anywhere else, so an
         // empty substitution here means a bug upstream, not a silent default.
