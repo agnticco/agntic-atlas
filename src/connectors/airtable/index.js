@@ -116,6 +116,58 @@ export async function airtableListRecords(api, { baseId, tableId, filterByFormul
   return { records: (data.records ?? []).map(r => ({ id: r.id, fields: r.fields, createdTime: r.createdTime })) };
 }
 
+// ── Schema handlers (P12 Increment F — "never ask for something we can read") ──
+//
+// The `schema.bases:read` scope has been REQUESTED SINCE THE CONNECTOR SHIPPED
+// (oauth.js) and used by nothing. Every tenant who has ever connected Airtable has
+// already granted it, so this needs no re-consent and no migration — the door was
+// built, and nobody opened it.
+//
+// This is the difference between "just talk to it" working and not: without these,
+// the user must paste an opaque `appXXXXXXXXXXXXXX` base id and an exact table
+// name into a chat window, which is precisely where a conversational builder stops
+// being conversational (converger-v2 §6.2.3).
+
+/** Every base this token can see. */
+export async function airtableListBases(api) {
+  const data = await api('GET', '/meta/bases');
+  return {
+    bases: (data.bases ?? []).map(b => ({
+      id: b.id, name: b.name, permissionLevel: b.permissionLevel,
+    })),
+  };
+}
+
+/**
+ * A base's tables and THEIR FIELDS — names, types, and (for a single-select) the
+ * closed set of options it accepts.
+ *
+ * The field TYPES are not decoration. A decision table routing on an Airtable
+ * single-select can take its enum straight from `options.choices`, which is a
+ * closed domain declared by the system of record rather than guessed by a model —
+ * the strongest form of the thing §11.7 demands.
+ */
+export async function airtableDescribeBase(api, { baseId } = {}) {
+  if (!baseId) throw new Error('airtable_describe_base: baseId is required.');
+  const data = await api('GET', `/meta/bases/${baseId}/tables`);
+  return {
+    baseId,
+    tables: (data.tables ?? []).map(t => ({
+      id: t.id,
+      name: t.name,
+      primaryFieldId: t.primaryFieldId,
+      fields: (t.fields ?? []).map(f => ({
+        id: f.id,
+        name: f.name,
+        type: f.type,
+        // The closed option set of a select field, when it has one. Everything else
+        // has an open domain and says so by omitting `choices`.
+        choices: (f.options?.choices ?? []).map(c => c.name).filter(Boolean),
+      })),
+    })),
+  };
+}
+
 export async function airtableGetRecord(api, { baseId, tableId, recordId } = {}) {
   const data = await api('GET', `/${baseId}/${encodeURIComponent(tableId)}/${recordId}`);
   return { id: data.id, fields: data.fields, createdTime: data.createdTime };
@@ -197,6 +249,35 @@ export function registerAirtableChannels(capabilityRegistry) {
       return fn(api, config);
     };
   }
+
+  // ── Schema capabilities (P12 Increment F) ──────────────────────────────────
+  //
+  // NOT positioned as `delivery`: they read, they never write. They are `step`
+  // capabilities so a workflow CAN use them mid-flow, but their real consumer is
+  // the BUILDER — the converger calls them at build time to render "which base?"
+  // and "which table?" as CLICKABLE CHOICES, and to map "the customer's budget" to
+  // the `Deal Size` column itself instead of asking a human to paste an id.
+  capabilityRegistry.register({
+    id: 'airtable_list_bases', connector: 'airtable', positions: ['step'],
+    name: 'List Airtable Bases', icon: 'table',
+    description: 'Lists the Airtable bases this workspace can see. Use it to find a base instead of asking the user for its ID.',
+    requiredScopes: ['schema.bases:read'],
+    configSchema: [],   // it takes nothing: the token IS the question
+    isReady: ready,
+    handle: makeHandle((api) => airtableListBases(api)),
+  });
+
+  capabilityRegistry.register({
+    id: 'airtable_describe_base', connector: 'airtable', positions: ['step'],
+    name: 'Describe Airtable Base', icon: 'table',
+    description: 'Lists a base\'s tables and their field names, types, and select options. Use it to map data onto real columns instead of guessing them.',
+    requiredScopes: ['schema.bases:read'],
+    configSchema: [
+      { key: 'baseId', label: 'Base ID', type: 'string', optional: false, hint: 'appXXXXXXXXXXXXXX — from airtable_list_bases' },
+    ],
+    isReady: ready,
+    handle: makeHandle((api, config) => airtableDescribeBase(api, config)),
+  });
 
   capabilityRegistry.register({
     id: 'airtable_list_records', connector: 'airtable', positions: ['step'],
