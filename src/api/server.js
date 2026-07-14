@@ -84,8 +84,12 @@ import { mountAdminRoutes } from '../admin/server.js';
 import { logEvent, errFields } from '../utils/event-log.js';
 import { boolEnv, numEnv } from '../utils/env.js';
 import { FileCheckpointer } from '../graph/checkpointer/index.js';
-import { sendMail } from '../utils/mailer.js';
+import { sendMail, mailerConfigured } from '../utils/mailer.js';
 import { renderResetEmail } from '../auth/reset-email.js';
+// P12 Increment D — the human approval gate (converger-v2 §7).
+import { ApprovalStore } from '../approvals/approval-store.js';
+import { ApprovalService } from '../approvals/approval-service.js';
+import { availableApprovalChannels, approvalChannelView } from '../workflows/approval-channels.js';
 import { oauthRedirectBase } from '../connectors/oauth-redirect.js';
 import { entitlementsFor, PUBLIC_PLANS, PLAN_META, isSelfServe } from '../entitlements/index.js';
 import { BillingEventStore } from '../billing/billing-event-store.js';
@@ -213,6 +217,9 @@ const EMBEDDING_MODEL_PATH = process.env.EMBEDDING_MODEL_PATH
 const INTERACTIONS_DB       = process.env.INTERACTIONS_DB       ?? './memory/interactions.sqlite';
 const AIRTABLE_WEBHOOKS_FILE = process.env.AIRTABLE_WEBHOOKS_FILE ?? './memory/airtable-webhooks.json';
 const INBOX_DB               = process.env.INBOX_DB               ?? './memory/inbox.sqlite';
+// P12 Increment D — approval tokens (hashed, single-use, TTL). Its own database:
+// these are credentials, and they do not belong in the same file as workflow data.
+const APPROVALS_DB           = process.env.APPROVALS_DB           ?? './memory/approvals/approvals.sqlite';
 const TICKETS_DB             = process.env.TICKETS_DB             ?? './memory/tickets/tickets.sqlite';
 const BILLING_EVENTS_DB      = process.env.BILLING_EVENTS_DB      ?? './memory/billing/events.sqlite';
 const AUTH_DB     = process.env.AUTH_DB     ?? './memory/auth.sqlite';
@@ -237,6 +244,59 @@ function setSessionCookie(res, token) {
     secure: SECURE_COOKIES,
     maxAge: 30 * 24 * 60 * 60 * 1000, // 30d, matches the bearer-session TTL
   });
+}
+
+// ── The approval landing page (P12 Increment D) ──────────────────────────────
+// Standalone HTML, no assets, no session: the recipient of an approval email may
+// have no Atlas account and no cookie. Everything interpolated here came out of a
+// workflow's config or an LLM's output, so it is ESCAPED — an approval page that
+// executes the content it is asking you to approve would be a stored-XSS vector
+// handed out by email.
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => (
+  { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]
+));
+
+const PAGE = (title, body) => `<!doctype html><html><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow">
+<title>${esc(title)}</title>
+<style>
+ body{font:16px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:#f6f7f9;color:#14161a;
+      margin:0;min-height:100vh;display:grid;place-items:center;padding:24px}
+ .card{background:#fff;border:1px solid #e4e6ea;border-radius:14px;padding:28px;max-width:600px;width:100%;
+       box-shadow:0 1px 3px rgba(0,0,0,.06)}
+ h1{font-size:19px;margin:0 0 14px}
+ pre{background:#f6f7f9;border:1px solid #e4e6ea;border-radius:8px;padding:14px;white-space:pre-wrap;
+     word-break:break-word;max-height:340px;overflow:auto;font-size:14px}
+ button{font:inherit;font-weight:600;border:0;border-radius:8px;padding:11px 22px;cursor:pointer}
+ .go{background:#111;color:#fff}
+ .muted{color:#6b7280;font-size:14px}
+</style></head><body><div class="card">${body}</div></body></html>`;
+
+/** The confirmation page. Looks; does not decide. */
+function renderApprovalPage(ask, token) {
+  if (!ask) {
+    return PAGE('Link expired', `<h1>This link is no longer valid</h1>
+      <p class="muted">It has already been used, it expired, or the question was answered somewhere else.
+      Nothing has been changed.</p>`);
+  }
+  return PAGE('Approval needed', `
+    <h1>${esc(ask.prompt)}</h1>
+    ${ask.preview ? `<pre>${esc(ask.preview)}</pre>` : ''}
+    <form method="POST" action="/approvals/${esc(token)}">
+      <button class="go" type="submit">${esc(ask.decision.charAt(0).toUpperCase() + ask.decision.slice(1))}</button>
+    </form>
+    <p class="muted">You are about to <strong>${esc(ask.decision)}</strong>. This link can be used once,
+    and it expires ${esc(new Date(ask.expiresAt).toUTCString())}.</p>`);
+}
+
+function renderApprovalResult(result) {
+  return result.ok
+    ? PAGE('Recorded', `<h1>Recorded — ${esc(result.decision)}</h1>
+        <p class="muted">Thank you. The workflow has been told, and it is carrying on from here.
+        You can close this page.</p>`)
+    : PAGE('Not recorded', `<h1>Nothing was changed</h1>
+        <p class="muted">${esc(result.reason)}</p>`);
 }
 
 // Verify a Slack request signature (Events API). Signs `v0:{ts}:{rawBody}` with
@@ -539,7 +599,17 @@ async function buildEngine(workflowStore, llm, costTracker = null) {
   const nodeTypeRegistry = new NodeTypeRegistry();
   registerBuiltInNodeTypes(nodeTypeRegistry);
 
-  const workflowValidator = new WorkflowValidator({ sourceRegistry, channelRegistry, nodeTypes: nodeTypeRegistry });
+  // THE VALIDATOR PUBLISH RUNS ON. Everything that wants to know "would this
+  // save?" must be constructed the way THIS is — with the channel catalog AND the
+  // approval-channel view. A check built without them is a check on a program
+  // nobody runs: it was blind to UNKNOWN_CHANNEL in C, and it would be blind to
+  // APPROVAL_CHANNEL_NOT_CONNECTED now (CLAUDE.md — architectural flaw #2).
+  const workflowValidator = new WorkflowValidator({
+    sourceRegistry, channelRegistry, nodeTypes: nodeTypeRegistry,
+    approvalChannels: approvalChannelView(
+      availableApprovalChannels(channelRegistry, { mailer: mailerConfigured() }),
+    ),
+  });
 
   // Scheduler is constructed (FlowTester uses it for preview fetches) but NOT
   // started — the spine runs no background tick yet; scheduled triggers are P2/P7.
@@ -910,6 +980,71 @@ export async function bootSpine() {
     getRagInbox: ragInbox.forTenant.bind(ragInbox),
   });
 
+  // ── P12 Increment D — the human approval gate (converger-v2 §7) ────────────
+  // The pause has existed since Increment B; nothing DELIVERED the question or
+  // could PROVE an answer, so a `human` node was unreachable by design. This is
+  // what makes it reachable, and it is wired here — in the one place that can see
+  // the inbox, Slack, the mailer and the scheduler at once.
+  ensureDir(APPROVALS_DB);
+  const approvalStore = new ApprovalStore({ dbPath: APPROVALS_DB }).init();
+
+  const approvals = new ApprovalService({
+    approvalStore,
+    workflowStore: engine.workflowStore,
+    inboxStore,
+    // The ONE door back into the engine. It authenticates nothing — every caller
+    // above it has already proven who is answering.
+    resumeRun: (run, answer) => engine.workflowScheduler.resumeRun(run, answer),
+    // Block Kit buttons. Posts as the TENANT's bot, never the operator's: an
+    // approval must be asked in the workspace whose data it concerns.
+    //
+    // `getSlackToken` (with the cipher), NOT `getSlackGrant`. `getSlackGrant`
+    // returns { connected, scopes, account } and has NO botToken — so reading
+    // `?.botToken` off it is always undefined, and the token silently fell back to
+    // the operator's env SLACK_BOT_TOKEN. A tenant with its own connected
+    // workspace would have its approval posted into the OPERATOR's Slack (found by
+    // the verifier, R1). This is the same decrypt path server.js:353 already uses.
+    postSlack: async ({ tenantId, channel, text, blocks }) => {
+      let token;
+      try { token = getSlackToken({ oauthTokenStore: auth.oauthTokenStore, cipher: auth.tokenCipher, tenantId })?.botToken; }
+      catch { /* no grant */ }
+      token ??= process.env.SLACK_BOT_TOKEN;
+      if (!token) throw new Error('Slack is not connected for this workspace');
+      const r = await fetch('https://slack.com/api/chat.postMessage', {
+        method: 'POST',
+        headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+        body: JSON.stringify({ channel, text, blocks }),
+      });
+      const d = await r.json().catch(() => ({}));
+      if (!d.ok) throw new Error(`slack: ${d.error ?? 'post failed'}`);
+      return d;
+    },
+    sendMail: mailerConfigured() ? sendMail : null,
+    baseUrl: () => oauthRedirectBase(),
+  });
+
+  engine.workflowScheduler.registerAskDeliverer(
+    (ctx) => approvals.deliverAsk(ctx),
+  );
+  engine.workflowScheduler.registerTimeoutHook(
+    (ctx) => approvals.onTimeout(ctx),
+  );
+  // `on_error: { then: 'escalate' }` — Increment B raised the flag and could do
+  // nothing with it, because there was no inbox to escalate INTO. Now a failed
+  // step that says "tell a person" lands in that person's Approvals list instead
+  // of dying in a log nobody reads.
+  engine.workflowScheduler.registerEscalationNotifier(async ({ workflow, run, nodeId, error }) => {
+    if (!workflow.user_id || !workflow.tenant_id) return;
+    inboxStore.create({
+      tenantId: workflow.tenant_id,
+      userId:   workflow.user_id,
+      sourceWorkflowId: workflow.id,
+      sourceRunId:      run.id,
+      subject: `Needs a person — ${workflow.name ?? workflow.slug}`,
+      content: `The step "${nodeId}" failed, and this workflow says a person should be told rather than letting it die in a log.\n\n${String(error ?? '')}\n\nThe run stopped there. Nothing after that step ran.`,
+    });
+  });
+
   // Filesystem connector — tenant-scoped read + list for workflows.
   // Sandboxed to folders the tenant has connected via the Filesystem page.
   registerFilesystemCapabilities(engine.capabilityRegistry, {
@@ -942,6 +1077,7 @@ export async function bootSpine() {
     rag,
     ragInbox,
     inboxStore,
+    approvals,
     tickets: ticketStore,
     billingEvents: billingEventStore,
     slack,
@@ -968,6 +1104,7 @@ export async function bootSpine() {
       try { rag.close?.(); } catch { /* ignore */ }
       try { ragInbox.close?.(); } catch { /* ignore */ }
       try { inboxStore.close?.(); } catch { /* ignore */ }
+      try { approvalStore.close?.(); } catch { /* ignore */ }
       try { ticketStore.close?.(); } catch { /* ignore */ }
       try { billingEventStore.close?.(); } catch { /* ignore */ }
       try { auth.close?.(); } catch { /* ignore */ }
@@ -1035,9 +1172,15 @@ export function createApp(spine) {
     res.setHeader('X-Request-Id', req.id);
     res.on('finish', () => {
       if (req.path.startsWith('/assets/') || req.path === '/favicon.ico') return;
+      // Redact the raw approval token from the logged path (R1310, found by the
+      // verifier, R2). The ApprovalStore keeps only the token's SHA-256 hash on
+      // disk precisely so a leak yields no usable link — writing the plaintext
+      // token into ./memory/logs/atlas-events.log undoes that. Single-use + TTL
+      // limit the blast radius, but the log has no business holding a credential.
+      const path = req.path.replace(/^(\/approvals\/)[^/]+/, '$1<token>');
       logEvent('http', {
         reqId: req.id,
-        method: req.method, path: req.path, status: res.statusCode, ms: Date.now() - t0,
+        method: req.method, path, status: res.statusCode, ms: Date.now() - t0,
         tenant: req.tenant?.id ?? null, user: req.user?.id ?? null,
       });
     });
@@ -1640,6 +1783,143 @@ export function createApp(spine) {
     }
   });
 
+  // ── Slack interactivity — the approval buttons (P12 Increment D, §7.5) ──────
+  //
+  // A DIFFERENT URL from /connectors/slack/events. Block Kit buttons POST to the
+  // app's *Interactivity* Request URL, and they arrive as
+  // `application/x-www-form-urlencoded` with the payload in a `payload` field —
+  // not as JSON. That is why this route mounts its own body parser: the global
+  // one is `express.json`, which would leave `req.body` empty here and the
+  // signature unverifiable.
+  //
+  // NOT auth-gated, and it must not be: Slack has no session with us. THE
+  // SIGNATURE IS THE TRUST ANCHOR — HMAC-SHA256 over the raw bytes with the app
+  // signing secret, with a 5-minute window against replay. Everything else in
+  // this handler (the run id, the node id, the decision) is untrusted input that
+  // Slack merely carried; the only thing the signature proves is that Slack sent
+  // it, and the only thing the payload proves is WHICH SLACK USER clicked.
+  //
+  // The tenant is resolved from the Slack TEAM ID, never from the button's value:
+  // a value is a routing hint, and a routing hint that could name a tenant would
+  // be a cross-tenant forgery primitive.
+  app.post(
+    '/connectors/slack/interactive',
+    express.urlencoded({ extended: false, limit: '256kb', verify: (req, _res, buf) => { req.rawBody = buf; } }),
+    async (req, res) => {
+      const secret = process.env.SLACK_SIGNING_SECRET;
+      if (!secret) return res.status(501).json({ error: 'Slack interactivity not configured (set SLACK_SIGNING_SECRET)' });
+      if (!verifySlackSignature(req, secret)) {
+        logEvent('approval.slack.bad_signature', {});
+        return res.status(401).json({ error: 'bad signature' });
+      }
+
+      let payload;
+      try { payload = JSON.parse(req.body?.payload ?? '{}'); }
+      catch { return res.status(400).json({ error: 'bad payload' }); }
+
+      if (payload.type !== 'block_actions') return res.status(200).end();
+
+      const action = (payload.actions ?? [])[0];
+      const [runId, nodeId, decision] = String(action?.value ?? '').split(':');
+      const teamId      = payload.team?.id;
+      const slackUserId = payload.user?.id;
+
+      // The tenant this Slack workspace belongs to. If the workspace is not
+      // connected to any tenant, there is no run it could possibly answer.
+      const tenantId = spine.auth.oauthTokenStore.findTenantByAccount?.({ connectorId: 'slack', account: teamId });
+      if (!tenantId) {
+        logEvent('approval.slack.no_tenant', { teamId });
+        return res.status(200).json({ text: 'This Slack workspace isn\'t connected to an Atlas workspace.' });
+      }
+
+      const result = await spine.approvals.resolveFromSlack({
+        tenantId, slackUserId, runId, nodeId, decision,
+      });
+      logEvent('approval.slack', { tenant: tenantId, runId, nodeId, decision, ok: result.ok });
+
+      // `replace_original` swaps the message with the outcome, so the buttons are
+      // gone and a second reader cannot click a question that has been answered.
+      res.status(200).json({
+        replace_original: true,
+        text: result.ok
+          ? `:white_check_mark: *${decision}* — recorded by <@${slackUserId}>.`
+          : `:warning: ${result.reason}`,
+      });
+    },
+  );
+
+  // ── Approvals — the magic link (P12 Increment D, §7.3/§7.5) ────────────────
+  //
+  // THE GET DECIDES NOTHING. It is a link in an email, and a link in an email is
+  // fetched by things that are not people: scanning proxies, link checkers, the
+  // mail client's own prefetcher. If the GET consumed the token, a corporate
+  // security appliance would approve the customer's refund milliseconds after the
+  // mail arrived, and the person it was sent to would find the decision already
+  // made in their name. So the GET renders a page, and a POST from that page —
+  // which no prefetcher will ever issue — is what answers the question.
+  //
+  // Unauthenticated by necessity: the recipient may have no Atlas account. The
+  // TOKEN is the credential — 32 random bytes, stored only as a SHA-256 hash,
+  // single-use, expiring, and bound to (run, node, decision) so a forwarded
+  // "approve" link cannot be edited into a "reject".
+  app.get('/approvals/:token', (req, res) => {
+    const ask = spine.approvals.peekToken(req.params.token);
+    res.type('html').send(renderApprovalPage(ask, req.params.token));
+  });
+
+  app.post('/approvals/:token', async (req, res) => {
+    const result = await spine.approvals.resolveFromToken(req.params.token);
+    logEvent('approval.email', { ok: result.ok, reason: result.reason ?? null });
+    res.type('html').send(renderApprovalResult(result));
+  });
+
+  // ── Approvals — the in-app inbox (strong: an authenticated session) ─────────
+  // Tenant-scoped at the store, not in this handler: `listAwaitingHuman` puts the
+  // tenant in the WHERE clause, so there is no code path on which forgetting a
+  // check here could surface another tenant's pending approval.
+  app.get('/api/approvals', requireActiveTenant, (req, res) => {
+    const runs = spine.engine.workflowStore.listAwaitingHuman({ tenantId: req.tenant.id });
+    res.json({
+      approvals: runs.map(r => {
+        let workflowName = null;
+        try { workflowName = spine.engine.workflowStore.get(r.workflow_id)?.name ?? null; } catch { /* best-effort */ }
+        return {
+          runId:     r.id,
+          workflowId: r.workflow_id,
+          workflowName,
+          nodeId:    r.paused_node,
+          prompt:    r.pending_ask?.prompt ?? 'Approve this step?',
+          preview:   r.pending_ask?.preview ?? null,
+          // The node's OWN answers — not a hardcoded approve/reject. A node may
+          // declare any closed set, and the buttons have to offer what the engine
+          // will actually accept, or the click is refused as "not one of the
+          // answers this step offers" and the person cannot answer their own
+          // question.
+          decisions: r.pending_ask?.decisions ?? ['approve', 'reject'],
+          pausedAt:  r.paused_at,
+          expiresAt: r.pause_expires_at,
+        };
+      }),
+    });
+  });
+
+  app.post('/api/approvals/:runId/:nodeId', requireActiveTenant, async (req, res) => {
+    const result = await spine.approvals.resolveFromInbox({
+      tenantId: req.tenant.id,
+      userId:   req.user.id,
+      runId:    req.params.runId,
+      nodeId:   req.params.nodeId,
+      decision: req.body?.decision,
+    });
+    logEvent('approval.inbox', {
+      tenant: req.tenant.id, user: req.user.id,
+      runId: req.params.runId, decision: req.body?.decision, ok: result.ok,
+    });
+    // 200 either way — "already answered" is a normal outcome (somebody got there
+    // first), not a server error, and the UI needs to read the reason.
+    res.json(result);
+  });
+
   // Is Slack connected for this tenant?
   app.get('/connectors/slack/status', requireActiveTenant, (req, res) => {
     const grant = getSlackGrant({ oauthTokenStore: spine.auth.oauthTokenStore, tenantId: req.tenant.id });
@@ -1845,6 +2125,30 @@ export function createApp(spine) {
         }
         else if (ev.type === 'step_completed') { steps.push({ nodeId: ev.nodeId, output: ev.output }); logEvent('run.step', { tenant: tenantId, runId, nodeId: ev.nodeId }); }
         else if (ev.type === 'run_completed') { completed = true; output = ev.output; }
+        // ── A TEST RUN NEVER PARKS (P12 Increment D) ───────────────────────
+        // This is the builder's "Run test". A `human` step pauses it, and until
+        // now that fell off the end of this loop: no steps after the pause, no
+        // error, `completed:false` — the button did nothing and said nothing.
+        //
+        // It must not be made to park, either. A parked run is a REAL run: the
+        // timeout sweeper would eventually resolve it and resume it, and the
+        // steps after the approval — the customer email, the record — would
+        // happen for real, out of a run the user pressed "test" on. So the test
+        // stops here and REPORTS the pause: this is where it would ask, this is
+        // who it would ask, this is what they would see.
+        else if (ev.type === 'run_paused') {
+          logEvent('run.paused', { tenant: tenantId, runId, nodeId: ev.nodeId });
+          if (dbRun) {
+            try { spine.engine.workflowStore.completeRun(dbRun.id, `paused at "${ev.nodeId}" — awaiting a person`, spine.costTracker?.getSessionCost?.(`flow-run-${runId}`) ?? null); }
+            catch { /* best-effort */ }
+          }
+          return res.json({
+            runId, completed: false, clean: true, paused: true,
+            awaiting: { nodeId: ev.nodeId, ask: ev.ask },
+            steps,
+            note: `This workflow stops here and asks a person ("${ev.ask?.prompt ?? 'approve this step'}"). In a real run it would wait for their answer before going on.`,
+          });
+        }
         else if (ev.type === 'run_failed') {
           logEvent('run.failed', { tenant: tenantId, runId, failedStep: steps.length, error: typeof ev.error === 'string' ? ev.error : (ev.error?.message ?? JSON.stringify(ev.error)), ms: Date.now() - t0 });
           const failCost = spine.costTracker?.getSessionCost?.(`flow-run-${runId}`) ?? null;

@@ -130,6 +130,14 @@ const ADDITIVE_RUN_COLUMNS = [
   // and resuming from it silently delivered mutilated content. See
   // flow-tester.js, run().
   { col: 'checkpoint',        type: 'TEXT' },
+  // P12 Increment D — the timeout sweeper. `pause_expires_at` is the deadline
+  // computed from the node's own `timeout.after` at the moment it paused. It is
+  // stored rather than re-derived on each tick because the node's config can
+  // change under a paused run (the workflow is edited and re-published) — and the
+  // deadline a person was PROMISED must not move because somebody edited the spec
+  // while they were thinking about it.
+  { col: 'paused_at',         type: 'TEXT' },
+  { col: 'pause_expires_at',  type: 'TEXT' },
 ];
 
 export class WorkflowStore {
@@ -501,12 +509,16 @@ export class WorkflowStore {
    * stream (truncated at 2000 chars, objects JSON-encoded), and resuming from
    * them delivered the customer a mutilated copy of what the person approved.
    */
-  pauseRun(runId, nodeId, ask, checkpoint = null) {
+  pauseRun(runId, nodeId, ask, checkpoint = null, expiresAt = null) {
     this.db.prepare(
       `UPDATE workflow_runs
-          SET status = 'awaiting_human', paused_node = ?, pending_ask = ?, checkpoint = ?
+          SET status = 'awaiting_human', paused_node = ?, pending_ask = ?, checkpoint = ?,
+              paused_at = ?, pause_expires_at = ?
         WHERE id = ?`,
-    ).run(nodeId, JSON.stringify(ask ?? null), JSON.stringify(checkpoint ?? null), runId);
+    ).run(
+      nodeId, JSON.stringify(ask ?? null), JSON.stringify(checkpoint ?? null),
+      new Date().toISOString(), expiresAt, runId,
+    );
   }
 
   /** Runs waiting on a person. Increment D's Approvals inbox reads this. */
@@ -518,19 +530,60 @@ export class WorkflowStore {
     return this.db
       .prepare(`SELECT * FROM workflow_runs WHERE ${where.join(' AND ')} ORDER BY started_at DESC`)
       .all(...vals)
-      .map(r => ({
-        ...r,
-        steps: r.steps ? JSON.parse(r.steps) : [],
-        pending_ask: r.pending_ask ? JSON.parse(r.pending_ask) : null,
-        checkpoint:  r.checkpoint  ? JSON.parse(r.checkpoint)  : null,
-      }));
+      .map(hydrateAwaiting);
   }
 
-  /** Flip a paused run back to running once a decision has been captured. */
+  /**
+   * One paused run, by id. The approval endpoints resolve a token or a Slack
+   * button to a run and must load exactly that run — including its CHECKPOINT,
+   * which `getRun()` does not parse.
+   *
+   * Tenant-scoped when a tenantId is given, and every production caller gives one:
+   * this is the query a forged token would have to get past, so the tenant check
+   * lives in the WHERE clause rather than in the caller's memory.
+   */
+  getAwaitingHuman(runId, { tenantId = null } = {}) {
+    const where = ['id = ?', "status = 'awaiting_human'"];
+    const vals  = [runId];
+    if (tenantId) { where.push('tenant_id = ?'); vals.push(tenantId); }
+    const row = this.db.prepare(`SELECT * FROM workflow_runs WHERE ${where.join(' AND ')}`).get(...vals);
+    return row ? hydrateAwaiting(row) : null;
+  }
+
+  /**
+   * Paused runs whose deadline has passed. The sweeper's query — kept here, in
+   * SQL, so "expired" means one thing.
+   */
+  listExpiredPauses(now = new Date().toISOString()) {
+    return this.db
+      .prepare(`SELECT * FROM workflow_runs
+                 WHERE status = 'awaiting_human'
+                   AND pause_expires_at IS NOT NULL
+                   AND pause_expires_at < ?`)
+      .all(now)
+      .map(hydrateAwaiting);
+  }
+
+  /**
+   * Flip a paused run back to running once a decision has been captured.
+   *
+   * This is also the CONCURRENCY GUARD for the whole approval path: two people
+   * clicking Approve and Reject at the same moment, or a Slack button racing the
+   * timeout sweeper, both reach here — and only one wins, because the UPDATE is
+   * conditional on the run still being `awaiting_human`. It returns false for the
+   * loser, which must then NOT resume the run. Without that, one run resumes
+   * twice and everything downstream — including the customer email — happens
+   * twice. (The token store burns the tokens too, but the inbox and Slack paths
+   * use no token, so the guarantee cannot live only there.)
+   */
   markRunResumed(runId) {
-    this.db.prepare(
-      `UPDATE workflow_runs SET status = 'running', paused_node = NULL, pending_ask = NULL, checkpoint = NULL WHERE id = ?`,
+    const info = this.db.prepare(
+      `UPDATE workflow_runs
+          SET status = 'running', paused_node = NULL, pending_ask = NULL, checkpoint = NULL,
+              paused_at = NULL, pause_expires_at = NULL
+        WHERE id = ? AND status = 'awaiting_human'`,
     ).run(runId);
+    return info.changes > 0;
   }
 
   _migrateStatusCheckIfNeeded() {
@@ -1419,6 +1472,23 @@ export class WorkflowStore {
   close() {
     this.db?.close();
   }
+}
+
+/**
+ * A paused run, with the JSON columns decoded (P12 Increment D).
+ *
+ * `checkpoint` is the RESUME STATE and `steps` is the display record. They are
+ * decoded together here, once, so no caller can reach for the convenient one by
+ * mistake — which is precisely the substitution that delivered a customer a
+ * truncated copy of the email a person had approved (converger-v2 §7.4).
+ */
+function hydrateAwaiting(r) {
+  return {
+    ...r,
+    steps:       r.steps       ? JSON.parse(r.steps)       : [],
+    pending_ask: r.pending_ask ? JSON.parse(r.pending_ask) : null,
+    checkpoint:  r.checkpoint  ? JSON.parse(r.checkpoint)  : null,
+  };
 }
 
 /**

@@ -23,6 +23,8 @@ import { SystemMessage, HumanMessage, AIMessage, ToolMessage } from '../core/mes
 import { logEvent, errFields } from '../utils/event-log.js';
 import { channelIdForCapability } from '../connectors/slack/index.js';
 import { webConnectionStatus } from '../connectors/web/index.js';
+import { availableApprovalChannels } from '../workflows/approval-channels.js';
+import { mailerConfigured } from '../utils/mailer.js';
 import { getGoogleAccessToken } from '../connectors/google/index.js';
 import { getSlackToken } from '../connectors/slack/oauth.js';
 import { getAirtableAccessToken } from '../connectors/airtable/oauth.js';
@@ -1086,6 +1088,24 @@ Rules:
     if (!Array.isArray(capabilities.channels) || !capabilities.channels.length) {
       try { capabilities.channels = spine.engine.channelRegistry.getAll(); } catch { /* registry itself is down */ }
     }
+
+    // ── The approval channels (P12 Increment D) ──────────────────────────────
+    // Same reasoning, one door along. A `human` node asks over inbox / slack /
+    // email, and APPROVAL_CHANNEL_NOT_CONNECTED is the check that a question can
+    // actually reach somebody. Publish always runs it (server.js constructs the
+    // validator with this view); the scorer must run it too, or a workflow that
+    // pauses on a Slack workspace nobody connected scores COMPLETE and then
+    // refuses to save — and at run time waits forever for an answer nobody was
+    // ever asked for.
+    //
+    // Derived from the SAME local registry (`inbox` needs no connector, which is
+    // what lets escalation always have somewhere to go), so it cannot be knocked
+    // out by a network failure the way the annotated catalog above could.
+    try {
+      capabilities.approvalChannels = availableApprovalChannels(
+        spine.engine.channelRegistry, { mailer: mailerConfigured() },
+      );
+    } catch { /* registry itself is down — the scorer then refuses to certify */ }
 
     // Query RAG for knowledge relevant to this intent so the converger's LLM
     // calls can see what's actually in the knowledge base (not just folder names).

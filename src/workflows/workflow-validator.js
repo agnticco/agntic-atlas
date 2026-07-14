@@ -22,8 +22,11 @@
  */
 
 import { liftV1Nodes, isRemovedType, REMOVED_TYPES } from './node-types/compat-v1.js';
-import { normalizeCases, CATCH_ALL } from './node-types/branch.js';
+import { normalizeCases, CATCH_ALL, ON_REF } from './node-types/branch.js';
 import { normalizeSteps } from './node-types/foreach.js';
+import { normalizeChannels, normalizeDecisions, allowedDecisions, TIMEOUT_DECISION } from './node-types/human.js';
+import { isStrong, FORBIDDEN_CHANNELS } from './approval-channels.js';
+import { parseDuration } from './duration.js';
 import { checkOutcome, missingFields, ASSERTION_KINDS } from './outcome-oracle.js';
 
 /** Per-channel required fields on a deliver node's config (beyond `channel`). */
@@ -39,12 +42,17 @@ export class WorkflowValidator {
    * @param {import('../tools/tool-registry.js').ToolRegistry} [deps.toolRegistry]
    * @param {import('./channel-registry.js').ChannelRegistry}  [deps.channelRegistry]
    * @param {import('./node-type-registry.js').NodeTypeRegistry} [deps.nodeTypes]
+   * @param {{has:Function,list:Function}} [deps.approvalChannels] — which approval
+   *        channels this workspace can actually ask over (approval-channels.js).
+   *        Null = this caller cannot see the catalog, so the connectedness check
+   *        skips here and the GAP SCORER fails closed instead. See _checkHumanNode.
    */
-  constructor({ sourceRegistry = null, toolRegistry = null, channelRegistry = null, nodeTypes = null } = {}) {
-    this.sourceRegistry  = sourceRegistry;
-    this.toolRegistry    = toolRegistry;
-    this.channelRegistry = channelRegistry;
-    this.nodeTypes       = nodeTypes;
+  constructor({ sourceRegistry = null, toolRegistry = null, channelRegistry = null, nodeTypes = null, approvalChannels = null } = {}) {
+    this.sourceRegistry    = sourceRegistry;
+    this.toolRegistry      = toolRegistry;
+    this.channelRegistry   = channelRegistry;
+    this.nodeTypes         = nodeTypes;
+    this.approvalChannels  = approvalChannels;
   }
 
   /**
@@ -518,7 +526,14 @@ export class WorkflowValidator {
 
       if (node?.type === 'branch') {
         const onRef = String(node.config?.on ?? '').trim().replace(/^\{\{\s*|\s*\}\}$/g, '').trim();
-        const onId  = /^([a-z0-9_-]+)(?:\.output)?$/i.exec(onRef)?.[1] ?? null;
+        // ON_REF, the SHARED grammar (branch.js), not a private copy. Increment D
+        // taught BRANCH_BAD_ON the `.decision` form and left these two checks on
+        // the old `/\.output?$/` — so on `{{ask.decision}}`, the one shape §7.1
+        // documents and escalation.js emits, `onId` came back null and both the
+        // moat (LLM_INPUT_NOT_ENUM) and the case-membership check silently did not
+        // run. Three parsers of one reference is three chances to disagree; there
+        // is now one. (Found by the verifier + the test-adversary, F1.)
+        const onId  = ON_REF.exec(onRef)?.[1] ?? null;
         const src   = onId ? byId.get(onId) : null;
         if (!src) continue;   // no such step — BRANCH_BAD_ON already reports it
 
@@ -580,7 +595,7 @@ export class WorkflowValidator {
     for (const node of nodes) {
       if (node?.type !== 'branch') continue;
       const onRef = String(node.config?.on ?? '').trim().replace(/^\{\{\s*|\s*\}\}$/g, '').trim();
-      const onId  = /^([a-z0-9_-]+)(?:\.output)?$/i.exec(onRef)?.[1] ?? null;
+      const onId  = ON_REF.exec(onRef)?.[1] ?? null;   // shared grammar — see the moat block above (F1)
       const src   = onId ? byId.get(onId) : null;
       if (!src) continue;
 
@@ -637,8 +652,29 @@ export class WorkflowValidator {
         // MANDATORY catch-all then swallows 100% of traffic — forever, silently,
         // with run_completed and no warning. The catch-all that exists to prevent
         // a silent misroute ends up MASKING one.
+        // The SAME reference grammar the engine resolves (branch.js ON_REF). If
+        // these two ever disagree, the validator accepts a reference the engine
+        // cannot read — and the engine's answer to a reference it cannot read is
+        // the catch-all, on every run, silently.
         const onRef = String(node.config?.on ?? '').trim().replace(/^\{\{\s*|\s*\}\}$/g, '').trim();
-        const onId  = /^([a-z0-9_-]+)(?:\.output)?$/i.exec(onRef)?.[1] ?? null;
+        const onMatch = ON_REF.exec(onRef);
+        const onId    = onMatch?.[1] ?? null;
+        const onField = onMatch?.[2]?.toLowerCase() ?? null;
+
+        // `.decision` names a field only a `human` node has. On anything else the
+        // engine throws rather than misroute — so catch it at build time, where it
+        // is a sentence instead of a broken run.
+        if (onId && onField === 'decision' && seenIds.has(onId)) {
+          const src = nodes.find(n => n?.id === onId);
+          if (src && src.type !== 'human') {
+            issues.push({
+              severity: 'error', code: 'BRANCH_BAD_ON',
+              message: `"${node.label || node.id}" routes on "${node.config.on}", but "${onId}" is not a step that asks a person — only a human step produces a decision.`,
+              nodeId: node.id, field: 'config.on',
+              hint: `Route on "${onId}.output" instead, or point it at the human step whose answer you meant.`,
+            });
+          }
+        }
         if (!onRef) {
           issues.push({
             severity: 'error', code: 'MISSING_CONFIG',
@@ -748,6 +784,13 @@ export class WorkflowValidator {
         }
       }
 
+      // ── The approval gate (P12 Increment D, converger-v2 §7.7) ────────────
+      // An approval anyone can forge is not an approval, and a pause nobody can
+      // answer is a hang. Both are build errors, not run-time surprises.
+      if (node?.type === 'human') {
+        this._checkHumanNode(node, nodes, edges, issues);
+      }
+
       // A `foreach` sub-step is a real step: it writes, and it can be retried.
       // The checks below must see it, or the highest-risk write shape in the
       // engine (N writes per fire) is the only one nobody warns about.
@@ -762,8 +805,7 @@ export class WorkflowValidator {
             });
           }
           const act = String(sub?.config?.action ?? '');
-          if (sub?.type === 'connector-action' && !sub.idempotency?.key
-              && /(^|_)(create|append|send|post|add|insert)(_|$)/i.test(act)) {
+          if (sub?.type === 'connector-action' && !sub.idempotency?.key && isWritingAction(act)) {
             issues.push({
               severity: 'warning', code: 'WRITE_WITHOUT_IDEMPOTENCY',
               message: `"${sub.id || act}" writes ("${act}") inside a loop and has no idempotency key — if the trigger fires twice it writes every row twice.`,
@@ -781,7 +823,7 @@ export class WorkflowValidator {
       // a customer record is a support ticket, not a theory.
       if (node?.type === 'connector-action' && !node.idempotency?.key) {
         const action = String(node.config?.action ?? '');
-        if (/(^|_)(create|append|send|post|add|insert)(_|$)/i.test(action)) {
+        if (isWritingAction(action)) {
           issues.push({
             severity: 'warning', code: 'WRITE_WITHOUT_IDEMPOTENCY',
             message: `"${node.label || node.id}" writes ("${action}") but has no idempotency key, so if the trigger fires twice it will write twice.`,
@@ -789,6 +831,182 @@ export class WorkflowValidator {
             hint: 'Add idempotency: { "key": "{{<stepId>.<uniqueField>}}", "on_conflict": "skip" } — e.g. the sender\'s email, or an invoice id.',
           });
         }
+      }
+    }
+  }
+
+  /**
+   * The `human` approval gate (converger-v2 §7.7). Needs the edge list — "does
+   * this approval guard a write?" is a question about what lies DOWNSTREAM of
+   * it, which a node's own validate(node) hook cannot see.
+   */
+  _checkHumanNode(node, nodes, edges, issues) {
+    const label = node.label || node.id;
+    const channels = normalizeChannels(node.config?.channels);
+
+    // ── EMAIL_REPLY_APPROVAL (§11.8) ────────────────────────────────────────
+    // The hard rule of this increment. Parsing "yes" out of a reply body
+    // authenticates NOTHING: `From:` is trivially spoofable, SPF/DKIM
+    // authenticate a sending DOMAIN and not a human INTENT, and a forwarded
+    // thread is full of the word "yes". There is no safe configuration of it, so
+    // it is not a channel with a low score — it is rejected outright.
+    for (const ch of channels) {
+      if (FORBIDDEN_CHANNELS.includes(String(ch?.type))) {
+        issues.push({
+          severity: 'error', code: 'EMAIL_REPLY_APPROVAL',
+          message: `"${label}" would take its approval from an email reply. That authenticates nobody — a sender address is trivially forged, and a forwarded thread is full of the word "yes".`,
+          nodeId: node.id, field: 'config.channels',
+          hint: 'Use { "type": "email" } instead: the person gets a signed, single-use link that expires. Or ask in Slack or the in-app inbox, which prove who clicked.',
+        });
+      }
+    }
+
+    // ── APPROVAL_CHANNEL_NOT_CONNECTED ──────────────────────────────────────
+    // A question asked over a channel this workspace has not connected is a
+    // question nobody is ever asked — and the run waits for the answer forever.
+    //
+    // `approvalChannels` is null when the caller cannot see the catalog. The
+    // check then SKIPS, exactly as the `deliver` channel checks already do — and
+    // the gap scorer refuses to certify the spec at all (CHANNELS_UNVERIFIED),
+    // so nothing can score `complete` on a check that quietly did not run. That
+    // split is deliberate: skipping here and failing closed there is what keeps
+    // `complete ⇒ publishable` true without making the validator unusable to
+    // every caller that has no registry.
+    if (this.approvalChannels) {
+      for (const ch of channels) {
+        const type = String(ch?.type ?? '');
+        if (!type || FORBIDDEN_CHANNELS.includes(type)) continue;   // reported above
+        if (!this.approvalChannels.has(type)) {
+          issues.push({
+            severity: 'error', code: 'APPROVAL_CHANNEL_NOT_CONNECTED',
+            message: `"${label}" asks over ${type}, which isn't connected for this workspace — the question would never reach anyone, and the run would wait for an answer that cannot come.`,
+            nodeId: node.id, field: 'config.channels',
+            hint: `Connect ${type}, or ask somewhere available: ${this.approvalChannels.list().join(', ')}.`,
+          });
+        }
+      }
+    }
+
+    if (!channels.length) {
+      issues.push({
+        severity: 'error', code: 'APPROVAL_CHANNEL_NOT_CONNECTED',
+        message: `"${label}" pauses for a person but doesn't say where to ask them, so nobody would ever see the question.`,
+        nodeId: node.id, field: 'config.channels',
+        hint: 'Add at least one channel, e.g. { "type": "inbox" } — the in-app Approvals list.',
+      });
+    }
+
+    // ── HUMAN_WITHOUT_TIMEOUT ───────────────────────────────────────────────
+    // A pause with no timeout is a workflow that hangs forever. It does not fail,
+    // it does not complete, and nothing ever tells anyone — the single most
+    // expensive thing a durable pause can do.
+    const timeout = node.config?.timeout;
+    const after   = typeof timeout === 'object' && timeout ? timeout.after : null;
+    if (!after || !parseDuration(after)) {
+      issues.push({
+        severity: 'error', code: 'HUMAN_WITHOUT_TIMEOUT',
+        message: `"${label}" waits for a person but never gives up. If nobody answers, this run waits forever — no error, no output, and nobody is told.`,
+        nodeId: node.id, field: 'config.timeout',
+        hint: 'Add timeout: { "after": "48h", "then": "reject" } — say what should happen when nobody answers.',
+      });
+    } else {
+      // A `then` nobody declared is the BRANCH_BAD_ON failure through another
+      // door: the engine cannot honour an answer that is not in the node's own
+      // closed set, so a typo ("aprove") would silently resolve as `timeout` and
+      // the run would take a path the author never wrote.
+      const then = timeout.then == null ? null : String(timeout.then);
+      const allowed = [...allowedDecisions(node.config?.decisions), 'escalate'];
+      if (then != null && !allowed.includes(then)) {
+        issues.push({
+          severity: 'error', code: 'HUMAN_BAD_TIMEOUT',
+          message: `"${label}" says that when nobody answers it should "${then}" — but that isn't one of its possible answers, so the run would take a path you didn't write.`,
+          nodeId: node.id, field: 'config.timeout',
+          hint: `Use one of: ${allowed.join(', ')}.`,
+        });
+      } else if (then != null && then !== 'escalate' && timeoutAuthorizesWrite({ nodes, edges }, node.id, then)) {
+        // SILENCE IS NOT CONSENT (§11 / F3). `then: 'approve'` passes the check
+        // above — `approve` IS one of the node's answers — and then the sweeper
+        // hands the engine `approve` with `by: 'system:timeout'`: nobody read the
+        // draft, and the customer got it. "If nobody answers in 48h, just send it"
+        // is a sentence a user says out loud and an LLM will write. A timeout may
+        // say DON'T (`reject`) or escalate to a person; it may never perform the
+        // very action the approval existed to gate.
+        issues.push({
+          severity: 'error', code: 'HUMAN_BAD_TIMEOUT',
+          message: `"${label}" would go ahead and act if nobody answers ("${then}") — but the whole point of asking is that a real send or write waits for a person. Silence is not approval.`,
+          nodeId: node.id, field: 'config.timeout',
+          hint: 'On timeout, either stop (e.g. "then": "reject") or hand it to a person ("then": "escalate"). Don\'t let it proceed on its own.',
+        });
+      }
+
+      // SILENCE IS NOT CONSENT — THROUGH THE CATCH-ALL (found by the verifier,
+      // round 2). The trace above only follows `then`; with `then` UNSET (or
+      // `escalate`, or a `then` the sweeper downgrades), the value actually
+      // injected on silence is `timeout` — which routes through the branch's
+      // `timeout` case or its MANDATORY catch-all. So an inverted gate
+      // (`cases:[{when:'reject',to:'drop'},{when:'*',to:'send'}]`) with no `then`
+      // validated clean and, on a silent timeout, SENT — nobody approved, money
+      // moved. Mirror what the sweeper injects, and refuse if THAT writes. (A
+      // safe declared `then` the sweeper keeps is checked as `then` above; here we
+      // catch the timeout-floor case it does not.)
+      const declaredThen = then != null && then !== 'escalate'
+        && normalizeDecisions(node.config?.decisions).includes(then);
+      const keepsThen = declaredThen && !timeoutAuthorizesWrite({ nodes, edges }, node.id, then);
+      if (!keepsThen && timeoutAuthorizesWrite({ nodes, edges }, node.id, TIMEOUT_DECISION)) {
+        issues.push({
+          severity: 'error', code: 'HUMAN_BAD_TIMEOUT',
+          message: `"${label}" would send or write on a silent timeout — the "if nobody answers" path leads to a real action through the catch-all. An approval that a timeout can bypass is not an approval.`,
+          nodeId: node.id, field: 'config.cases',
+          hint: 'Route the timeout/catch-all case to a step that does NOT send or write (e.g. one that records "not approved"). Put the real action behind the "approve" case only.',
+        });
+      }
+    }
+
+    // ── WEAK_APPROVAL_FOR_WRITE (§7.2) ──────────────────────────────────────
+    // The channel must be at least as strong as the action is risky. `email`
+    // proves only POSSESSION OF THE LINK — mailbox access, and the link is
+    // forwardable. That is fine for "is this summary any good?"; it is not fine
+    // for the step that sends the customer an email or creates the record.
+    //
+    // An error, not a warning: the whole point of the gate is that somebody
+    // ACCOUNTABLE said yes, and a forwarded link cannot tell you who did.
+    const guarded = [...descendantsOf(node.id, edges)]
+      .map(id => nodes.find(n => n?.id === id))
+      .filter(n => n && isWriteNode(n));
+    if (guarded.length && channels.length && !channels.some(ch => isStrong(ch?.type))) {
+      issues.push({
+        severity: 'error', code: 'WEAK_APPROVAL_FOR_WRITE',
+        message: `"${label}" approves "${guarded[0].label || guarded[0].id}", which writes or sends for real — but the only way to answer it is an emailed link. Anyone the mail is forwarded to could approve it, and the record would say the wrong person did.`,
+        nodeId: node.id, field: 'config.channels',
+        hint: 'Add { "type": "slack" } or { "type": "inbox" }: both prove who clicked. Keep the email link as well if you like — the first valid answer wins.',
+      });
+    }
+
+    // ── HUMAN_ANSWER_NOT_ROUTED — a human alone is NOT a gate (§7.1) ─────────
+    // A `human` node only REPORTS its decision, exactly as a `branch` only reports
+    // a route. Nothing in the engine stops the next step running whatever the
+    // answer was — so `draft → ask → send` DELIVERS A REJECTED DRAFT to the
+    // customer. It looks precisely like an approval gate and is precisely a no-op,
+    // which is worse than having none. escalation.js and prompts.js both already
+    // ASSERT this is enforced ("the validator will reject it if any is missing");
+    // this is the rule that makes that assertion true. (Found by the verifier +
+    // the test-adversary, F2.)
+    //
+    // The answer is "read" iff a `branch` routes on THIS human's decision, and the
+    // human flows into it. A terminal human (no successors) is fine — nothing runs
+    // after it, so there is nothing to gate. The engine enforces the same thing
+    // for DB specs that predate this rule (flow-tester propagate()).
+    const successors = edges.filter(e => e?.from === node.id).map(e => e.to);
+    if (successors.length) {
+      const routesOnThis = (n) => n?.type === 'branch' && onRefId(n.config?.on) === node.id;
+      const ungated = successors.filter(sid => !routesOnThis(nodes.find(n => n?.id === sid)));
+      if (ungated.length) {
+        issues.push({
+          severity: 'error', code: 'HUMAN_ANSWER_NOT_ROUTED',
+          message: `"${label}" asks a person to decide, but its answer isn't used to route anything — "${ungated[0]}" runs whether they approve or reject. An approval nothing acts on is not an approval.`,
+          nodeId: node.id, field: 'edges',
+          hint: `Send "${label}" into a branch that routes on {{${node.id}.decision}}, and put "${ungated[0]}" behind the "approve" case. Then a rejection actually stops it.`,
+        });
       }
     }
   }
@@ -912,7 +1130,7 @@ export class WorkflowValidator {
     for (const node of nodes) {
       const vars = varsFor(node);
       const ids  = idsFor(node);
-      const strings = this._collectStrings(node.config);
+      const strings = this._collectStrings(templateScannable(node));
       for (const s of strings) {
         let m;
         while ((m = refRe.exec(s)) !== null) {
@@ -938,7 +1156,7 @@ export class WorkflowValidator {
     const anyRe = /\{\{\s*([^}]+?)\s*\}\}/g;
     const okRe  = /^[a-z0-9_-]+(\.output)?$/i;
     for (const node of nodes) {
-      const strings = this._collectStrings(node.config);
+      const strings = this._collectStrings(templateScannable(node));
       for (const s of strings) {
         let m;
         while ((m = anyRe.exec(s)) !== null) {
@@ -998,6 +1216,117 @@ export class WorkflowValidator {
  * a source whose values are not declarable, you have not extended the moat — you
  * have deleted it.
  */
+/**
+ * The config a node's TEMPLATE checks may look at.
+ *
+ * A `branch`'s `on` is excluded, because it is not a template — it is a
+ * REFERENCE, with its own grammar (branch.js ON_REF), its own resolver, and its
+ * own error code (BRANCH_BAD_ON). The engine never substitutes it: doing so would
+ * replace the reference with the VALUE, which is indistinguishable from a step id
+ * (CLAUDE.md — the `"urgent"` crash).
+ *
+ * Scanning it as a template made the one shape converger-v2 §7.1 documents —
+ * `on: "{{approve_send.decision}}"`, the natural way to route on an approval —
+ * fail publish with BAD_TEMPLATE_REF ("dotted sub-fields are not supported"),
+ * which is a true sentence about templates and a false one about this key.
+ */
+function templateScannable(node) {
+  if (node?.type !== 'branch') return node?.config;
+  const { on, ...rest } = node.config ?? {};
+  return rest;
+}
+
+/**
+ * An action that CREATES something in someone else's system. The regex is the
+ * one WRITE_WITHOUT_IDEMPOTENCY has always used; it is named here so the approval
+ * rules and the idempotency rule cannot drift apart about what "a write" is.
+ */
+export function isWritingAction(action) {
+  return /(^|_)(create|append|send|post|add|insert)(_|$)/i.test(String(action ?? ''));
+}
+
+/**
+ * A node whose effect leaves this system and cannot be taken back: a connector
+ * action that creates/sends, or ANY `deliver` (a delivery is a send — that is
+ * what it is for).
+ *
+ * Deliberately WIDER than the predicate WRITE_WITHOUT_IDEMPOTENCY uses, and the
+ * difference is not an oversight. Idempotency is about writing the same record
+ * TWICE, so it only concerns systems of record. Approval strength is about
+ * whether the person who said yes can be identified at all — and an email sent
+ * to a customer on a forwarded link's say-so is exactly as unrecallable as a row
+ * in their CRM.
+ */
+export function isWriteNode(node) {
+  if (!node || typeof node !== 'object') return false;
+  if (node.type === 'deliver') return true;
+  if (node.type === 'connector-action') return isWritingAction(node.config?.action);
+  // A `foreach` is a write iff any of its per-item steps is (P12 Increment D —
+  // found by the verifier + the test-adversary, F4). This is the load-bearing
+  // case, not an edge case: a loop is N writes per fire — CLAUDE.md's own "highest
+  // -risk write shape the engine has, and the whole reason `foreach` exists" — so
+  // it is the LAST place WEAK_APPROVAL_FOR_WRITE may be blind. `descendantsOf`
+  // walks top-level edges only and never enters `config.steps`, so without this a
+  // forwardable emailed link could authorise a hundred irreversible writes while
+  // the identical single write is correctly refused.
+  if (node.type === 'foreach') {
+    return normalizeSteps(node.config?.steps).some(isWriteNode);
+  }
+  return false;
+}
+
+/** Every node reachable from `startId` by following edges forward. */
+export function descendantsOf(startId, edges = []) {
+  const next = new Map();
+  for (const e of edges) {
+    if (!e?.from || !e?.to) continue;
+    if (!next.has(e.from)) next.set(e.from, []);
+    next.get(e.from).push(e.to);
+  }
+  const seen = new Set();
+  const stack = [...(next.get(startId) ?? [])];
+  while (stack.length) {
+    const id = stack.pop();
+    if (seen.has(id)) continue;
+    seen.add(id);
+    for (const n of (next.get(id) ?? [])) stack.push(n);
+  }
+  return seen;
+}
+
+/** The step id a branch's `on` reference points at, via the SHARED grammar. */
+export function onRefId(on) {
+  const ref = String(on ?? '').trim().replace(/^\{\{\s*|\s*\}\}$/g, '').trim();
+  return ON_REF.exec(ref)?.[1] ?? null;
+}
+
+/**
+ * Would a `human` node timing out to `then` cause a real, irreversible action —
+ * a send or a write — with NOBODY having approved it? (P12 Increment D, F3.)
+ *
+ * Silence is not consent. The declared timeout answer is legitimate for saying
+ * "give up and DON'T do it" (`then: reject`), but a timeout that routes to a
+ * `deliver` or a create/send is the system approving on the person's behalf. This
+ * traces what the ENGINE would actually do — find the branch that reads this
+ * human, follow the case matching `then` (or the catch-all), and ask whether that
+ * subtree writes — so it is exact for any decision vocabulary, not a guess that
+ * "approve" is the dangerous word.
+ *
+ * Returns false when it cannot trace (no gating branch): the ungated shape is
+ * HUMAN_ANSWER_NOT_ROUTED's problem, not this one.
+ */
+export function timeoutAuthorizesWrite({ nodes = [], edges = [] }, humanId, then) {
+  const branch = nodes.find(n => n?.type === 'branch' && onRefId(n.config?.on) === humanId);
+  if (!branch) return false;
+  const cases = normalizeCases(branch.config?.cases);
+  const norm  = String(then).trim().toLowerCase();
+  const target = cases.find(c => String(c?.when).trim().toLowerCase() === norm)?.to
+              ?? cases.find(c => String(c?.when).trim() === CATCH_ALL)?.to;
+  if (!target) return false;
+  const reach = new Set([target, ...descendantsOf(target, edges)]);
+  return [...reach].some(id => isWriteNode(nodes.find(n => n?.id === id)));
+}
+
 function closedDomainOf(node) {
   if (!node || typeof node !== 'object') return null;
 

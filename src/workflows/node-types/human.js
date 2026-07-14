@@ -93,8 +93,16 @@ export const humanNodeType = {
         'it can never default to approved.',
       );
     }
-    const allowed = normalizeDecisions(cfg.decisions);
-    if (allowed.length && !allowed.includes(String(provided.decision))) {
+    // `timeout` is always an allowed answer, and it is not a person's — it is the
+    // SYSTEM's, injected by the timeout sweeper when nobody answered in time
+    // (Increment D). The validator's closedDomainOf() has always declared it as
+    // part of a human node's closed domain, so a `branch` may legitimately carry
+    // a `timeout` case; before the sweeper existed nothing could ever produce it.
+    // Leaving it out of the allow-list here would mean the engine THREW on the
+    // one answer it generates itself, and the declared timeout path — the whole
+    // reason a pause is required to have one — would be unreachable.
+    const allowed = allowedDecisions(cfg.decisions);
+    if (!allowed.includes(String(provided.decision))) {
       throw new Error(
         `human step got the answer "${provided.decision}", which is not one of ${allowed.join(', ')}.`,
       );
@@ -119,6 +127,20 @@ export function buildAsk(node, cfg) {
     assignee:  cfg.assignee ?? 'inbox',
     timeout:   cfg.timeout ?? null,
   };
+}
+
+/** The system's own answer when nobody answered. Never one a person can give. */
+export const TIMEOUT_DECISION = 'timeout';
+
+/**
+ * Every answer this node will accept: the ones a person may give, plus the one
+ * the engine injects on expiry. Kept in step with `closedDomainOf()` in
+ * workflow-validator.js — the branch allow-list and the executor MUST agree on
+ * what a human node can emit, or a branch case the validator accepts is one the
+ * engine refuses to produce.
+ */
+export function allowedDecisions(raw) {
+  return [...new Set([...normalizeDecisions(raw), TIMEOUT_DECISION])];
 }
 
 export function normalizeDecisions(raw) {

@@ -86,20 +86,58 @@ export function normalizeCases(raw) {
 }
 
 /**
- * Resolve `on` against the run context. Accepts "{{x.output}}", "x.output" or a
- * bare node id. FlowTester has already template-substituted the config, so a
- * "{{…}}" form usually arrives resolved; the node-id forms are handled here so a
- * spec can say `on: "score.output"` without braces (which is what the converger
- * emits, and what reads naturally in the table UI).
+ * The value references a branch may route on. DELIBERATELY TWO, not "any field".
+ *
+ *   <id>            the node's output
+ *   <id>.output     the same thing, said out loud
+ *   <id>.decision   a `human` node's answer — the shape converger-v2 §7.1
+ *                   documents ("{{approve_send.decision}}"), and the one anybody
+ *                   writing an approval gate reaches for first.
+ *
+ * It cannot be widened to an arbitrary field path, and that is the moat rather
+ * than fussiness: `closedDomainOf()` declares what values a node can EMIT, and
+ * every branch rule — the LLM_INPUT_NOT_ENUM allowlist, BRANCH_CASE_NOT_IN_ENUM —
+ * is a claim about THAT value. Route on `classify.confidence` instead and the
+ * declared domain describes something you are no longer looking at: the case
+ * check passes, nothing matches at run time, and the mandatory catch-all quietly
+ * swallows every run. A field whose domain nobody declared is a field a branch
+ * may not read.
+ *
+ * @see workflow-validator.js — BRANCH_BAD_ON parses the SAME shapes. They must
+ *      agree, or the validator accepts a reference the engine cannot resolve.
+ */
+export const ON_REF = /^([a-z0-9_-]+)(?:\.(output|decision))?$/i;
+
+/**
+ * Resolve `on` against the run context. FlowTester leaves `on` RAW (it is a
+ * reference, not a template — substituting it would replace it with the VALUE,
+ * which is indistinguishable from a step id), so every form arrives here intact.
  */
 function resolveOn(on, ctx) {
   if (on == null) return undefined;
   const raw = String(on).trim();
   const inner = raw.replace(/^\{\{\s*|\s*\}\}$/g, '').trim();
-  const m = /^([a-z0-9_-]+)(?:\.output)?$/i.exec(inner);
+  const m = ON_REF.exec(inner);
   if (m) {
-    const id = m[1];
-    if (ctx?.outputs?.has(id)) return ctx.outputs.get(id);
+    const id    = m[1];
+    const field = m[2]?.toLowerCase();
+    if (ctx?.outputs?.has(id)) {
+      const out = ctx.outputs.get(id);
+      if (field !== 'decision') return out;
+
+      // `.decision` on something that has no decision. The step ran and produced
+      // a value, but not the one being asked for — a `human` node's output is
+      // {decision, by, at, channel} and nothing else has a `decision` at all.
+      // Returning undefined here would fall through to the catch-all, i.e. route
+      // 100% of runs down the "not approved" path, silently, forever. Refuse.
+      if (out == null || typeof out !== 'object' || out.decision === undefined) {
+        throw new Error(
+          `branch routes on "${raw}", but step "${id}" produced no decision (its output is ${typeof out}). ` +
+          'Only a human step has a decision. Refusing to fall through to the catch-all — that would silently misroute every run.',
+        );
+      }
+      return out.decision;
+    }
 
     // The step EXISTS in the spec but produced nothing on this leg — an upstream
     // branch skipped it. That is not an error: the value genuinely isn't there,
