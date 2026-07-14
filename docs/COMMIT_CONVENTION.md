@@ -65,6 +65,15 @@ frozen canonical spec by name when relevant (see CLAUDE.md).
   Verifier check (see CLAUDE.md gating rule).
 - **`Verified-by:`** — optional. `self` or the verifying agent's name.
 
+> ⚠️ **NEVER BEGIN A BODY LINE WITH `Gate:` UNLESS YOU MEAN THE TRAILER.**
+> `.githooks/pre-push` greps for `^Gate:[[:space:]]*[^[:space:]]` — **anywhere in the
+> message, not just the last paragraph.** So a body line like
+> `Gate: past C, stops at D` (a status note, meant innocently) makes the hook treat
+> the commit as gate-closing, run the whole phase gate, and correctly **refuse the
+> push** because the phase is not closed. It looks exactly like a broken gate and it
+> is not: the hook is right and the message is wrong. This cost a P12-C session four
+> failed pushes. Write "Gate status:" or "The gate now …" instead.
+
 ## Examples
 
 Gate-closing commit:
