@@ -695,12 +695,75 @@ refactor them without an explicit decision recorded here:
     well-formed human step; it was an *unanswerable* one that nothing had yet noticed. The invariant
     the test pins — **the good shape is ACCEPTED** — is untouched and still holds.
 
-  **⚠️ OPERATIONAL HAZARD, learned the hard way: NEVER run `mutation-sweep.mjs` in the background.**
-  It **rewrites files under `src/` in place** and restores them between mutants. Run in the
-  background while you are editing, it will clobber your work — or, if it is killed mid-mutant, leave
-  a **live mutant in your source tree**. That happened here (a `if (!fetcher)` silently became
-  `if (false)`, and a `throw` became `void 0 && …`). Run it in the FOREGROUND, and if it is ever
-  interrupted, `grep -rn "if (true)\|if (false)\|void 0 && " src/` before doing anything else.
+- **The verifier FAILED increment D, and the test-adversary corroborated it — 4 blockers, all behind a
+  green suite (2026-07-13, round 2).** Same lesson as B and C, a fourth time: the headline invariant of
+  the increment (*"a `human` node alone is not a gate; the step after it does not run on reject"*) was
+  **false**, and it took an independent pair of eyes to see it. All four are now fixed and pinned by
+  `tests/approvals/gate-adversarial.test.js` (in the gate + the sweep). **Three of the four were a
+  LAUNDERING HOP one step to the left of a real check** — the exact shape CLAUDE.md names three times.
+  1. **A `human` node ALONE IS NOT A GATE.** `draft → ask → send` (no branch reading the decision)
+     validated clean, and on **reject the customer got the draft anyway**. `human` only REPORTS its
+     answer (like `branch` reports a route); nothing stopped the next step. `escalation.js` and
+     `prompts.js` both *asserted* "the validator will reject it if any is missing" — it did not. Fixed on
+     **both sides** (the doctrine `BRANCH_TARGET_EXTRA_PARENT` follows): the validator rejects it
+     (`HUMAN_ANSWER_NOT_ROUTED` — a human's successor must be a `branch` that routes on
+     `{{<id>.decision}}`), and the **engine** lights only that gating branch, so a DB spec that predates
+     the rule cannot deliver a rejected draft either (`flow-tester.js` propagate(), `isGateFor`).
+  2. **`.decision` defeated the moat.** Increment D taught `BRANCH_BAD_ON` the `.decision` reference
+     form and left **two other parsers** (`_checkDecisionInputs`, `BRANCH_CASE_NOT_IN_ENUM`) on the old
+     `/\.output?$/` regex — so on the ONE shape §7.1 documents and `escalation.js` emits
+     (`on: "{{ask.decision}}"`), the moat and the case-membership check silently `continue`d. A case
+     `"approved"` (typo of `"approve"`) published clean, matched nothing, and the mandatory catch-all
+     swallowed 100% of traffic. **All three parsers now use the shared `ON_REF`** — three parsers of one
+     reference is three chances to disagree; there is one now.
+  3. **Silence became consent.** `timeout: { then: 'approve' }` passed `HUMAN_BAD_TIMEOUT` (approve IS a
+     declared answer) and the sweeper handed the engine `approve` with `by: 'system:timeout'` — nobody
+     read the draft, the customer got it. `sweepTimeouts`'s own docblock swore *"It never resolves as
+     `approve`."* Fixed **behaviorally, not by banning the word "approve"**: `timeoutAuthorizesWrite()`
+     traces what the timeout decision would ACTUALLY do (follow the branch case to its subtree, ask if it
+     writes), so it is exact for any decision vocabulary (`ship`/`hold`, not just `approve`/`reject`).
+     The validator rejects it; the sweeper **downgrades to `timeout`** for DB specs that predate the rule.
+     **A timeout may say DON'T (`reject`) or escalate — it may never perform the action the approval
+     existed to gate.**
+  4. **`WEAK_APPROVAL_FOR_WRITE` was laundered by a `foreach`.** `isWriteNode` checked `deliver` /
+     writing `connector-action` but never looked inside `foreach.config.steps`, so an **email-only**
+     (forwardable) approval in front of a loop of `airtable_create_record` was accepted while the
+     identical single write was refused. A loop is N writes per fire — the highest-risk write shape the
+     engine has, and the one place the rule was blind. `isWriteNode` now recurses into `foreach` steps.
+  - **9 existing control-flow tests regressed on the B1 engine fix, and that was EXPECTED** (the
+    adversary flagged it before I merged): those resume/fidelity fixtures used the now-invalid ungated
+    `human → deliver` shape. **Fixtures updated to route through a branch; not one assertion touched** —
+    the checkpoint-fidelity invariant (the SENT body equals the APPROVED draft) still holds, because a
+    `branch` is a CONTROL node and does not launder `lastOutput`. A diff against `control-flow.test.js`
+    shows only fixture graphs changing, which is how a verifier confirms the assertions were preserved.
+  - **Residuals fixed in the same pass (the verifier classified them non-blocking; they were cheap and
+    R1 was genuinely broken):** **R1** — the approval Slack post read `getSlackGrant(...)?.botToken`,
+    which is **always undefined** (that function returns `{connected, scopes, account}`, no token), so a
+    tenant's approval posted into the OPERATOR's Slack; now uses `getSlackToken({...cipher})` like
+    `server.js:353`. **R2** — the raw magic-link token was written to the event-log path in plaintext,
+    undoing the store's hash-only model; the logger now redacts `/approvals/<token>`. **R3** —
+    `timeout.then: 'escalate'` routed to the catch-all but notified nobody (inert); the sweeper now
+    calls the escalation notifier, so `escalate` is meaningfully different from a silent `timeout`.
+  - **The apparatus worked.** Every one of these reached a green-suite, browser-verified state and was
+    caught only by the independent verifier + adversary running in parallel. `mutation-sweep` TARGETS
+    now covers the validator, the scheduler, and the approvals; `gate-adversarial.test.js` is in both the
+    gate and the sweep. **A green suite is evidence of nothing until a second pair of eyes has watched
+    it go red.**
+
+  **⚠️ OPERATIONAL HAZARD, learned the hard way (TWICE): mutation-testing eats uncommitted work.**
+  - `mutation-sweep.mjs` **rewrites files under `src/` in place** and restores them between mutants.
+    Run in the background while you are editing, it will clobber your work — or, if it is killed
+    mid-mutant, leave a **live mutant in your source tree** (`if (!fetcher)` → `if (false)`; a `throw`
+    → `void 0 && …`). Run it in the FOREGROUND, and if it is ever interrupted,
+    `grep -rn "if (true)\|if (false)\|void 0 && " src/` before doing anything else.
+  - **A hand-rolled mutation loop that restores with `git checkout -- <file>` reverts to HEAD, NOT to
+    your working tree.** If you have UNCOMMITTED edits in that file, `git checkout` **silently deletes
+    them** — there is no stash, no reflog, no recovery except replaying the edits. This wiped an entire
+    round of validator + engine fixes mid-session (recovered only because every edit was still in the
+    agent's context). **COMMIT before you mutation-test, or restore with a saved copy
+    (`cp f /tmp/f.bak` … `cp /tmp/f.bak f`), never `git checkout`.** The grep for mutant signatures is
+    also your tell that a restore reverted too far: run it, and run the full suite, immediately after
+    any mutation loop.
 
 ## Support tickets (in-app feedback / bug reporting) — added 2026-07-08
 
@@ -1001,6 +1064,11 @@ phase, not just this one.
   one is refused correctly ("that question has already been answered"), so it is not *wrong* — but it
   is a stale question in a channel, and the honest thing is to edit the message. Needs the
   `chat.update` ts, which `postSlack` already returns and nothing stores.
+- ~~**R1 — the approval Slack post used `getSlackGrant(...)?.botToken`** (always undefined → posted as
+  the operator), **R2 — the raw magic-link token was logged in plaintext**, and **R3 —
+  `timeout.then: 'escalate'` notified nobody.**~~ **All three CLOSED in round 2** (`getSlackToken` with
+  the cipher; the logger redacts `/approvals/<token>`; the sweeper calls the escalation notifier on a
+  `then: 'escalate'` timeout).
 - **`APPROVAL_CHANNEL_NOT_CONNECTED` cannot see the mailer from the converger's side.**
   `builder.js` computes `capabilities.approvalChannels` with `mailerConfigured()`, which is a
   *server* fact; a tenant whose deployment has no SMTP configured gets `email` correctly withheld.

@@ -313,3 +313,68 @@ test('the timeout sweeper does nothing when no pause has expired', async () => {
   assert.equal(await s.scheduler.sweepTimeouts(), 0, 'a pending approval is not an expired one');
   assert.equal(s.ws.getRun(run.id).status, 'awaiting_human', 'and it is still waiting');
 });
+
+// ── The timeout sweeper never auto-authorises an action (F3 / R3) ────────────
+
+/** draft → ask → gate(approve→send | *→dropped): the sanctioned approval shape. */
+function pausedApprovalRun(then, { deliver = null } = {}) {
+  const ws = new WorkflowStore({ dbPath: ':memory:' });
+  ws.init();
+  const sent = [];
+  const flowTester = new FlowTester({
+    nodeTypes,
+    llm: { invoke: async () => ({ content: 'DRAFT' }) },
+    channelRegistry: {
+      get: (id) => ({ id, available: true, actionOnly: false }),
+      getHandler: () => async ({ body }) => { sent.push(body); if (deliver) deliver(body); return { delivered: true, ts: '1' }; },
+    },
+  });
+  const scheduler = new WorkflowScheduler({ workflowStore: ws, sourceRegistry: null, flowTester });
+  scheduler.registerAskDeliverer(async () => {});   // deliver is a no-op; we drive the sweeper directly
+  const wf = ws.create({
+    name: 'approval', kind: 'flow', status: 'active', tenantId: 't', userId: 'u',
+    triggers: [{ type: 'schedule', config: { cron: '0 9 * * *' } }],
+    nodes: [
+      { id: 'draft', type: 'llm', config: { mode: 'freeform', prompt: 'draft' } },
+      { id: 'ask',   type: 'human', config: { prompt: 'Send?', decisions: ['approve', 'reject'], channels: [{ type: 'inbox' }], timeout: { after: '48h', then } } },
+      { id: 'gate',  type: 'branch', config: { on: 'ask.decision', cases: [{ when: 'approve', to: 'send' }, { when: '*', to: 'dropped' }] } },
+      { id: 'send',    type: 'deliver',  config: { channel: 'slack', target: '#c' } },
+      { id: 'dropped', type: 'assemble', config: { title: 'Not sent', sections: '[]' } },
+    ],
+    edges: [{ from: 'draft', to: 'ask' }, { from: 'ask', to: 'gate' }, { from: 'gate', to: 'send' }, { from: 'gate', to: 'dropped' }],
+  });
+  return { ws, scheduler, wf, sent };
+}
+
+test('a timeout that would route to a WRITE is downgraded — the sweeper never sends on silence', async () => {
+  // A spec already in the database with `then: 'approve'` (the validator now
+  // rejects it at build time, but the engine must not rely on that). The sweeper
+  // traces it: approve → the send. It must NOT perform it.
+  const h = pausedApprovalRun('approve');
+  await h.scheduler._executeFlow(h.wf, { trigger: 'scheduled' });
+  const [paused] = h.ws.listAwaitingHuman({ tenantId: 't' });
+  h.ws.db.prepare("UPDATE workflow_runs SET pause_expires_at = ?").run(new Date(Date.now() - 1000).toISOString());
+
+  await h.scheduler.sweepTimeouts();
+
+  assert.deepEqual(h.sent, [], 'NOBODY APPROVED, so nothing was sent — silence is not consent');
+  const answered = h.ws.getRun(paused.id).steps.find(s => s.type === 'human_answered');
+  assert.notEqual(answered.decision, 'approve', 'the system did not answer "approve" on the person\'s behalf');
+});
+
+test('a timeout of `then: escalate` actually TELLS A PERSON (R3)', async () => {
+  const h = pausedApprovalRun('escalate');
+  const escalations = [];
+  h.scheduler.registerEscalationNotifier(async (ctx) => { escalations.push(ctx); });
+
+  await h.scheduler._executeFlow(h.wf, { trigger: 'scheduled' });
+  const [paused] = h.ws.listAwaitingHuman({ tenantId: 't' });
+  h.ws.db.prepare("UPDATE workflow_runs SET pause_expires_at = ?").run(new Date(Date.now() - 1000).toISOString());
+
+  await h.scheduler.sweepTimeouts();
+
+  assert.equal(escalations.length, 1, '`escalate` must notify — otherwise it is just a silent `timeout`');
+  assert.equal(escalations[0].nodeId, 'ask');
+  assert.deepEqual(h.sent, [], 'and it still does not send — escalate routes to the catch-all');
+  assert.equal(h.ws.listAwaitingHuman({ tenantId: 't' }).length, 0, 'the pause is resolved, not left hanging');
+});

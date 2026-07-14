@@ -526,7 +526,14 @@ export class WorkflowValidator {
 
       if (node?.type === 'branch') {
         const onRef = String(node.config?.on ?? '').trim().replace(/^\{\{\s*|\s*\}\}$/g, '').trim();
-        const onId  = /^([a-z0-9_-]+)(?:\.output)?$/i.exec(onRef)?.[1] ?? null;
+        // ON_REF, the SHARED grammar (branch.js), not a private copy. Increment D
+        // taught BRANCH_BAD_ON the `.decision` form and left these two checks on
+        // the old `/\.output?$/` — so on `{{ask.decision}}`, the one shape §7.1
+        // documents and escalation.js emits, `onId` came back null and both the
+        // moat (LLM_INPUT_NOT_ENUM) and the case-membership check silently did not
+        // run. Three parsers of one reference is three chances to disagree; there
+        // is now one. (Found by the verifier + the test-adversary, F1.)
+        const onId  = ON_REF.exec(onRef)?.[1] ?? null;
         const src   = onId ? byId.get(onId) : null;
         if (!src) continue;   // no such step — BRANCH_BAD_ON already reports it
 
@@ -588,7 +595,7 @@ export class WorkflowValidator {
     for (const node of nodes) {
       if (node?.type !== 'branch') continue;
       const onRef = String(node.config?.on ?? '').trim().replace(/^\{\{\s*|\s*\}\}$/g, '').trim();
-      const onId  = /^([a-z0-9_-]+)(?:\.output)?$/i.exec(onRef)?.[1] ?? null;
+      const onId  = ON_REF.exec(onRef)?.[1] ?? null;   // shared grammar — see the moat block above (F1)
       const src   = onId ? byId.get(onId) : null;
       if (!src) continue;
 
@@ -916,6 +923,20 @@ export class WorkflowValidator {
           nodeId: node.id, field: 'config.timeout',
           hint: `Use one of: ${allowed.join(', ')}.`,
         });
+      } else if (then != null && then !== 'escalate' && timeoutAuthorizesWrite({ nodes, edges }, node.id, then)) {
+        // SILENCE IS NOT CONSENT (§11 / F3). `then: 'approve'` passes the check
+        // above — `approve` IS one of the node's answers — and then the sweeper
+        // hands the engine `approve` with `by: 'system:timeout'`: nobody read the
+        // draft, and the customer got it. "If nobody answers in 48h, just send it"
+        // is a sentence a user says out loud and an LLM will write. A timeout may
+        // say DON'T (`reject`) or escalate to a person; it may never perform the
+        // very action the approval existed to gate.
+        issues.push({
+          severity: 'error', code: 'HUMAN_BAD_TIMEOUT',
+          message: `"${label}" would go ahead and act if nobody answers ("${then}") — but the whole point of asking is that a real send or write waits for a person. Silence is not approval.`,
+          nodeId: node.id, field: 'config.timeout',
+          hint: 'On timeout, either stop (e.g. "then": "reject") or hand it to a person ("then": "escalate"). Don\'t let it proceed on its own.',
+        });
       }
     }
 
@@ -937,6 +958,34 @@ export class WorkflowValidator {
         nodeId: node.id, field: 'config.channels',
         hint: 'Add { "type": "slack" } or { "type": "inbox" }: both prove who clicked. Keep the email link as well if you like — the first valid answer wins.',
       });
+    }
+
+    // ── HUMAN_ANSWER_NOT_ROUTED — a human alone is NOT a gate (§7.1) ─────────
+    // A `human` node only REPORTS its decision, exactly as a `branch` only reports
+    // a route. Nothing in the engine stops the next step running whatever the
+    // answer was — so `draft → ask → send` DELIVERS A REJECTED DRAFT to the
+    // customer. It looks precisely like an approval gate and is precisely a no-op,
+    // which is worse than having none. escalation.js and prompts.js both already
+    // ASSERT this is enforced ("the validator will reject it if any is missing");
+    // this is the rule that makes that assertion true. (Found by the verifier +
+    // the test-adversary, F2.)
+    //
+    // The answer is "read" iff a `branch` routes on THIS human's decision, and the
+    // human flows into it. A terminal human (no successors) is fine — nothing runs
+    // after it, so there is nothing to gate. The engine enforces the same thing
+    // for DB specs that predate this rule (flow-tester propagate()).
+    const successors = edges.filter(e => e?.from === node.id).map(e => e.to);
+    if (successors.length) {
+      const routesOnThis = (n) => n?.type === 'branch' && onRefId(n.config?.on) === node.id;
+      const ungated = successors.filter(sid => !routesOnThis(nodes.find(n => n?.id === sid)));
+      if (ungated.length) {
+        issues.push({
+          severity: 'error', code: 'HUMAN_ANSWER_NOT_ROUTED',
+          message: `"${label}" asks a person to decide, but its answer isn't used to route anything — "${ungated[0]}" runs whether they approve or reject. An approval nothing acts on is not an approval.`,
+          nodeId: node.id, field: 'edges',
+          hint: `Send "${label}" into a branch that routes on {{${node.id}.decision}}, and put "${ungated[0]}" behind the "approve" case. Then a rejection actually stops it.`,
+        });
+      }
     }
   }
 
@@ -1190,6 +1239,17 @@ export function isWriteNode(node) {
   if (!node || typeof node !== 'object') return false;
   if (node.type === 'deliver') return true;
   if (node.type === 'connector-action') return isWritingAction(node.config?.action);
+  // A `foreach` is a write iff any of its per-item steps is (P12 Increment D —
+  // found by the verifier + the test-adversary, F4). This is the load-bearing
+  // case, not an edge case: a loop is N writes per fire — CLAUDE.md's own "highest
+  // -risk write shape the engine has, and the whole reason `foreach` exists" — so
+  // it is the LAST place WEAK_APPROVAL_FOR_WRITE may be blind. `descendantsOf`
+  // walks top-level edges only and never enters `config.steps`, so without this a
+  // forwardable emailed link could authorise a hundred irreversible writes while
+  // the identical single write is correctly refused.
+  if (node.type === 'foreach') {
+    return normalizeSteps(node.config?.steps).some(isWriteNode);
+  }
   return false;
 }
 
@@ -1210,6 +1270,39 @@ export function descendantsOf(startId, edges = []) {
     for (const n of (next.get(id) ?? [])) stack.push(n);
   }
   return seen;
+}
+
+/** The step id a branch's `on` reference points at, via the SHARED grammar. */
+export function onRefId(on) {
+  const ref = String(on ?? '').trim().replace(/^\{\{\s*|\s*\}\}$/g, '').trim();
+  return ON_REF.exec(ref)?.[1] ?? null;
+}
+
+/**
+ * Would a `human` node timing out to `then` cause a real, irreversible action —
+ * a send or a write — with NOBODY having approved it? (P12 Increment D, F3.)
+ *
+ * Silence is not consent. The declared timeout answer is legitimate for saying
+ * "give up and DON'T do it" (`then: reject`), but a timeout that routes to a
+ * `deliver` or a create/send is the system approving on the person's behalf. This
+ * traces what the ENGINE would actually do — find the branch that reads this
+ * human, follow the case matching `then` (or the catch-all), and ask whether that
+ * subtree writes — so it is exact for any decision vocabulary, not a guess that
+ * "approve" is the dangerous word.
+ *
+ * Returns false when it cannot trace (no gating branch): the ungated shape is
+ * HUMAN_ANSWER_NOT_ROUTED's problem, not this one.
+ */
+export function timeoutAuthorizesWrite({ nodes = [], edges = [] }, humanId, then) {
+  const branch = nodes.find(n => n?.type === 'branch' && onRefId(n.config?.on) === humanId);
+  if (!branch) return false;
+  const cases = normalizeCases(branch.config?.cases);
+  const norm  = String(then).trim().toLowerCase();
+  const target = cases.find(c => String(c?.when).trim().toLowerCase() === norm)?.to
+              ?? cases.find(c => String(c?.when).trim() === CATCH_ALL)?.to;
+  if (!target) return false;
+  const reach = new Set([target, ...descendantsOf(target, edges)]);
+  return [...reach].some(id => isWriteNode(nodes.find(n => n?.id === id)));
 }
 
 function closedDomainOf(node) {
