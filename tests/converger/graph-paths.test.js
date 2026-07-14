@@ -38,6 +38,8 @@ async function drive({
   bases = [{ id: 'appAAAAAAAAAAAAA1', name: 'Sales CRM' }],
   withInvoker = true,
   proposeSameEdgeForever = false,
+  searchToo = false,       // the draft also has an airtable SEARCH node (no `fields`)
+  blockingGap = false,     // the outcome promises Slack and the model never builds it
   answers = {},
   onInterrupt = () => {},
   reply = {},
@@ -59,18 +61,30 @@ async function drive({
     for (const [needle, val] of Object.entries(answers)) if (p.includes(needle)) return J(val);
 
     if (p.includes('OUTCOME CONTRACT')) return J({ candidates: [{ id: 'c1', statement: 'Leads are saved.',
-      assertions: [{ id: 'a1', kind: 'record_exists', target: 'airtable:Leads', fields: ['Name'] }] }] });
+      assertions: blockingGap
+        // The contract promises a Slack post the model never builds ⇒ a BLOCKING
+        // UNSATISFIED_ASSERTION, which routes back through `propose` and re-enters
+        // `destinations`. That is the only way to exercise the latch.
+        ? [{ id: 'a1', kind: 'record_exists', target: 'airtable:Leads', fields: ['Name'] },
+           { id: 'a2', kind: 'message_sent',  target: 'slack:#ops' }]
+        : [{ id: 'a1', kind: 'record_exists', target: 'airtable:Leads', fields: ['Name'] }] }] });
     if (p.includes('What starts this workflow'))      return J({ trigger: { type: 'email', filter: 'to:leads@acme.com' } });
     if (p.includes('CONCRETE example cases'))         return J({ examples: [] });
     if (p.includes('Analyze this automation intent')) return J({ ready: true });
     if (p.includes('Is this workflow FINISHED'))      return J({ complete: true });
-    if (p.includes('cases nobody has decided about')) return J({ suggestions: [] });
+    if (p.includes('cases nobody has decided about')) {
+      const ids = [...p.matchAll(/^ {2}- id: (\S+)$/gm)].map(m => m[1]);
+      return J({ suggestions: ids.map(id => ({ gapId: id, answer: 'send it to #ops' })) });
+    }
     if (p.includes('REAL columns are'))               return J({ map: { Name: 'Name' } });
     if (p.includes('Build the next component')) {
       const d = draftIn(p);
       const has = (id) => (d.nodes ?? []).some(n => n.id === id);
       if (!has('save')) return J({ component: 'node', spec: { id: 'save', type: 'connector-action', label: 'Save',
         config: { action: 'airtable_create_record', baseId: 'appPLACEHOLDER', tableId: 'Leads', fields: { Name: 'x' } } } });
+      // A READ capability: it has no `fields` param at all, and must not be given one.
+      if (searchToo && !has('find')) return J({ component: 'node', spec: { id: 'find', type: 'connector-action', label: 'Find',
+        config: { action: 'airtable_search_records', baseId: 'appPLACEHOLDER', tableId: 'Leads', filterByFormula: '{Status}="New"' } } });
       // A model that re-proposes an edge the draft ALREADY HAS. applyProposal dedupes,
       // so the draft comes back identical — the loop must not spin on it.
       if (proposeSameEdgeForever) return J({ component: 'edge', spec: { from: 'save', to: 'save' } });
@@ -95,7 +109,8 @@ async function drive({
     iv = await conv.resume('g1', (answer[iv.type] ?? (() => ({ type: 'accept' })))(iv));
   }
   const spec = iv?.spec ?? null;
-  return { spec, calls, seen, save: (spec?.nodes ?? []).find(n => n.id === 'save') };
+  const nodes = spec?.nodes ?? [];
+  return { spec, calls, seen, save: nodes.find(n => n.id === 'save'), search: nodes.find(n => n.id === 'find') };
 }
 
 // ── The destination resolution ──────────────────────────────────────────────
@@ -154,6 +169,41 @@ describe('a proposal that changes nothing is not a proposal', () => {
     const r = await drive();
     assert.ok(r.save, 'the node the model proposed is in the spec');
     assert.equal(r.spec.name, 'Leads', 'and so is the name it proposed afterwards');
+  });
+});
+
+describe('the destination resolution touches only what it should', () => {
+  test('a node with NO fields (a search) does not GAIN one', async () => {
+    // fillDestination writes the mapped columns into nodes that HAVE fields. A search
+    // or a delete has none — injecting `fields` into one adds a config key the
+    // capability does not declare, and the spec would then be rejected at publish for
+    // a key the builder itself put there.
+    const r = await drive({ searchToo: true });
+    assert.ok(r.search, 'precondition: the draft has an airtable SEARCH node');
+    assert.equal('fields' in r.search.config, false,
+      'a read capability must not be handed a `fields` key it never declared');
+    assert.equal(r.search.config.baseId, 'appAAAAAAAAAAAAA1', '…but it DOES get the resolved base');
+  });
+
+  test('the connector is not re-asked when the gap loop comes back round', async () => {
+    // `destinationsResolved` is a latch. Without it, a blocking gap that routes back
+    // through `propose` re-enters `destinations` and the user is asked "which base?"
+    // a second time — and a question asked twice is one people learn to click past.
+    const r = await drive({ blockingGap: true });
+    assert.equal(r.calls.filter(c => c === 'airtable_list_bases').length, 1,
+      `the base was looked up ${r.calls.filter(c => c === 'airtable_list_bases').length} times across the gap round`);
+    assert.ok(r.seen.some(iv => iv.type === 'gap_review'), 'precondition: the gap loop actually ran');
+  });
+});
+
+describe('the outcome step degrades honestly', () => {
+  test('when the model offers NO contract, the graph carries on rather than dying', async () => {
+    // An outcome the model cannot state is not a reason to crash the session — it is a
+    // reason to fall back to the ordinary propose loop and keep asking.
+    const r = await drive({ answers: { 'OUTCOME CONTRACT': { candidates: [] } } });
+    assert.ok(r.seen.length > 0, 'the session must continue and still reach the user');
+    assert.equal(r.seen.some(iv => iv.type === 'outcome_check'), false,
+      'and it must not show an outcome card with nothing on it');
   });
 });
 
