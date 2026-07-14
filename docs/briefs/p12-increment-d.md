@@ -156,17 +156,44 @@ Approvals inbox items with Approve/Reject; the Slack Block Kit message; the appr
 ## The verification apparatus you INHERIT (and must uphold)
 
 - **A green suite is evidence of nothing until you have watched it go red.** Mutation-test every
-  guard you add: re-introduce the bug, confirm a test fails, restore.
+  guard you add: re-introduce the bug, confirm a test fails, restore. **Including the guards you add
+  in the FIX** — that is where two false mutation scores came from.
 - **Never quote a mutation score in a doc.** State the rule; let the verifier re-derive the number.
   Two builders in this phase published scores an independent check falsified.
-- **Spawn the `test-adversary` after you build, BEFORE the verifier.** It may write `tests/` and
-  `scripts/checks/` and **must not touch `src/`**. On C it found **five** defects — including the
-  moat itself bypassed by one laundering hop — all behind a fully green suite.
-- **Then the fresh `verifier`.** On C it found a **user-facing dead end** (`complete` ⇒ a spec that
-  would not publish) *and* the fact that **the check written to prove that invariant was
-  structurally incapable of failing**.
 - **The survivor list from `mutation-sweep.mjs` IS the coverage report. Read it.** On C it named the
-  exact line of the blocker as a survivor and the builder read past it.
+  exact line of the eventual blocker as a survivor, and the Builder read past it.
+
+### ⚠️ The review loop CHANGED after C — read this, it is new (CLAUDE.md → "Review calibration")
+
+The operator recalibrated the increment loop on 2026-07-13 because review was costing more than it
+bought. **Three rules, and they change what you do:**
+
+1. **Run `test-adversary` and `verifier` IN PARALLEL** (one message, two `Agent` calls), *after* you
+   build. Not serially — they are both read-only w.r.t. `src/`, so they cannot race. If the adversary
+   finds a defect you then fix, send the verifier **the fix diff as a delta** (`SendMessage`) rather
+   than restarting it.
+2. **YOU run the gate — once — and record the log and the SHA it ran at.** The verifier does **not**
+   re-run it, and must not be asked to. Re-running a deterministic 20-minute check at the same SHA is
+   not a fresh signal; it is duplication (and P3 / converger-adversarial call a live model, so a
+   re-run can flake and burn a round on noise). The verifier confirms `HEAD` matches your SHA — and
+   spends its time on **targeted mutation of the guards you ADDED** and on **trying to break your
+   stated invariants**, which is where every real finding in this phase actually came from.
+3. **The verifier BLOCKS only on defects that are user-reachable AND silent (or destructive).**
+   Everything else is a **RESIDUAL**: it still gets reported, it still gets written into `CLAUDE.md`
+   with `file:line`, and it is carried into E's brief. A residual ledger is a debt ledger, not a
+   shrug. **You may not talk the verifier out of a blocker, and it may not omit a finding to speed
+   your merge.**
+
+**What did not change:** the verifier is fresh, independent, did not write the code, and **may still
+fail you.** On C it did — and it was right. It found a spec that scored `complete` and then refused
+to publish (a dead end the user cannot escape), *and* the fact that the check written to prove that
+invariant **was structurally incapable of failing**. The test-adversary, separately, found **five**
+defects — including **the moat itself bypassed by one laundering hop** — every one behind a fully
+green suite.
+
+Velocity was bought by deleting **duplication**, never by deleting **the second pair of eyes**. If
+you find yourself wanting to skip the adversary or the verifier because you are confident: that is
+precisely the state every previous Builder in this phase was in, and each of them was wrong.
 
 ### The lesson C paid for twice — do not pay for it a third time
 
@@ -199,12 +226,40 @@ tenant's run. **Write the adversarial check against the wiring `server.js` actua
 - **Do not deploy.** Do not start E (`decision` node / DMN table UI). Do not touch billing, Stripe,
   tenancy, or the connectors beyond what D needs.
 
+## Residuals you inherit from C (recorded, not forgotten)
+
+Carry these forward; close them if D touches the surface, otherwise re-record them for E.
+
+- **`decision-analysis.js` is unreachable from any publishable spec.** `gap-scorer.js` gates the
+  entire DMN engine on `node.type === 'decision'`, and that node type does not exist until E. The
+  hyper-rectangle machinery is built, tested, and dormant. *(Not a bug — a sequencing fact. E turns
+  it on.)*
+- **`assertion.when` is carried but NOT proven** (converger-v2 §2.2). A conditional assertion raises a
+  non-blocking `CONDITIONAL_UNPROVEN` gap. Proving it needs `decision` (E) + the examples as a test
+  suite (G).
+- **The `connector-action` config hole.** It is still the only node type with `configPolicy: 'open'`
+  — its params are unchecked. Increment F closes it by validating against each capability's own
+  schema.
+- **`mutation-sweep` TARGETS still excludes `workflow-store.js` and `workflow-scheduler.js`.** If D
+  touches either (it touches the scheduler — the timeout sweeper), **widen TARGETS** and watch the
+  floor (0.78, a ratchet).
+- **The UI was never rendered in a browser during C.** The scripts parse and the server boots, but no
+  agent has *seen* the outcome cards or the gap list draw. If you touch `public/index.html`, render it.
+
 ## Process
 
 1. `git checkout main && git pull` → `git checkout -b feat/p12-increment-d`.
 2. Build. Run `bash scripts/gate.sh 12` as you go.
 3. Commit per `docs/COMMIT_CONVENTION.md` (`Phase: 12`, header ≤72 chars, no `Gate:` trailer).
-4. **`test-adversary` → then `verifier`.** Merge only on an independent PASS.
+   **Do not begin any body line with `Gate:`** — `.githooks/pre-push` greps `^Gate:` anywhere in the
+   message and will treat the commit as gate-closing, run the whole phase gate, and correctly refuse
+   the push because the phase is not closed. It looks like a broken gate and is not. This cost the
+   C session four failed pushes. Write "Gate status:" instead.
+4. **Run the gate ONCE. Record the log and the SHA.**
+5. **Spawn `test-adversary` and `verifier` IN PARALLEL** (one message, two `Agent` calls). Tell the
+   verifier the SHA the gate log was produced at, and tell it **not** to re-run the gate.
+6. Fix what they find. Send the verifier the fix diff as a **delta** — do not restart it.
+7. Merge only on an independent PASS (blockers closed; residuals recorded in `CLAUDE.md`).
 
 ## If the brief's premise doesn't match the code
 
