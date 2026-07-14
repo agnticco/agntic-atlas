@@ -677,3 +677,28 @@ describe('DUPLICATE_ASSERTION_ID', () => {
     assert.ok(apprCodes(spec).includes('DUPLICATE_ASSERTION_ID'), 'a colliding id silently drops an assertion — reject it');
   });
 });
+
+// P12 — foreach validate() branches (mutation-sweep survivors)
+describe('foreach validate', () => {
+  const foreachSpec = (steps) => ({
+    name: 'x', kind: 'flow',
+    triggers: [{ type: 'schedule', config: { cron: '0 9 * * *' } }],
+    nodes: [
+      { id: 'rows', type: 'connector-action', config: { action: 'airtable_search_records', baseId: 'b', tableId: 't' } },
+      { id: 'loop', type: 'foreach', config: { over: 'rows.output', steps } },
+      { id: 'out',  type: 'deliver', config: { channel: 'in_app' } },
+    ],
+    edges: [{ from: 'rows', to: 'loop' }, { from: 'loop', to: 'out' }],
+  });
+  test('a foreach with NO steps is rejected (MISSING_CONFIG)', () => {
+    assert.ok(codes(foreachSpec([])).includes('MISSING_CONFIG'), 'a loop with nothing to do per item is a mistake');
+  });
+  test('a write inside a foreach with no idempotency warns (WRITE_WITHOUT_IDEMPOTENCY)', () => {
+    const spec = foreachSpec([{ id: 'mk', type: 'connector-action', config: { action: 'airtable_create_record', baseId: 'b', tableId: 't', fields: '{}' } }]);
+    assert.ok(codes(spec).includes('WRITE_WITHOUT_IDEMPOTENCY'), 'N writes per fire with no key is the highest-risk write shape');
+  });
+  test('a write inside a foreach WITH an idempotency key does not warn (positive)', () => {
+    const spec = foreachSpec([{ id: 'mk', type: 'connector-action', idempotency: { key: '{{item}}' }, config: { action: 'airtable_create_record', baseId: 'b', tableId: 't', fields: '{}' } }]);
+    assert.ok(!codes(spec).includes('WRITE_WITHOUT_IDEMPOTENCY'), 'a keyed write in a loop is fine');
+  });
+});
