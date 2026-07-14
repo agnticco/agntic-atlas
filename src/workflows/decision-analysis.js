@@ -232,7 +232,25 @@ function coveredAtoms(cond, input, atoms) {
     return { atoms: new Set(atoms.filter(a => !inner.atoms.has(a))), ok: true };
   }
   const wanted = raw.split(',').map(s => s.trim()).filter(Boolean);
-  const set = new Set(atoms.filter(a => wanted.some(w => String(w) === String(a))));
+
+  // CASE-INSENSITIVELY, because that is how the ENGINE matches it
+  // (matchesCondition, below — and branch.js's `matches` before it). Compared
+  // case-sensitively here, `when: {tone: "URGENT"}` over values ["urgent",…] was a
+  // condition the engine evaluates happily and the analyser called UNREADABLE —
+  // a hard publish error (DECISION_BAD_CONDITION) whose message ("isn't a
+  // condition this system can check") was simply untrue. The two halves of one
+  // grammar MUST agree; this file's own header says the day they disagree is the
+  // day the proof describes a program nobody is running. (Found by the
+  // test-adversary.)
+  const declared = (w) => atoms.find(a => String(a).toLowerCase() === String(w).toLowerCase());
+
+  // EVERY member of a comma list must be a declared value. Reporting `ok` when
+  // only SOME are is a silent drop: `"urgent, bogus"` quietly covered just the
+  // `urgent` atom while the author believed the rule covered both — and the same
+  // typo, alone, is correctly an error. A rule is unreadable if ANY part of it is.
+  if (wanted.some(w => !declared(w))) return { atoms: new Set(), ok: false };
+
+  const set = new Set(wanted.map(declared));
   // A literal naming a value the enum never declared covers nothing, and that is
   // a defect in the rule, not a gap in the table. Report it as unparseable so it
   // surfaces rather than quietly shrinking the covered region.

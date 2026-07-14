@@ -833,9 +833,71 @@ refactor them without an explicit decision recorded here:
     the multiple-choice UI is what makes the proof affordable to the user. Same asset (§13). The
     `decisions` graph node runs **before** `gaps`, so the gap list is about the table **as corrected**.
   - `mutation-sweep.mjs` — TARGETS **widened** to `node-types/decision.js` (the EXECUTOR that must
-    agree with `decision-analysis.js`, which has been swept since C), SUITES gains
-    `tests/workflows/decision-node.test.js`. **Floor held at 0.78 — a ratchet, never lowered.**
-    `scripts/gates/p12.sh` **not modified**: E's block was written in advance and is the checklist.
+    agree with `decision-analysis.js`, which has been swept since C), SUITES gains the three decision
+    suites. **Floor held at 0.78 — a ratchet, never lowered.** `scripts/gates/p12.sh` — E's block
+    gained the three suites: the three checks it shipped with are a `grep` and an `ls`, which prove
+    the SYMBOLS exist and not that anything enforces them (architectural flaw #1, verbatim).
+    **Checks ADDED, never weakened.**
+
+  **The verifier and the test-adversary found SIX live defects in E, three of them SILENT — and every
+  one was behind a green suite (2026-07-14, round 2).** Fifth increment running. Pinned by
+  `tests/workflows/decision-adversarial.test.js` (the six) and `decision-pinning.test.js` (the sweep's
+  behavioural survivors); both are in the gate and the sweep.
+  1. **A `decision` INSIDE A `foreach` DELIVERED THE DECIDED VALUE TO THE CUSTOMER, once per row.**
+     `foreach.js`'s `CONTROL_SUBSTEP_TYPES` is a **second executor**, and `decision` was added to
+     `flow-tester.js`'s `CONTROL_TYPES` and `_node-input.js`'s `NON_CONTENT_TYPES` and **not to it** —
+     so the decision's `{value,text,rule}` became the iteration's `last` and `stringifyOutput` picked
+     its `.text`: the channel received a plausible-looking `"P1"` instead of the lead, with
+     `run_completed` and no error. **This is the THIRD time this exact line has been the defect** —
+     CLAUDE.md's own increment-B block says "the sub-loop was missed at first" about `branch`, and it
+     was missed again. **A new control type is not done until it is in BOTH sets.** Fixed on both
+     sides (`CONTROL_SUBSTEP_TYPES` + a new `DECISION_IN_FOREACH`, mirroring `BRANCH_IN_FOREACH` — a
+     decision in a loop is a structural no-op there anyway, because nothing inside a loop can route on
+     its answer).
+  2. **THE MOAT HAD A SECOND DOOR, and it was the one the deciding happens through.**
+     `LLM_INPUT_NOT_ENUM` fires only on `evaluator:'llm'`. Declare an input `type:'enum'` with **no
+     evaluator** and point its `from` at a *freeform* `llm`, and prose walked straight into the table:
+     `coerce()` `String()`d it and handed it over, where it matched no rule but the catch-all. The
+     workflow decided `P3` on an input reading *"This is EXTREMELY urgent — the server is on fire"*,
+     and `analyzeTable` certified `decidable: true, uncovered: []` over it. **A false proof, with a
+     receipt in the audit trail.** §11.7's property is *"the value being decided on has a CLOSED,
+     DECLARED domain"* — **not "an LLM didn't type it"**. A value's domain is not bounded by who
+     produced it, so the check belongs where the value **enters the table**, on every path in.
+     `coerce()` now rejects an off-enum value (it throws → escalates → reaches a person, which is
+     exactly what an unanticipated case must do). Same class as C's laundering hop: **a check scoped to
+     the PRODUCER instead of the VALUE is wrong by construction.**
+  3. **THE CLASSIFIER RETURNED THE VALUE THE MODEL NEGATED.** The off-enum fallback was *"the first
+     declared value appearing ANYWHERE in the answer"* — so with `['approve','reject']`, the answer
+     *"I would reject this — do not approve"* classified as **`approve`**, and the table decided on it
+     with full confidence. It never returned free text; it returned **the wrong member of the set**,
+     which is worse, because every downstream check passes. It also made any value that is a PREFIX of
+     another (`ship` vs `ship_hold`) unreachable the moment the model added a preamble. Now: exact
+     answer wins, else the answer must contain **exactly one** declared value on **word boundaries**;
+     an ambiguous answer to a closed question is not an answer, so it throws. **The identical fallback
+     was in `llm.js` mode `classify`** — the *other* sanctioned way an LLM feeds a decision (§11.7) —
+     and is fixed with the same shared `pickCategory()`.
+  4. **A `null` extracted field decided via the catch-all.** `llm` mode `extract` states in its own
+     system prompt that *"if a field cannot be found, its value is null"* — so **the one producer the
+     converger is taught to put in front of a table** emits precisely the value `readInput` did not
+     catch (it checked `undefined` only), and a `null` matches only `-`. The table decided on a value
+     nobody supplied — which `readInput`'s own docblock already forbade in those words.
+  5. **A `from` the validator ACCEPTS must be one the engine can RESOLVE.** `from` is a REFERENCE, not
+     a template, and `_runNode` was substituting it — so `from: "{{think.output}}"` arrived as the
+     prose itself and the engine went hunting for a step named after it. **Verbatim the `branch.on`
+     crash** (increment B), one increment later, in the one other place a reference lives. `inputs`
+     now stay RAW, like `foreach.steps` and `branch.on`. (`<id>.output` also now means the step's
+     output, the spelling every other reference in the system uses, instead of a field named "output".)
+  6. **The engine and the analyser read one condition two ways.** `coveredAtoms` compared an enum
+     literal **case-sensitively**; `matchesCondition` compares it **case-insensitively**. So
+     `when: {tone: "URGENT"}` was a condition the engine evaluates happily and the analyser called
+     *unreadable* — a hard publish error whose message ("isn't a condition this system can check") was
+     simply untrue. This file's own header says the day the two halves disagree is the day the proof
+     describes a program nobody is running. (Also: a comma list silently dropped its undeclared
+     members, so `"urgent, bogus"` covered half of what its author wrote while the same typo *alone*
+     was correctly an error. A rule is unreadable if ANY part of it is.)
+  - **Two of the guards written in the FIX then SURVIVED the curated mutation-guard** — deletable with
+    the whole suite still green. **Mutation-test the guards you add in the fix, not just the ones you
+    started with.** Fifth occurrence of that exact lesson; it is now 35 curated mutations, all killed.
 
 ## Support tickets (in-app feedback / bug reporting) — added 2026-07-08
 
@@ -1129,6 +1191,24 @@ phase, not just this one.
 - **The `decision_review` UI edits cells, `then`s and the hit policy — it cannot ADD or DELETE a rule.**
   Deliberate for E (the table is *reviewed*, not *authored* — §6.2.5, and the gap review is where a
   missing case gets answered), but a user who spots a rule that should not exist has to say so in chat.
+- **No `DECISION_ANSWER_NOT_ROUTED`.** A `decision` nothing routes on is inert — the run completes, the
+  draft is delivered, and the decision is simply ignored. Judged NOT a defect (unlike a `human`, a
+  decision does not *claim* to gate, and its value is legitimately usable in a template), but recorded
+  because `prompts.js` teaches decision→branch and the silent-no-op class is exactly what this phase
+  exists to kill. Revisit if a real workflow ever ships one.
+- **`decision-analysis.js` and `workflow-validator.js` share a FEEL-A grammar in two functions**
+  (`coveredAtoms` for the proof, `matchesCondition` for the engine). Defect #6 above was them
+  disagreeing. They now agree, and both are swept — but they are still two functions, and the honest
+  fix is one. Collapse them when F touches the analyser.
+
+**⚠️ PROCESS HAZARD, found by the verifier (2026-07-14): do NOT run the test-adversary and the verifier
+in parallel if BOTH are told to run `mutation-sweep`.** The sweep rewrites `src/` in place, so one
+agent's sweep corrupts the other's results **in both directions** — the verifier caught a live mutant
+(`const cfg = node.config};`) in its working tree mid-run and had to discard and re-derive every
+finding on a clean tree. CLAUDE.md already says "run it in the FOREGROUND"; that is necessary and not
+sufficient. **Exactly ONE agent may run the sweep per round** (give it to the adversary, whose job is
+the survivor list), and the other must be told explicitly not to. Parallelism is still right — they are
+read-only w.r.t. `src/` in every other respect — but the sweep is a WRITE.
 
 *New, from D:*
 - **`workflow-store.js` is still not in `mutation-sweep` TARGETS.** D touched it (the pause deadline

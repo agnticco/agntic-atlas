@@ -654,6 +654,17 @@ export class FlowTester {
     } else if (type === 'branch') {
       const { on, ...rest } = rawCfg;
       cfg = { ...this._substitute(rest, ctx), on };      // `on` stays RAW
+    } else if (type === 'decision') {
+      // …and a `decision`'s `inputs`, for the SAME reason: each input's `from` is
+      // a REFERENCE ("extract.budget"), not a template. Substituting it replaced
+      // the reference with the VALUE before run() ever saw it, so
+      // `from: "{{think.output}}"` arrived as the prose itself and the engine went
+      // looking for a step called "This is EXTREMELY urgent…". Verbatim the
+      // branch-`on` crash (CLAUDE.md, Increment B), one increment later, in the
+      // one other place a reference lives. A reference names a step; a template
+      // names a value. readInput() dereferences `from` against ctx.outputs itself.
+      const { inputs, ...rest } = rawCfg;
+      cfg = { ...this._substitute(rest, ctx), inputs };  // `inputs` stay RAW
     } else {
       cfg = this._substitute(rawCfg, ctx);
     }

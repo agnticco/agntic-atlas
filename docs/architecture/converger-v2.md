@@ -537,6 +537,24 @@ where "just talk to it" dies.
 | `DECISION_UNKNOWN_INPUT` | a `when` key must be a declared input — an unknown one is **ignored** by the analysis, so the rule covers boxes its author excluded | a proof about a different table | **DONE (E)** |
 | `DECISION_TOO_WIDE` | **warning** at >4 inputs — decompose (§12) | an unreviewable, unauditable table | **DONE (E)** |
 | `DECISION_BAD_HIT_POLICY` · `DUPLICATE_DECISION_INPUT` · `DECISION_BAD_INPUT_REF` | structural | — | **DONE (E)** |
+| `DECISION_IN_FOREACH` | a `decision` inside a loop — nothing in a loop can ROUTE on its answer (routing needs edges; a loop has none), so it is a structural no-op **and** its output would become the iteration's work product | the decided value delivered to the customer, once per row | **DONE (E)** |
+
+#### The moat has TWO doors, and the second is where the deciding happens (Increment E)
+
+`LLM_INPUT_NOT_ENUM` is a **build-time** check on `evaluator: 'llm'`. It is necessary and it is not
+sufficient. An input declared `type: 'enum'` with **no evaluator**, whose `from` points at a freeform
+`llm`, carries prose into the table — where it matches no rule but the catch-all, and the workflow
+decides confidently on a case nobody anticipated, with `analyzeTable` certifying `uncovered: []` over
+it. A false proof, with a receipt in the audit trail.
+
+> **§11.7's property is "the value being decided on has a CLOSED, DECLARED domain" — not "an LLM did
+> not type it". A value's domain is not bounded by who produced it.**
+
+So the rule is enforced where the value **enters the table**, on every path in: `coerce()` rejects an
+off-enum value at run time, exactly as `classifyInput()` always has for the LLM path. An off-enum value
+is the one case that MUST reach a person — it is precisely the case the table's author never
+anticipated — so it throws, and the throw escalates (`escalation.js`). This is the same lesson as C's
+laundering hop: **a check scoped to the PRODUCER rather than to the VALUE is wrong by construction.**
 
 #### Why `DECISION_TABLE_GAP` is a WARNING (Increment E)
 
