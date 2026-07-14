@@ -1410,6 +1410,7 @@ export class WorkflowValidator {
    * incoming edge. Static template vars (date, time, etc.) always pass.
    */
   _checkTemplateRefs(nodes, seenIds, issues) {
+    const byId = new Map(nodes.filter(n => n?.id).map(n => [n.id, n]));
     const STATIC_VARS = new Set(['prev', 'date', 'time', 'datetime', 'year', 'month', 'day']);
     // {{item}} / {{index}} are bound ONLY inside a `foreach`'s per-item steps.
     // Outside a loop they resolve to nothing, so allowing them everywhere would
@@ -1428,7 +1429,7 @@ export class WorkflowValidator {
     // Without a sub-field form, an Airtable record (a MAP of column → value, each
     // value from a different part of the upstream extract) has NO correct spelling:
     // the only expressible spec puts the whole JSON blob into every column.
-    const refRe = /\{\{\s*([a-z0-9_-]+)(?:\.[a-z0-9_-]+)?\s*\}\}/gi;
+    const refRe = /\{\{\s*([a-z0-9_-]+)(?:\.([a-z0-9_-]+))?\s*\}\}/gi;
 
     // A foreach's per-item steps may reference each other by id. Those ids are
     // nested inside config, so they never reach the top-level `seenIds`.
@@ -1445,8 +1446,35 @@ export class WorkflowValidator {
       for (const s of strings) {
         let m;
         while ((m = refRe.exec(s)) !== null) {
-          const ref = m[1];
+          const ref   = m[1];
+          const field = m[2] ?? null;
           if (vars.has(ref.toLowerCase())) continue;
+
+          // ── BAD_TEMPLATE_FIELD (P12 Increment F) ─────────────────────────
+          //
+          // The sub-field grammar F added ({{extract.budget}}) is what makes a
+          // correct Airtable record expressible at all — and it WIDENED the silent
+          // -failure surface it was meant to close: a typo'd `{{extract.budgett}}`
+          // resolves to an EMPTY STRING at run time, so the column is written blank,
+          // the run reports success, and nobody is told. That is precisely the defect
+          // this increment exists to kill, re-created by its own fix.
+          //
+          // An `llm` in `extract` mode DECLARES its field names (`config.fields`), so
+          // the typo is knowable at build time. Where the source declares nothing (a
+          // connector read, a freeform llm), its output shape is genuinely unknown and
+          // NO claim is made — an unknowable field name is not a wrong one.
+          const src = field && field.toLowerCase() !== 'output' ? byId.get(ref) : null;
+          const declared = declaredFieldsOf(src);
+          if (declared && !declared.some(f => f.toLowerCase() === field.toLowerCase())) {
+            issues.push({
+              severity: 'error', code: 'BAD_TEMPLATE_FIELD',
+              message: `"${node.label || node.id}" reads {{${ref}.${field}}}, but "${src.label || src.id}" doesn't produce a "${field}" — it would come out blank, and nothing would say so.`,
+              nodeId: node.id, field: null,
+              hint: `"${src.label || src.id}" produces: ${declared.join(', ')}.`,
+            });
+            continue;
+          }
+
           if (!ids.has(ref)) {
             issues.push({
               severity: 'error', code: 'BAD_TEMPLATE_REF',
@@ -1479,7 +1507,7 @@ export class WorkflowValidator {
           if (okRe.test(inner)) continue; // {{id}} / {{id.output}} — validated above
           issues.push({
             severity: 'error', code: 'BAD_TEMPLATE_REF',
-            message: `"${node.label || node.id}" uses an unsupported reference {{${inner}}}. The engine only resolves {{prev}} and {{<stepId>.output}} — field paths, array indexing (e.g. [*], [0]) and dotted sub-fields are not supported and break at runtime.`,
+            message: `"${node.label || node.id}" uses an unsupported reference {{${inner}}}. The engine resolves {{prev}}, {{<stepId>.output}} and ONE named field ({{<stepId>.<field>}}) — deeper paths and array indexing (e.g. [*], [0], a.b.c) are not supported and break at runtime.`,
             nodeId: node.id, field: null,
             hint: `Pass the previous step's full output ({{prev}} or {{<stepId>.output}}) to the next step instead of extracting a sub-field.`,
           });
@@ -1606,6 +1634,23 @@ export function descendantsOf(startId, edges = []) {
     for (const n of (next.get(id) ?? [])) stack.push(n);
   }
   return seen;
+}
+
+/**
+ * The field names a step DECLARES it will produce, or `null` if it declares none.
+ *
+ * Only `llm` mode `extract` declares them today (`config.fields`, one "name: what it
+ * means" per line). Everything else — a connector read, a freeform llm — has an output
+ * shape nobody wrote down, so no claim can be made about a field of it, and none is.
+ */
+function declaredFieldsOf(node) {
+  if (node?.type !== 'llm' || String(node.config?.mode ?? '') !== 'extract') return null;
+  const raw = node.config?.fields;
+  const list = Array.isArray(raw)
+    ? raw.map(f => (typeof f === 'string' ? f : f?.name ?? f?.key))
+    : String(raw ?? '').split(/\n|,/).map(l => l.split(':')[0]);
+  const names = list.map(x => String(x ?? '').trim()).filter(Boolean);
+  return names.length ? names : null;
 }
 
 /** The step id a branch's `on` reference points at, via the SHARED grammar. */
