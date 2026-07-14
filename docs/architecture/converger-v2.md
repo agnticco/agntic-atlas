@@ -211,6 +211,18 @@ Two consequences worth stating loudly:
 undecidable — see `bpmn-dmn-foundations.md` §3.3 and §6. **The validator enforces this
 (`LLM_INPUT_NOT_ENUM`).**
 
+> **`assertion.when` is CARRIED but NOT PROVEN (Increment C).** The `"when": "priority = 'P1'"` in
+> `a2` above is a **run-time condition**. The outcome oracle proves a node exists that *can* produce
+> the effect; it does **not** prove the node runs on exactly the inputs the condition names — that
+> needs the `decision` shape (E) and the worked examples as a test suite (G).
+>
+> Treating a conditional assertion as *satisfied* by an ungated node would be a **false proof**: the
+> workflow would pass its own contract while pinging `#sales-urgent` for **every** lead, not just the
+> big ones. So C says exactly that, out loud: a conditional assertion raises a non-blocking
+> `CONDITIONAL_UNPROVEN` coverage gap — *"the outcome says this happens only when X, but nothing
+> checks that yet, so it would happen on every run."* **Never imply a completeness proof you cannot
+> make**; a claim nobody checked is worse than one nobody made, because the user stops looking.
+
 ### 2.3 Node library — re-cut, not ballooned
 
 | | Today | v2 |
@@ -256,7 +268,7 @@ gap_review      — "3 cases you haven't told me about" [Answer | Escalate (defa
 
 ## 3. DELTA: `src/converger/`
 
-### `gap-scorer.js` → **rewrite** (this is the heart)
+### `gap-scorer.js` → **rewrite** (this is the heart) — ✅ **DONE (Increment C)**
 
 ```js
 // BEFORE
@@ -266,13 +278,80 @@ scoreGap(draft) → { needsTrigger, needsProcessing, needsDelivery, needsEdges, 
 scoreGap(spec, { capabilities }) → {
   gaps: [ {
     id, class: 'outcome'|'coverage'|'contract',
-    nodeId, message,
-    resolution: 'unanswered' | 'answered' | 'escalated',   // default → 'escalated'
-    decidable: boolean          // false when the domain is infinite (say so in the UI)
+    nodeId, code, severity, message, hint,
+    resolution: 'unanswered' | 'answered' | 'escalated',
+    decidable: boolean,         // false when the domain is infinite (say so in the UI)
+    blocking:  boolean          // this gap makes the spec fail validation
   } ],
-  complete: boolean             // every gap answered OR explicitly escalated
+  complete: boolean             // no gap is left 'unanswered'
 }
 ```
+
+> ⚠️ **CORRECTED (Increment C).** This section used to say `resolution` defaults to **`'escalated'`**,
+> full stop. **That is not merely wrong, it is unimplementable**: if every gap defaults to escalated
+> then `complete` is unconditionally TRUE, so an **empty draft scores complete** and the converger
+> ratifies a workflow with no steps in it. A default that makes a check vacuous is not a safety net;
+> it is the bug. (Same class as the `?? 'unscoped'` tenant fallback that leaked across tenants in
+> Increment B.)
+>
+> The rule that actually holds:
+>
+> - A gap defaults to **`'escalated'`** — nobody answered it, so a human deals with it. This is what
+>   makes *"Accept all defaults"* honest rather than a way to hide unknowns.
+> - **A BLOCKING gap — one that makes the spec fail validation — always defaults to `'unanswered'`.**
+>   It *cannot* be escalated, because escalation promises a person will handle the case **at run
+>   time**, and a spec that cannot publish never has a run time. Calling that "escalated" would be a
+>   lie told in the language of safety.
+>
+> Which buys the property the whole loop rests on:
+>
+> > **`complete ⇒ publishable`.**
+>
+> Without it the converger can declare a workflow finished that `POST /api/builder/workflows` then
+> rejects — a dead end the user cannot argue their way out of: the builder says done, the save button
+> says no.
+
+> ⚠️ **AND IT ONLY HOLDS IF THE SCORER FAILS CLOSED.** This section used to claim the property held
+> "by construction". It did not, and the independent verifier produced the counter-example.
+>
+> `scoreGap` judges a spec with the validator — but the validator's channel checks
+> (`UNKNOWN_CHANNEL`, `CHANNEL_UNAVAILABLE`) sit behind `if (channelId && this.channelRegistry)`, so
+> **with no channel catalog they silently do not run**, while publish — which always has a registry
+> (`server.js:542`) — still enforces them. A `deliver` to a hallucinated `channel: 'discord'`
+> therefore scored **complete**, and then failed to publish.
+>
+> It disabled itself exactly when it mattered most: `builder.js` builds the catalog *after* three
+> network-bound connector lookups inside a *"non-fatal"* catch, so an expired refresh token dropped
+> it — and in that same state the model has no catalog in its prompt either, making it **most** likely
+> to invent a channel id.
+>
+> **A check that silently degrades is not a safety net; it is the bug** (CLAUDE.md — the
+> `?? 'unscoped'` tenant fallback). So the scorer now **refuses to certify** when it cannot see the
+> catalog (`CHANNELS_UNVERIFIED`, blocking), and `builder.js` guarantees one.
+> **Refusing to certify is always available. Certifying without checking is not.**
+>
+> And the check built to *prove* this property — `converger-adversarial.mjs` check 6 — was
+> **structurally incapable of failing**: it scored with no capabilities and validated with no
+> registry, so both sides were equally blind and the divergence was invisible *by construction*.
+> That is CLAUDE.md architectural flaw #2 verbatim — *a check that exercises a configuration
+> production never uses cannot see the bug production has*. It now validates the way production
+> validates.
+
+**The contract and outcome gaps ARE the validator's issues**, classified — `gap-scorer.js` does not
+re-implement them. That is deliberate: a converger holding its own private opinion of "complete"
+drifts from the publish gate, and the day it drifts is the day it ratifies an unpublishable spec.
+One oracle, consulted by both, cannot drift. What the gap scorer adds on top is the DMN coverage
+analysis (`decision-analysis.js`), which the validator does not do until Increment E.
+
+**The outcome contract is a FLOOR, not a ceiling.** It guarantees nothing the user asked for was
+silently **dropped** — that is what kills defect #1. It cannot guarantee every transformation they
+asked for is **present**, because *"a summary of the email"* and *"the email"* arrive at Slack as the
+same assertion (`message_sent → slack:#logistics`), and no machine-checkable assertion distinguishes
+them. So once the gap floor is met, the INTENT still gets the last word: `analyze` asks the model
+once whether the draft is finished, and it must **name a concrete missing component** to continue
+(`buildSufficiencyPrompt`, bounded). Note the difference from v1's checklist, which *demanded* a
+processing node and so invented one for workflows that genuinely had none (defect #4) — here
+"finished" is the default answer, and a 2-node workflow ratifies untouched.
 
 Three gap classes:
 1. **outcome** — an `assertion` with no node that satisfies it. *(kills defect #1)*
@@ -287,16 +366,38 @@ enumerable input domains; a rule is a box; report uncovered regions. **Only deci
 enums / bounded ints / booleans** — mark everything else `decidable: false` and require a
 catch-all instead. **Do not imply a proof we cannot make.**
 
-### `elicitation-graph.js` → new nodes
+### `elicitation-graph.js` → new nodes — ✅ **DONE (Increment C)**
 ```
-outcome   (new, interactive)   → loops until every assertion is machine-checkable
-examples  (new, interactive)   → asks for 3 concrete cases; induces rules from them
-decisions (new, mostly LLM)    → builds tables from examples; runs gap analysis; asks hit policy
-process   (new, non-interactive) → backward-chains the graph from assertions
-gaps      (new, interactive)   → presents the gap list; default resolution = escalate
-ratify    (existing)           → confirm; emit spec v2
+outcome   (new, interactive)     → 2-3 candidate contracts; the first is pre-selected
+examples  (new, interactive)     → proposes concrete cases; keeping them is the default, skip is one click
+process   (new, non-interactive) → backward-chains the graph from the assertions. No LLM call.
+analyze   (existing)             → now gap-driven by the new oracle, not the old 5-item checklist
+clarify   (existing)             → unchanged
+propose   (existing)             → now told the validator's own message AND hint for each gap
+gaps      (new, interactive)     → presents the gap list; default resolution = escalate
+ratify    (existing)             → confirm; emit spec v2
 ```
-Keep `analyze`/`clarify`/`propose` for the v1 path until increment C is green (see §9).
+Routing: `outcome → examples → process → (analyze ⇄ clarify|propose) → gaps → ratify`.
+`analyze`/`clarify`/`propose` are v1's loop, kept intact. Two loop BOUNDS were added
+(`proposeRounds`, `gapRounds`): a gap the model cannot close would otherwise spin to the recursion
+limit and die with a stack trace instead of asking the user a question.
+
+> **There is no `decisions` graph node, and there must not be one yet.** This section originally
+> listed one that "builds tables from examples". It cannot: **the `decision` node type does not
+> exist until Increment E**, so a `decisions` node could only emit a spec the engine cannot run —
+> the same trap as surfacing `human` before Increment D builds the surface that asks it. In the
+> runnable vocabulary a decision today is **`llm` + `mode: 'classify'` feeding a `branch`**, and
+> that is what the converger proposes when the intent needs a judgement (`buildDecisionPrompt`
+> exists and teaches exactly that shape). `LLM_INPUT_NOT_ENUM` is what forces `classify` rather
+> than free prose. E replaces this with the real table.
+
+**`process` is deterministic and it is load-bearing.** For each assertion whose satisfying node is
+unambiguous (`nodeForAssertion` — "post to #logistics" has exactly one shape), it builds the node
+directly: no LLM round-trip, and — the real point — **the delivery node is derived FROM the
+assertion, so it cannot target a different channel than the one the user just confirmed.** The
+contract and the spec agree by construction rather than by the model's good behaviour. Where the
+shape is *not* derivable (an Airtable write needs a base and a table — Increment F reads those from
+the connector), nothing is invented: the assertion stays an open gap and `propose` fills it.
 
 ### `spec-assembler.js`
 - `applyProposal` — add cases for the new components (§2.4).
@@ -396,8 +497,10 @@ where "just talk to it" dies.
 | `UNKNOWN_CONFIG_KEY` | node config keys ⊆ the type's `configSchema`, **for `configPolicy: 'closed'` types** | **#3** | **DONE (A)** |
 | `REMOVED_NODE_TYPE` | `tool` / `mcp_tool` / `fetch` are rejected by name | dead node types | **DONE (A)** |
 | `UNKNOWN_LLM_MODE` | `llm.mode` ∈ the five modes | typo'd mode | **DONE (A)** |
-| `UNSATISFIED_ASSERTION` | every `outcome.assertions[]` maps to ≥1 node that satisfies it | **#1** | C |
-| `LLM_INPUT_NOT_ENUM` | a `decision` input with `evaluator:'llm'` **must** be `type:'enum'` with `values` | **protects the moat** | C |
+| `UNSATISFIED_ASSERTION` | every `outcome.assertions[]` maps to ≥1 node that satisfies it | **#1** | **DONE (C)** |
+| `MALFORMED_ASSERTION` | an assertion we cannot CHECK (unknown `kind`, no `target`) is an error, never a silent pass | **#1** | **DONE (C)** |
+| `MISSING_OUTCOME` | a spec declaring `version: 2` must carry an outcome with ≥1 assertion | **#1** | **DONE (C)** |
+| `LLM_INPUT_NOT_ENUM` | an LLM-evaluated decision input **must** be `type:'enum'` with `values` | **protects the moat** | **DONE (C)** |
 | `NON_EXHAUSTIVE_BRANCH` | every `branch` has a `*` case | **#5** | **DONE (B)** |
 | `BRANCH_CASE_NO_EDGE` | a case's target must have an edge from the branch — without one it sorts BEFORE the branch topologically and runs unconditionally, so the routing silently does nothing | silent no-op routing | **DONE (B)** |
 | `BRANCH_TARGET_EXTRA_PARENT` | a case target must be reachable ONLY through its branch — a second incoming edge is live whichever way the branch went, so the step runs even when it was ruled out | a branch that decides nothing | **DONE (B)** |
@@ -409,6 +512,69 @@ where "just talk to it" dies.
 
 `UNKNOWN_CONFIG_KEY` is the highest-leverage check: it turns "the converger hallucinated a
 field" from a silent production failure into a build-time error.
+
+#### `LLM_INPUT_NOT_ENUM` covers TWO shapes, not one (Increment C)
+
+The rule as written names only a `decision` input. Implemented that narrowly it would have guarded
+**nothing that can run**: `decision` is not a registered node type until Increment E, so in C the
+check would have been pure theatre — a symbol in the validator that no reachable spec could ever
+trip. Meanwhile the shape that *can* run today has exactly the same defect:
+
+> a **`branch`** routing on an **`llm`** node that is not in `classify` mode.
+
+A branch matches its cases by **exact value**. Routing on free prose (*"This seems quite urgent, I'd
+say"*) matches no case, so the **mandatory catch-all silently swallows 100% of traffic** — with
+`run_completed` and no error. That is verbatim the `BRANCH_BAD_ON` failure (CLAUDE.md: *"the
+catch-all that exists to prevent a silent misroute was masking one"*), arriving through a different
+door. An LLM feeding a decision is an LLM feeding a decision, whichever node type spells it.
+
+So the validator enforces the rule on **both**, and `classify` — which returns exactly one of a
+closed set and throws on anything else — is the sanctioned way through. This also gave the one place
+Increment C had to touch a prior increment's test: `tests/workflows/control-flow.test.js`'s
+"routing on a step an earlier branch SKIPPED" fixture used a *freeform* `llm` as the routed-on node.
+The mode was incidental to the invariant that test pins (a skipped step's value takes the catch-all
+rather than crashing); it was changed to `classify`, the assertion left untouched, and the test
+re-mutation-tested to confirm it still goes red when the original defect is restored.
+
+> ⚠️ **AND IT MUST BE AN ALLOWLIST.** The first implementation asked *"is the branch's source an
+> `llm` node that isn't classifying?"* — a **denylist** — and the test-adversary bypassed it with a
+> single hop: put an `assemble` between the freeform `llm` and the `branch`
+> (`content: "{{think.output}}"`, a shape the converger is *taught* to emit) and the check never
+> fires. `validator.ok === true`, `scoreGap.complete === true`, and the branch routes on free prose:
+> nothing matches, and the mandatory catch-all silently swallows 100% of traffic. Same hole through
+> `search_web` and `connector-action`.
+>
+> **The property §11.7 requires is "the routed-on value has a CLOSED, DECLARED domain" — not "its
+> parent isn't an LLM".** Laundering a value through another node does not bound its domain; it only
+> hides who produced it. A branch may therefore route ONLY on:
+>
+> | Source | Its closed domain |
+> |---|---|
+> | `llm` + `mode: 'classify'` | `categories` (and `run()` throws on an off-enum answer) |
+> | `decision` | `output.values` (Increment E) |
+> | `human` | `decisions` — approve / reject / timeout (Increment D) |
+>
+> **A new source type earns its place on that list by declaring the set of values it can emit.** If
+> you add one without a declared value set, you have deleted the completeness proof — which is the
+> product. A denylist here is wrong *by construction*, and it fails silently.
+
+#### A `deliver` node's keys are deliver's ∪ the CHANNEL's (Increment C fix)
+
+Increment A judged every `deliver` node against `deliver`'s own `configSchema` alone. **That was a
+live defect, and it was shipped.** A delivery channel is a *capability with its own parameters*:
+`sheets_append`'s handler reads `config.spreadsheetId` and `config.range`
+(`src/connectors/google/index.js:694`); `airtable_create_record` reads `baseId` / `tableId` /
+`fields`. None is a `deliver` key — so **every delivery to a Sheet or an Airtable base was rejected
+at publish with `UNKNOWN_CONFIG_KEY`**, while the converger's own system prompt rendered exactly
+that shape from the channel catalog and instructed the model to emit it. The builder was telling
+users to build workflows it would then refuse to save. Slack and Gmail escaped only because their
+keys happen to overlap `deliver`'s own.
+
+The fix **narrows a lie in the schema; it does not widen the check**: a deliver node's keys are now
+checked against `deliver`'s schema **∪ the selected channel's own `configSchema`**. `model` is still
+rejected. `message` is still rejected. The keys judged against are simply the true ones. This is why
+`scoreGap()` takes `capabilities` — it hands the validator the same channel catalog the server has,
+which is what keeps `complete ⇒ publishable` true rather than aspirational.
 
 #### `UNKNOWN_CONFIG_KEY` is scoped by `configPolicy` — and it has to be
 
@@ -817,15 +983,28 @@ gaps) and a shape-derivation call.
   and the builder cannot add one, so no user workflow can park itself waiting for a question
   nobody will ever be asked. D builds the surface that asks it.
 
-### Increment C — converger v2 core + outcome/gap UI *(the moat)*
-- `outcome` + `examples` + `decisions` + `process` + `gaps` graph nodes.
-- `gap-scorer.js` rewrite. Spec v2. `UNSATISFIED_ASSERTION`, `LLM_INPUT_NOT_ENUM`.
+### Increment C — converger v2 core + outcome/gap UI *(the moat)* — ✅ **DONE**
+- `outcome` + `examples` + `process` + `gaps` graph nodes. **No `decisions` node** — see §3: the
+  `decision` node type does not exist until E, so one could only emit an unrunnable spec.
+- `gap-scorer.js` rewrite. Spec v2. `UNSATISFIED_ASSERTION`, `MALFORMED_ASSERTION`,
+  `MISSING_OUTCOME`, `LLM_INPUT_NOT_ENUM`. New `outcome-oracle.js` (the single satisfaction oracle,
+  shared by the validator and the gap scorer) and `decision-analysis.js` (box subtraction).
 - **UI:** the shared `choices[]` primitive · outcome cards (`outcome_check`) · the pinned outcome
   card · the gap list (`gap_review`) with **escalate pre-selected** and **Accept all defaults**.
-- **Acceptance:** the "Slack AND email" case (defect #1) **cannot publish** — it fails
-  `UNSATISFIED_ASSERTION`. A 2-node workflow ratifies without inventing an LLM node (defect #4).
-  The converger asks ≥1 exception question (defect #5). **A user can publish a gap-free workflow
-  by clicking only defaults — zero free-text turns.**
+- **Acceptance:** ✅ the "Slack AND email" case (defect #1) **cannot publish** —
+  `UNSATISFIED_ASSERTION`, and the live adversarial check proves both destinations survive into the
+  contract *at the source*, which is where they were actually being lost. ✅ A 2-node workflow
+  ratifies without inventing an LLM node (defect #4). ✅ The converger asks ≥1 exception question
+  (defect #5) — every workflow raises at least `NO_ERROR_PATH` ("nothing says what happens if a step
+  fails"), which is the one exception question that applies to every workflow ever built and is
+  precisely the question v1 had no shape to ask. ✅ Zero-typing: every interrupt carries a
+  pre-selected default and *Accept all defaults* is one click.
+- **Also landed, because it blocked C:** the `deliver`-node channel-schema fix (see §5) — without
+  it no `record_exists` assertion could ever be satisfied by a publishable spec, because every
+  Airtable/Sheets delivery failed `UNKNOWN_CONFIG_KEY`.
+- **Deferred deliberately, and said so rather than faked:** `assertion.when` is carried but not
+  proven (§2.2); the example *picker* (pull three real emails from the inbox) is F; the decision
+  TABLE is E.
 
 ### Increment D — `human` approval gate + channels + Approvals inbox
 - `ApprovalStore` (hashed / single-use / TTL, per §7.3) · durable pause + resume (§7.4) ·

@@ -38,7 +38,14 @@ function initialState(intent, capabilities) {
     clarifications:   [],
     confirmationLog:  [],
     step:             0,
-    phase:            'analyzing',
+    // P12 Increment C: elicitation now STARTS from the outcome, not the steps.
+    // "What must be true when this has run?" precedes "what are the steps?" —
+    // v1 asked them in the other order, which is why it could agree to a
+    // delivery and then quietly not build it (converger-v2 §2.1).
+    phase:            'outcome',
+    proposeRounds:    0,
+    gapRounds:        0,
+    escalatedGaps:    [],
     spec:             null,
     _pendingQuestion: null,
   };
@@ -129,10 +136,17 @@ export async function runHeadless({ intent, capabilities, llm, checkpointerDir }
   const MAX_STEPS = 40;
   let steps = 0;
 
+  // Every interrupt carries a DEFAULT, and the default is always a valid answer
+  // (converger-v2 §11.9). That is not a headless convenience — it is the same
+  // property the zero-typing path depends on in the real UI: if a default is
+  // missing here, a user pressing Enter would be stuck there too.
   function autoRespond(interruptVal) {
     const itype = interruptVal?.type;
-    if (itype === 'clarification') return { type: 'clarification', answer: 'Please proceed with your best inference.' };
-    if (itype === 'ratify')        return { type: 'approve' };
+    if (itype === 'clarification')   return { type: 'clarification', answer: 'Please proceed with your best inference.' };
+    if (itype === 'ratify')          return { type: 'approve' };
+    if (itype === 'outcome_check')   return { type: 'accept' };          // the pre-selected candidate
+    if (itype === 'example_request') return { type: 'accept' };          // keep the proposed examples
+    if (itype === 'gap_review')      return { type: 'accept_defaults' }; // answer / escalate, per row
     return { type: 'accept' };
   }
 

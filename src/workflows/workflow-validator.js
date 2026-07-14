@@ -24,6 +24,7 @@
 import { liftV1Nodes, isRemovedType, REMOVED_TYPES } from './node-types/compat-v1.js';
 import { normalizeCases, CATCH_ALL } from './node-types/branch.js';
 import { normalizeSteps } from './node-types/foreach.js';
+import { checkOutcome, missingFields, ASSERTION_KINDS } from './outcome-oracle.js';
 
 /** Per-channel required fields on a deliver node's config (beyond `channel`). */
 const CHANNEL_REQUIRED = {
@@ -58,7 +59,32 @@ export class WorkflowValidator {
     // v2 node and there is exactly one shape to reason about. Types that were
     // REMOVED rather than collapsed pass through unlifted and are rejected by
     // name below. See ./node-types/compat-v1.js.
-    const nodes  = liftV1Nodes(Array.isArray(def.nodes) ? def.nodes : []);
+    //
+    // A MALFORMED NODE IS REPORTED AND THEN REMOVED, before any other check runs.
+    //
+    // It used to be reported and left in the list, so `nodes.filter(n => n.type
+    // === 'trigger')` further down threw `Cannot read properties of null`. And
+    // because WorkflowService.create() calls validate() with no try/catch
+    // (workflow-service.js:90), a spec with a `null` in `nodes[]` made PUBLISH
+    // RETURN A 500 — instead of the clean, user-facing MALFORMED_NODE error the
+    // validator had already generated one line earlier. Turning bad input into a
+    // message is this class's entire job; crashing on bad input is the one thing
+    // it must never do. Filtering here means every check below sees an object by
+    // construction, rather than by each one remembering to guard.
+    // (Pre-existing on `main`; found by the test-adversary.)
+    const lifted = liftV1Nodes(Array.isArray(def.nodes) ? def.nodes : []);
+    const nodes  = [];
+    for (const n of lifted) {
+      if (!n || typeof n !== 'object' || Array.isArray(n)) {
+        issues.push({
+          severity: 'error', code: 'MALFORMED_NODE',
+          message: 'A step is missing required fields.',
+          nodeId: null, field: null,
+        });
+        continue;
+      }
+      nodes.push(n);
+    }
     const edges  = Array.isArray(def.edges) ? def.edges : [];
 
     // ── 1. Top-level shape ────────────────────────────────────────────────
@@ -83,14 +109,6 @@ export class WorkflowValidator {
     // ── 2. Node-level checks ──────────────────────────────────────────────
     const seenIds = new Set();
     for (const node of nodes) {
-      if (!node || typeof node !== 'object') {
-        issues.push({
-          severity: 'error', code: 'MALFORMED_NODE',
-          message: 'A step is missing required fields.',
-          nodeId: null, field: null,
-        });
-        continue;
-      }
 
       // id uniqueness
       if (typeof node.id !== 'string' || !node.id.trim()) {
@@ -170,6 +188,32 @@ export class WorkflowValidator {
       // Increment F validates those against each capability's own schema.
       if (typeDef && typeDef.configPolicy !== 'open') {
         const declared = new Set((typeDef.configSchema ?? []).map(f => f.key));
+
+        // A `deliver` node's config is deliver's OWN keys plus the SELECTED
+        // CHANNEL's — because a delivery channel is a capability with its own
+        // parameters, and the channel is the only place they can be declared.
+        //
+        // Increment A missed this and it was a live defect: `sheets_append`'s
+        // handler reads `config.spreadsheetId` and `config.range`
+        // (src/connectors/google/index.js:694) and `airtable_create_record`
+        // reads baseId/tableId/fields — none of which `deliver` declares, so
+        // EVERY delivery to a Sheet or an Airtable base was rejected at publish
+        // with UNKNOWN_CONFIG_KEY. The converger's own system prompt renders
+        // those exact shapes from the channel catalog and tells the model to
+        // emit them, so the builder was instructing users to build workflows it
+        // would then refuse to save. (slack/gmail escaped only because their
+        // keys happen to overlap deliver's own.)
+        //
+        // This is a narrowing of the schema's LIE, not a widening of the check:
+        // an undeclared key is still an error, `model` is still rejected, and
+        // `message` is still rejected. The keys now checked against are simply
+        // the true ones. Where the channel cannot be resolved (no registry
+        // wired), its params are unknowable — so they are not judged, exactly as
+        // connector-action's are not.
+        if (node.type === 'deliver') {
+          for (const f of this._channelConfigSchema(cfg.channel)) declared.add(f.key);
+        }
+
         for (const key of Object.keys(cfg)) {
           if (declared.has(key)) continue;
           issues.push({
@@ -302,7 +346,260 @@ export class WorkflowValidator {
     // ── 8. Control flow (P12 Increment B) ─────────────────────────────────
     this._checkControlFlow(nodes, edges, seenIds, issues);
 
+    // ── 9. The outcome contract + the moat (P12 Increment C) ──────────────
+    this._checkOutcome(def, nodes, issues);
+    this._checkDecisionInputs(nodes, issues);
+
     return this._finalize(issues);
+  }
+
+  /**
+   * UNSATISFIED_ASSERTION — every `outcome.assertions[]` must map to at least one
+   * node that satisfies it.
+   *
+   * This is the check that makes defect #1 impossible. The converger was asked
+   * for Slack AND Gmail, confirmed both, and emitted a spec containing only
+   * Slack; the user found out when the emails never arrived. Nothing in the
+   * system had declared what the finished workflow was supposed to PRODUCE, so
+   * nothing could notice that it didn't. Now the outcome declares it, and a spec
+   * that doesn't deliver on its own contract does not publish.
+   *
+   * Satisfaction is decided by ./outcome-oracle.js — the SAME implementation the
+   * converger's gap scorer uses. Deliberately: two copies of this rule would
+   * drift, and the day they drift is the day the converger ratifies a spec that
+   * publish then rejects, which is a dead end the user cannot get out of.
+   */
+  _checkOutcome(def, nodes, issues) {
+    const outcome = def?.outcome;
+
+    // v1 specs have no outcome and never will. Only a spec that declares itself
+    // v2 is held to the contract — otherwise every workflow in the database
+    // becomes unpublishable overnight (§8: absent version ⇒ 1).
+    if (!outcome) {
+      if (Number(def?.version) === 2) {
+        issues.push({
+          severity: 'error', code: 'MISSING_OUTCOME',
+          message: 'This workflow declares no outcome, so there is no way to tell whether it works.',
+          nodeId: null, field: 'outcome',
+          hint: 'Add outcome.statement and at least one assertion describing what must be true after a run.',
+        });
+      }
+      return;
+    }
+
+    const assertions = Array.isArray(outcome.assertions) ? outcome.assertions : [];
+    if (!assertions.length) {
+      issues.push({
+        severity: 'error', code: 'MISSING_OUTCOME',
+        message: 'The outcome states what should happen but lists no checkable assertions.',
+        nodeId: null, field: 'outcome.assertions',
+        hint: `Each assertion is { id, kind, target } — kind is one of: ${ASSERTION_KINDS.join(', ')}.`,
+      });
+      return;
+    }
+
+    const { unsatisfied, malformed, satisfied } = checkOutcome(outcome, nodes);
+
+    // An assertion we cannot CHECK must never pass quietly. Silently ignoring an
+    // unknown kind is the same failure as dropping the delivery it asked for —
+    // the user is told the contract is met when nobody ever tested it.
+    for (const { assertion, reason } of malformed) {
+      issues.push({
+        severity: 'error', code: 'MALFORMED_ASSERTION',
+        message: `The outcome promises "${assertion?.id ?? assertion?.target ?? 'something'}", but ${reason} — so nothing can verify it.`,
+        nodeId: null, field: 'outcome.assertions',
+        hint: `An assertion is { id, kind, target }, where kind is one of: ${ASSERTION_KINDS.join(', ')}, and target is "<connector>:<destination>" (e.g. "slack:#ops").`,
+      });
+    }
+
+    for (const a of unsatisfied) {
+      issues.push({
+        severity: 'error', code: 'UNSATISFIED_ASSERTION',
+        message: `The outcome promises "${a.target}" (${a.kind}), but no step in this workflow does that — the request would be silently dropped.`,
+        nodeId: null, field: 'outcome.assertions',
+        hint: `Add a step that delivers to ${a.target}, or remove the promise from the outcome. Do not publish a workflow that quietly does less than it says.`,
+      });
+    }
+
+    // Assertion ids must be UNIQUE. They are the handle everything else uses to
+    // refer to a promise — the gap list, the provenance record, the SOP. Two
+    // assertions wearing one id is an ambiguity that resolves, silently, in
+    // favour of whichever came first. An LLM generates these ids, so this is not
+    // a theoretical concern.
+    const seenAssertionIds = new Set();
+    for (const a of assertions) {
+      const id = a?.id;
+      if (!id) continue;
+      if (seenAssertionIds.has(id)) {
+        issues.push({
+          severity: 'error', code: 'DUPLICATE_ASSERTION_ID',
+          message: `Two of the outcome's promises share the id "${id}" — one of them would be quietly ignored.`,
+          nodeId: null, field: 'outcome.assertions',
+          hint: 'Give every assertion its own id (a1, a2, …).',
+        });
+      }
+      seenAssertionIds.add(id);
+    }
+
+    // A satisfied assertion that named FIELDS is only really satisfied if the
+    // node sets them. Reported only when the node's field names are readable —
+    // we never accuse a spec of dropping a field we merely could not see.
+    //
+    // Keyed by INDEX, not id — see checkOutcome(). Looking the assertion back up
+    // by id took `.find()`'s first hit, so a duplicate id checked the wrong
+    // assertion's fields.
+    for (const [idx, hits] of satisfied) {
+      const a = assertions[idx];
+      if (!a?.fields?.length) continue;
+      const anyComplete = hits.some(n => missingFields(a, n).length === 0);
+      if (anyComplete) continue;
+      const gapsByNode = hits.map(n => ({ n, miss: missingFields(a, n) })).filter(x => x.miss.length);
+      if (!gapsByNode.length) continue;
+      const { n, miss } = gapsByNode[0];
+      issues.push({
+        severity: 'error', code: 'UNSATISFIED_ASSERTION',
+        message: `The outcome promises ${a.target} will carry ${miss.join(', ')}, but "${n.label || n.id}" never sets ${miss.length > 1 ? 'those fields' : 'that field'}.`,
+        nodeId: n.id, field: 'config.fields',
+        hint: `Set ${miss.join(', ')} on that step, or drop ${miss.length > 1 ? 'them' : 'it'} from the outcome.`,
+      });
+    }
+  }
+
+  /**
+   * LLM_INPUT_NOT_ENUM — §11.7. THE MOAT. Never weaken this.
+   *
+   * An LLM-evaluated decision input MUST classify into a CLOSED ENUM. Not
+   * because free text is untidy, but because a free-text input has an INFINITE
+   * domain — and coverage over an infinite domain is not provable. One such
+   * input makes the whole table undecidable, which deletes the completeness
+   * proof, which is the entire product (see decision-analysis.js).
+   *
+   * Atlas's claim is "I can tell you what I don't know about your process". A
+   * system that cannot enumerate the cases cannot know which ones are missing,
+   * and would be reduced to *asserting* completeness it never established. A
+   * false proof is worse than no proof: the user stops looking.
+   *
+   * Two shapes, one rule — because an LLM feeding a decision is an LLM feeding a
+   * decision, whichever node type spells it:
+   *
+   *   1. a `decision` input with evaluator:'llm' that is not a closed enum
+   *      (Increment E runs these; the rule is enforced from C so no such spec
+   *      can be built in the meantime);
+   *   2. a `branch` routing on an `llm` node that is not in `classify` mode —
+   *      routing on free prose is the same undecidable input wearing a different
+   *      hat, and `classify` exists precisely to be the sanctioned way through
+   *      (it throws on an off-enum answer instead of passing it downstream).
+   *
+   * Runs OUTSIDE the node-type loop on purpose: `decision` is not a registered
+   * type until Increment E, so it exits that loop early as UNKNOWN_NODE_TYPE.
+   * The moat must not depend on the node being runnable yet.
+   */
+  _checkDecisionInputs(nodes, issues) {
+    const byId = new Map(nodes.filter(n => n?.id).map(n => [n.id, n]));
+
+    for (const node of nodes) {
+      if (node?.type === 'decision') {
+        const inputs = Array.isArray(node.inputs) ? node.inputs
+                     : Array.isArray(node.config?.inputs) ? node.config.inputs
+                     : [];
+        for (const input of inputs) {
+          if (String(input?.evaluator ?? '').toLowerCase() !== 'llm') continue;
+          const isEnum  = String(input?.type ?? '').toLowerCase() === 'enum';
+          const values  = Array.isArray(input?.values) ? input.values.filter(v => v != null) : [];
+          if (isEnum && values.length >= 2) continue;
+          issues.push({
+            severity: 'error', code: 'LLM_INPUT_NOT_ENUM',
+            message: `"${node.label || node.id}" asks the AI to judge "${input?.key ?? 'an input'}" but doesn't give it a closed list of answers — so there is no way to prove the table covers every case.`,
+            nodeId: node.id, field: 'inputs',
+            hint: 'An AI-judged input must be { "type": "enum", "values": ["…", "…"] } with every possible answer listed. Free text has an unbounded domain, so coverage cannot be checked and the workflow could silently do nothing on an input nobody anticipated.',
+          });
+        }
+      }
+
+      if (node?.type === 'branch') {
+        const onRef = String(node.config?.on ?? '').trim().replace(/^\{\{\s*|\s*\}\}$/g, '').trim();
+        const onId  = /^([a-z0-9_-]+)(?:\.output)?$/i.exec(onRef)?.[1] ?? null;
+        const src   = onId ? byId.get(onId) : null;
+        if (!src) continue;   // no such step — BRANCH_BAD_ON already reports it
+
+        // ── The rule is an ALLOWLIST, and it has to be ────────────────────
+        //
+        // The first version of this check asked "is the branch's source an `llm`
+        // node that isn't classifying?" — a DENYLIST, and it was bypassed by a
+        // single laundering hop: put an `assemble` between a freeform `llm` and
+        // the branch (`content: "{{think.output}}"`, a shape the converger is
+        // explicitly taught to emit) and the moat never fires. The branch then
+        // routes on free prose, nothing matches, and the MANDATORY CATCH-ALL
+        // SWALLOWS 100% OF TRAFFIC — silently, with `run_completed`. The same
+        // hole existed through `search_web` and `connector-action`. (Found by the
+        // test-adversary.)
+        //
+        // The property §11.7 actually requires is "the value being routed on has
+        // a CLOSED, DECLARED domain" — not "its immediate parent isn't an LLM".
+        // Laundering a value through another node does not bound its domain; it
+        // only hides who produced it. So we ask the question the moat actually
+        // asks, and a node type earns its way ONTO this list by declaring the set
+        // of values it can emit:
+        //
+        //   llm + mode:'classify'  → `categories` — a closed enum, and run() throws off-enum
+        //   decision               → `output.values` — a closed enum (Increment E)
+        //   human                  → `decisions` — approve|reject|timeout (Increment D)
+        //
+        // Anything else is an open domain. Adding a new source means declaring
+        // its value set, which is exactly the discipline that keeps the
+        // completeness proof true.
+        const mode = String(src.config?.mode ?? 'freeform').toLowerCase();
+        if (closedDomainOf(src)) continue;
+
+        const what = src.type === 'llm'
+          ? `an AI step in ${mode} mode — it emits free text`
+          : `a ${src.type} step, whose output is not a closed set of values`;
+        issues.push({
+          severity: 'error', code: 'LLM_INPUT_NOT_ENUM',
+          message: `"${node.label || node.id}" routes on "${src.label || src.id}", ${what}, so the cases can never be proven to cover every value it might produce — an unanticipated one would fall through to the catch-all and the workflow would silently do nothing.`,
+          nodeId: node.id, field: 'config.on',
+          hint: `A branch may only route on a value with a closed, declared set of possibilities: an AI step in "classify" mode (list its categories), a decision table, or a human approval. Put a classify step in front of "${src.id}" and route on that.`,
+        });
+      }
+    }
+
+    // ── BRANCH_CASE_NOT_IN_ENUM ───────────────────────────────────────────
+    //
+    // We forced the routed-on value into a CLOSED ENUM (that is the moat) — and
+    // then never checked the cases against it. A branch whose cases name values
+    // the classifier CANNOT PRODUCE ("HIGH" when the categories are
+    // urgent|normal) matches nothing, so the mandatory catch-all swallows 100% of
+    // traffic — forever, silently, with `run_completed` — while the converger
+    // told the user the workflow was finished. That is verbatim the failure
+    // BRANCH_BAD_ON exists to prevent, reached through the case VALUES instead of
+    // the `on` reference.
+    //
+    // Making the domain closed is only half the job: the point of a closed domain
+    // is that membership becomes DECIDABLE. Not deciding it is a completeness
+    // claim we did not check. (Found by the independent verifier.)
+    for (const node of nodes) {
+      if (node?.type !== 'branch') continue;
+      const onRef = String(node.config?.on ?? '').trim().replace(/^\{\{\s*|\s*\}\}$/g, '').trim();
+      const onId  = /^([a-z0-9_-]+)(?:\.output)?$/i.exec(onRef)?.[1] ?? null;
+      const src   = onId ? byId.get(onId) : null;
+      if (!src) continue;
+
+      const domain = closedDomainOf(src);
+      if (!domain) continue;   // not a closed-domain source — LLM_INPUT_NOT_ENUM already fired
+
+      const known = new Set(domain.map(v => String(v).trim().toLowerCase()));
+      for (const c of normalizeCases(node.config?.cases)) {
+        const when = String(c?.when ?? '').trim();
+        if (!when || when === CATCH_ALL) continue;
+        if (known.has(when.toLowerCase())) continue;
+        issues.push({
+          severity: 'error', code: 'BRANCH_CASE_NOT_IN_ENUM',
+          message: `"${node.label || node.id}" has a case for "${when}", but "${src.label || src.id}" can only ever produce: ${domain.join(', ')}. That case can never match, so everything would fall through to the catch-all.`,
+          nodeId: node.id, field: 'config.cases',
+          hint: `Use one of: ${domain.join(', ')} — or add "${when}" to "${src.id}"'s list of possible answers.`,
+        });
+      }
+    }
   }
 
   /**
@@ -499,6 +796,24 @@ export class WorkflowValidator {
   // ── Internals ─────────────────────────────────────────────────────────
 
   /**
+   * The config keys a delivery CHANNEL declares for itself. Empty when the
+   * channel cannot be resolved — an unknowable key set is not a wrong one, and
+   * `UNKNOWN_CHANNEL` already reports a channel that does not exist.
+   *
+   * The registry may be a real ChannelRegistry or the plain catalog view the
+   * converger holds (`capabilities.channels`) — both expose `get(id).configSchema`.
+   */
+  _channelConfigSchema(channelId) {
+    if (!channelId || !this.channelRegistry) return [];
+    try {
+      const ch = this.channelRegistry.get?.(channelId);
+      return Array.isArray(ch?.configSchema) ? ch.configSchema : [];
+    } catch {
+      return [];
+    }
+  }
+
+  /**
    * The `fetch` / `tool` / `mcp_tool` branches that used to live here went away
    * with the node types themselves (P12 Increment A) — they resolved ids against
    * a `sourceRegistry` / `toolRegistry` that this build never instantiates. Those
@@ -666,4 +981,53 @@ export class WorkflowValidator {
     const warnings = issues.filter(i => i.severity === 'warning');
     return { ok: errors.length === 0, errors, warnings, issues };
   }
+}
+
+/**
+ * The CLOSED SET OF VALUES a node can emit — or `null` if its domain is open.
+ *
+ * ONE definition, used by both branch rules: the allowlist that decides whether a
+ * branch may route on this node at all (LLM_INPUT_NOT_ENUM), and the check that
+ * its cases name values the node can actually produce (BRANCH_CASE_NOT_IN_ENUM).
+ * Two copies of "what can this node emit?" would drift, and a drift here means
+ * one rule believes the domain is closed while the other does not — which is how
+ * a branch ends up validated against an enum nobody enforced.
+ *
+ * A node type earns its place here by DECLARING its possible values. That is the
+ * whole discipline behind the completeness proof (converger-v2 §11.7): if you add
+ * a source whose values are not declarable, you have not extended the moat — you
+ * have deleted it.
+ */
+function closedDomainOf(node) {
+  if (!node || typeof node !== 'object') return null;
+
+  if (node.type === 'llm') {
+    const mode = String(node.config?.mode ?? 'freeform').toLowerCase();
+    if (mode !== 'classify') return null;
+    const cats = parseEnumList(node.config?.categories);
+    return cats.length >= 2 ? cats : null;
+  }
+
+  // decision (Increment E) — the output enum.
+  if (node.type === 'decision') {
+    const out = node.output ?? node.config?.output;
+    const vals = Array.isArray(out?.values) ? out.values.filter(v => v != null).map(String) : [];
+    return vals.length >= 2 ? vals : null;
+  }
+
+  // human (Increment D) — approve / reject, plus the timeout the engine can inject.
+  if (node.type === 'human') {
+    const declared = parseEnumList(node.config?.decisions);
+    const base = declared.length ? declared : ['approve', 'reject'];
+    return [...new Set([...base, 'timeout'])];
+  }
+
+  return null;
+}
+
+/** A declared value list may arrive newline-separated, comma-separated, or as an array. */
+function parseEnumList(v) {
+  if (Array.isArray(v)) return v.map(String).map(s => s.trim()).filter(Boolean);
+  if (typeof v !== 'string') return [];
+  return v.split(/[\n,]/).map(s => s.trim()).filter(Boolean);
 }

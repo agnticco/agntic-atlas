@@ -1349,7 +1349,15 @@ test('branch: routing on a step an earlier branch SKIPPED takes the catch-all, n
       { id: 'r1', type: 'branch', config: { on: 'c.output',
         cases: [{ when: 'urgent', to: 'a' }, { when: '*', to: 'b' }] } },
       { id: 'a',  type: 'llm', config: { prompt: 'A' } },
-      { id: 'b',  type: 'llm', config: { prompt: 'B' } },
+      // `b` is a CLASSIFY step, not a freeform one. Increment C's LLM_INPUT_NOT_ENUM
+      // (§11.7, the moat) rejects a branch that routes on free prose: the cases are
+      // matched by exact value, so prose matches nothing and the mandatory catch-all
+      // silently swallows 100% of traffic — the very misroute BRANCH_BAD_ON exists to
+      // prevent. The mode is INCIDENTAL to what this test pins (routing on a step an
+      // earlier branch ruled out must take the catch-all, not crash), and that
+      // invariant is asserted unchanged below. `b` is skipped on this leg, so it never
+      // runs and its categories never matter at run time.
+      { id: 'b',  type: 'llm', config: { mode: 'classify', categories: 'x\nurgent' } },
       { id: 'r2', type: 'branch', config: { on: 'b.output',     // ← b was ruled out
         cases: [{ when: 'x', to: 'd1' }, { when: '*', to: 'd2' }] } },
       { id: 'd1', type: 'deliver', config: { channel: 'in_app', body: 'D1' } },

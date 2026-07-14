@@ -430,6 +430,159 @@ refactor them without an explicit decision recorded here:
     itself waiting for a question nobody will ever be asked. **Do not surface `human` in the
     converger prompt or the builder until D lands.**
 
+- **Converger v2 core — the outcome contract (2026-07-13, P12 increment C)** — the converger could
+  agree to post to Slack **and** email the team, build only the Slack step, and nothing in the system
+  could notice: no part of a spec ever declared what the finished workflow was supposed to
+  **produce**. Spec v2 adds `outcome{statement, assertions[], examples[]}`, and a spec that does not
+  deliver on its own contract **does not publish**.
+  - **`src/workflows/outcome-oracle.js` (new)** — the SINGLE satisfaction oracle, imported by BOTH
+    `workflow-validator.js` (`UNSATISFIED_ASSERTION`) and `converger/gap-scorer.js`. Two copies of
+    this rule would drift, and the day they drift is the day the converger ratifies a spec that
+    publish rejects — a dead end the user cannot argue their way out of. Assertion kinds are a
+    **closed set** (`message_sent · record_exists · document_exists`); an assertion outside it is
+    `MALFORMED_ASSERTION`, **never a silent pass** — an uncheckable promise reported as met is the
+    same failure as a missing delivery, just better hidden.
+  - **`src/converger/gap-scorer.js` (rewritten)** — `scoreGap(spec, {capabilities}) → {gaps, complete}`,
+    three classes (outcome/coverage/contract). The old five-item checklist demanded a *processing*
+    node, which is why the converger invented a pointless LLM step for a genuinely two-step workflow
+    and charged for it on every run (defect #4). **The contract/outcome gaps ARE the validator's
+    issues, classified — not a second opinion.**
+  - **A BLOCKING gap can NEVER default to `'escalated'`.** converger-v2 §3 specified a blanket
+    `'escalated'` default; that is **unimplementable** — it makes `complete` unconditionally true, so
+    an EMPTY draft scores complete and the converger ratifies a workflow with no steps. Escalation
+    promises a person handles the case **at run time**, and a spec that cannot publish has no run
+    time. Blocking ⇒ `'unanswered'`, which buys **`complete ⇒ publishable`** by construction. **A
+    default that makes a check vacuous is not a safety net; it is the bug** — same class as the
+    `?? 'unscoped'` tenant fallback that leaked across tenants in B. §3 is corrected.
+  - **`LLM_INPUT_NOT_ENUM` (§11.7, THE MOAT) covers TWO shapes.** Scoped to `decision` inputs alone
+    it would guard **nothing that can run** — `decision` is not a registered node type until E, so
+    the check would be pure theatre. The shape that *can* run today has the identical defect: a
+    **`branch` routing on an `llm` node not in `classify` mode**. A branch matches by exact value, so
+    free prose matches nothing and **the mandatory catch-all silently swallows 100% of traffic**,
+    with `run_completed` and no error — verbatim the `BRANCH_BAD_ON` failure through a different
+    door. This forced the one edit to a prior increment's test (`control-flow.test.js`'s
+    skipped-step fixture routed on a *freeform* llm; the mode was incidental to the invariant it
+    pins). The fixture was changed, the assertion left untouched, and **the test was re-mutation-
+    tested to confirm it still goes red when B's original defect is restored.**
+  - **`deliver` keys are deliver's ∪ the CHANNEL's — a LIVE defect from increment A, fixed here.**
+    A delivery channel is a capability with its own params: `sheets_append`'s handler reads
+    `config.spreadsheetId`/`config.range` (`src/connectors/google/index.js:694`),
+    `airtable_create_record` reads `baseId`/`tableId`/`fields`. None is a `deliver` key, so **every
+    delivery to a Sheet or an Airtable base was rejected at publish** — while the converger's system
+    prompt rendered exactly that shape from the channel catalog and told the model to emit it. The
+    builder was instructing users to build workflows it would then refuse to save. (Slack/Gmail
+    escaped only because their keys overlap deliver's own.) This **narrows a lie in the schema; it
+    does not widen the check** — `model` and `message` are still rejected. It is why `scoreGap` takes
+    `capabilities`: the gap scorer must judge against the same channel catalog the server has, or
+    `complete ⇒ publishable` is aspirational rather than true.
+  - **The outcome is a FLOOR, not a ceiling.** It proves nothing was silently **dropped**; it cannot
+    prove every transformation is **present** — *"a summary of the email"* and *"the email"* reach
+    Slack as the same assertion, and inventing an assertion that claimed to tell them apart would be
+    a proof we cannot make. So once the floor is met the INTENT gets the last word: `analyze` asks
+    the model once if the draft is finished and it must **name** a concrete missing component to
+    continue (bounded). Unlike v1's checklist, "finished" is the default answer — so a 2-node
+    workflow still ratifies untouched.
+  - **`assertion.when` is carried but NOT proven** — proving it needs `decision` (E) + the examples
+    as a test suite (G). A conditional assertion therefore raises a non-blocking
+    `CONDITIONAL_UNPROVEN` gap rather than being counted satisfied by an ungated node, which would
+    let the workflow pass its own contract while pinging `#sales-urgent` for **every** lead.
+  - **No `decisions` graph node, and no `human` in the prompt.** converger-v2 §3 listed a `decisions`
+    node that "builds tables"; it cannot — the `decision` node type does not exist until E, so it
+    could only emit an unrunnable spec. Same trap as surfacing `human` before D builds the surface
+    that asks it. A decision today is `llm`+`classify` → `branch`.
+  - `mutation-sweep.mjs` `TARGETS` widened to `workflow-validator.js` + the three C files (the round-9
+    residual). It immediately found that **most of the pre-existing validator publish gate**
+    (`MISSING_TRIGGER`, `CYCLE_DETECTED`, `DELIVER_NO_INPUT`, `SELF_LOOP`, `UNKNOWN_CHANNEL`, …) was
+    pinned by **no test at all**. The floor is a ratchet: it was **not** lowered to accommodate the
+    new files.
+  - Also: `interaction-store.js` handled exactly three event types and **silently dropped every
+    other** — so the moment the graph gained an interrupt, its entire record would have vanished with
+    no error. It now stores unrecognised events, plus a `converger_provenance` table (which turn
+    produced each assertion; which gaps escalated by default) that feeds the SOP.
+
+- **The five defects the `test-adversary` found in C — all behind a fully green suite (2026-07-13).**
+  Same lesson as B, and it landed on the first run of the agent built to prevent exactly this.
+  Pinned by **`tests/converger/moat-adversarial.test.js`**, which is now in the gate and in the
+  mutation sweep.
+  1. **THE MOAT WAS BYPASSED BY ONE LAUNDERING HOP.** `LLM_INPUT_NOT_ENUM` asked *"is the branch's
+     source an `llm` node that isn't classifying?"* — **a denylist**. Put an `assemble` between a
+     freeform `llm` and the `branch` (`content: "{{think.output}}"` — a shape the converger is
+     explicitly taught to emit) and the check never fires: `validator.ok === true`. The branch then
+     routes on free prose, nothing matches, and **the mandatory catch-all swallows 100% of traffic,
+     silently, with `run_completed`** — verbatim the failure `BRANCH_BAD_ON` exists to prevent. Same
+     hole through `search_web` and `connector-action`. **§11.7's property is "the routed-on value has
+     a CLOSED, DECLARED domain", not "its parent isn't an LLM" — laundering a value through another
+     node does not bound its domain, it only hides who produced it.** It is now an **allowlist**: a
+     branch may route only on `llm`+`classify` (categories), `decision` (output values), or `human`
+     (approve/reject/timeout). A new source type earns its place by **declaring its value set**.
+     **A denylist on a security-relevant property is the same class of bug as a `??` default: it is
+     wrong by construction, and it fails silently.**
+  2. **A malformed decision rule silently covered the WHOLE table.** `rule?.when?.[key]` on a `null`
+     rule yields `undefined`, which the analyser reads as `-` (irrelevant) — i.e. "covers every
+     value on every dimension". One bad rule (exactly what an LLM emits) made `analyzeTable` report
+     `uncovered: []` **and** `hasCatchAll: false` simultaneously, which cannot both be true: a clean
+     bill of health for a table it could not read. That is the **false proof** the module's own
+     header forbids. A rule with no readable `when` is now `decidable: false`.
+  3. **Duplicate assertion ids dropped an assertion.** `checkOutcome` keyed `satisfied` by
+     `a.id ?? a.target`, so two assertions sharing an id collapsed to one Map entry — falsifying the
+     single property the oracle exists to guarantee. Worse, the survivor carried the *first*
+     assertion's `fields`, so a second assertion's `fields:['Budget']` was checked against a list
+     that never mentioned Budget and **a spec that never wrote Budget published clean**. Keyed by
+     **index** now (unique by construction), plus `DUPLICATE_ASSERTION_ID`. **A key that CAN collide
+     is a silent drop waiting to happen.**
+  4. **`integer` inputs got a PHANTOM gap.** The domain was partitioned over the reals, so `<=0` +
+     `>=1` — exhaustive over the integers — reported an uncovered cell *"between 0 and 1"*. That is
+     the module's *other* named failure mode ("invent a gap that isn't there"), and it is the more
+     corrosive one: **a question with no real answer is what teaches people to click past the
+     questions.**
+  5. **A `null` node made `validate()` THROW**, and `WorkflowService.create()` calls it with no
+     try/catch — so publish returned a **500** instead of the clean `MALFORMED_NODE` the validator
+     had already generated one line earlier. Pre-existing on `main`. Malformed nodes are now removed
+     from the working set before any check runs. **Turning bad input into a message is the
+     validator's entire job; crashing on bad input is the one thing it must never do.**
+  - **`scripts/gates/p12.sh` and `mutation-sweep.mjs` SUITES both gained `moat-adversarial.test.js`.
+    Checks ADDED, never weakened** — recorded because a diff against `scripts/` is how a verifier
+    detects a builder quietly weakening their own gate, so it must never be silent.
+
+- **The independent verifier then FAILED increment C, and was right (2026-07-13, round 2).** The
+  headline invariant was false and **the check written to prove it could not fail**. Third time this
+  phase; the lesson keeps arriving in a new costume.
+  - **`complete ⇒ publishable` was FALSE with no channel catalog.** The validator's channel checks
+    sit behind `if (channelId && this.channelRegistry)` — so with no registry `UNKNOWN_CHANNEL` and
+    `CHANNEL_UNAVAILABLE` **silently do not run**, while publish (which always has one,
+    `server.js:542`) still enforces them. A `deliver` to a hallucinated `channel:'discord'` scored
+    **complete** and then failed to publish: the builder says done, the save button says no.
+    It **disabled itself exactly when it mattered** — `builder.js` built the catalog after three
+    network-bound connector lookups inside a *"non-fatal"* catch, so an expired refresh token dropped
+    it, and in that same state the model has no catalog in its prompt either and is at its **most**
+    likely to invent a channel id. **A check that silently degrades is not a safety net; it is the
+    bug** (the `?? 'unscoped'` lesson, third occurrence). `scoreGap` now **refuses to certify**
+    without a catalog (`CHANNELS_UNVERIFIED`, blocking) and `builder.js` guarantees one.
+    **Refusing to certify is always available; certifying without checking is not.**
+  - **The check that was supposed to catch it was structurally incapable of failing.**
+    `converger-adversarial.mjs` check 6 (*"complete ⇒ publishable"*) **scored with no capabilities
+    and validated with no `channelRegistry`** — both sides equally blind, so the divergence was
+    invisible **by construction**. Production validates *with* a registry. That is **architectural
+    flaw #2, verbatim**: *a check that exercises a configuration production never uses cannot see the
+    bug production has.* The generated sweep had even listed the exact line (`gap-scorer.js`
+    `byId.get(id) ?? null`) as a **survivor**, and the builder read past it.
+    **Rule: a check must construct its subject the way PRODUCTION constructs it. If your test hands
+    in something production omits — or omits something production hands in — it is testing a program
+    nobody runs.** `p3-converger-run.mjs` was fixed the same way: it drove the converger with no
+    channel catalog at all.
+  - **`BRANCH_CASE_NOT_IN_ENUM` (new).** A branch on a `classify` whose cases name values the
+    classifier **cannot produce** (`"HIGH"` when the categories are `urgent|normal`) validated clean
+    and scored complete. Every run takes the catch-all — silently, forever, with `run_completed` —
+    while the converger reports the workflow finished. **We forced the domain closed precisely so
+    membership would be DECIDABLE, and then never decided it.** Closing a domain and not checking
+    against it is a completeness claim nobody made good on. `closedDomainOf()` is now the single
+    definition of "what values can this node emit", shared by the allowlist and the case check, so
+    the two cannot drift.
+  - Also: `ratify` shipped a finished-looking draft with unresolved **blocking** gaps (the user found
+    out on a failed save) — it now carries `publishable` + `blockers`; and the outcome-candidate
+    filter silently dropped a requested connector (**defect #1 relocated from the spec into the
+    candidate list**) — it now says what it refused to promise, and why.
+
 ## Support tickets (in-app feedback / bug reporting) — added 2026-07-08
 
 Users submit bugs/ideas/requests from a floating **Feedback** button in the operator
@@ -758,4 +911,4 @@ Update as gates close. `git log --grep "^Gate:"` is the authoritative ledger.
 - [x] **P9** — value tracking: time-saved metrics per run, all-up ROI summary, customer-facing report
 - [x] **P10** — admin observability: standalone admin app, per-tenant usage + cost monitoring *(merged `601760c`; carries `Gate: P10` trailer + passing `scripts/gates/p10.sh`. Ledger backfilled by independent verifier: `docs/gates/p10.md`.)*
 - [x] **P11** — E2E validation + production hardening + VPS migration. **Closed 2026-07-13** (`b711b44`, `Gate: P11`, ledger `docs/gates/p11.md`). Built & merged long before (`d73b813`…`75891b7` + artifacts `2106f71`); the gate was un-closeable only because `scripts/gates/p11.sh` fail-closes when `PROD_HOST` is unset — it cannot smoke-test a VPS that doesn't exist. Prod went live, so `PROD_HOST=atlas.agntic.co bash scripts/gate.sh 11` finally runs. **Note for anyone re-running it:** the E2E suite *self-skips the converger test* without `ANTHROPIC_API_KEY` (`tests/e2e/full-journey.test.js`), so a bare run reports "6 pass / 1 skip" and the skipped one is Done-when #1. Run it with a key (7/7) or you are passing a gate you haven't proven.
-- [~] **P12** — **converger v2**: outcome contracts + BPMN/DMN shape (decisions, gap analysis) + the elicitation UI + the human approval gate. Build spec: [`docs/architecture/converger-v2.md`](docs/architecture/converger-v2.md) (theory: [`bpmn-dmn-foundations.md`](docs/architecture/bpmn-dmn-foundations.md)). Gate `scripts/gates/p12.sh` is **progressive** — it runs increments A–G in order and stops at the first unbuilt one, so `bash scripts/gate.sh 12` answers both *"is the phase closed?"* and *"which increment next?"*. **Increments A (validator hardening + node re-cut) and B (engine control flow) are done** — the gate now stops at **C (converger v2 core — the moat)**. Increments do NOT carry a `Gate:` trailer; only the phase's close does. Two invariants are load-bearing and must never be weakened: **`LLM_INPUT_NOT_ENUM`** (an LLM-evaluated decision input must classify into a *closed enum* — without it there is no completeness proof, and the completeness proof is the moat) and **`EMAIL_REPLY_APPROVAL`** (an approval parsed out of an email reply body authenticates *nothing*: `From:` is spoofable, and SPF/DKIM authenticate a sending domain, not a human intent — use a signed, hashed, single-use magic link).
+- [~] **P12** — **converger v2**: outcome contracts + BPMN/DMN shape (decisions, gap analysis) + the elicitation UI + the human approval gate. Build spec: [`docs/architecture/converger-v2.md`](docs/architecture/converger-v2.md) (theory: [`bpmn-dmn-foundations.md`](docs/architecture/bpmn-dmn-foundations.md)). Gate `scripts/gates/p12.sh` is **progressive** — it runs increments A–G in order and stops at the first unbuilt one, so `bash scripts/gate.sh 12` answers both *"is the phase closed?"* and *"which increment next?"*. **Increments A (validator hardening + node re-cut), B (engine control flow) and C (converger v2 core + the outcome contract) are done** — the gate now stops at **D (the human approval gate)**. Increments do NOT carry a `Gate:` trailer; only the phase's close does. Two invariants are load-bearing and must never be weakened: **`LLM_INPUT_NOT_ENUM`** (an LLM-evaluated decision input must classify into a *closed enum* — without it there is no completeness proof, and the completeness proof is the moat) and **`EMAIL_REPLY_APPROVAL`** (an approval parsed out of an email reply body authenticates *nothing*: `From:` is spoofable, and SPF/DKIM authenticate a sending domain, not a human intent — use a signed, hashed, single-use magic link).

@@ -160,6 +160,19 @@ GAP_TEST="tests/converger/gap-oracle.test.js"
 echo "p12: [C] gap oracle..."
 run_test "$GAP_TEST" "increment C"
 
+# ADDED (Increment C), never weakened. The test-adversary found five defects in C
+# behind a fully green suite — including the moat itself being bypassed by ONE
+# laundering hop (put an `assemble` between a freeform llm and a branch and
+# LLM_INPUT_NOT_ENUM never fires; the branch then routes on free prose and the
+# mandatory catch-all silently swallows 100% of traffic). All five are fixed and
+# pinned here. This suite is what stops them coming back.
+MOAT_TEST="tests/converger/moat-adversarial.test.js"
+[ -f "$MOAT_TEST" ] \
+  || next "C — converger v2 core + outcome/gap UI" \
+          "$MOAT_TEST missing. Must pin: the moat cannot be laundered through an intermediate node; a malformed decision rule never reports a clean bill of health; duplicate assertion ids do not drop an assertion; an \`integer\` domain does not invent a gap; a null node does not crash publish."
+echo "p12: [C] moat adversarial (the five defects the test-adversary found)..."
+run_test "$MOAT_TEST" "increment C"
+
 grep -q 'UNSATISFIED_ASSERTION' "$VALIDATOR" \
   || next "C — converger v2 core + outcome/gap UI" \
           "UNSATISFIED_ASSERTION not in the validator. Every outcome.assertions[] must map to >=1 node that satisfies it — this is what kills the 'Slack AND email' silent-drop defect."
@@ -176,7 +189,12 @@ ADV="scripts/checks/converger-adversarial.mjs"
   || next "C — converger v2 core + outcome/gap UI" \
           "$ADV missing. Contradictory outcomes; unstateable outcomes; an outcome needing an absent connector. It must NEVER silently drop an assertion."
 echo "p12: [C] converger adversarial..."
-node "$ADV" >/tmp/p12-cadv.log 2>&1 || { tail -40 /tmp/p12-cadv.log >&2; fail "increment C — converger adversarial check failed"; }
+# --env-file-if-exists=.env is LOAD-BEARING here for the same reason it is in
+# run_test(): half of this check drives the REAL model, to prove the converger
+# does not drop a requested destination BEFORE any validator can see it — which
+# is where defect #1 actually happened. Without a key the check FAILS CLOSED (it
+# does not self-skip), so a bare `node` invocation could never pass it.
+node --env-file-if-exists=.env "$ADV" >/tmp/p12-cadv.log 2>&1 || { tail -40 /tmp/p12-cadv.log >&2; fail "increment C — converger adversarial check failed"; }
 grep -q 'CONVERGER-ADVERSARIAL-PASS' /tmp/p12-cadv.log || fail "increment C — converger adversarial did not report PASS"
 
 # ─────────────────────────────────────────────────────────────────────────────

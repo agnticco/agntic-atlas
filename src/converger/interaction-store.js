@@ -75,9 +75,58 @@ export class InteractionStore {
       CREATE INDEX IF NOT EXISTS idx_ce_tenant     ON converger_events(tenant_id);
       CREATE INDEX IF NOT EXISTS idx_ce_type       ON converger_events(type);
       CREATE INDEX IF NOT EXISTS idx_ce_response   ON converger_events(response_type);
+
+      -- PROVENANCE (P12 Increment C). Which turn produced each assertion, and
+      -- which gaps nobody answered so they went to a person by default.
+      --
+      -- It lives HERE and not in the spec, deliberately: the spec is what the
+      -- engine executes, and an execution artefact should not carry a record of
+      -- the conversation that produced it. This table is what the SOP is written
+      -- from — "these three cases were never decided; they escalate" is exactly
+      -- the sentence a consultant's deliverable needs, and it is the sentence
+      -- nobody could write before, because nothing recorded it.
+      CREATE TABLE IF NOT EXISTS converger_provenance (
+        id           TEXT PRIMARY KEY,
+        session_id   TEXT NOT NULL,
+        tenant_id    TEXT NOT NULL,
+        kind         TEXT NOT NULL,    -- 'assertion' | 'example' | 'gap_escalated' | 'gap_answered'
+        ref_id       TEXT,             -- the assertion / gap id it is about
+        step         INTEGER,
+        detail       TEXT,             -- JSON
+        created_at   INTEGER NOT NULL
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_cp_session ON converger_provenance(session_id);
+      CREATE INDEX IF NOT EXISTS idx_cp_tenant  ON converger_provenance(tenant_id);
+      CREATE INDEX IF NOT EXISTS idx_cp_kind    ON converger_provenance(kind);
     `);
 
     return this;
+  }
+
+  // ── Provenance ───────────────────────────────────────────────────────────
+
+  appendProvenance(tenantId, sessionId, { kind, refId = null, step = null, detail = null }) {
+    requireTenant(tenantId, 'appendProvenance');
+    this.db.prepare(`
+      INSERT INTO converger_provenance
+        (id, session_id, tenant_id, kind, ref_id, step, detail, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      `cp_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+      sessionId, tenantId, kind, refId, step,
+      detail == null ? null : JSON.stringify(detail), Date.now(),
+    );
+  }
+
+  getProvenance(tenantId, sessionId) {
+    requireTenant(tenantId, 'getProvenance');
+    return this.db.prepare(`
+      SELECT * FROM converger_provenance
+       WHERE session_id = ? AND tenant_id = ?
+       ORDER BY created_at ASC
+    `).all(sessionId, tenantId)
+      .map(r => ({ ...r, detail: r.detail ? JSON.parse(r.detail) : null }));
   }
 
   // ── Session lifecycle ────────────────────────────────────────────────────
@@ -133,7 +182,49 @@ export class InteractionStore {
         VALUES (?, ?, ?, ?, ?, ?, ?)
       `).run(id, sessionId, tenantId, entry.step, 'ratify',
              entry.confirmation?.type ?? null, now);
+
+    } else {
+      // EVERY OTHER EVENT TYPE. This branch is not a formality: before Increment
+      // C this method handled exactly three types and silently dropped anything
+      // else — so the moment the graph gained an interrupt, its entire record
+      // would have vanished with no error, and the closed-loop analysis would
+      // have been quietly blind to the most important turns in the build.
+      // An unrecognised event is stored, not discarded.
+      this.db.prepare(`
+        INSERT INTO converger_events
+          (id, session_id, tenant_id, step, type, component, proposal_spec, response_type, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(id, sessionId, tenantId, entry.step ?? 0, String(entry.type ?? 'unknown'),
+             entry.component ?? null,
+             JSON.stringify(entry),
+             entry.confirmation?.type ?? null, now);
     }
+
+    // ── Provenance (P12 Increment C) ────────────────────────────────────────
+    // Which turn produced each assertion, and which gaps nobody answered.
+    try {
+      if (entry.type === 'outcome_check') {
+        for (const a of entry.outcome?.assertions ?? []) {
+          this.appendProvenance(tenantId, sessionId, {
+            kind: 'assertion', refId: a.id, step: entry.step,
+            detail: { assertion: a, statement: entry.outcome?.statement, confirmedBy: entry.confirmation?.type ?? 'default' },
+          });
+        }
+      }
+      if (entry.type === 'gap_review') {
+        for (const g of entry.escalated ?? []) {
+          this.appendProvenance(tenantId, sessionId, {
+            kind: 'gap_escalated', refId: g.id, step: entry.step,
+            detail: { code: g.code, class: g.class, message: g.message },
+          });
+        }
+        for (const [gapId, answer] of Object.entries(entry.answers ?? {})) {
+          this.appendProvenance(tenantId, sessionId, {
+            kind: 'gap_answered', refId: gapId, step: entry.step, detail: { answer },
+          });
+        }
+      }
+    } catch { /* provenance is a record, never a blocker on the build */ }
   }
 
   // ── Tenant-scoped reads ───────────────────────────────────────────────────
