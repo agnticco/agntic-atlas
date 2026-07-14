@@ -196,6 +196,22 @@ describe('the destination resolution touches only what it should', () => {
   });
 });
 
+describe('unparseable model output becomes a QUESTION, not a tight loop', () => {
+  test('a proposal with no component asks the user for more detail', async () => {
+    // The graph's own note: this "guarantees we always interrupt so the graph never
+    // tight-loops through analyze→propose without pausing". Without the interrupt the
+    // model's garbage is treated as a proposal and the loop spins with nothing on
+    // screen — the user watches a spinner forever, which is the worst failure a
+    // conversational builder has: it looks like it is working.
+    let asked = null;
+    await drive({
+      answers: { 'Build the next component': {} },   // the model returns nothing usable
+      onInterrupt: (iv) => { if (!asked && iv.type === 'clarification' && /more detail/i.test(iv.question ?? '')) asked = iv; },
+    });
+    assert.ok(asked, 'unparseable output must reach the user as a question, not spin silently');
+  });
+});
+
 describe('the outcome step degrades honestly', () => {
   test('when the model offers NO contract, the graph carries on rather than dying', async () => {
     // An outcome the model cannot state is not a reason to crash the session — it is a
