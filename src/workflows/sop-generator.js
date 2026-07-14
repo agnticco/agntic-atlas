@@ -278,11 +278,15 @@ function buildDeps(edges) {
   return deps;
 }
 
-export function generateSopMarkdown(wf) {
+export function generateSopMarkdown(wf, { provenance = null } = {}) {
   const nodes    = wf.nodes    ?? [];
   const edges    = wf.edges    ?? [];
   const triggers = wf.triggers ?? [];
   const deps     = buildDeps(edges);
+  // `outcome` is JSON in the store; a caller may hand it parsed or raw.
+  const outcome  = typeof wf.outcome === 'string'
+    ? (() => { try { return JSON.parse(wf.outcome); } catch { return null; } })()
+    : wf.outcome ?? null;
 
   const now = new Date().toISOString().slice(0, 10);
   const lines = [];
@@ -304,6 +308,35 @@ export function generateSopMarkdown(wf) {
   if (wf.description) {
     lines.push(wf.description);
     lines.push('');
+  }
+
+  // ── The Outcome (P12 Increment G) ──────────────────────────────────────────
+  // The contract this workflow is held to — what must be TRUE after every run.
+  // This is the top of the SOP because it is the point of the whole procedure:
+  // an auditor reads "what is this supposed to achieve" before "how".
+  if (outcome && (outcome.statement || (outcome.assertions ?? []).length)) {
+    lines.push('---');
+    lines.push('');
+    lines.push('## Outcome');
+    lines.push('');
+    if (outcome.statement) { lines.push(`> ${outcome.statement}`); lines.push(''); }
+    const assertions = Array.isArray(outcome.assertions) ? outcome.assertions : [];
+    if (assertions.length) {
+      lines.push('**Every run must produce:**');
+      lines.push('');
+      for (const a of assertions) {
+        const kind = String(a.kind ?? '').replace(/_/g, ' ');
+        const when = a.when ? ` *(only when ${a.when})*` : '';
+        const flds = Array.isArray(a.fields) && a.fields.length ? ` — carrying ${a.fields.join(', ')}` : '';
+        lines.push(`- **${kind}** → \`${a.target}\`${flds}${when}`);
+      }
+      lines.push('');
+    }
+    const examples = Array.isArray(outcome.examples) ? outcome.examples : [];
+    if (examples.length) {
+      lines.push(`*Verified against ${examples.length} worked example${examples.length > 1 ? 's' : ''} in the test panel.*`);
+      lines.push('');
+    }
   }
 
   // Triggers
@@ -382,5 +415,94 @@ export function generateSopMarkdown(wf) {
     lines.push('');
   }
 
+  // ── When things go wrong / a case isn't covered (P12 Increment G) ──────────
+  // The escalation policy, DERIVED FROM THE SPEC — not from a transient build log.
+  // "What happens when a step fails, or an input nobody anticipated arrives" is the
+  // question every operator asks before trusting a workflow to run unattended, and
+  // the answer is written in the spec's own on_error / human / catch-all structure.
+  // Reading it from there means the SOP is true even for a workflow edited by hand,
+  // long after the converger session is gone.
+  const policy = escalationLines(nodes);
+  if (policy.length) {
+    lines.push('---');
+    lines.push('');
+    lines.push('## When things go wrong');
+    lines.push('');
+    lines.push('How this workflow handles a failure, or a case nobody anticipated:');
+    lines.push('');
+    for (const p of policy) lines.push(`- ${p}`);
+    lines.push('');
+  }
+
+  // ── How this was decided (P12 Increment G) ─────────────────────────────────
+  // The provenance: which turn of the conversation produced each promise, and which
+  // gaps were escalated by default rather than answered. This is the consultant's
+  // audit trail — "you agreed to X on turn 4; these three cases were left to a
+  // person." It is read from the interaction store by the caller and passed in;
+  // absent when there is no recorded session (a hand-built or pre-C workflow).
+  const prov = Array.isArray(provenance) ? provenance : [];
+  if (prov.length) {
+    const assertions = prov.filter(p => p.kind === 'assertion');
+    const escalated  = prov.filter(p => p.kind === 'gap_escalated');
+    if (assertions.length || escalated.length) {
+      lines.push('---');
+      lines.push('');
+      lines.push('## How this was decided');
+      lines.push('');
+      if (assertions.length) {
+        lines.push('**The promises, and when they were agreed:**');
+        lines.push('');
+        for (const a of assertions) {
+          lines.push(`- ${provDetail(a)}${a.step != null ? ` *(step ${a.step})*` : ''}`);
+        }
+        lines.push('');
+      }
+      if (escalated.length) {
+        lines.push('**Left to a person, by default** — these cases were not decided at build time; the workflow escalates them at run time:');
+        lines.push('');
+        for (const e of escalated) lines.push(`- ${provDetail(e)}`);
+        lines.push('');
+      }
+    }
+  }
+
   return lines.join('\n');
+}
+
+/** Human-readable escalation policy, read straight off the spec's nodes. */
+function escalationLines(nodes) {
+  const out = [];
+  for (const n of nodes) {
+    const label = n.label || n.id;
+    const then = n.on_error?.then;
+    if (then === 'escalate') {
+      const retry = Number(n.on_error?.retry ?? 0);
+      out.push(`If **${label}** fails${retry ? ` (after ${retry} retr${retry === 1 ? 'y' : 'ies'})` : ''}, it is handed to a person in their Approvals list.`);
+    } else if (typeof then === 'string' && then.startsWith('route_to:')) {
+      const target = then.slice('route_to:'.length);
+      const t = nodes.find(x => x.id === target);
+      out.push(`If **${label}** fails, the run continues down a recovery path (**${t?.label || target}**).`);
+    }
+    if (n.type === 'human') {
+      const to = n.config?.timeout?.then;
+      out.push(`**${label}** pauses for a person's decision${to ? `; if nobody answers in time, it ${to}s` : ''}.`);
+    }
+    if (n.type === 'branch') {
+      const cases = normalizeCases(n.config?.cases);
+      const fallthrough = cases.find(c => String(c?.when).trim() === '*');
+      if (fallthrough) {
+        const t = nodes.find(x => x.id === fallthrough.to);
+        out.push(`An unanticipated value at **${label}** goes to **${t?.label || fallthrough.to}** — nothing falls through silently.`);
+      }
+    }
+  }
+  return out;
+}
+
+/** Render one provenance row for the SOP. */
+function provDetail(p) {
+  const d = p.detail;
+  if (d && typeof d === 'object') return d.message ?? d.target ?? d.statement ?? JSON.stringify(d);
+  if (typeof d === 'string') { try { const o = JSON.parse(d); return o.message ?? o.target ?? o.statement ?? d; } catch { return d; } }
+  return p.ref_id ?? '(recorded)';
 }
