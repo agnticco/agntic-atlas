@@ -1304,6 +1304,31 @@ phase, not just this one.
   'open'` any more: a connector-action's params are validated against the SELECTED CAPABILITY's own
   declared schema, by the same resolver `deliver` uses for its channel.
 
+*New, from F (the verifier's round-2 residuals — recorded, none blocking):*
+- **A LATCH THAT STOPS YOU ASKING MUST NEVER STOP YOU CHECKING.** The round-2 blocker:
+  `destinations` resolved the columns once, `applyProposal` REPLACES a node by id, and a blocking
+  gap routes back through `propose` — so any later propose round could put the invented column
+  straight back, and nothing re-checked it. **The gap loop even hands the model the motive**: the
+  blocking gap says *"you promised Company and nothing writes it"*, so the model obligingly
+  re-proposes the node with `Company` back on. The increment's own honest-failure path, converted
+  into a silent success by the loop that reported it. **A fact the next node can falsify is not an
+  invariant, it is a memory.** Fixed by caching the resolved destination (ask once) and
+  RE-CHECKING the columns on every pass (free — it reads state). **Mutation testing could not have
+  found this: there was no line to mutate. It was a MISSING re-check, and the sweep measures the
+  guards you wrote, never the one you didn't.**
+- **`{{item.naem}}` inside a `foreach` is unchecked** — it publishes, writes the column blank, and
+  says nothing. The item's shape is genuinely unknowable at build time, so this is consistent with
+  `BAD_TEMPLATE_FIELD`'s rule ("a source that declares nothing makes no claim") — but it is the same
+  silent-blank-column class, in the canonical bulk-write shape. Same for `{{look.subject}}` off a
+  connector read: **capabilities declare no OUTPUT schema**. Closing both needs output schemas on the
+  catalog — worth doing, and the natural home is G or a connector increment.
+- **`fields: {}` publishes when the assertion carries no `fields` array.** `fillDestination`'s
+  docstring claims a total mismatch "fails UNSATISFIED_ASSERTION" — true only if the model put a
+  `fields` array on the assertion. Otherwise it publishes and fails loudly at every run on
+  `airtableCreateRecord`'s empty-record guard. **The docstring over-claims; the behaviour is loud.**
+- `tests/workflows/validator-rules.test.js:42-52` still hand-rolls a `CHANNELS` map instead of using
+  `tests/helpers/catalog.js`.
+
 *New, from E:*
 - ~~**A decision's `from` is not checked against what the upstream step produces.**~~ **CLOSED by
   increment F** — `BAD_TEMPLATE_FIELD`. F's sub-field grammar ({{extract.budget}}) is what makes a
