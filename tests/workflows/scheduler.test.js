@@ -167,14 +167,24 @@ test('overlapping ticks do not double-fire a workflow', async () => {
 });
 
 test('start() and stop() are idempotent and leave no timer behind', () => {
+  // start() creates a real setInterval. The `finally` clears it DIRECTLY (not via
+  // stop()), so this test never leaks a live timer even when the assertion below
+  // fails — which matters under mutation: a mutant that neuters stop() makes the
+  // assertion fail (correct kill), but a leaked interval would keep Node's event
+  // loop alive and HANG `node --test` on exit, stalling the whole sweep. Kill by
+  // assertion in ~1s, never by a 120s timeout.
   const s = setup();
-  s.scheduler.start();
-  const first = s.scheduler._timer;
-  s.scheduler.start();               // second start must not create a second loop
-  assert.equal(s.scheduler._timer, first, 'a second start() would double-fire every scheduled workflow');
-  s.scheduler.stop();
-  assert.equal(s.scheduler._timer, null);
-  s.scheduler.stop();                // stopping twice must not throw
+  try {
+    s.scheduler.start();
+    const first = s.scheduler._timer;
+    s.scheduler.start();               // second start must not create a second loop
+    assert.equal(s.scheduler._timer, first, 'a second start() would double-fire every scheduled workflow');
+    s.scheduler.stop();
+    assert.equal(s.scheduler._timer, null);
+    s.scheduler.stop();                // stopping twice must not throw
+  } finally {
+    clearInterval(s.scheduler._timer);  // defensive: never leave a live timer, even if stop() is broken
+  }
 });
 
 // ── fetch-kind workflows ─────────────────────────────────────────────────────

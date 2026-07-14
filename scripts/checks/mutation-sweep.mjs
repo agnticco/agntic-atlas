@@ -197,8 +197,23 @@ function mutantsFor(file) {
  * so this is a large win rather than a marginal one.
  */
 function suitesPass() {
-  try { execFileSync('node', ['--test', ...SUITES], { stdio: 'pipe' }); return true; }
-  catch { return false; }
+  // TIMEOUT IS LOAD-BEARING, not a nicety. A mutant can make a test HANG rather
+  // than fail — e.g. neutering `WorkflowScheduler.stop()` leaves a live
+  // `setInterval` that keeps Node's event loop alive, so `node --test` reports
+  // the failing assertion and then NEVER EXITS. Without a timeout, `execFileSync`
+  // waits forever, the whole sweep stalls on that one mutant, and every killed
+  // gate run orphans the hung worker (observed: 4-hour-old zombies, an 83-minute
+  // sweep that would never finish). A hang is a FAILURE — the suite did not pass —
+  // so a timeout that throws is the CORRECT kill, not a false one. 120s is ~50x
+  // the normal run, so it never trips on a slow-but-passing suite.
+  //
+  // `killSignal: 'SIGKILL'` because a mutant that hangs on a timer will ignore
+  // SIGTERM; `--test-force-exit` so the child tears down even with a live handle.
+  try {
+    execFileSync('node', ['--test', '--test-force-exit', ...SUITES],
+      { stdio: 'pipe', timeout: 120_000, killSignal: 'SIGKILL' });
+    return true;
+  } catch { return false; }
 }
 
 // ── Run ──────────────────────────────────────────────────────────────────────
