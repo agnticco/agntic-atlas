@@ -584,3 +584,36 @@ describe('a FIELDS assertion is checked even when it has no id', () => {
     assert.equal(errors(spec(['Name', 'Company'])).includes('UNSATISFIED_ASSERTION'), false);
   });
 });
+
+// ── P12 Increment D — `.decision` is a HUMAN field (BRANCH_BAD_ON) ────────────
+test('a branch routing on `.decision` of a NON-human step is rejected', () => {
+  // `.decision` is a field only a `human` node produces. Routing on `llm.decision`
+  // is meaningless — the engine would throw rather than misroute — so it is a
+  // build-time error (BRANCH_BAD_ON), not a runtime surprise.
+  const spec = {
+    name: 'x', kind: 'flow',
+    triggers: [{ type: 'schedule', config: { cron: '0 9 * * *' } }],
+    nodes: [
+      { id: 'draft', type: 'llm', config: { mode: 'freeform', prompt: 'd' } },
+      { id: 'gate',  type: 'branch', config: { on: '{{draft.decision}}', cases: [{ when: 'approve', to: 'd' }, { when: '*', to: 'no' }] } },
+      { id: 'd',     type: 'deliver', config: { channel: 'in_app' } },
+      { id: 'no',    type: 'assemble', config: { title: 'no', sections: '[]' } },
+    ],
+    edges: [{ from: 'draft', to: 'gate' }, { from: 'gate', to: 'd' }, { from: 'gate', to: 'no' }],
+  };
+  assert.ok(codes(spec).includes('BRANCH_BAD_ON'), 'only a human step has a .decision to route on');
+  // Positive: `.decision` on an actual human node is fine.
+  const ok = {
+    name: 'x', kind: 'flow',
+    triggers: [{ type: 'schedule', config: { cron: '0 9 * * *' } }],
+    nodes: [
+      { id: 'draft', type: 'llm', config: { mode: 'freeform', prompt: 'd' } },
+      { id: 'ask',   type: 'human', config: { prompt: 'ok?', decisions: ['approve', 'reject'], channels: [{ type: 'inbox' }], timeout: { after: '48h', then: 'reject' } } },
+      { id: 'gate',  type: 'branch', config: { on: '{{ask.decision}}', cases: [{ when: 'approve', to: 'd' }, { when: '*', to: 'no' }] } },
+      { id: 'd',     type: 'deliver', config: { channel: 'in_app' } },
+      { id: 'no',    type: 'assemble', config: { title: 'no', sections: '[]' } },
+    ],
+    edges: [{ from: 'draft', to: 'ask' }, { from: 'ask', to: 'gate' }, { from: 'gate', to: 'd' }, { from: 'gate', to: 'no' }],
+  };
+  assert.ok(!codes(ok).includes('BRANCH_BAD_ON'), 'a human .decision routes fine');
+});

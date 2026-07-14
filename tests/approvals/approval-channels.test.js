@@ -372,3 +372,46 @@ test('a pause with NO ask deliverer wired FAILS the run rather than hanging fore
     'it does NOT park — a run waiting for an answer no surface will ever request is a hang');
   assert.equal(ws.getLastRun(wf.id).status, 'error', 'an honest, visible failure instead');
 });
+
+// ── Precise behavioral pins (mutation-sweep survivors) ───────────────────────
+
+test('deliverAsk RESOLVES (does not throw) when at least one channel succeeds', async () => {
+  // Kills the mutant that makes the "not one channel worked" throw fire on every
+  // call: a successful delivery must return a count, not reject.
+  const h = harness({ channels: [{ type: 'inbox' }, { type: 'email', to: 'ops@acme.test' }] });
+  const run = await h.park();
+  const res = await h.service.deliverAsk({
+    workflow: h.ws.get(h.workflow.id), run, ask: run.pending_ask, expiresAt: null,
+  });
+  assert.equal(res.delivered, 2, 'both channels delivered');
+  assert.equal(res.of, 2);
+});
+
+test('an inbox-only ask issues NO email tokens (tokens exist only for the email channel)', async () => {
+  // Kills the mutant that makes `if (wantsEmail)` always true — minting a
+  // forgeable credential for a channel that does not use one.
+  const h = harness({ channels: [{ type: 'inbox' }] });
+  const run = await h.park();
+  const tokenRows = h.approvals.db.prepare('SELECT COUNT(*) n FROM approval_tokens WHERE run_id = ?').get(run.id);
+  assert.equal(tokenRows.n, 0, 'no channel needs a token, so none was minted');
+  assert.equal(h.inboxed.length, 1, 'and the inbox ask still went out');
+});
+
+test('an email ask DOES mint one token per decision', async () => {
+  const h = harness({ channels: [{ type: 'email', to: 'ops@acme.test' }], decisions: ['approve', 'reject'] });
+  const run = await h.park();
+  const n = h.approvals.db.prepare('SELECT COUNT(*) n FROM approval_tokens WHERE run_id = ?').get(run.id).n;
+  assert.equal(n, 2, 'one token for approve, one for reject');
+});
+
+test('an unsupported channel type REJECTS (its promise throws), it is not silently downgraded', async () => {
+  // Kills THROW_GONE on the `unsupported approval channel` guard: the bad channel
+  // must fail, while the good one still delivers.
+  const h = harness({ channels: [{ type: 'inbox' }, { type: 'carrier_pigeon' }] });
+  const run = await h.park();
+  const res = await h.service.deliverAsk({
+    workflow: h.ws.get(h.workflow.id), run, ask: run.pending_ask, expiresAt: null,
+  });
+  assert.equal(res.delivered, 1, 'exactly the inbox channel delivered');
+  assert.equal(res.of, 2, 'and the unsupported one counted as a channel that failed');
+});
