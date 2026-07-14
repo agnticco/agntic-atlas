@@ -227,7 +227,15 @@ export function scoreGap(spec = {}, { capabilities = {}, validator = null } = {}
   // is always available; certifying without checking is not.
   // (Found by the independent verifier.)
   const hasCatalog = Array.isArray(capabilities?.channels) && capabilities.channels.length > 0;
-  const routed = nodes.filter(n => n?.type === 'deliver' && n.config?.channel);
+  // …and a `connector-action` is checked against the SAME catalog as of Increment F
+  // (its params are the capability's own). Publish always has the registry, so a
+  // scorer without one performs FEWER checks than publish does — which is precisely
+  // how a spec scores `complete` and is then rejected at save. Same hole, one node
+  // type along. (CLAUDE.md, Increment C: refusing to certify is always available;
+  // certifying without checking is not.)
+  const routed = nodes.filter(n =>
+    (n?.type === 'deliver' && n.config?.channel) ||
+    (n?.type === 'connector-action' && n.config?.action));
   if (!hasCatalog && routed.length) {
     gaps.push({
       id: 'gap_channels_unverified', class: 'contract', nodeId: null,

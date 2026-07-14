@@ -169,15 +169,23 @@ export class WorkflowValidator {
 
       // required config — inferred from the type's configSchema (fields
       // without `optional: true` are required).
-      const required = typeDef?.configSchema?.filter(f => !f.optional).map(f => f.key) ?? [];
-      for (const key of required) {
+      //
+      // For a `connector-action` and a `deliver`, "required" also includes the
+      // SELECTED CAPABILITY's own required params (P12 Increment F). An
+      // `airtable_create_record` with no `baseId` is not a workflow with a small
+      // omission — it is one that cannot possibly run, and it used to publish
+      // clean and fail at 3am against a real customer's trigger.
+      const capSchema = this._capabilitySchemaFor(node, cfg);
+      const schema    = [...(typeDef?.configSchema ?? []), ...capSchema];
+      const required  = schema.filter(f => !f.optional).map(f => f.key);
+      for (const key of [...new Set(required)]) {
         const v = cfg[key];
         if (v == null || (typeof v === 'string' && !v.trim())) {
           issues.push({
             severity: 'error', code: 'MISSING_CONFIG',
-            message: `"${node.label || node.id}" is a ${typeDef.label || node.type} step but is missing its ${key}.`,
+            message: `"${node.label || node.id}" is a ${typeDef?.label || node.type} step but is missing its ${key}.`,
             nodeId: node.id, field: `config.${key}`,
-            hint: typeDef.configSchema.find(f => f.key === key)?.hint ?? this._requiredFieldHint(node.type, key),
+            hint: schema.find(f => f.key === key)?.hint ?? this._requiredFieldHint(node.type, key),
           });
         }
       }
@@ -192,11 +200,42 @@ export class WorkflowValidator {
       // out. An unknown key is not a shrug; it means the spec asked for
       // something the engine will not do, and the user will never be told.
       //
-      // Scoped by configPolicy: 'open' types (connector-action) take params
-      // this schema cannot enumerate, because they are per-capability and the
-      // catalog is built at run time from the tenant's authorised connectors.
-      // Increment F validates those against each capability's own schema.
-      if (typeDef && typeDef.configPolicy !== 'open') {
+      // NOTHING IS 'open' ANY MORE (P12 Increment F). `connector-action` was the
+      // last one, on the reasoning that its params are per-capability and this
+      // schema cannot enumerate them. True — and beside the point: every
+      // CAPABILITY declares its own `configSchema`, so the key set is simply
+      // "the node's own keys ∪ the selected capability's", exactly as `deliver`
+      // has resolved its channel's keys since Increment C. The schema was there
+      // all along and was never consulted. `configPolicy` is kept because a
+      // future type may genuinely need it, and because a check that cannot be
+      // scoped is a check that gets deleted the first time it is inconvenient.
+      //
+      // ── AND IT ONLY RUNS WHEN THE CAPABILITY CAN BE RESOLVED ──────────────
+      //
+      // A `deliver` / `connector-action` whose capability we cannot look up has an
+      // UNKNOWABLE key set — and an unknowable key set is not a wrong one. Judging
+      // it anyway rejects `baseId` on an Airtable action purely because the caller
+      // had no registry, which is a false rejection produced by the checker's own
+      // configuration rather than by anything in the spec.
+      //
+      // That is safe to skip precisely because it never happens in production:
+      // publish always wires the registry (server.js), and the GAP SCORER REFUSES
+      // TO CERTIFY a spec it could not check (CHANNELS_UNVERIFIED). Skipping here
+      // and failing closed there is the split that keeps `complete ⇒ publishable`
+      // true without making the validator unusable to every caller that has no
+      // catalog. (P12 Increment F — the same rule `_checkHumanNode` already applies
+      // to approval channels.)
+      // Ask the REGISTRY whether it knows the capability — do not infer it from
+      // `capSchema.length`, because a capability that genuinely takes no params has
+      // an empty schema and is perfectly well resolved. Inferring "resolved" from
+      // "has keys" would silently stop checking exactly the capabilities whose key
+      // set is `{}` — i.e. the ones where ANY key is a hallucination.
+      const capBearing  = node.type === 'deliver' ? cfg.channel
+                        : node.type === 'connector-action' ? cfg.action
+                        : null;
+      const capResolved = !capBearing || !!this._resolveCapability(capBearing);
+
+      if (typeDef && typeDef.configPolicy !== 'open' && capResolved) {
         const declared = new Set((typeDef.configSchema ?? []).map(f => f.key));
 
         // A `deliver` node's config is deliver's OWN keys plus the SELECTED
@@ -220,9 +259,10 @@ export class WorkflowValidator {
         // the true ones. Where the channel cannot be resolved (no registry
         // wired), its params are unknowable — so they are not judged, exactly as
         // connector-action's are not.
-        if (node.type === 'deliver') {
-          for (const f of this._channelConfigSchema(cfg.channel)) declared.add(f.key);
-        }
+        // …and a `connector-action`'s config is ITS own keys plus the SELECTED
+        // CAPABILITY's, for exactly the same reason. Same resolver, keyed on
+        // `action` instead of `channel` (P12 Increment F).
+        for (const f of capSchema) declared.add(f.key);
 
         for (const key of Object.keys(cfg)) {
           if (declared.has(key)) continue;
@@ -1126,14 +1166,38 @@ export class WorkflowValidator {
    * The registry may be a real ChannelRegistry or the plain catalog view the
    * converger holds (`capabilities.channels`) — both expose `get(id).configSchema`.
    */
+  /** The capability behind a `deliver`'s channel or a `connector-action`'s action. */
+  _resolveCapability(id) {
+    if (!id || !this.channelRegistry) return null;
+    try { return this.channelRegistry.get?.(id) ?? null; } catch { return null; }
+  }
+
   _channelConfigSchema(channelId) {
-    if (!channelId || !this.channelRegistry) return [];
-    try {
-      const ch = this.channelRegistry.get?.(channelId);
-      return Array.isArray(ch?.configSchema) ? ch.configSchema : [];
-    } catch {
-      return [];
-    }
+    const ch = this._resolveCapability(channelId);
+    return Array.isArray(ch?.configSchema) ? ch.configSchema : [];
+  }
+
+  /**
+   * The params the CAPABILITY this node selected declares for itself.
+   *
+   * A `deliver` selects one with `config.channel`; a `connector-action` selects one
+   * with `config.action`. They are the same catalog and the same question — "what
+   * settings does this capability take?" — so they get the same answer from the
+   * same place. Two resolvers would be two chances to disagree about whether
+   * `baseId` is a real key, and a disagreement there means one of them rejects a
+   * spec the other accepts.
+   *
+   * Empty when the capability cannot be resolved (no registry wired): an
+   * unknowable key set is not a wrong one, and `UNKNOWN_CHANNEL` /
+   * `UNKNOWN_CONNECTOR_ACTION` already report a capability that does not exist.
+   * The gap scorer FAILS CLOSED in that state rather than certifying a spec whose
+   * params nobody checked (CHANNELS_UNVERIFIED) — the split that keeps
+   * `complete ⇒ publishable` true. (P12 Increment F.)
+   */
+  _capabilitySchemaFor(node, cfg) {
+    if (node?.type === 'deliver')          return this._channelConfigSchema(cfg.channel);
+    if (node?.type === 'connector-action') return this._channelConfigSchema(cfg.action);
+    return [];
   }
 
   /**
@@ -1144,6 +1208,28 @@ export class WorkflowValidator {
    */
   _checkTypeSpecific(node, issues) {
     const cfg = node.config ?? {};
+
+    // A connector-action naming a capability that does not exist threw at RUN time
+    // ("Connector action X is not available in this build") — i.e. at 6am, against
+    // a real customer's trigger, in a log nobody reads. The catalog is right here
+    // at build time; ask it then. Mirrors UNKNOWN_CHANNEL exactly. (Increment F.)
+    if (node.type === 'connector-action' && cfg.action && this.channelRegistry) {
+      const cap = this.channelRegistry.get?.(cfg.action);
+      if (!cap) {
+        issues.push({
+          severity: 'error', code: 'UNKNOWN_CONNECTOR_ACTION',
+          message: `"${node.label || node.id}" runs the connector action "${cfg.action}", which isn't a capability this workspace has.`,
+          nodeId: node.id, field: 'config.action',
+          hint: 'Pick a connector action from the catalog — or connect the connector that provides it.',
+        });
+      } else if (cap.available === false) {
+        issues.push({
+          severity: 'error', code: 'CHANNEL_UNAVAILABLE',
+          message: `Connector action "${cfg.action}" is registered but not ready: ${cap.unavailableReason || 'dependency missing'}.`,
+          nodeId: node.id, field: 'config.action',
+        });
+      }
+    }
 
     if (node.type === 'deliver') {
       const channelId = cfg.channel;
