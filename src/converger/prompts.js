@@ -204,10 +204,27 @@ AVAILABLE NODE TYPES (only these — every one is runnable by the engine today):
 - assemble: Stitch several upstream steps into ONE markdown document. No AI call, so it is free and exact. config: title, intro, sections (JSON array of { heading, content }, where content is "{{<nodeId>.output}}"), outro. Use it to combine sections; never use an llm node just to concatenate.
 - connector-action: Call a connector capability MID-workflow to GET or DO something, then pass the result to the next step (config: { action:"<id>", ...params }). Use this ONLY when the workflow genuinely needs to reach into a connector mid-flow — e.g. pull a Slack channel's history, look up a user, create/invite to a channel. Do NOT use it to "fetch" the data a trigger already delivers, and never for the final delivery (use deliver). If no connector action is needed, skip it entirely. Available actions:
 ${stepSummary(capabilities)}
+- decision: A DECISION TABLE. Use it when the answer depends on TWO OR MORE inputs together, or on a numeric threshold ("over $50k", "more than 3 days late") — anything a single classify cannot express. Everything lives under config:
+    { "inputs": [ { "key": "budget", "type": "number", "from": "<stepId>.budget" },
+                  { "key": "tone", "type": "enum", "values": ["calm","urgent"], "evaluator": "llm", "evaluatorPrompt": "How urgent does the sender sound?" } ],
+      "output":  { "key": "priority", "type": "enum", "values": ["P1","P2","P3"] },
+      "hitPolicy": "FIRST",
+      "rules":   [ { "when": { "budget": ">50000" },  "then": "P1" },
+                   { "when": { "tone": "urgent" },    "then": "P1" },
+                   { "when": { "budget": "-", "tone": "-" }, "then": "P3" } ] }
+  Conditions: a literal ("urgent") · a comma list ("urgent, angry") · < <= > >= · an interval [10..50] · not(x) · "-" meaning "don't care". A rule whose inputs are ALL "-" is the catch-all.
+  HARD RULES, all enforced at publish time:
+  • An input judged by AI (evaluator:"llm") MUST be type:"enum" with a closed \`values\` list (LLM_INPUT_NOT_ENUM). Free text has no bounded set of answers, so no table can be proven to cover it.
+  • Every \`then\` must be one of \`output.values\` (DECISION_OUTPUT_NOT_IN_ENUM), and every \`when\` key must be one of the declared inputs (DECISION_UNKNOWN_INPUT).
+  • hitPolicy "UNIQUE" promises exactly one rule can EVER match — overlapping rules are rejected (UNIQUE_HIT_OVERLAP). Use "FIRST" (first match wins) unless the user genuinely means "only one".
+  • At most FOUR inputs. Past that, split it into two decisions and feed the first one's answer into the second as an input.
+  • An input combination no rule covers is reported before publish (DECISION_TABLE_GAP) and, at run time, the step FAILS rather than guessing — so the case reaches a person instead of vanishing. Prefer a catch-all rule.
+  Do NOT reach for a decision when one llm mode:"classify" would do. One input, one judgement ⇒ classify. Several inputs, or a number ⇒ decision.
 - branch: Route the workflow down exactly ONE path, based on a value an earlier step produced. config: { on: "<stepId>.output", cases: [ { when: "<value>", to: "<stepId>" }, … , { when: "*", to: "<stepId>" } ] }.
   HARD RULES, all enforced at publish time:
   • The catch-all { "when": "*" } is MANDATORY. Without it an unexpected value matches nothing and the workflow SILENTLY does nothing.
-  • It may ONLY route on a value with a CLOSED, DECLARED set of possibilities: an llm node with mode:"classify" (its categories), or a human node (its decisions). Routing on freeform AI prose is rejected (LLM_INPUT_NOT_ENUM) — cases match by exact value, so prose matches nothing and every run falls through the catch-all.
+  • It may ONLY route on a value with a CLOSED, DECLARED set of possibilities: an llm node with mode:"classify" (its categories), a decision node (its output.values — but NOT one whose hitPolicy is COLLECT, which emits a list), or a human node (its decisions). Routing on freeform AI prose is rejected (LLM_INPUT_NOT_ENUM) — cases match by exact value, so prose matches nothing and every run falls through the catch-all.
+  • Every case's \`when\` must be a value the routed-on step can actually produce (BRANCH_CASE_NOT_IN_ENUM) — a case for a value nothing emits can never match.
   • Every case needs a real edge: { "from": "<branchId>", "to": "<case target>" }.
   • A case's target must be reachable ONLY through the branch — nothing else may have an edge to it, or it runs whichever way the branch went and the branch decides nothing. To use another step's data there, reference it as {{stepId.output}} — a template needs no edge.
 - human: STOP AND ASK A PERSON. The run pauses (costing nothing while it waits), the question goes to their Approvals list / Slack / email, and it continues when they answer. config: { prompt, preview: "{{<stepId>.output}}" (what they SEE — usually the draft being approved), decisions: ["approve","reject"], channels: [{ "type": "inbox" }] (also "slack" with a target, or "email" with a to), timeout: { "after": "48h", "then": "reject" } }.
@@ -595,20 +612,33 @@ EXAMPLES: ${JSON.stringify(examples ?? [], null, 2)}
 
 If every input is treated identically, answer {"needsDecision":false} and stop.
 
-If some inputs are treated differently, the ONLY sanctioned shape is:
-  1. an "llm" node with mode:"classify" and a CLOSED list of categories, then
-  2. a "branch" node that routes on it.
+If some inputs are treated differently, there are exactly TWO sanctioned shapes, and the
+number of things the judgement depends on picks which:
 
-An AI step that emits free text CANNOT feed a branch: the branch matches by exact value, so
-prose matches nothing and every run falls through the catch-all — silently. The validator
-rejects it (LLM_INPUT_NOT_ENUM). A classifier returns exactly one of a closed set, which is
-what makes the routing checkable. This is not a style preference; it is the difference between
-a workflow whose behaviour can be proven complete and one that cannot.
+  ONE judgement, one input  →  an "llm" node with mode:"classify" and a CLOSED list of
+                               categories, then a "branch" that routes on it.
+  SEVERAL inputs, or a NUMBER ("over $50k", "more than 3 days late")
+                            →  a "decision" node: a table whose inputs are declared, whose
+                               output is a closed list of answers, and whose rules can be
+                               PROVEN to cover every case. Then a "branch" routes on its
+                               output.
 
-Return JSON only:
-{"needsDecision":true,
+What is NOT allowed, in either shape: an AI step that emits free text feeding a branch. The
+branch matches by exact value, so prose matches nothing and every run falls through the
+catch-all — silently. The validator rejects it (LLM_INPUT_NOT_ENUM). A closed set of answers
+is what makes the routing checkable, and an AI-judged decision input must be an enum for the
+same reason. This is not a style preference; it is the difference between a workflow whose
+behaviour can be proven complete and one that cannot.
+
+Return JSON only, using ONE of these two shapes:
+{"needsDecision":true,"shape":"classify",
  "classify":{"id":"<id>","categories":["…","…"],"instructions":"<how to decide>"},
- "cases":[{"when":"<category>","to":"<what should happen>"}, {"when":"*","to":"<everything else>"}]}`;
+ "cases":[{"when":"<category>","to":"<what should happen>"}, {"when":"*","to":"<everything else>"}]}
+{"needsDecision":true,"shape":"table",
+ "decision":{"id":"<id>","inputs":[{"key":"<k>","type":"number|enum|integer|boolean","values":["…"],"evaluator":"llm|null"}],
+             "output":{"key":"<k>","type":"enum","values":["…","…"]},"hitPolicy":"FIRST",
+             "rules":[{"when":{"<k>":"<condition>"},"then":"<one of output.values>"}]},
+ "cases":[{"when":"<output value>","to":"<what should happen>"}, {"when":"*","to":"<everything else>"}]}`;
 }
 
 // ── Gap prompt — suggest an answer for each open gap ─────────────────────────

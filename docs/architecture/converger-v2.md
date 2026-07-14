@@ -165,21 +165,22 @@ Two consequences worth stating loudly:
       "config": { "fields": ["name","company","budget"] } },
 
     { "id": "score_priority", "type": "decision",          // NEW — DMN decision table
-      "inputs": [
-        { "key": "budget", "type": "number" },
-        { "key": "tone",   "type": "enum",                 // ⚠️ LLM input MUST be a closed enum
-          "values": ["calm","neutral","urgent"],
-          "evaluator": "llm",
-          "evaluatorPrompt": "Classify the sender's tone." }
-      ],
-      "output":    { "key": "priority", "type": "enum", "values": ["P1","P2","P3"] },
-      "hitPolicy": "FIRST",                                 // U | A | P | F | C
-      "rules": [
-        { "when": { "budget": ">50000" },       "then": "P1" },
-        { "when": { "tone": "urgent" },         "then": "P1" },
-        { "when": { "budget": "[10000..50000]" },"then": "P2" },
-        { "when": { "budget": "-", "tone": "-" },"then": "P3" }   // catch-all ("-" = irrelevant)
-      ] },
+      "config": {                                          // ⚠️ UNDER config — see below
+        "inputs": [
+          { "key": "budget", "type": "number", "from": "extract_fields.budget" },
+          { "key": "tone",   "type": "enum",               // ⚠️ LLM input MUST be a closed enum
+            "values": ["calm","neutral","urgent"],
+            "evaluator": "llm",
+            "evaluatorPrompt": "Classify the sender's tone." }
+        ],
+        "output":    { "key": "priority", "type": "enum", "values": ["P1","P2","P3"] },
+        "hitPolicy": "FIRST",                              // UNIQUE | FIRST | COLLECT
+        "rules": [
+          { "when": { "budget": ">50000" },        "then": "P1" },
+          { "when": { "tone": "urgent" },          "then": "P1" },
+          { "when": { "budget": "[10000..50000]" },"then": "P2" },
+          { "when": { "budget": "-", "tone": "-" },"then": "P3" }  // catch-all ("-" = irrelevant)
+        ] } },
 
     { "id": "route_priority", "type": "branch",             // NEW — routes on an EXISTING value
       "on": "score_priority.output",
@@ -210,6 +211,29 @@ Two consequences worth stating loudly:
 `type: "enum"` with a closed `values` list. A free-text LLM input makes gap analysis
 undecidable — see `bpmn-dmn-foundations.md` §3.3 and §6. **The validator enforces this
 (`LLM_INPUT_NOT_ENUM`).**
+
+> **CORRECTED (Increment E): the decision table lives under `config`, not on the node.** Rev 1
+> drew `inputs`/`output`/`hitPolicy`/`rules` at the node level, and the engine **cannot run that
+> shape**: `run(cfg, ctx, services)` is handed `node.config` and nothing else
+> (`flow-tester.js` `_runNode`), so a table hung off the node is a table the executor never sees.
+> It would also sit outside `MISSING_CONFIG` and `UNKNOWN_CONFIG_KEY` — i.e. outside every check
+> that makes a spec's shape true. `tableOf()` (`node-types/decision.js`) still *reads* the
+> top-level spelling, deliberately, so the moat and the DMN analysis still bite on it — but the
+> validator **rejects** it, because a table nobody executes must never publish.
+>
+> Other corrections forced by the code, same increment:
+> - **`hitPolicy` is `UNIQUE | FIRST | COLLECT`.** Rev 1 listed DMN's `U | A | P | F | C`; `ANY`,
+>   `PRIORITY` and `COLLECT`-with-aggregator are not implemented and an unrecognised policy is
+>   **rejected** (`DECISION_BAD_HIT_POLICY`) rather than silently read as `FIRST` — running a table
+>   under a policy its author did not choose is how `UNIQUE`'s promise goes unchecked.
+> - **A `branch` may not route on a `COLLECT` table.** It emits a *list*, and a branch matches by
+>   exact value — so nothing matches and the mandatory catch-all swallows 100% of traffic.
+>   `closedDomainOf()` returns `null` for one, so `LLM_INPUT_NOT_ENUM` rejects it.
+> - **An input needs a source.** `from: "<stepId>[.<field>]"` (a reference, like a branch's `on` —
+>   *not* a template) names it explicitly; with no `from`, the input's own key is looked up in the
+>   nearest upstream structured output. A value that cannot be found **throws**: an input that
+>   silently became `""` would match whatever rule tests `-` on it, and the table would decide on a
+>   value nobody supplied — a wrong answer that looks exactly like a right one.
 
 > **`assertion.when` is CARRIED but NOT PROVEN (Increment C).** The `"when": "priority = 'P1'"` in
 > `a2` above is a **run-time condition**. The outcome oracle proves a node exists that *can* produce
@@ -506,8 +530,43 @@ where "just talk to it" dies.
 | `BRANCH_TARGET_EXTRA_PARENT` | a case target must be reachable ONLY through its branch — a second incoming edge is live whichever way the branch went, so the step runs even when it was ruled out | a branch that decides nothing | **DONE (B)** |
 | `ON_ERROR_ROUTE_NO_EDGE` · `ON_ERROR_BAD_TARGET` | `route_to:<id>` needs an edge from the failing node (which is what guarantees the target sorts *after* it) — without one the failure path never runs and the workflow reports **success** | an unhandled error reported as a success | **DONE (B)** |
 | `NESTED_FOREACH` · `HUMAN_IN_FOREACH` | one loop level (§12); a pause inside a loop would need one durable pause per item, and the resume model is per-RUN | a loop that pauses on item 1 and never processes 2..N | **DONE (B)** |
-| `DECISION_TABLE_GAP` | enumerable inputs fully covered, or a catch-all rule exists | **#5** | E |
-| `UNIQUE_HIT_OVERLAP` | `hitPolicy: UNIQUE` but rules overlap | **#5** | E |
+| `DECISION_TABLE_GAP` | enumerable inputs fully covered, or a catch-all rule exists. **Warning, not error** — see below | **#5** | **DONE (E)** |
+| `UNIQUE_HIT_OVERLAP` | `hitPolicy: UNIQUE` but rules overlap | **#5** | **DONE (E)** |
+| `DECISION_UNDECIDABLE` · `DECISION_BAD_CONDITION` | a domain that cannot be enumerated, or a rule outside FEEL-A. **No coverage claim is made about a table we cannot read** | a false proof | **DONE (E)** |
+| `DECISION_OUTPUT_NOT_IN_ENUM` | a rule's `then` must be one of `output.values` — otherwise nothing downstream has a case for it | silent misroute | **DONE (E)** |
+| `DECISION_UNKNOWN_INPUT` | a `when` key must be a declared input — an unknown one is **ignored** by the analysis, so the rule covers boxes its author excluded | a proof about a different table | **DONE (E)** |
+| `DECISION_TOO_WIDE` | **warning** at >4 inputs — decompose (§12) | an unreviewable, unauditable table | **DONE (E)** |
+| `DECISION_BAD_HIT_POLICY` · `DUPLICATE_DECISION_INPUT` · `DECISION_BAD_INPUT_REF` | structural | — | **DONE (E)** |
+
+#### Why `DECISION_TABLE_GAP` is a WARNING (Increment E)
+
+An uncovered case is **escalatable, not fatal**, and that is the whole of §6.2.4: it is honest to
+publish a workflow that hands an unanticipated case to a person, and it is what makes *"Accept all
+defaults"* a real button rather than a way to bury unknowns. It would **not** be honest to publish
+one that silently does nothing — so the promise is kept on the other side, at run time:
+
+- `decision.run()` **THROWS** when no rule matches. It never returns null and never guesses. A null
+  would flow into the downstream `branch`, match no case, and be swallowed by the mandatory
+  catch-all: a silent no-op with `run_completed`, which is the exact failure this phase exists to
+  make impossible.
+- `escalation.js` **materialises** the escalation — `on_error: { retry: 1, then: 'escalate' }` on the
+  decision itself — so the throw reaches the owner's Approvals list instead of a log nobody reads.
+  A gap we said we would escalate and then quietly did nothing about is a lie in the language of
+  safety (Increment D).
+
+The severity split is also what keeps **`complete ⇒ publishable`** true by construction: the gap
+scorer classifies the validator's issues by severity (error ⇒ must be ANSWERED; warning ⇒ may be
+ESCALATED), so a table gap resolves exactly as it did when the scorer computed it itself.
+
+#### The DMN analysis now runs at PUBLISH, not only in the converger (Increment E)
+
+Increment C wired `decision-analysis.js` into `gap-scorer.js` **only**, because `decision` was not a
+registered node type and the validator therefore never looked at a table. That left the proof on one
+side of the door: a table with a hole assembled by any other path — the builder, the API, an edited
+spec — would publish unexamined. `WorkflowValidator._checkDecisionTables()` now owns the analysis and
+the scorer **classifies** its issues. One oracle, consulted by both, for the same reason
+`outcome-oracle.js` exists: two implementations of *"is this table complete?"* drift, and the day they
+drift is the day the converger ratifies a spec that publish rejects.
 | `WRITE_WITHOUT_IDEMPOTENCY` | **warning** on write capabilities lacking `idempotency` | duplicate records | **DONE (B)** |
 
 `UNKNOWN_CONFIG_KEY` is the highest-leverage check: it turns "the converger hallucinated a
@@ -1074,13 +1133,25 @@ gaps) and a shape-derivation call.
   now lands in that person's Approvals list. The run still **fails** — a person acknowledging a
   failure does not turn it into a success.
 
-### Increment E — `decision` node + table review UI + DMN gap analysis
+### Increment E — `decision` node + table review UI + DMN gap analysis — ✅ **DONE**
 - Box subtraction, **never** cross-product enumeration (§12).
 - **UI:** the decision table (`decision_review`) — dropdown cells over the enum values,
   plain-language hit-policy radio, collapsed by default.
 - **Acceptance:** a table with an uncovered enum combination is reported *before* publish;
   `UNIQUE` + overlapping rules is rejected; a decision with **>4 inputs** triggers a decompose
   prompt rather than a table nobody can read.
+
+**Built:** `node-types/decision.js` (the type — registered, so the moat now guards a shape that can
+actually run); `WorkflowValidator._checkDecisionTables()` (the analysis at publish — see §5);
+`matchesCondition()` in `decision-analysis.js` (**one FEEL-A grammar**, so the executor and the proof
+cannot disagree about what a rule means); the `decisions` node in `elicitation-graph.js`, which runs
+**before** `gaps` so the gap list is about the table *as corrected*; the `decision_review` surface in
+`public/index.html`; `escalation.js` materialising `DECISION_TABLE_GAP`; and the SOP rendering the
+table as a **table**, because the SOP is where the audit actually happens.
+
+A `decision` is a **control node**: its output (`{value, text, rule, inputs}` — the answer plus which
+row fired) never becomes `lastOutput` and is never fed to a transform, exactly as `branch` and `human`
+are not. A `deliver` after a decision sends the draft, not the audit record.
 
 ### Increment F — `foreach` + schema-aware connectors + the example picker
 - `airtable_list_bases` · `airtable_describe_table` · `sheets_describe`.
@@ -1138,8 +1209,12 @@ gaps) and a shape-derivation call.
   no human reviews the table, and an unreviewable table is not auditable, which is the moat.
   **DECOMPOSE AT >4 INPUTS.** Implementation directive: box subtraction, never cross-product
   enumeration. See `bpmn-dmn-foundations.md` §7b(a).
-- **Decision evaluation cost.** One LLM call for the whole table (cheap, less auditable) vs one
-  per fuzzy input (costlier, precisely attributable)? Lean per-input for the audit trail; measure.
+- ~~**Decision evaluation cost.**~~ — **ANSWERED (Increment E): one call per fuzzy input.** A table
+  typically has zero or one AI-judged input (the rest are numbers and enums read from an earlier
+  `extract`), so "costlier" is usually a difference of nothing. What it buys is that each judgement
+  is separately attributable — the run log records which value the model produced for which input,
+  and the row that fired. A single call for the whole table returns an answer with no way to ask
+  *why*, which is the one thing this node type exists to provide.
 - **`foreach` nesting.** Start: **no.** One level.
 - **Approval quorum > 1.** Deferred. `quorum: 1` (first responder wins) covers every case we have.
   Two-man rule is a compliance feature to sell *later*, not to build now.

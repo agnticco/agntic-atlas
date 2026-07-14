@@ -779,6 +779,64 @@ refactor them without an explicit decision recorded here:
     also your tell that a restore reverted too far: run it, and run the full suite, immediately after
     any mutation loop.
 
+- **The `decision` node — the completeness proof, turned on (2026-07-14, P12 increment E)** — C built
+  the DMN engine (`decision-analysis.js`: box subtraction, 10¹⁰ combinations in ~1 ms) and could not
+  reach it from anything runnable: `decision` was not a registered node type, so **the moat guarded a
+  shape no spec could contain**, and the analysis ran only in the converger — never at publish. E makes
+  it real.
+  - **`src/workflows/node-types/decision.js` (new)** — `inputs · output · hitPolicy · rules`, all under
+    **`config`**. converger-v2 §2.2 drew them on the NODE, and **the engine cannot run that shape**:
+    `run(cfg, ctx, services)` is handed `node.config` and nothing else, so a table hung off the node is
+    a table the executor never sees — and one sitting outside `MISSING_CONFIG` / `UNKNOWN_CONFIG_KEY`,
+    i.e. outside every check that makes a spec's shape true. `tableOf()` still **reads** the top-level
+    spelling (so the moat and the analysis bite on it) and the validator **rejects** it. §2.2 corrected.
+  - **AN UNCOVERED CASE THROWS.** It never returns null and never guesses. A null would reach the
+    downstream `branch`, match no case, and be swallowed by the **mandatory catch-all** — a silent
+    no-op with `run_completed`, which is verbatim the failure this phase exists to make impossible.
+    That is why `DECISION_TABLE_GAP` can honestly be a **warning**: the escalation is real
+    (`escalation.js` puts `on_error: {retry:1, then:'escalate'}` on the decision, so the throw reaches
+    a person), and `complete ⇒ publishable` still holds because the gap scorer classifies by severity.
+  - **ONE FEEL-A GRAMMAR.** `matchesCondition()` lives in `decision-analysis.js` beside the analysis
+    and is built from the same `parseNumeric` / literal / `not()` code. A private copy inside the node's
+    `run()` would be a second implementation of the rule language, and **the day they disagree the
+    coverage proof describes a program nobody is running** — the analyser certifies every case is
+    covered while the engine, reading the same table by different rules, matches nothing. Same doctrine
+    as `outcome-oracle.js`. For the same reason the **DMN analysis moved into the validator**
+    (`_checkDecisionTables`) and `gap-scorer.js`'s hand-rolled copy was **deleted**: publish and
+    converge now consult one oracle, so the converger cannot ratify a table publish rejects.
+  - **An unparseable condition is not "no match".** The engine **refuses to run** a rule it cannot
+    read, rather than treating it as unmatched — which would silently narrow the table at run time
+    while the analyser (which reports it as a bad condition) believed it was covered.
+  - **`decision` is a CONTROL node** — added to `CONTROL_TYPES` (flow-tester) and `NON_CONTENT_TYPES`
+    (`_node-input.js`), exactly as `branch`/`human` are. Its output is `{value, text, rule, inputs}` —
+    the answer plus **which row fired** (the audit trail). Left out, a `deliver` after a decision sends
+    the customer `{"value":"P1","rule":{…}}` instead of the draft. `text` is what a template renders,
+    so `{{score.output}}` → `"P1"` rather than a JSON blob.
+  - **A `branch` may NOT route on a `COLLECT` table** — it emits a *list*, and a branch matches by
+    exact value, so nothing matches and the catch-all swallows 100% of traffic. `closedDomainOf()`
+    returns `null` for one. Same class as `BRANCH_BAD_ON`, reached through the hit policy.
+  - New validator codes: `DECISION_TABLE_GAP`, `UNIQUE_HIT_OVERLAP`, `DECISION_UNDECIDABLE`,
+    `DECISION_BAD_CONDITION`, **`DECISION_OUTPUT_NOT_IN_ENUM`** (a rule's `then` outside `output.values`
+    is a value nothing downstream has a case for — the `BRANCH_CASE_NOT_IN_ENUM` failure through the
+    other door), **`DECISION_UNKNOWN_INPUT`** (a `when` on an undeclared key is **silently ignored** by
+    the analysis, so the rule covers boxes its author believed it excluded — the proof would be about a
+    different table), `DECISION_TOO_WIDE` (>4 inputs — **cognitive**, not computational: an unreviewable
+    table is not auditable, which is the moat), `DECISION_BAD_HIT_POLICY` (an unrecognised policy is
+    rejected, **never quietly read as FIRST** — that would run the table under a policy its author did
+    not choose, and UNIQUE's promise would never be checked), `DUPLICATE_DECISION_INPUT`,
+    `DECISION_BAD_INPUT_REF`.
+  - **UI (`decision_review`)** — a TABLE, not prose: collapsed to one sentence by default, expanding to
+    a grid whose cells are **dropdowns over the declared enum values** (a number gets a text box — its
+    conditions are ranges, which no dropdown can enumerate), plus the hit policy as a plain-language
+    radio (never the DMN letter). The dropdowns are only renderable *because* `LLM_INPUT_NOT_ENUM`
+    forced the domain closed: the completeness proof is what makes the multiple-choice UI possible, and
+    the multiple-choice UI is what makes the proof affordable to the user. Same asset (§13). The
+    `decisions` graph node runs **before** `gaps`, so the gap list is about the table **as corrected**.
+  - `mutation-sweep.mjs` — TARGETS **widened** to `node-types/decision.js` (the EXECUTOR that must
+    agree with `decision-analysis.js`, which has been swept since C), SUITES gains
+    `tests/workflows/decision-node.test.js`. **Floor held at 0.78 — a ratchet, never lowered.**
+    `scripts/gates/p12.sh` **not modified**: E's block was written in advance and is the checklist.
+
 ## Support tickets (in-app feedback / bug reporting) — added 2026-07-08
 
 Users submit bugs/ideas/requests from a floating **Feedback** button in the operator
@@ -852,7 +910,8 @@ spec is actually executable, not just structurally similar to the frozen file.
   capability's `handle` in `src/connectors/*/index.js`, not in the LLM prompt.
 
 - **The node library is `trigger · llm · assemble · connector-action · search_web · deliver`, plus
-  the control-flow types `branch · foreach · human` (P12 increments A + B, 2026-07-13).** `tool` / `mcp_tool` / `fetch` **no longer exist** — they were
+  the control-flow types `branch · foreach · human · decision` (P12 increments A + B + E,
+  2026-07-13/14).** `tool` / `mcp_tool` / `fetch` **no longer exist** — they were
   deleted, and the validator now rejects them by name (`REMOVED_NODE_TYPE`). They were never
   runnable: there is no `ToolRegistry` (no `src/tools/`, never instantiated) and `FlowTester` is
   built without `tools`, so they threw at run time; now they fail at build time instead.
@@ -1051,15 +1110,25 @@ phase, not just this one.
 ### The residual ledger — carried into E (recorded, not forgotten)
 
 *Inherited from C, still open:*
-- **`decision-analysis.js` is unreachable from any publishable spec** — `gap-scorer.js` gates the
-  DMN engine on `node.type === 'decision'`, which does not exist until E. Built, tested, dormant.
-  **E turns it on.**
+- ~~**`decision-analysis.js` is unreachable from any publishable spec.**~~ **CLOSED by increment E**:
+  `decision` is a registered node type, the analysis runs at publish (`_checkDecisionTables`) as well
+  as in the converger, and the engine honours it (an uncovered case throws).
 - **`assertion.when` is carried but NOT proven** (§2.2) — a conditional assertion raises a
   non-blocking `CONDITIONAL_UNPROVEN` gap. **D now materialises that gap into a real `human` gate**
   (`escalation.js`), which is an honest *escalation* of the condition — but it is still not a
   *proof*. Proving it needs `decision` (E) + the examples as a test suite (G).
 - **The `connector-action` config hole** — still the only node type with `configPolicy: 'open'`; its
   params are unchecked. **Increment F** closes it by validating against each capability's own schema.
+
+*New, from E:*
+- **A decision's `from` is not checked against what the upstream step actually produces.**
+  `DECISION_BAD_INPUT_REF` checks the reference's *shape*, and the engine throws loudly at run time if
+  the value is missing (and the failure escalates). But an `llm` in `extract` mode **declares** its
+  field names in `config.fields`, so `from: "extract.budgett"` is statically knowable as wrong and is
+  currently only found on the first real run. Cheap to close when F does schema-aware connectors.
+- **The `decision_review` UI edits cells, `then`s and the hit policy — it cannot ADD or DELETE a rule.**
+  Deliberate for E (the table is *reviewed*, not *authored* — §6.2.5, and the gap review is where a
+  missing case gets answered), but a user who spots a rule that should not exist has to say so in chat.
 
 *New, from D:*
 - **`workflow-store.js` is still not in `mutation-sweep` TARGETS.** D touched it (the pause deadline
@@ -1205,4 +1274,4 @@ Update as gates close. `git log --grep "^Gate:"` is the authoritative ledger.
 - [x] **P9** — value tracking: time-saved metrics per run, all-up ROI summary, customer-facing report
 - [x] **P10** — admin observability: standalone admin app, per-tenant usage + cost monitoring *(merged `601760c`; carries `Gate: P10` trailer + passing `scripts/gates/p10.sh`. Ledger backfilled by independent verifier: `docs/gates/p10.md`.)*
 - [x] **P11** — E2E validation + production hardening + VPS migration. **Closed 2026-07-13** (`b711b44`, `Gate: P11`, ledger `docs/gates/p11.md`). Built & merged long before (`d73b813`…`75891b7` + artifacts `2106f71`); the gate was un-closeable only because `scripts/gates/p11.sh` fail-closes when `PROD_HOST` is unset — it cannot smoke-test a VPS that doesn't exist. Prod went live, so `PROD_HOST=atlas.agntic.co bash scripts/gate.sh 11` finally runs. **Note for anyone re-running it:** the E2E suite *self-skips the converger test* without `ANTHROPIC_API_KEY` (`tests/e2e/full-journey.test.js`), so a bare run reports "6 pass / 1 skip" and the skipped one is Done-when #1. Run it with a key (7/7) or you are passing a gate you haven't proven.
-- [~] **P12** — **converger v2**: outcome contracts + BPMN/DMN shape (decisions, gap analysis) + the elicitation UI + the human approval gate. Build spec: [`docs/architecture/converger-v2.md`](docs/architecture/converger-v2.md) (theory: [`bpmn-dmn-foundations.md`](docs/architecture/bpmn-dmn-foundations.md)). Gate `scripts/gates/p12.sh` is **progressive** — it runs increments A–G in order and stops at the first unbuilt one, so `bash scripts/gate.sh 12` answers both *"is the phase closed?"* and *"which increment next?"*. **Increments A (validator hardening + node re-cut), B (engine control flow), C (converger v2 core + the outcome contract) and D (the human approval gate) are done** — the gate now stops at **E (the `decision` node + DMN table UI)**. Increments do NOT carry a `Gate:` trailer; only the phase's close does. Two invariants are load-bearing and must never be weakened: **`LLM_INPUT_NOT_ENUM`** (an LLM-evaluated decision input must classify into a *closed enum* — without it there is no completeness proof, and the completeness proof is the moat) and **`EMAIL_REPLY_APPROVAL`** (an approval parsed out of an email reply body authenticates *nothing*: `From:` is spoofable, and SPF/DKIM authenticate a sending domain, not a human intent — use a signed, hashed, single-use magic link).
+- [~] **P12** — **converger v2**: outcome contracts + BPMN/DMN shape (decisions, gap analysis) + the elicitation UI + the human approval gate. Build spec: [`docs/architecture/converger-v2.md`](docs/architecture/converger-v2.md) (theory: [`bpmn-dmn-foundations.md`](docs/architecture/bpmn-dmn-foundations.md)). Gate `scripts/gates/p12.sh` is **progressive** — it runs increments A–G in order and stops at the first unbuilt one, so `bash scripts/gate.sh 12` answers both *"is the phase closed?"* and *"which increment next?"*. **Increments A (validator hardening + node re-cut), B (engine control flow), C (converger v2 core + the outcome contract), D (the human approval gate) and E (the `decision` node + DMN gap analysis + the table review UI) are done** — the gate now stops at **F (`foreach` + schema-aware connectors + the example picker)**. Increments do NOT carry a `Gate:` trailer; only the phase's close does. Two invariants are load-bearing and must never be weakened: **`LLM_INPUT_NOT_ENUM`** (an LLM-evaluated decision input must classify into a *closed enum* — without it there is no completeness proof, and the completeness proof is the moat) and **`EMAIL_REPLY_APPROVAL`** (an approval parsed out of an email reply body authenticates *nothing*: `From:` is spoofable, and SPF/DKIM authenticate a sending domain, not a human intent — use a signed, hashed, single-use magic link).
