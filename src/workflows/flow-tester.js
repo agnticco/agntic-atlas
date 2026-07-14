@@ -34,8 +34,32 @@ import { ON_REF } from './node-types/branch.js';
  * placed after a decision would send the customer the literal
  * {"value":"P1","rule":{…}} instead of the draft the decision was routing — the
  * same defect the `human` node had, whose fix this is.
+ *
+ * `deliver` belongs here too, and its absence was a LIVE, SILENT, CUSTOMER-FACING
+ * defect: **a delivery's return value is a RECEIPT, not the work product.**
+ *
+ * A workflow asked to post to Slack AND email the team fans out — one `deliver`
+ * per destination, both edged from the content step, and the engine runs both
+ * (that part always worked). But the FIRST delivery's receipt ({delivered, ts})
+ * became `lastOutput`, and the second `deliver` builds its body from
+ * `ctx.lastOutput` — so the EMAIL SHIPPED THE SLACK RECEIPT:
+ *
+ *     slack  ← "Here is your summary…"
+ *     gmail  ← {"delivered":true,"ts":"1728…"}
+ *
+ * With `run_completed`, no error, and the run marked success. From the outside it
+ * looks like "only the Slack one worked", which is exactly how it was reported.
+ *
+ * It also means `run.output` — what the console shows, what the Inbox stores, and
+ * what `output-validator.js` inspects for an empty body or a leaked template — has
+ * been the last channel's receipt rather than the content all along. Those checks
+ * were reading the wrong thing.
+ *
+ * `deliver` was already in `_node-input.js`'s NON_CONTENT_TYPES (so an `llm` step
+ * never ingests a receipt); it was simply never added to the set that governs
+ * `lastOutput`. Same class as branch/human/decision, fourth member.
  */
-const CONTROL_TYPES = new Set(['branch', 'human', 'decision']);
+const CONTROL_TYPES = new Set(['branch', 'human', 'decision', 'deliver']);
 
 export class FlowTester {
   /**
