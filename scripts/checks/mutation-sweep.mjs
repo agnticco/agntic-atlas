@@ -122,6 +122,13 @@ const SUITES = [
   'tests/converger/destination-adversarial.test.js',
   'tests/workflows/foreach-config-adversarial.test.js',
   'tests/workflows/capability-schema-truth.test.js',
+  // The elicitation graph's OWN branches — the destination resolution, the no-op
+  // guard, the trigger derivation, the clarify/modify paths. Widening TARGETS to
+  // elicitation-graph.js put 50 survivors on the board in one file; this executes
+  // the behavioural half of them. A file the sweep targets but no suite drives is a
+  // file whose mutants are unkillable by construction.
+  'tests/converger/graph-paths.test.js',
+  'tests/converger/destination-mapping.test.js',
 ];
 
 /**
