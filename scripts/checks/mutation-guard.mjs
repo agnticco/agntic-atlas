@@ -44,6 +44,13 @@ import { execFileSync } from 'node:child_process';
 const SUITES = [
   'tests/workflows/control-flow.test.js',
   'tests/workflows/validator-config-keys.test.js',
+  // P12 Increment E. ADDED, not swapped. Without it the two `decision` guards
+  // below are unkillable BY CONSTRUCTION — the only suite that exercises them is
+  // never run, so the guard would report them as surviving (correctly) while the
+  // tests that pin them sat green in another file. "Some other suite covers it"
+  // is exactly how a guard ends up pinned by nothing (CLAUDE.md, Increment D:
+  // the Slack/email surface).
+  'tests/workflows/decision-node.test.js',
 ];
 
 /**
@@ -80,18 +87,38 @@ const MUTATIONS = [
     repl: '        if (prior !== undefined && !CONTROL_TYPES.has(node.type)) lastOutput = prior;\n        continue;\n      }\n\n      // ── The durable pause' },
 
   // ── control nodes leaking into the work product (round 4/7) ──────────────
+  //
+  // ANCHORS RE-GROUNDED (P12 Increment E) — `decision` joined both sets, so the
+  // exact-match `find` strings drifted and the mutations stopped APPLYING. The
+  // guard caught that itself and failed the gate, which is the whole point of
+  // refusing to pass on an unapplied mutation: a mutation that cannot be applied
+  // is not a check, it is a blank line that reports "ok".
+  //
+  // The MUTATIONS ARE UNCHANGED — each still deletes one type from the set and
+  // still requires the suite to go red. `decision` gets its own two entries below,
+  // because a guard that covers a set must cover every member of it: a `decision`
+  // silently dropped from CONTROL_TYPES delivers {"value":"P1","rule":{…}} to the
+  // customer instead of the draft, exactly as `branch` and `human` did.
   { file: 'src/workflows/flow-tester.js',
     name: 'CONTROL_TYPES loses `branch` (router bookkeeping delivered to the customer)',
-    find: "const CONTROL_TYPES = new Set(['branch', 'human']);",
-    repl: "const CONTROL_TYPES = new Set(['human']);" },
+    find: "const CONTROL_TYPES = new Set(['branch', 'human', 'decision']);",
+    repl: "const CONTROL_TYPES = new Set(['human', 'decision']);" },
   { file: 'src/workflows/flow-tester.js',
     name: 'CONTROL_TYPES loses `human` (approval record delivered to the customer)',
-    find: "const CONTROL_TYPES = new Set(['branch', 'human']);",
-    repl: "const CONTROL_TYPES = new Set(['branch']);" },
+    find: "const CONTROL_TYPES = new Set(['branch', 'human', 'decision']);",
+    repl: "const CONTROL_TYPES = new Set(['branch', 'decision']);" },
+  { file: 'src/workflows/flow-tester.js',
+    name: 'CONTROL_TYPES loses `decision` (the audit record delivered to the customer)',
+    find: "const CONTROL_TYPES = new Set(['branch', 'human', 'decision']);",
+    repl: "const CONTROL_TYPES = new Set(['branch', 'human']);" },
   { file: 'src/workflows/node-types/_node-input.js',
     name: 'NON_CONTENT_TYPES loses `branch`/`human` (control output fed to an AI step)',
-    find: "new Set(['trigger', 'deliver', 'branch', 'human'])",
+    find: "new Set(['trigger', 'deliver', 'branch', 'human', 'decision'])",
     repl: "new Set(['trigger', 'deliver'])" },
+  { file: 'src/workflows/node-types/_node-input.js',
+    name: 'NON_CONTENT_TYPES loses `decision` (the audit record fed to an AI step)',
+    find: "new Set(['trigger', 'deliver', 'branch', 'human', 'decision'])",
+    repl: "new Set(['trigger', 'deliver', 'branch', 'human'])" },
 
   // ── foreach (rounds 5/6) ─────────────────────────────────────────────────
   { file: 'src/workflows/flow-tester.js',

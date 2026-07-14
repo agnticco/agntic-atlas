@@ -671,6 +671,50 @@ describe('a decision never becomes `lastOutput`', () => {
       'the LLM draft — NOT {"value":"P1","rule":{…}}. A decision is a control node: its output is routing and audit metadata, not the work product.');
   });
 
+  test('AND AN AI STEP AFTER A DECISION SUMMARISES THE EMAIL, not the audit record', async () => {
+    // The second guard, and it is a different one: `CONTROL_TYPES` governs what
+    // `deliver` SENDS; `NON_CONTENT_TYPES` governs what an `llm` INGESTS. Drop
+    // `decision` from the latter and the model is handed
+    // {"value":"P1","rule":{…}} as the content to summarise — so it dutifully
+    // summarises the classification of the email instead of the email.
+    const prompts = [];
+    const tester = new FlowTester({
+      nodeTypes,
+      llm: { invoke: async (msgs) => { prompts.push(String(msgs[1]?.content ?? '')); return { content: 'urgent' }; } },
+    });
+    const def = {
+      name: 'Summarize after decide', version: 2,
+      triggers: [{ type: 'manual' }],
+      nodes: [
+        { id: 'draft', type: 'llm', label: 'Draft', config: { mode: 'freeform', prompt: 'write the customer email' } },
+        { id: 'score', type: 'decision', label: 'Score', config: {
+          inputs: [{ key: 'tone', type: 'enum', values: ['calm', 'urgent'], evaluator: 'llm' }],
+          output: { key: 'priority', type: 'enum', values: ['P1', 'P3'] },
+          hitPolicy: 'FIRST',
+          rules: [{ when: { tone: 'urgent' }, then: 'P1' }, { when: { tone: '-' }, then: 'P3' }],
+        } },
+        { id: 'brief', type: 'llm', label: 'Brief', config: { mode: 'summarize' } },
+      ],
+      edges: [{ from: 'draft', to: 'score' }, { from: 'score', to: 'brief' }],
+    };
+    const events = [];
+    for await (const e of tester.run(def, {})) events.push(e);
+    assert.equal(events.some(e => e.type === 'run_failed'), false,
+      events.find(e => e.type === 'run_failed')?.error ?? '');
+
+    const summarizePrompt = prompts.at(-1);
+    // Assert on the DECIDED VALUE, not just the JSON shape. The audit record
+    // stringifies through its `text` field, so a leaked decision arrives in the
+    // prompt as the bare string "P1" rather than as {"value":"P1","rule":…} —
+    // and a test that only looked for the JSON would pass while the model was
+    // being handed the classification as content. The decision contributes
+    // "P1" and nothing else; the draft contributes "urgent". Only "urgent"
+    // belongs here.
+    assert.equal(/P1|"rule"/.test(summarizePrompt), false,
+      `the summarize step was handed the decision's answer as its content:\n${summarizePrompt}`);
+    assert.match(summarizePrompt, /urgent/, 'it should be summarising the draft the decision routed');
+  });
+
   test('the run log carries the decision, so the audit trail survives the run', async () => {
     const tester = new FlowTester({ nodeTypes, llm: { invoke: async () => ({ content: 'urgent' }) } });
     const def = {
