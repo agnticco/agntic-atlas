@@ -68,6 +68,137 @@ export const DRAFT_DEFAULT = {
   errorHandling: {},
 };
 
+// ── Schema-aware destinations (P12 Increment F) ───────────────────────────────
+
+/** Does this node reach into the named connector? */
+function usesConnector(node, connector) {
+  const id = node?.type === 'connector-action' ? node.config?.action
+           : node?.type === 'deliver'          ? node.config?.channel
+           : null;
+  return typeof id === 'string' && id.startsWith(`${connector}_`);
+}
+
+/**
+ * Is this id a REAL one, or a placeholder the model invented?
+ *
+ * An LLM asked for an Airtable base id it cannot know will produce something that
+ * LOOKS like one — `appXXXXXXXXXXXXXX`, `appYourBaseId`, `<your base id>`, an unresolved
+ * `{{template}}`. Treating any of those as resolved is how a lead gets written into
+ * a base that does not exist. A real base id is `app` + 14 alphanumerics, and the
+ * placeholder forms are exactly the ones that fail that test.
+ */
+function isResolvedId(v) {
+  const s = String(v ?? '').trim();
+  if (!s || s.includes('{{') || s.includes('<')) return false;
+  if (/^app[A-Za-z0-9]{14}$/.test(s)) return !/X{6,}/i.test(s);
+  return false;
+}
+
+/** Write the resolved destination into every node that needed one. */
+function fillDestination(nodes, { baseId, tableId, fields }) {
+  return nodes.map((n) => {
+    if (!usesConnector(n, 'airtable')) return n;
+    const config = { ...(n.config ?? {}), baseId };
+    if (tableId) config.tableId = tableId;
+    // Only rewrite `fields` where the node HAS them (a create/update). A search or a
+    // delete has no fields, and inventing some would be a config key nothing reads.
+    if (fields && config.fields && typeof config.fields === 'object') config.fields = fields;
+    return { ...n, config };
+  });
+}
+
+/**
+ * Map the fields the draft INTENDED onto the columns that ACTUALLY EXIST.
+ *
+ * This is the whole point of reading the schema, and skipping it would be worse
+ * than not reading it at all: **Airtable silently ignores an unknown field name.**
+ * Post `{ "Budget": 80000 }` to a table whose column is `Deal Size` and the record
+ * is created, the column is empty, `run_completed` fires, and the workflow reports
+ * success forever. The user finds out when a quarter's leads have no budgets.
+ *
+ * A column the draft wants and the table does NOT have is left OUT rather than
+ * guessed at — and it stays in the outcome's assertions, so `UNSATISFIED_ASSERTION`
+ * reports it as a promise the workflow cannot keep. That is the honest failure: the
+ * spec does not publish, and the user is told which column is missing.
+ */
+async function mapFieldsToColumns({ llm, sessionId, nodes, columns, outcome, table }) {
+  const wanted = {};
+  for (const n of nodes) {
+    const f = n?.config?.fields;
+    if (f && typeof f === 'object' && !Array.isArray(f)) Object.assign(wanted, f);
+  }
+  if (!Object.keys(wanted).length || !columns.length) return null;
+
+  const colList = columns.map(c => `- ${c.name} (${c.type}${c.choices?.length ? `: ${c.choices.join(' | ')}` : ''})`).join('\n');
+  const parsed = await llmJson(llm, [
+    new SystemMessage('You map a workflow\'s intended fields onto the REAL columns of a table. You never invent a column. You reply with JSON only.'),
+    new HumanMessage(
+      `The workflow wants to write these fields into the table "${table}":\n${JSON.stringify(wanted, null, 2)}\n\n` +
+      `The table's REAL columns are:\n${colList}\n\n` +
+      `Outcome: ${outcome?.statement ?? '(none)'}\n\n` +
+      'Return {"fields": { "<REAL column name>": "<the value or {{template}} from the intended fields>" }}. ' +
+      'Use ONLY column names from the list above — a name that is not on the list is silently ignored by ' +
+      'Airtable, so the record would be created with that column empty and nobody would be told. ' +
+      'Drop an intended field that has no matching column rather than inventing one.',
+    ),
+  ], tierCfg('fast', sessionId));
+
+  const out = parsed?.fields;
+  if (!out || typeof out !== 'object') return null;
+  // Trust nothing: drop anything the model returned that is not a real column.
+  const real = new Set(columns.map(c => c.name));
+  const safe = Object.fromEntries(Object.entries(out).filter(([k]) => real.has(k)));
+  return Object.keys(safe).length ? safe : null;
+}
+
+/**
+ * Three REAL emails from the user's own inbox, to be picked from. (Increment F.)
+ *
+ * converger-v2 §6.4 calls this "the biggest single unlock", and the reasoning is
+ * worth keeping: asked to invent test cases, people invent EASY ones. The case that
+ * finds the bug is the awkward real message — the forwarded thread, the one with the
+ * budget in the signature, the one that is not really a lead at all — and nobody
+ * types that from memory. We have `gmail_search` and we have their token.
+ *
+ * The trigger's own filter IS the query. That is the point: the examples are drawn
+ * from exactly the population the workflow will run on, so an example that does not
+ * match the trigger cannot appear (and if the trigger's filter is wrong, the picker
+ * shows the wrong emails — which is itself the fastest way to find that out).
+ *
+ * Returns `{ items: [], source: null }` when there is no live source. The caller
+ * then falls back to the model's proposed cases, which are clearly LABELLED as
+ * proposals — never dressed up as the user's real mail.
+ */
+async function fetchRealExamples({ invokeCapability, triggers, capabilities }) {
+  const none = { items: [], source: null, query: null };
+  if (!invokeCapability) return none;
+
+  const emailTrigger = (Array.isArray(triggers) ? triggers : []).find(t => t?.type === 'email');
+  if (!emailTrigger) return none;
+
+  // Gmail must actually be connected — `capabilities.channels` is the live, per-tenant
+  // catalog, so this is a fact rather than a hope.
+  const hasGmail = (capabilities?.channels ?? []).some(c => c?.id === 'gmail_search' || String(c?.id ?? '').startsWith('gmail_'));
+  if (!hasGmail) return none;
+
+  const query = String(emailTrigger.filter ?? '').trim() || 'newer_than:30d';
+  try {
+    const res = await invokeCapability('gmail_search', { query, maxResults: 3 });
+    const msgs = res?.messages ?? res?.results ?? (Array.isArray(res) ? res : []);
+    const items = msgs.slice(0, 3).map((m, i) => ({
+      id: m.id ?? `real${i + 1}`,
+      // The label is what the user READS before clicking. Subject + sender is what
+      // they recognise an email by; a message id is not.
+      label: `${m.subject ?? '(no subject)'} — ${m.from ?? 'unknown sender'}`,
+      given: { subject: m.subject ?? '', from: m.from ?? '', body: m.snippet ?? m.body ?? '' },
+      real:  true,   // provenance: this came from their inbox, not from a model
+    })).filter(e => e.given.subject || e.given.body);
+    return items.length ? { items, source: 'gmail', query } : none;
+  } catch {
+    return none;   // an unreadable inbox is a reason to ask, never a reason to invent
+  }
+}
+
 // ── Tier config helper ────────────────────────────────────────────────────────
 // Build an invoke config that routes through ModelPool to the requested tier.
 // Always call llm.invoke(messages, tierCfg(name, sessionId)) rather than
@@ -84,7 +215,7 @@ function tierCfg(tierName, sessionId) {
  * @param {{ llm: ModelPool, checkpointerDir?: string }} opts
  * @returns {CompiledGraph}
  */
-export function buildElicitationGraph({ llm, checkpointerDir = './memory/converger' }) {
+export function buildElicitationGraph({ llm, checkpointerDir = './memory/converger', invokeCapability = null }) {
   const graph = new StateGraph({
     stateSchema: {
       // Plain defaults (no reducer — replacement semantics)
@@ -103,6 +234,11 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
       gapRounds:         0,
       sufficiencyChecks: 0,
       _missingNote:      null,
+      // The destination (Airtable base + table + columns) has been resolved from the
+      // live connector once (P12 Increment F). Without this the gap loop would
+      // re-enter `destinations` on its way back to ratify and ask "which base?"
+      // again — and a question asked twice is a question people learn to click past.
+      destinationsResolved: false,
       // The decision tables have been shown to the user once (P12 Increment E).
       // The gap loop can re-enter `decisions` on its way back to ratify, and
       // re-asking someone to review a table they just reviewed is how a review
@@ -264,23 +400,42 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
   // "Show me a case." The SME's rows — which become the ACCEPTANCE SUITE, not
   // just colour. Skipping is one click and is a legitimate answer.
   //
-  // The example PICKER (pull three real emails from the user's actual inbox via
-  // gmail_search, and let them click) is Increment F. Until then this offers the
-  // model's proposed cases and a skip, and never demands typing.
+  // THE PICKER (P12 Increment F, §6.4 — "the biggest single unlock"). Do NOT ask a
+  // user to invent test cases: they invent EASY ones, and the case that finds the
+  // bug is the awkward real one they would never think to type. We hold their Gmail
+  // token. So when the workflow triggers on email, we go and READ three real
+  // messages and let them click — zero typing, and the examples are true.
+  //
+  // Falls back to the model's proposed cases when there is no live source (no Gmail,
+  // a non-email trigger, a lookup failure). Inventing a plausible-looking "real"
+  // email would be worse than proposing an obviously-modelled one, because the user
+  // would believe it came from their inbox.
   graph.addNode('examples', async (state, cfg) => {
     const sessionId = cfg?.configurable?.threadId;
 
-    const parsed = await llmJson(llm, [
-      new SystemMessage(buildSystemPrompt(state.capabilities)),
-      new HumanMessage(buildExamplesPrompt({ intent: state.intent, outcome: state.draft?.outcome })),
-    ], tierCfg('fast', sessionId));
+    const real = await fetchRealExamples({
+      invokeCapability, triggers: state.draft?.triggers, capabilities: state.capabilities,
+    });
 
-    const proposed = (parsed?.examples ?? []).filter(e => e?.given);
+    let proposed = real.items;
+    let source   = real.source;
+    let query    = real.query;
+
+    if (!proposed.length) {
+      const parsed = await llmJson(llm, [
+        new SystemMessage(buildSystemPrompt(state.capabilities)),
+        new HumanMessage(buildExamplesPrompt({ intent: state.intent, outcome: state.draft?.outcome })),
+      ], tierCfg('fast', sessionId));
+      proposed = (parsed?.examples ?? []).filter(e => e?.given);
+      source   = null;
+      query    = null;
+    }
     if (!proposed.length) return { phase: 'process' };
 
     const confirmation = await interrupt({
       type:        'example_request',
-      source:      null,               // Increment F fills this from a live connector
+      source,                          // 'gmail' when these are the user's OWN emails
+      query,                           // …and the search that found them, so it is auditable
       items:       proposed.map((e, i) => ({ id: e.id ?? `e${i + 1}`, preview: e.label ?? JSON.stringify(e.given), raw: e })),
       allowManual: true,
       allowSkip:   true,
@@ -515,6 +670,113 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
       confirmationLog: [logEntry],
       step:            state.step + 1,
       phase:           'analyzing',
+    };
+  });
+
+  // ── destinations ───────────────────────────────────────────────────────────
+  // "Which base? Which table?" — as CLICKS, never as a pasted id. (Increment F.)
+  //
+  // This is §6.2.3 (*never ask for something we can read*) made concrete, and it is
+  // where "just talk to it" previously died: a workflow that writes to Airtable
+  // needs `appXXXXXXXXXXXXXX` and an exact table name, and no amount of conversation
+  // can produce them. The model cannot know them; the user has to go and look them
+  // up. So the builder stopped being a builder and became a form.
+  //
+  // We hold the tenant's OAuth token, and it can read all of it. So:
+  //
+  //   0 bases  → say so plainly (they connected an empty Airtable)
+  //   1 base   → TAKE IT. Zero-typing (§6.2.4): a question with one possible answer
+  //              is not a question, it is a speed bump.
+  //   N bases  → chips. `choices[]` is the SHARED interrupt primitive (§6.3), so
+  //              this needs no new client surface — the composer already renders it.
+  //
+  // …and the same for tables. Then the table's REAL columns go into the draft, so
+  // the record lands in `Deal Size` rather than in a column the model invented.
+  //
+  // NO INVOKER ⇒ WE ASK, WE NEVER GUESS. Without a live connector this node is a
+  // pass-through and the ordinary propose loop asks the user for the id, exactly as
+  // it did before F. Degrading to a question is honest; degrading to a made-up base
+  // id would write a customer's lead into nothing.
+  const AIRTABLE_ID_KEYS = { baseId: 'airtable', spreadsheetId: 'sheets' };
+
+  graph.addNode('destinations', async (state, cfg) => {
+    const sessionId = cfg?.configurable?.threadId;
+    const nodes = state.draft?.nodes ?? [];
+
+    // Which steps need a destination id we cannot possibly know?
+    const needsBase = nodes.filter(n => usesConnector(n, 'airtable') && !isResolvedId(n.config?.baseId));
+    if (!needsBase.length || !invokeCapability || state.destinationsResolved) {
+      return { phase: 'gapping' };
+    }
+
+    // ── 1. The base ──────────────────────────────────────────────────────────
+    let bases;
+    try {
+      bases = (await invokeCapability('airtable_list_bases'))?.bases ?? [];
+    } catch (err) {
+      // A connector that cannot be read is not a connector that can be guessed at.
+      // Fall through to the ordinary loop, which ASKS.
+      return { phase: 'gapping', confirmationLog: [{ step: state.step, type: 'destination_lookup_failed', error: String(err?.message ?? err) }] };
+    }
+    if (!bases.length) return { phase: 'gapping' };
+
+    let base = bases[0];
+    if (bases.length > 1) {
+      const answer = await interrupt({
+        type: 'clarification',
+        question: 'Which Airtable base should this write to?',
+        choices: bases.map((b, i) => ({ id: b.id, label: b.name, selected: i === 0 })),
+        step: state.step,
+      });
+      base = bases.find(b => b.id === answer?.id || b.name === answer?.answer) ?? bases[0];
+    }
+
+    // ── 2. The table, and its REAL columns ───────────────────────────────────
+    let tables = [];
+    try {
+      tables = (await invokeCapability('airtable_describe_base', { baseId: base.id }))?.tables ?? [];
+    } catch { /* fall through: we have a base, and the loop can still ask for a table */ }
+    if (!tables.length) {
+      return {
+        draft: { ...state.draft, nodes: fillDestination(nodes, { baseId: base.id }) },
+        destinationsResolved: true, step: state.step + 1, phase: 'gapping',
+      };
+    }
+
+    let table = tables[0];
+    if (tables.length > 1) {
+      const answer = await interrupt({
+        type: 'clarification',
+        question: `Which table in "${base.name}"?`,
+        choices: tables.map((t, i) => ({ id: t.id, label: t.name, selected: i === 0 })),
+        step: state.step,
+      });
+      table = tables.find(t => t.id === answer?.id || t.name === answer?.answer) ?? tables[0];
+    }
+
+    // ── 3. Map the promised fields onto the columns that ACTUALLY EXIST ───────
+    // One cheap call. The alternative is the model inventing `Budget` when the
+    // column is called `Deal Size`, which Airtable accepts by silently ignoring —
+    // the record is created, the field is empty, and the run reports success.
+    const columns = table.fields ?? [];
+    const mapped = await mapFieldsToColumns({
+      llm, sessionId, nodes: needsBase, columns,
+      outcome: state.draft?.outcome, table: table.name,
+    });
+
+    return {
+      draft: {
+        ...state.draft,
+        nodes: fillDestination(nodes, { baseId: base.id, tableId: table.name, fields: mapped }),
+      },
+      confirmationLog: [{
+        step: state.step, type: 'destination_resolved',
+        base: { id: base.id, name: base.name }, table: table.name,
+        columns: columns.map(c => c.name), mapped,
+      }],
+      destinationsResolved: true,
+      step:  state.step + 1,
+      phase: 'gapping',
     };
   });
 
@@ -821,14 +1083,18 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
   graph.addEdge('process', 'analyze');
 
   graph.addConditionalEdges('analyze', (state) => {
-    if (state.phase === 'gapping')    return 'decisions';   // …which falls straight
-    if (state.phase === 'ratifying')  return 'ratify';      //   through to `gaps`
-    if (state.phase === 'clarifying') return 'clarify';     //   when nothing decides
-    return 'propose';
+    if (state.phase === 'gapping')    return 'destinations'; // …→ decisions → gaps,
+    if (state.phase === 'ratifying')  return 'ratify';       //   each a pass-through
+    if (state.phase === 'clarifying') return 'clarify';      //   when it has nothing
+    return 'propose';                                        //   to do
   });
 
   graph.addEdge('clarify', 'analyze');
   graph.addEdge('propose', 'analyze');
+  // destinations → decisions → gaps. The order is load-bearing in both places:
+  // the table under review must be the one whose columns were just resolved, and
+  // the gap list must be about the draft AS CORRECTED by both.
+  graph.addEdge('destinations', 'decisions');
   graph.addEdge('decisions', 'gaps');
 
   graph.addConditionalEdges('gaps', (state) => {
