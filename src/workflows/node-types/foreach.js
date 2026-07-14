@@ -34,8 +34,20 @@ export const DEFAULT_MAX_ITEMS = 100;
  * Control-node types whose output is routing/audit metadata, never the work
  * product — so they never become a loop iteration's `last`. Mirrors
  * flow-tester.js CONTROL_TYPES for the sub-loop, which has its own executor.
+ *
+ * `decision` (P12 Increment E) was missed here, and it is the THIRD time this
+ * exact line has been the defect: `branch` and `human` were both added to the
+ * top-level CONTROL_TYPES first and to this one only after a verifier found a
+ * control blob being delivered to a customer once per item. A decision's output
+ * is {value, text, rule, inputs}, and `stringifyOutput` picks its `.text` — so
+ * the customer receives a plausible-looking "P1" instead of the lead, once per
+ * row, with `run_completed` and no error.
+ *
+ * THE SUB-LOOP IS A SECOND EXECUTOR. Any rule about what may become the work
+ * product must be applied to BOTH, and a new control type is not done until it is
+ * in both sets. (Found by the independent verifier + the test-adversary.)
  */
-const CONTROL_SUBSTEP_TYPES = new Set(['branch', 'human']);
+const CONTROL_SUBSTEP_TYPES = new Set(['branch', 'human', 'decision']);
 
 export const foreachNodeType = {
   type: 'foreach',
@@ -85,6 +97,24 @@ export const foreachNodeType = {
         message: `"${node.label || node.id}" asks a person to approve something inside a loop. That isn't supported.`,
         nodeId: node.id, field: 'config.steps',
         hint: 'Move the approval outside the loop — approve the whole batch once, before or after it runs.',
+      });
+    }
+    if (steps.some(s => s?.type === 'decision')) {
+      // A decision inside a loop is a structural no-op for exactly the reason a
+      // branch is: nothing inside a loop can ROUTE on its answer (routing needs
+      // edges and liveness, and a loop has neither), so the one thing a decision
+      // exists to feed cannot exist there. It is not merely useless, it is
+      // dangerous in the same way — its {value,text,rule} would become the
+      // iteration's `last` and a downstream deliver sub-step would send the
+      // decided VALUE ("P1") to the customer instead of the item, once per row.
+      // The engine now refuses to let that happen (CONTROL_SUBSTEP_TYPES), and
+      // this refuses to let the shape be built. Both, because the engine must not
+      // depend on the validator having run — DB specs predate every rule.
+      issues.push({
+        severity: 'error', code: 'DECISION_IN_FOREACH',
+        message: `"${node.label || node.id}" contains a decision table. A loop can't act on one — its steps run in order, and nothing inside can route on the answer.`,
+        nodeId: node.id, field: 'config.steps',
+        hint: 'Decide OUTSIDE the loop and route there, or loop over the rows and let each step act on the item directly.',
       });
     }
     if (steps.some(s => s?.type === 'branch')) {

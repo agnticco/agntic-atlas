@@ -26,6 +26,20 @@
  *                             person acknowledging a failure does not turn it into
  *                             a success.
  *
+ *   DECISION_TABLE_GAP     →  on_error: { retry: 1, then: 'escalate' } on the
+ *                             DECISION itself (P12 Increment E). The gap's own
+ *                             message says the workflow "would silently do nothing"
+ *                             for the uncovered case, and its hint promises "an
+ *                             unanticipated case goes to a person instead of
+ *                             vanishing". `decision.run()` keeps the first half by
+ *                             THROWING when no rule matches — refusing to guess —
+ *                             and this keeps the second: the throw becomes an
+ *                             escalation to the owner's Approvals list, rather than
+ *                             a failed run in a log. Without it, the gap the user
+ *                             was invited to escalate would be recorded and then
+ *                             quietly do nothing, which is the exact lie this file
+ *                             exists to stop telling.
+ *
  *   CONDITIONAL_UNPROVEN   →  a real `human` gate in front of the step. The
  *                             outcome promised "…and over $50k it also pings
  *                             #sales-urgent", nothing in the workflow can tell a
@@ -52,8 +66,17 @@ import { satisfiesAssertion } from '../workflows/outcome-oracle.js';
 /** What a materialised gate asks over, and how long it waits. */
 const GATE_TIMEOUT = { after: '48h', then: 'reject' };
 
-/** Steps that can carry an error policy. A `branch` failing is a spec bug, not an incident. */
-const CAN_FAIL = new Set(['llm', 'assemble', 'connector-action', 'search_web', 'deliver', 'foreach']);
+/**
+ * Steps that can carry an error policy. A `branch` failing is a spec bug, not an
+ * incident.
+ *
+ * A `decision` CAN fail, and its failure is the most interesting one in the
+ * engine: an input combination no rule covers, or an AI-judged input the model
+ * could not place in the closed enum. Both are exactly the case a person must see.
+ * Leaving `decision` out would mean the one node type built to surface the unknown
+ * was the one type whose unknowns had nowhere to go. (P12 Increment E.)
+ */
+const CAN_FAIL = new Set(['llm', 'assemble', 'connector-action', 'search_web', 'deliver', 'foreach', 'decision']);
 
 /**
  * @param {object} draft — the converger's draft (nodes, edges, outcome, …)
@@ -93,6 +116,43 @@ export function materialiseEscalations(draft, escalatedGaps = []) {
         } else {
           unmaterialised.push({ gapId: gap.id, code: gap.code, why: 'every step already declares what to do when it fails' });
         }
+        break;
+      }
+
+      // ── "There's a case this table has no rule for" (P12 Increment E) ────
+      //
+      // The honest escalation of an uncovered case is NOT to invent a rule for it
+      // — nobody asked the user what the answer should be, and guessing would put
+      // a decision they never made into a table they are told they can audit.
+      // It is to make sure that WHEN the case arrives, a person hears about it.
+      //
+      // `decision.run()` throws on an uncovered combination (it refuses to guess),
+      // so the only thing missing is somewhere for the throw to go.
+      case 'DECISION_TABLE_GAP': {
+        const node = nodes.find(n => n?.id === gap.nodeId && n?.type === 'decision');
+        if (!node) {
+          unmaterialised.push({ gapId: gap.id, code: gap.code, why: 'the decision it refers to is no longer in the workflow' });
+          break;
+        }
+        if (node.on_error?.then) {
+          // It already has a declared failure path — the case reaches whatever that
+          // path leads to. Nothing to add, and adding it anyway would silently
+          // overwrite a policy the user chose.
+          materialised.push({
+            gapId: gap.id, code: gap.code, how: 'on_error (already declared)', nodeIds: [node.id],
+            note: `An uncovered case fails "${node.label || node.id}", which already says what to do when it fails.`,
+          });
+          break;
+        }
+        nodes = nodes.map(n => (n.id === node.id
+          // retry:1 because an AI-judged input can be a flake; a table lookup cannot.
+          // Two retries of a genuinely uncovered combination is two identical failures.
+          ? { ...n, on_error: { retry: 1, then: 'escalate' } }
+          : n));
+        materialised.push({
+          gapId: gap.id, code: gap.code, how: 'on_error:escalate', nodeIds: [node.id],
+          note: `If "${node.label || node.id}" meets a case no rule covers, the run stops and a person is told — instead of the workflow silently doing nothing.`,
+        });
         break;
       }
 

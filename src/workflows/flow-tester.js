@@ -27,8 +27,15 @@ import { ON_REF } from './node-types/branch.js';
 /**
  * Control nodes. Their output is routing/audit metadata, not the work product,
  * so they never become `lastOutput` — which is what `deliver` sends.
+ *
+ * `decision` (P12 Increment E) joins them: its output is
+ * {value, text, rule, inputs} — the answer plus WHICH ROW OF THE TABLE FIRED.
+ * That is an audit record, not a work product. Left out of this set, a `deliver`
+ * placed after a decision would send the customer the literal
+ * {"value":"P1","rule":{…}} instead of the draft the decision was routing — the
+ * same defect the `human` node had, whose fix this is.
  */
-const CONTROL_TYPES = new Set(['branch', 'human']);
+const CONTROL_TYPES = new Set(['branch', 'human', 'decision']);
 
 export class FlowTester {
   /**
@@ -647,6 +654,17 @@ export class FlowTester {
     } else if (type === 'branch') {
       const { on, ...rest } = rawCfg;
       cfg = { ...this._substitute(rest, ctx), on };      // `on` stays RAW
+    } else if (type === 'decision') {
+      // …and a `decision`'s `inputs`, for the SAME reason: each input's `from` is
+      // a REFERENCE ("extract.budget"), not a template. Substituting it replaced
+      // the reference with the VALUE before run() ever saw it, so
+      // `from: "{{think.output}}"` arrived as the prose itself and the engine went
+      // looking for a step called "This is EXTREMELY urgent…". Verbatim the
+      // branch-`on` crash (CLAUDE.md, Increment B), one increment later, in the
+      // one other place a reference lives. A reference names a step; a template
+      // names a value. readInput() dereferences `from` against ctx.outputs itself.
+      const { inputs, ...rest } = rawCfg;
+      cfg = { ...this._substitute(rest, ctx), inputs };  // `inputs` stay RAW
     } else {
       cfg = this._substitute(rawCfg, ctx);
     }

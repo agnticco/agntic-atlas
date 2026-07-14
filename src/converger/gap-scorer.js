@@ -33,8 +33,15 @@
  * out of — the builder says it's done, the save button says it isn't. One
  * oracle, consulted by both, cannot drift.
  *
- * What this file adds on top is the DMN coverage analysis (decision-analysis.js),
- * which the validator does not do until Increment E.
+ * As of Increment E that is true of the DMN coverage analysis too: it used to be
+ * re-implemented here, because `decision` was not yet a registered node type and
+ * the validator therefore never ran it. Now the validator owns it
+ * (`_checkDecisionTables`) and this file classifies the result — so a table with a
+ * hole is found on the way OUT (publish) as well as on the way IN (converge), and
+ * there is one implementation of "is this table complete?", not two.
+ *
+ * What this file still adds on top: the EXCEPTION questions (§2b) — the ones that
+ * are gaps in a workflow's story rather than errors in its shape.
  *
  * ── resolution, and the invariant that keeps `complete` honest ──────────────
  *
@@ -71,15 +78,32 @@
 import { WorkflowValidator }       from '../workflows/workflow-validator.js';
 import { NodeTypeRegistry }        from '../workflows/node-type-registry.js';
 import { registerBuiltInNodeTypes } from '../workflows/node-types/index.js';
-import { analyzeTable }            from '../workflows/decision-analysis.js';
 import { approvalChannelView }     from '../workflows/approval-channels.js';
 
 /** Which class an issue belongs to. Anything unlisted is a contract gap. */
 const OUTCOME_CODES  = new Set(['UNSATISFIED_ASSERTION', 'MALFORMED_ASSERTION', 'MISSING_OUTCOME']);
 const COVERAGE_CODES = new Set([
-  'NON_EXHAUSTIVE_BRANCH', 'LLM_INPUT_NOT_ENUM', 'BRANCH_BAD_ON',
-  'DECISION_TABLE_GAP', 'UNIQUE_HIT_OVERLAP',
+  'NON_EXHAUSTIVE_BRANCH', 'LLM_INPUT_NOT_ENUM', 'BRANCH_BAD_ON', 'BRANCH_CASE_NOT_IN_ENUM',
+  // The DMN analysis (P12 Increment E). These now come FROM the validator — see
+  // the note where the hand-rolled copy used to be, below.
+  'DECISION_TABLE_GAP', 'UNIQUE_HIT_OVERLAP', 'DECISION_UNDECIDABLE',
+  'DECISION_BAD_CONDITION', 'DECISION_OUTPUT_NOT_IN_ENUM', 'DECISION_UNKNOWN_INPUT',
+  'DECISION_TOO_WIDE',
 ]);
+
+/**
+ * A gap the system CANNOT ANSWER for the user, however hard it tries — as opposed
+ * to one it merely has not answered yet. `decidable` drives the UI: a decidable
+ * gap gets a pre-filled "Use the suggestion" button, and an undecidable one must
+ * not, because there is no suggestion to make.
+ *
+ * The two DMN codes here are the honest half of the moat. A table whose domain is
+ * unbounded ("subject", free text), or one carrying a condition the FEEL-A grammar
+ * cannot read, is a table about which NO coverage claim can be made — not even a
+ * negative one. Offering a confident answer for a case we cannot enumerate would be
+ * a false proof, and a false proof is worse than no proof: the user stops looking.
+ */
+const UNDECIDABLE_CODES = new Set(['DECISION_UNDECIDABLE', 'DECISION_BAD_CONDITION']);
 
 /**
  * The validator needs a node-type registry to see any config at all (without one
@@ -175,7 +199,7 @@ export function scoreGap(spec = {}, { capabilities = {}, validator = null } = {}
       hint:     issue.hint ?? null,
       // A blocking gap cannot be escalated — see the header. It must be ANSWERED.
       resolution: blocking ? 'unanswered' : 'escalated',
-      decidable:  true,
+      decidable:  !UNDECIDABLE_CODES.has(issue.code),
       blocking,
     });
   });
@@ -276,82 +300,24 @@ export function scoreGap(spec = {}, { capabilities = {}, validator = null } = {}
     });
   }
 
-  // ── 3. Coverage gaps the validator does not compute (until Increment E) ───
-  // The DMN analysis: an input combination no rule matches, and — under UNIQUE —
-  // rules that overlap. Box subtraction, never cross-product enumeration.
-  for (const node of nodes) {
-    if (node?.type !== 'decision') continue;
-
-    const table = {
-      inputs:    node.inputs    ?? node.config?.inputs    ?? [],
-      rules:     node.rules     ?? node.config?.rules     ?? [],
-      hitPolicy: node.hitPolicy ?? node.config?.hitPolicy ?? 'FIRST',
-    };
-    const analysis = analyzeTable(table);
-
-    // UNDECIDABLE. Say so plainly, and offer the only honest resolution: a
-    // catch-all. Never imply a completeness proof we cannot make — that is the
-    // whole moat (converger-v2 §3).
-    if (!analysis.decidable) {
-      for (const u of analysis.undecidable) {
-        gaps.push({
-          id: `gap_undecidable_${node.id}_${u.key}`.toLowerCase(),
-          class: 'coverage', nodeId: node.id,
-          code: 'DECISION_UNDECIDABLE', severity: analysis.hasCatchAll ? 'warning' : 'error',
-          message: `"${node.label || node.id}" decides on "${u.key}", but ${u.reason} — so I can't prove every case is covered.`,
-          hint: 'Give it a closed list of possible values, or add a catch-all rule (every input "-") so an unanticipated input still goes somewhere.',
-          resolution: analysis.hasCatchAll ? 'escalated' : 'unanswered',
-          decidable: false,
-          blocking: !analysis.hasCatchAll,
-        });
-      }
-      for (const b of analysis.badConditions) {
-        gaps.push({
-          id: `gap_badcond_${node.id}_${b.rule}_${b.key}`.toLowerCase(),
-          class: 'coverage', nodeId: node.id,
-          code: 'DECISION_BAD_CONDITION', severity: 'error',
-          message: `Rule ${b.rule + 1} of "${node.label || node.id}" tests "${b.key}" with "${b.condition}", which isn't a condition this system can check.`,
-          hint: 'Allowed: a literal, a comma list, < <= > >=, an interval like [10..50], not(...), or "-" for "don\'t care".',
-          resolution: 'unanswered', decidable: false, blocking: true,
-        });
-      }
-      continue;   // no coverage claim is made about a table we cannot read
-    }
-
-    for (const box of analysis.uncovered) {
-      const where = Object.entries(box).map(([k, v]) => `${k} ${v}`).join(', ');
-      gaps.push({
-        id: `gap_uncovered_${node.id}_${gaps.length}`.toLowerCase(),
-        class: 'coverage', nodeId: node.id,
-        code: 'DECISION_TABLE_GAP', severity: 'warning',
-        message: `"${node.label || node.id}" has no rule for: ${where}. Right now the workflow would silently do nothing for those.`,
-        hint: 'Answer it, or let it escalate — an unanticipated case goes to a person instead of vanishing.',
-        resolution: 'escalated', decidable: true, blocking: false,
-      });
-    }
-    if (analysis.truncated) {
-      gaps.push({
-        id: `gap_uncovered_more_${node.id}`.toLowerCase(),
-        class: 'coverage', nodeId: node.id,
-        code: 'DECISION_TABLE_GAP', severity: 'warning',
-        message: `"${node.label || node.id}" has ${analysis.truncated} further uncovered combination${analysis.truncated > 1 ? 's' : ''} beyond the ones listed.`,
-        hint: 'A table with this many holes is usually two decisions wearing one hat. Consider splitting it.',
-        resolution: 'escalated', decidable: true, blocking: false,
-      });
-    }
-
-    for (const o of analysis.overlaps) {
-      const where = Object.entries(o.where).map(([k, v]) => `${k} ${v}`).join(', ');
-      gaps.push({
-        id: `gap_overlap_${node.id}_${o.rules.join('_')}`.toLowerCase(),
-        class: 'coverage', nodeId: node.id,
-        code: 'UNIQUE_HIT_OVERLAP', severity: 'error',
-        message: `"${node.label || node.id}" promises exactly one rule ever matches, but rules ${o.rules[0] + 1} and ${o.rules[1] + 1} both match ${where}.`,
-        hint: 'Either narrow the rules so they cannot both match, or change the hit policy to "first match wins".',
-        resolution: 'unanswered', decidable: true, blocking: true,
-      });
-    }
-  }
+  // ── 3. The DMN coverage analysis ─────────────────────────────────────────
+  //
+  // It used to be RE-IMPLEMENTED here, because Increment C's validator did not
+  // run it: `decision` was not a registered node type, so a table could only be
+  // reasoned about on the way IN (converge), never on the way OUT (publish).
+  //
+  // Increment E makes `decision` runnable, and moves the analysis into the
+  // validator (`_checkDecisionTables`) — where publish, the builder, the API and
+  // this scorer all reach it through ONE oracle. That is not tidying: two copies
+  // of "is this table complete?" drift, and the day they drift is the day the
+  // converger ratifies a spec that publish rejects. It is the same rule
+  // outcome-oracle.js exists to enforce, and it is what keeps `complete ⇒
+  // publishable` a property rather than a slogan.
+  //
+  // So the DMN gaps arrive above, with everything else, as validator issues —
+  // classified as `coverage` by COVERAGE_CODES, and given a resolution by the one
+  // severity rule that governs every gap: an error must be ANSWERED; a warning may
+  // be ESCALATED. Which is exactly the resolution the hand-written block assigned.
 
   return { gaps, complete: gaps.every(g => g.resolution !== 'unanswered') };
 }

@@ -232,12 +232,101 @@ function coveredAtoms(cond, input, atoms) {
     return { atoms: new Set(atoms.filter(a => !inner.atoms.has(a))), ok: true };
   }
   const wanted = raw.split(',').map(s => s.trim()).filter(Boolean);
-  const set = new Set(atoms.filter(a => wanted.some(w => String(w) === String(a))));
+
+  // CASE-INSENSITIVELY, because that is how the ENGINE matches it
+  // (matchesCondition, below — and branch.js's `matches` before it). Compared
+  // case-sensitively here, `when: {tone: "URGENT"}` over values ["urgent",…] was a
+  // condition the engine evaluates happily and the analyser called UNREADABLE —
+  // a hard publish error (DECISION_BAD_CONDITION) whose message ("isn't a
+  // condition this system can check") was simply untrue. The two halves of one
+  // grammar MUST agree; this file's own header says the day they disagree is the
+  // day the proof describes a program nobody is running. (Found by the
+  // test-adversary.)
+  const declared = (w) => atoms.find(a => String(a).toLowerCase() === String(w).toLowerCase());
+
+  // EVERY member of a comma list must be a declared value. Reporting `ok` when
+  // only SOME are is a silent drop: `"urgent, bogus"` quietly covered just the
+  // `urgent` atom while the author believed the rule covered both — and the same
+  // typo, alone, is correctly an error. A rule is unreadable if ANY part of it is.
+  if (wanted.some(w => !declared(w))) return { atoms: new Set(), ok: false };
+
+  const set = new Set(wanted.map(declared));
   // A literal naming a value the enum never declared covers nothing, and that is
   // a defect in the rule, not a gap in the table. Report it as unparseable so it
   // surfaces rather than quietly shrinking the covered region.
   if (!set.size) return { atoms: new Set(), ok: false };
   return { atoms: set, ok: true };
+}
+
+/**
+ * Does `value` satisfy `cond` for this input? THE RUN-TIME half of the SAME
+ * grammar the analysis above uses — deliberately in this file, and deliberately
+ * built out of the same `parseNumeric` / literal / not() / comma-list code.
+ *
+ * A second, private implementation inside the `decision` node's run() would be a
+ * copy of FEEL-A, and the day the two disagree is the day the coverage proof
+ * describes a program nobody is running: the analyser certifies that every case
+ * is covered, and the engine — reading the same table by different rules — falls
+ * through to no rule at all. The proof is only worth what the executor's
+ * agreement with it is worth. (converger-v2 §11.7; CLAUDE.md — one oracle,
+ * consulted by both.)
+ *
+ * @returns {{ ok: boolean, matched: boolean }} — `ok:false` means the condition is
+ *          not FEEL-A at all (unparseable). The caller must fail loudly: a
+ *          condition nobody can read is not a condition that failed to match.
+ */
+export function matchesCondition(cond, input, value) {
+  if (cond === undefined || cond === null || String(cond).trim() === IRRELEVANT) {
+    return { ok: true, matched: true };     // `-` — this rule does not care
+  }
+  const type = String(input?.type ?? '').toLowerCase();
+  const raw  = String(cond).trim();
+
+  if (type === 'number' || type === 'integer') {
+    const parsed = parseNumeric(raw);
+    if (!parsed) return { ok: false, matched: false };
+    const n = typeof value === 'number' ? value : Number(String(value).trim());
+    if (!Number.isFinite(n)) return { ok: true, matched: false };
+    return { ok: true, matched: parsed.test(n) };
+  }
+
+  if (type === 'boolean') {
+    const want = raw.toLowerCase();
+    if (want !== 'true' && want !== 'false') return { ok: false, matched: false };
+    return { ok: true, matched: String(value).trim().toLowerCase() === want };
+  }
+
+  // enum (and anything else): literal · comma disjunction · not(...)
+  const not = RE_NOT.exec(raw);
+  if (not) {
+    const inner = matchesCondition(not[1], input, value);
+    if (!inner.ok) return { ok: false, matched: false };
+    return { ok: true, matched: !inner.matched };
+  }
+  const wanted = raw.split(',').map(s => s.trim()).filter(Boolean);
+  if (!wanted.length) return { ok: false, matched: false };
+
+  // A LITERAL NAMING A VALUE THE ENUM NEVER DECLARED IS UNREADABLE — the same
+  // verdict `coveredAtoms` gives it, because these two functions are the two
+  // halves of ONE grammar and this file's header says the day they disagree is the
+  // day the proof describes a program nobody is running.
+  //
+  // They still disagreed here. The analyser called `"bogus"` unreadable; the engine
+  // read it happily as "no match" — and read `not(bogus)` as MATCHING EVERYTHING.
+  // Today the validator rejects such a table before either can run (so it was not
+  // reachable), but `run()`'s own `if (!ok) throw` exists precisely to stop a rule
+  // the engine cannot read, and for this whole class that throw could never fire.
+  // A guard that depends on another check having already refused the input is not a
+  // guard. (Found by the independent verifier, E-R10.)
+  const declared = Array.isArray(input?.values)
+    ? input.values.filter(v => v != null).map(v => String(v).toLowerCase())
+    : [];
+  if (declared.length && wanted.some(w => !declared.includes(w.toLowerCase()))) {
+    return { ok: false, matched: false };
+  }
+
+  const v = String(value ?? '').trim().toLowerCase();
+  return { ok: true, matched: wanted.some(w => w.toLowerCase() === v) };
 }
 
 // ── The analysis ─────────────────────────────────────────────────────────────

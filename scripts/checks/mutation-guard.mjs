@@ -44,6 +44,17 @@ import { execFileSync } from 'node:child_process';
 const SUITES = [
   'tests/workflows/control-flow.test.js',
   'tests/workflows/validator-config-keys.test.js',
+  // P12 Increment E. ADDED, not swapped. Without it the two `decision` guards
+  // below are unkillable BY CONSTRUCTION — the only suite that exercises them is
+  // never run, so the guard would report them as surviving (correctly) while the
+  // tests that pin them sat green in another file. "Some other suite covers it"
+  // is exactly how a guard ends up pinned by nothing (CLAUDE.md, Increment D:
+  // the Slack/email surface).
+  'tests/workflows/decision-node.test.js',
+  // The six defects the test-adversary + the verifier found in Increment E, now
+  // fixed. These are the suites that pin them.
+  'tests/workflows/decision-adversarial.test.js',
+  'tests/workflows/decision-pinning.test.js',
 ];
 
 /**
@@ -80,18 +91,38 @@ const MUTATIONS = [
     repl: '        if (prior !== undefined && !CONTROL_TYPES.has(node.type)) lastOutput = prior;\n        continue;\n      }\n\n      // ── The durable pause' },
 
   // ── control nodes leaking into the work product (round 4/7) ──────────────
+  //
+  // ANCHORS RE-GROUNDED (P12 Increment E) — `decision` joined both sets, so the
+  // exact-match `find` strings drifted and the mutations stopped APPLYING. The
+  // guard caught that itself and failed the gate, which is the whole point of
+  // refusing to pass on an unapplied mutation: a mutation that cannot be applied
+  // is not a check, it is a blank line that reports "ok".
+  //
+  // The MUTATIONS ARE UNCHANGED — each still deletes one type from the set and
+  // still requires the suite to go red. `decision` gets its own two entries below,
+  // because a guard that covers a set must cover every member of it: a `decision`
+  // silently dropped from CONTROL_TYPES delivers {"value":"P1","rule":{…}} to the
+  // customer instead of the draft, exactly as `branch` and `human` did.
   { file: 'src/workflows/flow-tester.js',
     name: 'CONTROL_TYPES loses `branch` (router bookkeeping delivered to the customer)',
-    find: "const CONTROL_TYPES = new Set(['branch', 'human']);",
-    repl: "const CONTROL_TYPES = new Set(['human']);" },
+    find: "const CONTROL_TYPES = new Set(['branch', 'human', 'decision']);",
+    repl: "const CONTROL_TYPES = new Set(['human', 'decision']);" },
   { file: 'src/workflows/flow-tester.js',
     name: 'CONTROL_TYPES loses `human` (approval record delivered to the customer)',
-    find: "const CONTROL_TYPES = new Set(['branch', 'human']);",
-    repl: "const CONTROL_TYPES = new Set(['branch']);" },
+    find: "const CONTROL_TYPES = new Set(['branch', 'human', 'decision']);",
+    repl: "const CONTROL_TYPES = new Set(['branch', 'decision']);" },
+  { file: 'src/workflows/flow-tester.js',
+    name: 'CONTROL_TYPES loses `decision` (the audit record delivered to the customer)',
+    find: "const CONTROL_TYPES = new Set(['branch', 'human', 'decision']);",
+    repl: "const CONTROL_TYPES = new Set(['branch', 'human']);" },
   { file: 'src/workflows/node-types/_node-input.js',
     name: 'NON_CONTENT_TYPES loses `branch`/`human` (control output fed to an AI step)',
-    find: "new Set(['trigger', 'deliver', 'branch', 'human'])",
+    find: "new Set(['trigger', 'deliver', 'branch', 'human', 'decision'])",
     repl: "new Set(['trigger', 'deliver'])" },
+  { file: 'src/workflows/node-types/_node-input.js',
+    name: 'NON_CONTENT_TYPES loses `decision` (the audit record fed to an AI step)',
+    find: "new Set(['trigger', 'deliver', 'branch', 'human', 'decision'])",
+    repl: "new Set(['trigger', 'deliver', 'branch', 'human'])" },
 
   // ── foreach (rounds 5/6) ─────────────────────────────────────────────────
   { file: 'src/workflows/flow-tester.js',
@@ -156,6 +187,61 @@ const MUTATIONS = [
   { file: 'src/workflows/node-types/human.js',
     name: 'human defaults to approved when no decision was given',
     find: '    if (!provided || !provided.decision) {', repl: '    if (false) {' },
+
+  // ── P12 Increment E: the six defects the test-adversary and the verifier found ──
+  // Every one reached candidate state behind a green suite, and three of them were
+  // SILENT — the workflow reported success while doing the wrong thing. They are
+  // history now, which is exactly what this list is for.
+  { file: 'src/workflows/node-types/foreach.js',
+    name: 'CONTROL_SUBSTEP_TYPES loses `decision` (the decided VALUE delivered to the customer, once per row)',
+    find: "const CONTROL_SUBSTEP_TYPES = new Set(['branch', 'human', 'decision']);",
+    repl: "const CONTROL_SUBSTEP_TYPES = new Set(['branch', 'human']);" },
+  { file: 'src/workflows/node-types/foreach.js',
+    name: 'DECISION_IN_FOREACH disabled (a decision in a loop publishes clean)',
+    find: "    if (steps.some(s => s?.type === 'decision')) {", repl: '    if (false) {' },
+  { file: 'src/workflows/node-types/decision.js',
+    name: 'coerce() stops checking an enum value against its declared set (free text takes the catch-all)',
+    find: '    if (!hit) {\n      throw new Error(\n        `decision input "${input.key}" is ${JSON.stringify(String(value).slice(0, 80))}, which is not one of its `',
+    repl: '    if (false) {\n      throw new Error(\n        `decision input "${input.key}" is ${JSON.stringify(String(value).slice(0, 80))}, which is not one of its `' },
+  { file: 'src/workflows/node-types/decision.js',
+    name: 'coerce() lets a NULL extracted field decide via the catch-all',
+    find: '  if (value === null) {', repl: '  if (false) {' },
+  { file: 'src/workflows/node-types/decision.js',
+    name: 'pickCategory accepts an AMBIGUOUS answer (a negated answer classifies as the value it negates)',
+    find: '  return hits.length === 1 ? hits[0] : null;',
+    repl: '  return hits.length >= 1 ? hits[0] : null;' },
+  { file: 'src/workflows/flow-tester.js',
+    name: "a decision's `from` gets template-substituted (the reference becomes the value; the engine hunts for a step named after the prose)",
+    find: "      const { inputs, ...rest } = rawCfg;\n      cfg = { ...this._substitute(rest, ctx), inputs };  // `inputs` stay RAW",
+    repl: '      cfg = this._substitute(rawCfg, ctx);' },
+  { file: 'src/workflows/decision-analysis.js',
+    name: 'the analyser reads an enum literal case-SENSITIVELY while the engine reads it case-insensitively',
+    find: '  const declared = (w) => atoms.find(a => String(a).toLowerCase() === String(w).toLowerCase());',
+    repl: '  const declared = (w) => atoms.find(a => String(a) === String(w));' },
+  { file: 'src/workflows/decision-analysis.js',
+    name: 'a comma list silently drops its undeclared members (the rule covers less than its author believes)',
+    find: '  if (wanted.some(w => !declared(w))) return { atoms: new Set(), ok: false };',
+    repl: '  if (false) return { atoms: new Set(), ok: false };' },
+
+  // ── The residuals the independent verifier left after the E fix ────────────
+  // Each of these was CORRECT CODE PINNED BY NOTHING — deletable with the whole
+  // suite green. That is the state a guard is in right before someone deletes it.
+  { file: 'src/workflows/node-types/llm.js',
+    name: 'llm classify reverts to the substring scan (THE sanctioned LLM→decision door: a negated answer classifies as the value it negates)',
+    find: '      const picked = pickCategory(raw, categories);',
+    repl: "      const picked = categories.find(c => c.toLowerCase() === String(raw).trim().toLowerCase()) ?? categories.find(c => String(raw).toLowerCase().includes(c.toLowerCase()));" },
+  { file: 'src/workflows/workflow-validator.js',
+    name: 'the moat re-reads the table privately (a JSON-string config.inputs skips LLM_INPUT_NOT_ENUM)',
+    find: '        const inputs = tableOf(node).inputs;',
+    repl: "        const inputs = Array.isArray(node.inputs) ? node.inputs : Array.isArray(node.config?.inputs) ? node.config.inputs : [];" },
+  { file: 'src/workflows/decision-analysis.js',
+    name: 'the engine reads an UNDECLARED enum literal as a plain no-match (and not(<undeclared>) as matching EVERYTHING)',
+    find: '  if (declared.length && wanted.some(w => !declared.includes(w.toLowerCase()))) {',
+    repl: '  if (false) {' },
+  { file: 'src/workflows/node-types/decision.js',
+    name: 'pickCategory crosses a non-ASCII letter ("urgentísimo" classifies as "urgent")',
+    find: "  return new RegExp(`(?:^|[^\\\\p{L}\\\\p{N}_-])${esc}(?:[^\\\\p{L}\\\\p{N}_-]|$)`, 'iu');",
+    repl: "  return new RegExp(`(?:^|[^\\\\w-])${esc}(?:[^\\\\w-]|$)`, 'i');" },
 ];
 
 const read  = (f) => readFileSync(f, 'utf8');
