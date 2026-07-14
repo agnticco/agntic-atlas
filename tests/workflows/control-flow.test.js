@@ -2283,3 +2283,73 @@ test('foreach: `over` given as a literal array is iterated directly', async () =
   assert.equal(done.count, 3, 'a literal array is iterated directly (3 items)');
   void seen;
 });
+
+// ── P12 Increment F: the sub-field template grammar ─────────────────────────
+
+// P12 Increment F — the sub-field template grammar.
+{
+  test('{{step.field}}: a field is resolved from an OBJECT output', async () => {
+    const sent = [];
+    const tester = new FlowTester({
+      nodeTypes, channelRegistry: stubChannels((args) => { sent.push(args.body); return { delivered: true, ts: '1' }; }),
+      llm: stubLlm(JSON.stringify({ name: 'Dana', budget: 80000 })),
+    });
+    const flow = {
+      name: 'F', triggers: [{ type: 'manual' }],
+      nodes: [
+        { id: 'extract', type: 'llm', label: 'X', config: { mode: 'extract', fields: 'name: n\nbudget: b' } },
+        { id: 'out', type: 'deliver', label: 'D', config: { channel: 'slack', target: '#x', body: 'Lead: {{extract.name}} for {{extract.budget}}' } },
+      ],
+      edges: [{ from: 'extract', to: 'out' }],
+    };
+    // The extract step reads the trigger's payload — without it there is nothing to
+    // extract FROM, and the step correctly fails.
+    await runAll(tester, flow, { initialContext: { subject: 'Lead', body: 'Dana, budget 80k' } });
+    assert.equal(sent[0], 'Lead: Dana for 80000',
+      'each template resolves ITS OWN field — without this an Airtable record can only put the whole JSON blob in every column');
+  });
+
+  test('{{step.field}}: …and from a JSON-STRING output, because an extract step returns one', async () => {
+    // pickField parses a string output. Without that, {{extract.budget}} on a step
+    // that returned '{"budget":80000}' resolves to EMPTY — the column is written
+    // blank and the run reports success.
+    const sent = [];
+    const tester = new FlowTester({
+      nodeTypes, channelRegistry: stubChannels((args) => { sent.push(args.body); return { delivered: true, ts: '1' }; }),
+      // A freeform llm returns a raw STRING — here, one that happens to be JSON. That
+      // is exactly what a step handing structured data downstream looks like.
+      llm: stubLlm('{"budget":80000}'),
+    });
+    const flow = {
+      name: 'F', triggers: [{ type: 'manual' }],
+      nodes: [
+        { id: 'src', type: 'llm', label: 'S', config: { mode: 'freeform', prompt: 'emit the lead as JSON' } },
+        { id: 'out', type: 'deliver', label: 'D', config: { channel: 'slack', target: '#x', body: 'B={{src.budget}}' } },
+      ],
+      edges: [{ from: 'src', to: 'out' }],
+    };
+    await runAll(tester, flow, {});
+    assert.equal(sent[0], 'B=80000');
+  });
+
+  test('{{step.field}}: a field the step did NOT produce renders EMPTY, never the literal template', async () => {
+    // An empty value is what lets the engine SEE an empty idempotency key and refuse
+    // to run. Leaving "{{x.y}}" in place makes it a non-empty string that dedupes on
+    // the template text itself — a dedupe that never dedupes anything.
+    const sent = [];
+    const tester = new FlowTester({
+      nodeTypes, channelRegistry: stubChannels((args) => { sent.push(args.body); return { delivered: true, ts: '1' }; }),
+      llm: stubLlm('{"a":1}'),
+    });
+    const flow = {
+      name: 'F', triggers: [{ type: 'manual' }],
+      nodes: [
+        { id: 'src', type: 'llm', label: 'S', config: { mode: 'freeform', prompt: 'emit json' } },
+        { id: 'out', type: 'deliver', label: 'D', config: { channel: 'slack', target: '#x', body: 'V=[{{src.missing}}]' } },
+      ],
+      edges: [{ from: 'src', to: 'out' }],
+    };
+    await runAll(tester, flow, {});
+    assert.equal(sent[0], 'V=[]');
+  });
+}
