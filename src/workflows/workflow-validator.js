@@ -24,7 +24,7 @@
 import { liftV1Nodes, isRemovedType, REMOVED_TYPES } from './node-types/compat-v1.js';
 import { normalizeCases, CATCH_ALL, ON_REF } from './node-types/branch.js';
 import { normalizeSteps } from './node-types/foreach.js';
-import { normalizeChannels, allowedDecisions } from './node-types/human.js';
+import { normalizeChannels, normalizeDecisions, allowedDecisions, TIMEOUT_DECISION } from './node-types/human.js';
 import { isStrong, FORBIDDEN_CHANNELS } from './approval-channels.js';
 import { parseDuration } from './duration.js';
 import { checkOutcome, missingFields, ASSERTION_KINDS } from './outcome-oracle.js';
@@ -936,6 +936,28 @@ export class WorkflowValidator {
           message: `"${label}" would go ahead and act if nobody answers ("${then}") — but the whole point of asking is that a real send or write waits for a person. Silence is not approval.`,
           nodeId: node.id, field: 'config.timeout',
           hint: 'On timeout, either stop (e.g. "then": "reject") or hand it to a person ("then": "escalate"). Don\'t let it proceed on its own.',
+        });
+      }
+
+      // SILENCE IS NOT CONSENT — THROUGH THE CATCH-ALL (found by the verifier,
+      // round 2). The trace above only follows `then`; with `then` UNSET (or
+      // `escalate`, or a `then` the sweeper downgrades), the value actually
+      // injected on silence is `timeout` — which routes through the branch's
+      // `timeout` case or its MANDATORY catch-all. So an inverted gate
+      // (`cases:[{when:'reject',to:'drop'},{when:'*',to:'send'}]`) with no `then`
+      // validated clean and, on a silent timeout, SENT — nobody approved, money
+      // moved. Mirror what the sweeper injects, and refuse if THAT writes. (A
+      // safe declared `then` the sweeper keeps is checked as `then` above; here we
+      // catch the timeout-floor case it does not.)
+      const declaredThen = then != null && then !== 'escalate'
+        && normalizeDecisions(node.config?.decisions).includes(then);
+      const keepsThen = declaredThen && !timeoutAuthorizesWrite({ nodes, edges }, node.id, then);
+      if (!keepsThen && timeoutAuthorizesWrite({ nodes, edges }, node.id, TIMEOUT_DECISION)) {
+        issues.push({
+          severity: 'error', code: 'HUMAN_BAD_TIMEOUT',
+          message: `"${label}" would send or write on a silent timeout — the "if nobody answers" path leads to a real action through the catch-all. An approval that a timeout can bypass is not an approval.`,
+          nodeId: node.id, field: 'config.cases',
+          hint: 'Route the timeout/catch-all case to a step that does NOT send or write (e.g. one that records "not approved"). Put the real action behind the "approve" case only.',
         });
       }
     }

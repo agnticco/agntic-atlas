@@ -744,6 +744,20 @@ refactor them without an explicit decision recorded here:
     undoing the store's hash-only model; the logger now redacts `/approvals/<token>`. **R3** —
     `timeout.then: 'escalate'` routed to the catch-all but notified nobody (inert); the sweeper now
     calls the escalation notifier, so `escalate` is meaningfully different from a silent `timeout`.
+  - **A FIFTH defect, on the verifier's re-check of the fix — silence-as-consent THROUGH THE
+    CATCH-ALL, and it MOVES MONEY.** F3 fixed `then: 'approve'`, but the value the sweeper injects
+    *most often* is the `timeout` floor (whenever `then` is unset), which routes through the branch's
+    **mandatory catch-all**. An INVERTED gate — `cases:[{when:'reject',to:'drop'},{when:'*',to:'send'}]`
+    with no `then` — validated clean, and on a silent timeout **SENT the refund with nobody having
+    approved it**. Both guards structurally exempted `TIMEOUT_DECISION`, so the one decision the sweeper
+    injects most was never traced. The verifier classified it a *residual* (the converger only emits the
+    safe shape — `escalation.js` puts the non-write on the catch-all — so it is not generated-reachable)
+    but recommended closing it because it moves money. **Closed, not merely recorded** — a money-moving
+    violation of this increment's own "silence is not consent" invariant is not something to leave open
+    behind a note. Fixed on both sides: the validator rejects a `human`-gate whose silence-injected
+    decision routes to a write (`HUMAN_BAD_TIMEOUT`, the catch-all trace), and the **sweeper refuses to
+    resume — it fails the run** when even `timeout` writes (no safe path exists). Pinned by
+    `gate-adversarial.test.js` F5; both guards mutation-killed.
   - **The apparatus worked.** Every one of these reached a green-suite, browser-verified state and was
     caught only by the independent verifier + adversary running in parallel. `mutation-sweep` TARGETS
     now covers the validator, the scheduler, and the approvals; `gate-adversarial.test.js` is in both the
