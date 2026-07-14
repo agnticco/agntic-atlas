@@ -28,6 +28,8 @@ import { normalizeChannels, normalizeDecisions, allowedDecisions, TIMEOUT_DECISI
 import { isStrong, FORBIDDEN_CHANNELS } from './approval-channels.js';
 import { parseDuration } from './duration.js';
 import { checkOutcome, missingFields, ASSERTION_KINDS } from './outcome-oracle.js';
+import { analyzeTable } from './decision-analysis.js';
+import { tableOf, valuesOf } from './node-types/decision.js';
 
 /** Per-channel required fields on a deliver node's config (beyond `channel`). */
 const CHANNEL_REQUIRED = {
@@ -358,7 +360,102 @@ export class WorkflowValidator {
     this._checkOutcome(def, nodes, issues);
     this._checkDecisionInputs(nodes, issues);
 
+    // ── 10. DMN coverage — the completeness proof (P12 Increment E) ───────
+    this._checkDecisionTables(nodes, issues);
+
     return this._finalize(issues);
+  }
+
+  /**
+   * DECISION_TABLE_GAP · UNIQUE_HIT_OVERLAP — the DMN analysis, at PUBLISH.
+   * (P12 Increment E, converger-v2 §5.)
+   *
+   * Increment C built `decision-analysis.js` and wired it into the converger's
+   * gap scorer only. That left the proof on one side of the door: a table with a
+   * hole could be assembled by any other path — the builder, the API, an edited
+   * spec — and publish would never look at it. Now BOTH consult the same oracle,
+   * for exactly the reason outcome-oracle.js exists (CLAUDE.md, Increment C): two
+   * implementations of "is this table complete?" would drift, and the day they
+   * drift is the day the converger ratifies a spec that publish rejects — a dead
+   * end the user cannot argue their way out of. The gap scorer now CLASSIFIES
+   * these issues rather than recomputing them.
+   *
+   * The severities are what keep `complete ⇒ publishable` true:
+   *
+   *   gap        WARNING — an uncovered case is escalatable, not fatal. It is
+   *              honest to publish a workflow that hands an unanticipated case to
+   *              a person (that is §6.2.4, and it is what makes "Accept all
+   *              defaults" a real button). It would NOT be honest to publish one
+   *              that silently does nothing — so `decision.run()` THROWS on an
+   *              uncovered case, and the escalation materialises as an error path
+   *              to a person (escalation.js). The warning is a promise the engine
+   *              keeps.
+   *   overlap    ERROR — under UNIQUE the table PROMISES exactly one rule ever
+   *              matches. If two can, the promise is false, and which answer you
+   *              get depends on rule order in a table whose author was told order
+   *              does not matter.
+   *   undecidable / bad condition
+   *              ERROR (undecidable downgrades to a warning when a catch-all
+   *              exists — a catch-all is the one honest answer to a domain we
+   *              cannot enumerate). A table we cannot read gets NO coverage claim,
+   *              ever. A false proof is worse than no proof.
+   */
+  _checkDecisionTables(nodes, issues) {
+    for (const node of nodes) {
+      if (node?.type !== 'decision') continue;
+
+      const analysis = analyzeTable(tableOf(node));
+      const label    = node.label || node.id;
+
+      if (!analysis.decidable) {
+        for (const u of analysis.undecidable) {
+          issues.push({
+            severity: analysis.hasCatchAll ? 'warning' : 'error',
+            code: 'DECISION_UNDECIDABLE',
+            message: `"${label}" decides on "${u.key}", but ${u.reason} — so I can't prove every case is covered.`,
+            nodeId: node.id, field: 'config.inputs',
+            hint: 'Give it a closed list of possible values, or add a catch-all rule (every input "-") so an unanticipated input still goes somewhere.',
+          });
+        }
+        for (const b of analysis.badConditions) {
+          issues.push({
+            severity: 'error', code: 'DECISION_BAD_CONDITION',
+            message: `Rule ${b.rule + 1} of "${label}" tests "${b.key}" with "${b.condition}", which isn't a condition this system can check.`,
+            nodeId: node.id, field: 'config.rules',
+            hint: 'Allowed: a literal, a comma list, < <= > >=, an interval like [10..50], not(...), or "-" for "don\'t care".',
+          });
+        }
+        continue;   // no coverage claim is made about a table we cannot read
+      }
+
+      for (const box of analysis.uncovered) {
+        const where = Object.entries(box).map(([k, v]) => `${k} ${v}`).join(', ');
+        issues.push({
+          severity: 'warning', code: 'DECISION_TABLE_GAP',
+          message: `"${label}" has no rule for: ${where}. Right now the workflow would silently do nothing for those.`,
+          nodeId: node.id, field: 'config.rules',
+          hint: 'Answer it, or let it escalate — an unanticipated case goes to a person instead of vanishing.',
+        });
+      }
+      if (analysis.truncated) {
+        issues.push({
+          severity: 'warning', code: 'DECISION_TABLE_GAP',
+          message: `"${label}" has ${analysis.truncated} further uncovered combination${analysis.truncated > 1 ? 's' : ''} beyond the ones listed.`,
+          nodeId: node.id, field: 'config.rules',
+          hint: 'A table with this many holes is usually two decisions wearing one hat. Consider splitting it.',
+        });
+      }
+
+      for (const o of analysis.overlaps) {
+        const where = Object.entries(o.where).map(([k, v]) => `${k} ${v}`).join(', ');
+        issues.push({
+          severity: 'error', code: 'UNIQUE_HIT_OVERLAP',
+          message: `"${label}" promises exactly one rule ever matches, but rules ${o.rules[0] + 1} and ${o.rules[1] + 1} both match ${where}.`,
+          nodeId: node.id, field: 'config.rules',
+          hint: 'Either narrow the rules so they cannot both match, or change the hit policy to "first match wins".',
+        });
+      }
+    }
   }
 
   /**
@@ -568,7 +665,9 @@ export class WorkflowValidator {
 
         const what = src.type === 'llm'
           ? `an AI step in ${mode} mode — it emits free text`
-          : `a ${src.type} step, whose output is not a closed set of values`;
+          : src.type === 'decision' && tableOf(src).hitPolicy === 'COLLECT'
+            ? 'a decision that COLLECTS every matching rule — it emits a list, not a single value'
+            : `a ${src.type} step, whose output is not a closed set of values`;
         issues.push({
           severity: 'error', code: 'LLM_INPUT_NOT_ENUM',
           message: `"${node.label || node.id}" routes on "${src.label || src.id}", ${what}, so the cases can never be proven to cover every value it might produce — an unanticipated one would fall through to the catch-all and the workflow would silently do nothing.`,
@@ -1338,9 +1437,19 @@ function closedDomainOf(node) {
   }
 
   // decision (Increment E) — the output enum.
+  //
+  // EXCEPT under COLLECT, whose output is a LIST of every rule that matched, not
+  // a member of the enum. A branch matches by exact value, so routing on a
+  // COLLECT table matches no case and the mandatory catch-all swallows 100% of
+  // traffic — silently, with `run_completed`. That is the BRANCH_BAD_ON failure
+  // arriving through the hit policy. `values` describes what a rule can DECIDE;
+  // under COLLECT it does not describe what the node EMITS, and the domain a
+  // branch routes on is the one the node emits. (A COLLECT table is still a
+  // perfectly good decision — it just cannot be the thing a branch routes on.)
   if (node.type === 'decision') {
-    const out = node.output ?? node.config?.output;
-    const vals = Array.isArray(out?.values) ? out.values.filter(v => v != null).map(String) : [];
+    const { output, hitPolicy } = tableOf(node);
+    if (hitPolicy === 'COLLECT') return null;
+    const vals = valuesOf(output);
     return vals.length >= 2 ? vals : null;
   }
 

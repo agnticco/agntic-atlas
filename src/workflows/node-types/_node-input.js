@@ -36,8 +36,12 @@
  * upstream of a delivery after an approval is the `human` node — so the customer
  * would receive the literal string {"decision":"approve","by":"user:1",…} instead
  * of the reply that was approved. The content is the draft ABOVE the approval.
+ *
+ * `decision` (P12 Increment E) is the same: {value, text, rule, inputs} is the
+ * answer plus the row that produced it. An `llm` step downstream of a decision
+ * must summarise the EMAIL, not the audit record of how the email was classified.
  */
-const NON_CONTENT_TYPES = new Set(['trigger', 'deliver', 'branch', 'human']);
+const NON_CONTENT_TYPES = new Set(['trigger', 'deliver', 'branch', 'human', 'decision']);
 
 /**
  * Stringify a node output for use as text input / delivered body.

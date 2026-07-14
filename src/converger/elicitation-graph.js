@@ -25,6 +25,8 @@ import { scoreGap, unansweredGaps } from './gap-scorer.js';
 import { applyProposal, assembleSpec } from './spec-assembler.js';
 import { materialiseEscalations } from './escalation.js';
 import { nodeForAssertion, assertableConnectors, splitTarget } from '../workflows/outcome-oracle.js';
+import { analyzeTable } from '../workflows/decision-analysis.js';
+import { tableOf, valuesOf, HIT_POLICIES, HIT_POLICY_LABELS, DECISION_MAX_INPUTS } from '../workflows/node-types/decision.js';
 import {
   buildSystemPrompt,
   buildAnalyzePrompt,
@@ -101,6 +103,11 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
       gapRounds:         0,
       sufficiencyChecks: 0,
       _missingNote:      null,
+      // The decision tables have been shown to the user once (P12 Increment E).
+      // The gap loop can re-enter `decisions` on its way back to ratify, and
+      // re-asking someone to review a table they just reviewed is how a review
+      // becomes a thing people click past.
+      decisionsReviewed: false,
       // Gaps the user (or the default) sent to a human rather than answering.
       // Kept in STATE and persisted to the interaction store — never in the spec.
       // It is provenance, and it feeds the SOP: "these cases were not decided;
@@ -511,6 +518,97 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
     };
   });
 
+  // ── decisions ──────────────────────────────────────────────────────────────
+  // "Here is the table I induced. Correct it."  (P12 Increment E, §6.4)
+  //
+  // The table is REVIEWED, never AUTHORED. Nobody can write a decision table from
+  // a blank grid — but everybody can look at a wrong row and say "no, over $50k is
+  // P1". Recognition over recall (§6.2.1), which is only possible because the
+  // domain is CLOSED: the cells are dropdowns precisely because
+  // LLM_INPUT_NOT_ENUM forced every AI-judged input into a declared list of
+  // values. The moat is what makes the multiple-choice UI possible; the
+  // multiple-choice UI is what makes the moat affordable to the user. They are the
+  // same asset (§13).
+  //
+  // It runs BEFORE `gaps`, so that a table the user has just corrected is the one
+  // whose remaining holes they are asked about — otherwise the gap list would be
+  // about a table that no longer exists.
+  //
+  // No LLM call: the table is already in the draft, and the analysis is arithmetic.
+  graph.addNode('decisions', async (state) => {
+    const tables = (state.draft?.nodes ?? []).filter(n => n?.type === 'decision');
+
+    // Most workflows do not decide anything, and must not be shown an empty grid
+    // and asked to admire it. A pass-through, with no interrupt and no cost.
+    if (!tables.length || state.decisionsReviewed) return { phase: 'gapping' };
+
+    const payload = tables.map((node) => {
+      const { inputs, output, rules, hitPolicy } = tableOf(node);
+      const analysis = analyzeTable({ inputs, rules, hitPolicy });
+      return {
+        decisionId: node.id,
+        label:      node.label || node.id,
+        inputs, rules, hitPolicy,
+        output:     { key: output?.key ?? 'result', values: valuesOf(output) },
+        hitPolicyOptions: HIT_POLICIES.map(p => ({
+          id: p, label: HIT_POLICY_LABELS[p], selected: p === hitPolicy,
+        })),
+        // What the analysis already knows, so the review surfaces it in place
+        // rather than making the user find it. `uncovered` here is a PREVIEW; the
+        // authoritative list is the gap review, one step later, on the table as
+        // corrected.
+        uncovered: analysis.uncovered.length + analysis.truncated,
+        decidable: analysis.decidable,
+        // DECOMPOSE AT >4 INPUTS (§12). The limit is cognitive: box subtraction
+        // would happily analyse ten. But a table nobody can hold in their head is
+        // one nobody reviews, and an unreviewed table is not auditable — which is
+        // the whole claim.
+        tooWide:   inputs.length > DECISION_MAX_INPUTS,
+        decompose: inputs.length > DECISION_MAX_INPUTS
+          ? `This decides on ${inputs.length} things at once. Past four, nobody can check the table — split it in two: decide "${inputs.slice(0, 2).map(i => i.key).join('" and "')}" first, then feed that answer into a second table as a single input.`
+          : null,
+      };
+    });
+
+    const confirmation = await interrupt({
+      type: 'decision_review',
+      decisions: payload,
+      // §6.2.2 — every interrupt ships with a pre-selected default, so Enter is
+      // always a valid answer. The default is the induced table, unmodified.
+      defaultAction: 'accept',
+      step: state.step,
+    });
+
+    // The user's edits, keyed by decision id: { rules?, hitPolicy? }. Absent (or
+    // "looks right", or Enter) ⇒ the table stands exactly as it was induced.
+    const edits = confirmation?.tables ?? {};
+    const nodes = (state.draft?.nodes ?? []).map((n) => {
+      const e = edits[n.id];
+      if (n?.type !== 'decision' || !e) return n;
+      return {
+        ...n,
+        config: {
+          ...(n.config ?? {}),
+          ...(Array.isArray(e.rules)  ? { rules: e.rules }          : {}),
+          ...(e.hitPolicy             ? { hitPolicy: e.hitPolicy }  : {}),
+        },
+      };
+    });
+
+    return {
+      draft: { ...state.draft, nodes },
+      confirmationLog: [{
+        step: state.step, type: 'decision_review',
+        decisions: payload.map(p => ({ decisionId: p.decisionId, rules: p.rules, hitPolicy: p.hitPolicy })),
+        edited: Object.keys(edits),
+        confirmation,
+      }],
+      decisionsReviewed: true,
+      step:  state.step + 1,
+      phase: 'gapping',
+    };
+  });
+
   // ── gaps ───────────────────────────────────────────────────────────────────
   // "Here are the cases you haven't told me about."  (P12 Increment C)
   //
@@ -574,7 +672,13 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
 
     const escalated = soft
       .filter(g => (resolutions[g.id] ?? 'escalate') === 'escalate')
-      .map(g => ({ id: g.id, class: g.class, code: g.code, message: g.message, resolution: 'escalated' }));
+      // `nodeId` is load-bearing, not decoration: materialiseEscalations() has to
+      // find the step the gap is ABOUT in order to put a real escalation path on
+      // it (P12 Increment E — a DECISION_TABLE_GAP escalates by routing the
+      // uncovered case to a person). Dropped here, the gap arrives at the
+      // materialiser as an anonymous sentence and can only be reported
+      // unmaterialised — "escalated" would go back to meaning nothing.
+      .map(g => ({ id: g.id, class: g.class, code: g.code, message: g.message, nodeId: g.nodeId ?? null, resolution: 'escalated' }));
 
     const logEntry = {
       step: state.step, type: 'gap_review',
@@ -695,10 +799,16 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
   // FIRST; the process is derived from them, which is why `process` needs almost
   // no user turns at all.
   //
-  //   outcome → examples → process → (analyze ⇄ clarify|propose) → gaps → ratify
+  //   outcome → examples → process → (analyze ⇄ clarify|propose) → decisions → gaps → ratify
   //
   // analyze/clarify/propose are v1's loop, kept intact and now driven by the new
   // gap oracle rather than the old five-item checklist.
+  //
+  // `decisions` (Increment E) sits immediately BEFORE `gaps`, and that order is
+  // load-bearing: the gap list must be about the table AS CORRECTED. Review the
+  // table after the gap list and the user is asked to fill holes in a table they
+  // are about to change — and the holes they were shown are in a table that no
+  // longer exists.
   graph.setEntryPoint('outcome');
 
   graph.addConditionalEdges('outcome', (state) => {
@@ -711,14 +821,15 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
   graph.addEdge('process', 'analyze');
 
   graph.addConditionalEdges('analyze', (state) => {
-    if (state.phase === 'gapping')    return 'gaps';
-    if (state.phase === 'ratifying')  return 'ratify';
-    if (state.phase === 'clarifying') return 'clarify';
+    if (state.phase === 'gapping')    return 'decisions';   // …which falls straight
+    if (state.phase === 'ratifying')  return 'ratify';      //   through to `gaps`
+    if (state.phase === 'clarifying') return 'clarify';     //   when nothing decides
     return 'propose';
   });
 
   graph.addEdge('clarify', 'analyze');
   graph.addEdge('propose', 'analyze');
+  graph.addEdge('decisions', 'gaps');
 
   graph.addConditionalEdges('gaps', (state) => {
     return state.phase === 'proposing' ? 'propose' : 'ratify';

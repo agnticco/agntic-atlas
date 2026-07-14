@@ -86,6 +86,13 @@ const SUITES = [
   // guard ends up pinned by nothing the SWEEP can see. A mutant is only killable
   // by a suite the sweep RUNS.
   'tests/approvals/gate-adversarial.test.js',
+  // P12 Increment E — the `decision` node. The table's run-time half: an
+  // uncovered case THROWS rather than guessing, an AI-judged input is snapped to
+  // its closed enum or the run stops, and the decision's output never becomes the
+  // delivered body. Without this suite in the list every mutant in decision.js is
+  // unkillable by construction, and the survivor list would report the newest
+  // guards in the engine as untested when they were merely unexecuted.
+  'tests/workflows/decision-node.test.js',
 ];
 
 /**
@@ -122,6 +129,13 @@ const TARGETS = [
   'src/approvals/approval-store.js',
   'src/approvals/approval-service.js',
   'src/workflows/workflow-scheduler.js',
+  // P12 Increment E — the decision table. `decision-analysis.js` (the PROOF) has
+  // been in TARGETS since C; this is the EXECUTOR that has to agree with it. A
+  // proof the engine does not honour is not a proof, so the two must be swept
+  // together: the guard that makes an uncovered case throw, the one that snaps an
+  // AI answer to the closed enum, and the one that refuses an unparseable
+  // condition all live here.
+  'src/workflows/node-types/decision.js',
 ];
 
 const args    = process.argv.slice(2);

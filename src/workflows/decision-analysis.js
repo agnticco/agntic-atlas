@@ -240,6 +240,57 @@ function coveredAtoms(cond, input, atoms) {
   return { atoms: set, ok: true };
 }
 
+/**
+ * Does `value` satisfy `cond` for this input? THE RUN-TIME half of the SAME
+ * grammar the analysis above uses — deliberately in this file, and deliberately
+ * built out of the same `parseNumeric` / literal / not() / comma-list code.
+ *
+ * A second, private implementation inside the `decision` node's run() would be a
+ * copy of FEEL-A, and the day the two disagree is the day the coverage proof
+ * describes a program nobody is running: the analyser certifies that every case
+ * is covered, and the engine — reading the same table by different rules — falls
+ * through to no rule at all. The proof is only worth what the executor's
+ * agreement with it is worth. (converger-v2 §11.7; CLAUDE.md — one oracle,
+ * consulted by both.)
+ *
+ * @returns {{ ok: boolean, matched: boolean }} — `ok:false` means the condition is
+ *          not FEEL-A at all (unparseable). The caller must fail loudly: a
+ *          condition nobody can read is not a condition that failed to match.
+ */
+export function matchesCondition(cond, input, value) {
+  if (cond === undefined || cond === null || String(cond).trim() === IRRELEVANT) {
+    return { ok: true, matched: true };     // `-` — this rule does not care
+  }
+  const type = String(input?.type ?? '').toLowerCase();
+  const raw  = String(cond).trim();
+
+  if (type === 'number' || type === 'integer') {
+    const parsed = parseNumeric(raw);
+    if (!parsed) return { ok: false, matched: false };
+    const n = typeof value === 'number' ? value : Number(String(value).trim());
+    if (!Number.isFinite(n)) return { ok: true, matched: false };
+    return { ok: true, matched: parsed.test(n) };
+  }
+
+  if (type === 'boolean') {
+    const want = raw.toLowerCase();
+    if (want !== 'true' && want !== 'false') return { ok: false, matched: false };
+    return { ok: true, matched: String(value).trim().toLowerCase() === want };
+  }
+
+  // enum (and anything else): literal · comma disjunction · not(...)
+  const not = RE_NOT.exec(raw);
+  if (not) {
+    const inner = matchesCondition(not[1], input, value);
+    if (!inner.ok) return { ok: false, matched: false };
+    return { ok: true, matched: !inner.matched };
+  }
+  const wanted = raw.split(',').map(s => s.trim()).filter(Boolean);
+  if (!wanted.length) return { ok: false, matched: false };
+  const v = String(value ?? '').trim().toLowerCase();
+  return { ok: true, matched: wanted.some(w => w.toLowerCase() === v) };
+}
+
 // ── The analysis ─────────────────────────────────────────────────────────────
 
 /**
