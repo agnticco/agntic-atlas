@@ -12,6 +12,7 @@
 
 import { liftV1Node } from './node-types/compat-v1.js';
 import { normalizeCases } from './node-types/branch.js';
+import { tableOf, HIT_POLICY_LABELS } from './node-types/decision.js';
 
 const TYPE_LABELS = {
   email:     'Email trigger',
@@ -23,6 +24,7 @@ const TYPE_LABELS = {
   branch:    'Branch (routes one way)',
   foreach:   'For each item',
   human:     'Wait for a person',
+  decision:  'Decision table',
 };
 
 /**
@@ -171,6 +173,25 @@ function nodeDescription(rawNode) {
     case 'foreach': {
       const max = cfg.maxItems ?? 100;
       return `Repeats its steps once for each item in ${cfg.over ?? 'the list'}, up to ${max} items.`;
+    }
+    // A decision table is the most auditable thing in the workflow, and the SOP is
+    // where the audit happens: it must show the RULES, in order, in the language
+    // the person uses. "Decides priority (AI step)" would hide the one part of the
+    // procedure a regulator, an auditor or a new joiner would actually want to
+    // read. (P12 Increment E.)
+    case 'decision': {
+      const { inputs, output, rules, hitPolicy } = tableOf({ config: cfg });
+      const rows = rules.map((r, i) => {
+        const conds = inputs
+          .map(inp => [inp.key, r?.when?.[inp.key]])
+          .filter(([, c]) => c != null && String(c).trim() !== '-')
+          .map(([k, c]) => `${k} ${c}`)
+          .join(' and ');
+        return `  ${i + 1}. ${conds || 'anything else'} → ${output?.key ?? 'result'} = ${r?.then}`;
+      }).join('\n');
+      const policy = HIT_POLICY_LABELS[hitPolicy] ?? hitPolicy;
+      return `Decides ${output?.key ?? 'a value'} from ${inputs.map(i => i.key).join(' and ') || 'its inputs'}. `
+           + `${policy}.\n${rows}`;
     }
     case 'human':
       return `Pauses and waits for a person: "${cfg.prompt ?? 'approve this step'}". Nothing downstream runs until they answer.`;

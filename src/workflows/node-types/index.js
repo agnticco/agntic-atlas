@@ -24,6 +24,7 @@ import { searchWebNodeType }       from './search-web.js';
 import { branchNodeType }          from './branch.js';
 import { foreachNodeType }         from './foreach.js';
 import { humanNodeType }           from './human.js';
+import { decisionNodeType }        from './decision.js';
 
 export function registerBuiltInNodeTypes(registry) {
   // Triggers + transport
@@ -36,10 +37,13 @@ export function registerBuiltInNodeTypes(registry) {
   registry.register(connectorActionNodeType);
   registry.register(searchWebNodeType);
 
-  // Control flow (P12 Increment B). `decision` (Increment E) joins these.
+  // Control flow (P12 Increments B + E). `decision` DECIDES a value; `branch`
+  // ROUTES on one that already exists. Keeping them apart is what makes the
+  // routing auditable and the coverage provable.
   registry.register(branchNodeType);
   registry.register(foreachNodeType);
   registry.register(humanNodeType);
+  registry.register(decisionNodeType);
 
   return registry;
 }
@@ -47,5 +51,5 @@ export function registerBuiltInNodeTypes(registry) {
 export {
   triggerNodeType, llmNodeType, assembleNodeType,
   deliverNodeType, connectorActionNodeType, searchWebNodeType,
-  branchNodeType, foreachNodeType, humanNodeType,
+  branchNodeType, foreachNodeType, humanNodeType, decisionNodeType,
 };

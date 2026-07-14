@@ -442,6 +442,93 @@
                 </div>
               </sc-if>
 
+              <!-- DECISION TABLE (decision_review) — P12 Increment E, §6.4.
+                   A TABLE, not prose. Collapsed to one sentence by default (§6.2.5:
+                   depth is opt-in), expanding to a grid whose cells are DROPDOWNS
+                   over the declared enum values. Those dropdowns are only possible
+                   because LLM_INPUT_NOT_ENUM forced the domain closed — the
+                   completeness proof is what makes the multiple-choice UI
+                   renderable, and the multiple-choice UI is what makes the proof
+                   affordable to the user. Same asset (§13). -->
+              <sc-if value="{{ item.isDecision }}" hint-placeholder-val="{{ false }}">
+                <div style="display:flex;gap:13px;align-items:flex-start;animation:msgIn .45s ease both">
+                  <div style="flex:none;width:32px;height:32px"></div>
+                  <div style="min-width:0;flex:1">
+                    <div style="font-size:15px;line-height:1.5;color:#fff;font-weight:500">{{ item.q }}</div>
+                    <div style="display:flex;flex-direction:column;gap:10px;margin-top:14px">
+                      <sc-for list="{{ item.tables }}" as="tbl" hint-placeholder-count="1">
+                        <div style="border:1px solid rgba(255,255,255,.09);border-radius:12px;padding:13px 15px;background:rgba(255,255,255,.02)">
+                          <div style="font-size:13.5px;line-height:1.5;color:rgba(255,255,255,.86);font-weight:500">{{ tbl.label }}</div>
+                          <div style="font-size:12.5px;line-height:1.5;color:rgba(255,255,255,.45);margin-top:3px">{{ tbl.summary }}</div>
+
+                          <!-- >4 inputs: the limit is COGNITIVE. A table nobody can
+                               hold in their head is one nobody reviews, and an
+                               unreviewed table is not auditable. -->
+                          <sc-if value="{{ tbl.decompose }}" hint-placeholder-val="{{ false }}">
+                            <div style="margin-top:9px;padding:9px 11px;border-radius:9px;border:1px solid rgba(240,191,107,.28);background:rgba(240,191,107,.06);font-size:12.5px;line-height:1.5;color:#e9c489">{{ tbl.decompose }}</div>
+                          </sc-if>
+
+                          <!-- One WRAPPING ROW PER RULE, not a fixed-column <table>.
+                               A table was the first attempt and it was unusable: the
+                               chat column is ~200px, so a 4-column grid overflowed to
+                               324px and every dropdown — including the `→ priority`
+                               column, the entire point — sat outside a scroll
+                               container the user has no reason to know is there. It
+                               rendered, and it could not be used. Rows that wrap stay
+                               readable at any width and still carry what §6.4 asks
+                               for: a cell per input, each a dropdown over the DECLARED
+                               values (a number gets a text box — its conditions are
+                               ranges, which no dropdown can enumerate). -->
+                          <sc-if value="{{ tbl.open }}" hint-placeholder-val="{{ false }}">
+                            <div style="display:flex;flex-direction:column;gap:7px;margin-top:12px">
+                              <sc-for list="{{ tbl.rows }}" as="row" hint-placeholder-count="3">
+                                <div style="display:flex;flex-wrap:wrap;align-items:center;gap:6px;padding:8px 10px;border-radius:9px;background:rgba(255,255,255,.03);border:1px solid rgba(255,255,255,.06)">
+                                  <span style="font-size:11px;color:rgba(255,255,255,.3);min-width:12px">{{ row.n }}</span>
+                                  <sc-for list="{{ row.cells }}" as="cell" hint-placeholder-count="2">
+                                    <span style="display:inline-flex;align-items:center;gap:5px">
+                                      <span style="font-size:11.5px;color:rgba(255,255,255,.42);font-family:ui-monospace,monospace">{{ cell.key }}</span>
+                                      <sc-if value="{{ cell.isSelect }}" hint-placeholder-val="{{ true }}">
+                                        <select onChange="{{ cell.onChange }}" value="{{ cell.value }}" style="background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.12);color:rgba(255,255,255,.85);font-family:inherit;font-size:12px;padding:3px 6px;border-radius:6px;cursor:pointer;max-width:100px">
+                                          <sc-for list="{{ cell.options }}" as="opt" hint-placeholder-count="3">
+                                            <option value="{{ opt.value }}" selected="{{ opt.selected }}">{{ opt.label }}</option>
+                                          </sc-for>
+                                        </select>
+                                      </sc-if>
+                                      <sc-if value="{{ cell.isText }}" hint-placeholder-val="{{ false }}">
+                                        <input value="{{ cell.value }}" onInput="{{ cell.onChange }}" placeholder="-" style="width:88px;background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.12);color:rgba(255,255,255,.85);font-family:ui-monospace,monospace;font-size:12px;padding:3px 6px;border-radius:6px" />
+                                      </sc-if>
+                                    </span>
+                                  </sc-for>
+                                  <span style="display:inline-flex;align-items:center;gap:5px">
+                                    <span style="font-size:12px;color:#e9c489">→</span>
+                                    <span style="font-size:11.5px;color:rgba(255,255,255,.42);font-family:ui-monospace,monospace">{{ tbl.outputKey }}</span>
+                                    <select onChange="{{ row.onThen }}" value="{{ row.then }}" style="background:rgba(240,191,107,.08);border:1px solid rgba(240,191,107,.3);color:#f3cd86;font-family:inherit;font-size:12px;padding:3px 6px;border-radius:6px;cursor:pointer">
+                                      <sc-for list="{{ row.thenOptions }}" as="topt" hint-placeholder-count="3">
+                                        <option value="{{ topt.value }}" selected="{{ topt.selected }}">{{ topt.label }}</option>
+                                      </sc-for>
+                                    </select>
+                                  </span>
+                                </div>
+                              </sc-for>
+                              <div style="display:flex;flex-wrap:wrap;gap:8px;margin-top:6px;align-items:center">
+                                <div style="font-size:12px;color:rgba(255,255,255,.4)">When more than one rule fits:</div>
+                                <sc-for list="{{ tbl.policies }}" as="pol" hint-placeholder-count="3">
+                                  <button onClick="{{ pol.onPick }}" style="{{ pol.style }}">{{ pol.label }}</button>
+                                </sc-for>
+                              </div>
+                            </div>
+                          </sc-if>
+                        </div>
+                      </sc-for>
+                    </div>
+                    <div style="display:flex;gap:10px;margin-top:14px">
+                      <button onClick="{{ item.onAccept }}" style="border:1px solid rgba(240,191,107,.45);background:rgba(240,191,107,.14);color:#f3cd86;font-family:inherit;font-size:14px;font-weight:600;padding:10px 20px;border-radius:999px;cursor:pointer" style-hover="background:rgba(240,191,107,.22)">{{ item.acceptLabel }}</button>
+                      <button onClick="{{ item.onToggle }}" style="border:1px solid rgba(255,255,255,.14);background:transparent;color:rgba(255,255,255,.6);font-family:inherit;font-size:14px;padding:10px 20px;border-radius:999px;cursor:pointer" style-hover="border-color:rgba(255,255,255,.3)">{{ item.reviewLabel }}</button>
+                    </div>
+                  </div>
+                </div>
+              </sc-if>
+
               <!-- SIGNAL LINE (building phase) -->
               <sc-if value="{{ item.isSignalLine }}" hint-placeholder-val="{{ false }}">
                 <div style="animation:msgIn .45s ease both;max-width:520px">
@@ -4541,6 +4628,123 @@ class Component extends DCLogic {
       return;
     }
 
+    // ── decision_review — the table, not prose (P12 Increment E, §6.4) ────
+    // COLLAPSED BY DEFAULT: one sentence, with "Review the table" next to it.
+    // Depth is opt-in (§6.2.5) — a user who trusts the induced table clicks
+    // "Looks right" and never sees a grid; a user who does not can open it and
+    // fix a cell. Cells are DROPDOWNS because the enum values are known, and the
+    // enum values are known because LLM_INPUT_NOT_ENUM forced them to be. The
+    // moat is what makes this screen renderable at all.
+    if (iv.type === "decision_review") {
+      const self = this;
+      const tables = iv.decisions || [];
+      const did = "dec" + (this._pc = (this._pc || 0) + 1);
+
+      // The edit buffer: decisionId -> { rules, hitPolicy }. Starts as the induced
+      // table, unmodified — which is also what gets sent if the user just hits
+      // "Looks right". The default is a real answer, not an empty one.
+      const buf = {};
+      tables.forEach(t => { buf[t.decisionId] = { rules: JSON.parse(JSON.stringify(t.rules || [])), hitPolicy: t.hitPolicy }; });
+
+      const send = () => {
+        self.setState({
+          msgs: self.state.msgs.map(m => (m._id === did ? { ...m, tables: [], open: false } : m)),
+          thinking: true, inputMode: "locked",
+        });
+        self._send({ type: "accept", tables: buf });
+      };
+
+      // The condition a cell shows. Enum/boolean inputs get a <select> over the
+      // declared values plus "any" ("-"); a number gets a text box, because its
+      // conditions are ranges (">50000", "[10..50]") and no dropdown can enumerate
+      // those.
+      const redraw = (open) => self.setState({
+        msgs: self.state.msgs.map(m => (m._id === did
+          ? { ...m, open, tables: buildTables(open), reviewLabel: open ? "Hide the table" : "Review the table" }
+          : m)),
+      });
+
+      const cellsFor = (t, rule, ri, open) => (t.inputs || []).map(inp => {
+        const cur = rule.when && rule.when[inp.key] != null ? String(rule.when[inp.key]) : "-";
+        const vals = Array.isArray(inp.values) ? inp.values.map(String)
+                   : (String(inp.type).toLowerCase() === "boolean" ? ["true", "false"] : null);
+        const set = (v) => {
+          buf[t.decisionId].rules[ri].when = { ...(buf[t.decisionId].rules[ri].when || {}), [inp.key]: v };
+          redraw(open);
+        };
+        return {
+          key: inp.key,
+          // A number's conditions are RANGES (">50000", "[10..50]"). No dropdown
+          // can enumerate those, so it gets a text box — and only an enum or a
+          // boolean, whose values are declared, gets the select.
+          isSelect: !!vals,
+          isText: !vals,
+          value: cur,
+          options: vals ? ["-"].concat(vals).map(v => ({ value: v, label: v === "-" ? "any" : v, selected: v === cur })) : [],
+          onChange: (e) => set(e.target.value),
+        };
+      });
+
+      const buildTables = (open) => tables.map(t => {
+        const b = buf[t.decisionId];
+        return {
+          decisionId: t.decisionId,
+          label: t.label,
+          open: !!open,
+          summary: "Decides " + (t.output && t.output.key ? t.output.key : "a value")
+                 + " from " + (t.inputs || []).map(i => i.key).join(" and ")
+                 + " — " + (b.rules || []).length + " rule" + ((b.rules || []).length === 1 ? "" : "s")
+                 + (t.uncovered ? " · " + t.uncovered + " case" + (t.uncovered === 1 ? "" : "s") + " not covered yet" : ""),
+          decompose: t.decompose || "",
+          outputKey: (t.output && t.output.key) || "result",
+          rows: (b.rules || []).map((rule, ri) => ({
+            n: ri + 1,
+            cells: cellsFor(t, rule, ri, open),
+            then: String(rule.then == null ? "" : rule.then),
+            thenOptions: ((t.output && t.output.values) || []).map(v => ({
+              value: v, label: v, selected: String(rule.then) === String(v),
+            })),
+            onThen: (e) => {
+              buf[t.decisionId].rules[ri].then = e.target.value;
+              redraw(open);
+            },
+          })),
+          // The hit policy in PLAIN LANGUAGE — never the DMN letter. "U" means
+          // nothing to the person whose process this is.
+          policies: (t.hitPolicyOptions || []).map(p => ({
+            id: p.id, label: p.label,
+            style: "border:1px solid " + (p.id === b.hitPolicy ? "rgba(240,191,107,.5)" : "rgba(255,255,255,.14)")
+                 + ";background:" + (p.id === b.hitPolicy ? "rgba(240,191,107,.12)" : "transparent")
+                 + ";color:" + (p.id === b.hitPolicy ? "#f3cd86" : "rgba(255,255,255,.6)")
+                 + ";font-family:inherit;font-size:12px;padding:5px 12px;border-radius:999px;cursor:pointer",
+            onPick: () => {
+              buf[t.decisionId].hitPolicy = p.id;
+              redraw(open);
+            },
+          })),
+        };
+      });
+
+      this.setState({
+        msgs: [...this.state.msgs, {
+          isDecision: true, _id: did, open: false,
+          q: tables.length === 1
+            ? "Here's the rule I'd use. Does it match how you actually decide?"
+            : "Here are the " + tables.length + " rules I'd use. Do they match how you actually decide?",
+          tables: buildTables(false),
+          reviewLabel: "Review the table",
+          acceptLabel: "Looks right",
+          onToggle: () => {
+            const m = self.state.msgs.find(x => x._id === did);
+            redraw(!(m && m.open));
+          },
+          onAccept: send,
+        }],
+        thinking: false, inputMode: "clarify", phase: "building",
+      });
+      return;
+    }
+
     // ── gap_review — "the cases you haven't told me about" ────────────────
     // THE surface (converger-v2 §6.4). Every row arrives pre-resolved, and
     // "Accept all defaults" is one click: a user can publish a provably-complete
@@ -4810,6 +5014,20 @@ class Component extends DCLogic {
       else if (ch === 'slack' || ch.charAt(0) === '#' || /^slack:/.test(ch) || cfg.target) { dt = 'Post to Slack'; dd = 'Posts the finished content to ' + (cfg.target || cfg.channel) + ' in Slack.'; }
       else { dt = 'Deliver'; dd = 'Delivers the content to ' + (ch || 'the configured destination') + '.'; }
       return { title: label || dt, desc: rat || dd };
+    }
+    // A decision is not a step that "processes the content" — it DECIDES, from a
+    // table the user can read. Say what it decides and on what; the generic
+    // fallback would have described the one auditable node in the library as an
+    // anonymous transform. (P12 Increment E.)
+    if (ty === 'decision') {
+      const ins = (Array.isArray(cfg.inputs) ? cfg.inputs : []).map(i => i && i.key).filter(Boolean);
+      const out = (cfg.output && cfg.output.key) || 'a value';
+      const n = (Array.isArray(cfg.rules) ? cfg.rules : []).length;
+      return {
+        title: label || 'Decision',
+        desc: rat || ('Decides ' + out + (ins.length ? ' from ' + ins.join(' and ') : '')
+                      + ' using ' + n + ' rule' + (n === 1 ? '' : 's') + '.'),
+      };
     }
     return { title: label || this._titleCase(ty || 'Step'), desc: rat || 'Processes the content and passes it to the next step.' };
   }

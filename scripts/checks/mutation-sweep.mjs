@@ -86,6 +86,28 @@ const SUITES = [
   // guard ends up pinned by nothing the SWEEP can see. A mutant is only killable
   // by a suite the sweep RUNS.
   'tests/approvals/gate-adversarial.test.js',
+  // P12 Increment E — the `decision` node. The table's run-time half: an
+  // uncovered case THROWS rather than guessing, an AI-judged input is snapped to
+  // its closed enum or the run stops, and the decision's output never becomes the
+  // delivered body. Without this suite in the list every mutant in decision.js is
+  // unkillable by construction, and the survivor list would report the newest
+  // guards in the engine as untested when they were merely unexecuted.
+  'tests/workflows/decision-node.test.js',
+  // P12 Increment E — the test-adversary's pass. Each test in here kills a mutant
+  // that SURVIVED this sweep on the increment-E tree: the keyless output, the
+  // malformed rule that crashed the validator instead of being read by it, the
+  // numeric upper tail that was never partitioned (a full completeness proof for a
+  // table with a hole above its highest cut), the interior integer phantom gap, and
+  // the boolean arm of matchesCondition. The survivor list is the coverage report,
+  // and this is the behavioural part of it.
+  //
+  'tests/workflows/decision-pinning.test.js',
+  // Its sibling. It held the six LIVE DEFECTS and was RED when the adversary handed
+  // it over; the Builder fixed all six, so it is green and belongs here. It pins the
+  // three SILENT ones — a decision in a loop delivering the decided value to the
+  // customer once per row, free text laundered into the table through a non-LLM enum
+  // input, and a classifier returning the value the model NEGATED.
+  'tests/workflows/decision-adversarial.test.js',
 ];
 
 /**
@@ -122,6 +144,13 @@ const TARGETS = [
   'src/approvals/approval-store.js',
   'src/approvals/approval-service.js',
   'src/workflows/workflow-scheduler.js',
+  // P12 Increment E — the decision table. `decision-analysis.js` (the PROOF) has
+  // been in TARGETS since C; this is the EXECUTOR that has to agree with it. A
+  // proof the engine does not honour is not a proof, so the two must be swept
+  // together: the guard that makes an uncovered case throw, the one that snaps an
+  // AI answer to the closed enum, and the one that refuses an unparseable
+  // condition all live here.
+  'src/workflows/node-types/decision.js',
 ];
 
 const args    = process.argv.slice(2);
