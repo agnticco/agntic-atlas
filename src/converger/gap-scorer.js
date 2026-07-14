@@ -72,6 +72,7 @@ import { WorkflowValidator }       from '../workflows/workflow-validator.js';
 import { NodeTypeRegistry }        from '../workflows/node-type-registry.js';
 import { registerBuiltInNodeTypes } from '../workflows/node-types/index.js';
 import { analyzeTable }            from '../workflows/decision-analysis.js';
+import { approvalChannelView }     from '../workflows/approval-channels.js';
 
 /** Which class an issue belongs to. Anything unlisted is a contract gap. */
 const OUTCOME_CODES  = new Set(['UNSATISFIED_ASSERTION', 'MALFORMED_ASSERTION', 'MISSING_OUTCOME']);
@@ -109,10 +110,23 @@ function channelView(capabilities) {
   return { get: (id) => byId.get(id) ?? null };
 }
 
+/**
+ * The approval channels the tenant can actually be ASKED over (P12 Increment D).
+ * Built by builder.js from the live catalog + the platform mailer and carried on
+ * `capabilities`, for exactly the same reason as `channels`: the scorer must run
+ * the checks publish runs, or `complete ⇒ publishable` is a slogan rather than a
+ * property. Absent ⇒ null ⇒ the validator skips APPROVAL_CHANNEL_NOT_CONNECTED
+ * and this file refuses to certify (below).
+ */
+function approvalView(capabilities) {
+  return approvalChannelView(capabilities?.approvalChannels ?? null);
+}
+
 function validatorFor(capabilities) {
   return new WorkflowValidator({
-    nodeTypes:       nodeTypes(),
-    channelRegistry: channelView(capabilities),
+    nodeTypes:        nodeTypes(),
+    channelRegistry:  channelView(capabilities),
+    approvalChannels: approvalView(capabilities),
   });
 }
 
@@ -195,6 +209,28 @@ export function scoreGap(spec = {}, { capabilities = {}, validator = null } = {}
       id: 'gap_channels_unverified', class: 'contract', nodeId: null,
       code: 'CHANNELS_UNVERIFIED', severity: 'error',
       message: 'I can\'t confirm the delivery destinations are real and connected — the connector catalog isn\'t loaded, so I won\'t claim this workflow is finished.',
+      hint: 'Reconnect the connectors (or reload the page) and try again.',
+      resolution: 'unanswered', decidable: false, blocking: true,
+    });
+  }
+
+  // The SAME hole, one door along (P12 Increment D). A `human` node's channels
+  // are checked by APPROVAL_CHANNEL_NOT_CONNECTED — but only when the validator
+  // was handed an approval-channel view. Without one that check silently does not
+  // run, so a pause asking over a Slack workspace nobody connected would score
+  // COMPLETE here and be rejected at publish (which always has the view). That is
+  // the C blocker exactly, and the lesson it taught is that the fix belongs on
+  // BOTH sides: the validator skips what it cannot see, and the scorer refuses to
+  // certify what it could not check.
+  //
+  // It is not merely a publish/score divergence, either: an approval nobody can
+  // reach is a run that waits forever for an answer that cannot come.
+  const asks = nodes.filter(n => n?.type === 'human');
+  if (!Array.isArray(capabilities?.approvalChannels) && asks.length) {
+    gaps.push({
+      id: 'gap_approval_channels_unverified', class: 'contract', nodeId: asks[0].id,
+      code: 'CHANNELS_UNVERIFIED', severity: 'error',
+      message: 'This workflow stops to ask a person, but I can\'t confirm where that question can actually be delivered — so I won\'t claim it\'s finished.',
       hint: 'Reconnect the connectors (or reload the page) and try again.',
       resolution: 'unanswered', decidable: false, blocking: true,
     });

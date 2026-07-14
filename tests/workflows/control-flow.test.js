@@ -1004,10 +1004,29 @@ test('positive: a well-formed foreach validates', () => {
 });
 
 test('positive: a well-formed human step validates', () => {
+  // FIXTURE UPDATED BY INCREMENT D — the assertion is untouched.
+  //
+  // Increment B built the pause and could not yet deliver the question, so "well
+  // formed" then meant only "it has a prompt and two answers". D adds the two
+  // things that make a pause ANSWERABLE, and both are now errors without which
+  // the step is broken in a way B had no way to see:
+  //
+  //   channels  — a question with nowhere to go is asked of nobody, and the run
+  //               waits forever for an answer that cannot come.
+  //   timeout   — a pause with no deadline never ends, never fails, and never
+  //               tells anyone (HUMAN_WITHOUT_TIMEOUT).
+  //
+  // So the old fixture was not a well-formed human step; it was an unanswerable
+  // one that nothing had yet noticed. The invariant this test pins — THE GOOD
+  // SHAPE IS ACCEPTED — is what matters, and it still holds.
   const res = validator.validate(spec(
     [
       { id: 'draft', type: 'llm', config: { prompt: 'draft' } },
-      { id: 'ask',   type: 'human', config: { prompt: 'Send it?', preview: '{{draft.output}}', decisions: ['approve', 'reject'] } },
+      { id: 'ask',   type: 'human', config: {
+        prompt: 'Send it?', preview: '{{draft.output}}', decisions: ['approve', 'reject'],
+        channels: [{ type: 'inbox' }],
+        timeout: { after: '48h', then: 'reject' },
+      } },
       { id: 'd',     type: 'deliver', config: { channel: 'in_app' } },
     ],
     [{ from: 'draft', to: 'ask' }, { from: 'ask', to: 'd' }],

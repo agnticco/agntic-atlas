@@ -583,6 +583,125 @@ refactor them without an explicit decision recorded here:
     filter silently dropped a requested connector (**defect #1 relocated from the spec into the
     candidate list**) — it now says what it refused to promise, and why.
 
+- **The human approval gate (2026-07-13, P12 increment D)** — Increment B built the durable pause
+  and stopped there **on purpose**: an approval anyone can forge is not an approval, so the
+  authentication got its own increment and its own adversarial check. D is that half. A `human`
+  node is now reachable: the ask goes out, the answer comes back **proven**, and an unanswered one
+  never becomes a yes.
+  - **`src/approvals/approval-store.js`** (new) — mirrors `password-reset-store.js`: 32 random bytes,
+    **SHA-256 hash only** on disk, single-use, TTL from the node's own `timeout.after`. **One token
+    per `(runId, nodeId, decision)`** — approve and reject are *different secrets*, so a forwarded
+    "approve" link cannot be edited into a "reject"; and **consuming either burns both**, because a
+    question that has been answered must not be answerable again by the next person down the thread.
+    `issue()` **throws** without a tenant (a `?? 'default'` here would be a cross-tenant forgery
+    primitive — the `?? 'unscoped'` lesson, fourth occurrence).
+  - **`src/approvals/approval-service.js`** (new) — the ask, over every declared channel in parallel
+    (first valid answer wins), and one `resolve*()` per channel. **Each proves who is answering
+    BEFORE the engine sees it**: `inbox` an authenticated session whose tenant must match the run's;
+    `slack` an HMAC-verified `block_actions` carrying the Slack user id; `email` a signed, hashed,
+    single-use magic link. There is exactly ONE door into the engine (`scheduler.resumeRun`) and it
+    authenticates nothing, by design. **A fifth channel proves its answerer before it reaches that
+    door, or it is not a channel.**
+  - **`GET /approvals/:token` DECIDES NOTHING.** It is a link in an email, and things that are not
+    people fetch those: scanning proxies, link checkers, the mail client's own prefetcher. If the GET
+    consumed the token, a corporate security appliance would approve the customer's refund
+    milliseconds after the mail landed. The GET renders a page; a **POST** from it answers.
+  - **`POST /connectors/slack/interactive` is a DIFFERENT URL from `/connectors/slack/events`**, and
+    it needs its own body parser: Block Kit buttons arrive `application/x-www-form-urlencoded` with
+    the payload in a `payload` field, and the global `express.json` leaves `req.body` empty — which
+    would make the signature unverifiable. The tenant is resolved from the Slack **team id**, never
+    from the button's `value`: a value is a routing hint, and a routing hint that could name a tenant
+    is a cross-tenant forgery primitive.
+  - Validator (§7.7): **`HUMAN_WITHOUT_TIMEOUT`** (a pause with no deadline never ends, never fails,
+    and never tells anyone), **`HUMAN_BAD_TIMEOUT`** (a `then` outside the node's own answers takes a
+    path nobody wrote — the `BRANCH_BAD_ON` class), **`WEAK_APPROVAL_FOR_WRITE`** (an emailed link
+    proves possession of a mailbox and is forwardable; it may not stand alone in front of a send or a
+    write), **`APPROVAL_CHANNEL_NOT_CONNECTED`**, **`EMAIL_REPLY_APPROVAL`** (§11.8 — `From:` is
+    forgeable, SPF/DKIM authenticate a sending *domain* rather than a human *intent*, and a forwarded
+    thread is full of the word "yes"). `src/workflows/approval-channels.js` is the **single** trust
+    table, read by the validator, the gap scorer and the service, so they cannot drift.
+  - **`complete ⇒ publishable` held only because the scorer FAILS CLOSED — and D moved the hole one
+    door along.** `APPROVAL_CHANNEL_NOT_CONNECTED` needs an approval-channel view; without one the
+    check silently does not run, so a pause asking over a Slack workspace nobody connected would
+    score `complete` and then refuse to publish. That is the C blocker exactly. `scoreGap` now
+    refuses to certify a spec containing a `human` node when it cannot see the channels, and
+    `builder.js` builds the view from the LOCAL registry (so a network failure cannot knock it out).
+
+  **Four live defects found while building it — three of them pre-existing:**
+  1. **A FAILURE PATH WAS ALSO A SUCCESSOR.** `on_error: { then: 'route_to:handler' }` requires an
+     edge `node → handler` (the validator *enforces* it), and `propagate()` lit **every** outgoing
+     edge on success — including that one. **So the only shape the validator accepted was the shape
+     that misfires:** the error handler ran on every healthy run, silently, with `run_completed`. A
+     "this broke" Slack post every morning — and, the moment D landed, an approval gate meant only
+     for failures pausing **every single run**. Pre-existing in B, behind its green suite.
+  2. **The documented approval shape could not be built.** §7.1 has always said a branch routes on
+     `{{approve_send.decision}}`. The engine's reference grammar accepted only `<id>` / `<id>.output`,
+     so that spelling was rejected at publish — i.e. *every* approval gate an LLM writes would have
+     bounced, on the increment's headline feature. `ON_REF` now accepts `.output | .decision`, and
+     **only** those: a branch may read a field whose domain `closedDomainOf()` declares, and nothing
+     else. Routing on `classify.confidence` would leave the case check validating a value nobody is
+     routing on — the moat, through a new door.
+  3. **`timeout` was not an answer the engine would accept.** `closedDomainOf()` has always declared
+     it part of a human node's closed domain (so a branch may carry a `timeout` case), but
+     `human.run()` threw on it — because before the sweeper existed nothing could produce one. The
+     declared timeout path was unreachable. **An unanswered approval still never becomes an
+     `approve`**: the sweeper resolves `timeout.then` only when it names one of the node's own
+     answers, else `timeout`. Silence is not consent.
+  4. **The Approve button sent no answer** — and only rendering the UI in a browser found it.
+     `_H()` already sets `Content-Type`; the handler spread it **and** added a lowercase
+     `'content-type'`, and the `Headers` constructor **appends** duplicate names rather than
+     replacing them. The request went out as `content-type: application/json, application/json`,
+     which `express.json()` does not recognise, so the body was never parsed and the click came back
+     *"no answer given"* with the run still waiting. **Render the UI. The scripts passing and the
+     server booting is not the same as a person being able to click the button.** (This was C's
+     recorded residual, and it was worth exactly what it cost.)
+
+  **`escalation.js` (new) — escalation finally MATERIALISES.** C made "escalate" the default
+  resolution of every non-blocking gap, which is what makes *"Accept all defaults"* honest — and then
+  emitted a spec in which nothing asked anybody anything. The promise was real at build time and
+  empty at run time, which is the worst place for a promise to be empty: **the user has stopped
+  worrying about it.** Now `NO_ERROR_PATH` → `on_error: {retry:2, then:'escalate'}` (a failure reaches
+  the owner's Approvals list instead of a log nobody reads), and `CONDITIONAL_UNPROVEN` → a real
+  `human` gate in front of the step, because the honest escalation of *"I cannot decide this"* is to
+  **ask**. Anything else escalated is **reported as unmaterialised, by name, with the reason** — a
+  gap we said we would escalate and then quietly did nothing about is a lie in the language of safety.
+
+  **A `human` node ALONE IS NOT A GATE — it needs a `branch`.** Nothing stops the step after a
+  `human` from running; `human` only *reports* the answer, exactly as `branch` only reports a route.
+  So `draft → approve_send → send_email` — which is what converger-v2 §7.1's shape read like —
+  **sends the email whether the person approved or rejected it.** It looks precisely like an approval
+  gate and is precisely a no-op. §7.1 is corrected; `escalation.js` materialises the routed shape and
+  `prompts.js` teaches it.
+
+  **`scripts/` diffs — checks ADDED, never weakened** (a diff against `scripts/` is how a verifier
+  detects a builder quietly weakening their own gate, so it must never be silent):
+  - `scripts/gates/p12.sh` — **not modified.** D's block was written in advance and is the checklist.
+  - `mutation-sweep.mjs` — `TARGETS` **widened** to `approval-store.js`, `approval-service.js` and
+    **`workflow-scheduler.js`** (closing the round-9 residual, which asked exactly this once an
+    increment touched the scheduler). `SUITES` gains the two approvals suites + a new
+    `tests/workflows/scheduler.test.js`. **The floor was NOT lowered.**
+  - **The widened sweep immediately earned its keep:** the scheduler — the choke point every real run
+    passes through, and where the monthly-run **plan cap** is enforced — had **no unit tests at all**.
+    `if (allowed === false)` (the cap itself) could be inverted with the whole suite green. It has a
+    suite now.
+  - **The Slack/email surface was covered ONLY by `approval-adversarial.mjs`, which the sweep does not
+    run** (it runs `node:test` suites), so the sweep reported all of it as unkillable — correctly. **A
+    mutant is only killable by a suite that EXECUTES it, and "some other script covers it" is exactly
+    how a guard ends up pinned by nothing.** Hence `tests/approvals/approval-channels.test.js`.
+  - `tests/workflows/control-flow.test.js` — **one FIXTURE changed, no assertion touched.** Its
+    "positive: a well-formed human step validates" case had a `human` node with **no channels and no
+    timeout**, which D makes an error. B could not have known: it had no way to deliver an ask, so
+    "well formed" then meant only "has a prompt and two answers". The old fixture was not a
+    well-formed human step; it was an *unanswerable* one that nothing had yet noticed. The invariant
+    the test pins — **the good shape is ACCEPTED** — is untouched and still holds.
+
+  **⚠️ OPERATIONAL HAZARD, learned the hard way: NEVER run `mutation-sweep.mjs` in the background.**
+  It **rewrites files under `src/` in place** and restores them between mutants. Run in the
+  background while you are editing, it will clobber your work — or, if it is killed mid-mutant, leave
+  a **live mutant in your source tree**. That happened here (a `if (!fetcher)` silently became
+  `if (false)`, and a `throw` became `void 0 && …`). Run it in the FOREGROUND, and if it is ever
+  interrupted, `grep -rn "if (true)\|if (false)\|void 0 && " src/` before doing anything else.
+
 ## Support tickets (in-app feedback / bug reporting) — added 2026-07-08
 
 Users submit bugs/ideas/requests from a floating **Feedback** button in the operator
@@ -847,12 +966,46 @@ phase, not just this one.
 **The one-line lesson: a green suite is evidence of nothing until you have watched it go red.**
 
 **Residual for a future increment (from the round-9 readiness verifier, non-blocking):**
-`mutation-sweep.mjs` `TARGETS` covers `flow-tester` / `branch` / `foreach` / `human` /
+~~`mutation-sweep.mjs` `TARGETS` covers `flow-tester` / `branch` / `foreach` / `human` /
 `idempotency-store` but **not** `workflow-validator.js`, `workflow-store.js`, or
-`workflow-scheduler.js` — those surfaces are graded only by the curated `mutation-guard` +
-`control-flow.test.js`, not the generated sweep. Verified by hand that the validator control-flow
-rules and the store migration bite, so it is a coverage-*scope* note, not a hole. Widen `TARGETS`
-when C/D touch those files (watch the floor — new files will surface equivalent-mutant survivors).
+`workflow-scheduler.js`.~~ **CLOSED by increment D** for the validator (C) and the scheduler (D).
+`workflow-store.js` is **still not in TARGETS** — carry it forward.
+
+### The residual ledger — carried into E (recorded, not forgotten)
+
+*Inherited from C, still open:*
+- **`decision-analysis.js` is unreachable from any publishable spec** — `gap-scorer.js` gates the
+  DMN engine on `node.type === 'decision'`, which does not exist until E. Built, tested, dormant.
+  **E turns it on.**
+- **`assertion.when` is carried but NOT proven** (§2.2) — a conditional assertion raises a
+  non-blocking `CONDITIONAL_UNPROVEN` gap. **D now materialises that gap into a real `human` gate**
+  (`escalation.js`), which is an honest *escalation* of the condition — but it is still not a
+  *proof*. Proving it needs `decision` (E) + the examples as a test suite (G).
+- **The `connector-action` config hole** — still the only node type with `configPolicy: 'open'`; its
+  params are unchecked. **Increment F** closes it by validating against each capability's own schema.
+
+*New, from D:*
+- **`workflow-store.js` is still not in `mutation-sweep` TARGETS.** D touched it (the pause deadline
+  columns, `getAwaitingHuman`, `listExpiredPauses`, the `markRunResumed` latch). Those are pinned by
+  `tests/approvals/*` and the curated `mutation-guard`, but not by the *generated* sweep. Widen it
+  when E touches the store.
+- **`quorum` appears in converger-v2 §7.1's node shape and does not exist.** It is *not* a silent
+  no-op — increment A's `UNKNOWN_CONFIG_KEY` rejects it at publish (verified: a `human` node with
+  `quorum: 2` fails validation), which is the check doing precisely its job. So the defect is in the
+  **DOC**, which shows a key the engine has no schema for: anyone building from §7.1 verbatim writes
+  a spec that will not save. Either implement quorum (a second answer, a second answerer, and a rule
+  for what happens when they disagree) or **cut it from §7.1**. Today the FIRST valid answer wins,
+  and that is all.
+- **The Slack ask is posted, but never UPDATED on a timeout.** If nobody answers and the sweeper
+  resolves the pause, the Block Kit message still sits in `#ops` with live-looking buttons. Clicking
+  one is refused correctly ("that question has already been answered"), so it is not *wrong* — but it
+  is a stale question in a channel, and the honest thing is to edit the message. Needs the
+  `chat.update` ts, which `postSlack` already returns and nothing stores.
+- **`APPROVAL_CHANNEL_NOT_CONNECTED` cannot see the mailer from the converger's side.**
+  `builder.js` computes `capabilities.approvalChannels` with `mailerConfigured()`, which is a
+  *server* fact; a tenant whose deployment has no SMTP configured gets `email` correctly withheld.
+  But the check is deployment-wide, not per-tenant — there is no per-tenant mail identity yet. Fine
+  today (one deployment, one mailer); revisit if tenants ever bring their own sending domain.
 
 **First run of the `test-adversary` (2026-07-13), against a suite already hardened by 8 rounds.**
 It touched no `src/`, found **no live bug** (every invariant held), but pinned 8 untested *paths*
@@ -970,4 +1123,4 @@ Update as gates close. `git log --grep "^Gate:"` is the authoritative ledger.
 - [x] **P9** — value tracking: time-saved metrics per run, all-up ROI summary, customer-facing report
 - [x] **P10** — admin observability: standalone admin app, per-tenant usage + cost monitoring *(merged `601760c`; carries `Gate: P10` trailer + passing `scripts/gates/p10.sh`. Ledger backfilled by independent verifier: `docs/gates/p10.md`.)*
 - [x] **P11** — E2E validation + production hardening + VPS migration. **Closed 2026-07-13** (`b711b44`, `Gate: P11`, ledger `docs/gates/p11.md`). Built & merged long before (`d73b813`…`75891b7` + artifacts `2106f71`); the gate was un-closeable only because `scripts/gates/p11.sh` fail-closes when `PROD_HOST` is unset — it cannot smoke-test a VPS that doesn't exist. Prod went live, so `PROD_HOST=atlas.agntic.co bash scripts/gate.sh 11` finally runs. **Note for anyone re-running it:** the E2E suite *self-skips the converger test* without `ANTHROPIC_API_KEY` (`tests/e2e/full-journey.test.js`), so a bare run reports "6 pass / 1 skip" and the skipped one is Done-when #1. Run it with a key (7/7) or you are passing a gate you haven't proven.
-- [~] **P12** — **converger v2**: outcome contracts + BPMN/DMN shape (decisions, gap analysis) + the elicitation UI + the human approval gate. Build spec: [`docs/architecture/converger-v2.md`](docs/architecture/converger-v2.md) (theory: [`bpmn-dmn-foundations.md`](docs/architecture/bpmn-dmn-foundations.md)). Gate `scripts/gates/p12.sh` is **progressive** — it runs increments A–G in order and stops at the first unbuilt one, so `bash scripts/gate.sh 12` answers both *"is the phase closed?"* and *"which increment next?"*. **Increments A (validator hardening + node re-cut), B (engine control flow) and C (converger v2 core + the outcome contract) are done** — the gate now stops at **D (the human approval gate)**. Increments do NOT carry a `Gate:` trailer; only the phase's close does. Two invariants are load-bearing and must never be weakened: **`LLM_INPUT_NOT_ENUM`** (an LLM-evaluated decision input must classify into a *closed enum* — without it there is no completeness proof, and the completeness proof is the moat) and **`EMAIL_REPLY_APPROVAL`** (an approval parsed out of an email reply body authenticates *nothing*: `From:` is spoofable, and SPF/DKIM authenticate a sending domain, not a human intent — use a signed, hashed, single-use magic link).
+- [~] **P12** — **converger v2**: outcome contracts + BPMN/DMN shape (decisions, gap analysis) + the elicitation UI + the human approval gate. Build spec: [`docs/architecture/converger-v2.md`](docs/architecture/converger-v2.md) (theory: [`bpmn-dmn-foundations.md`](docs/architecture/bpmn-dmn-foundations.md)). Gate `scripts/gates/p12.sh` is **progressive** — it runs increments A–G in order and stops at the first unbuilt one, so `bash scripts/gate.sh 12` answers both *"is the phase closed?"* and *"which increment next?"*. **Increments A (validator hardening + node re-cut), B (engine control flow), C (converger v2 core + the outcome contract) and D (the human approval gate) are done** — the gate now stops at **E (the `decision` node + DMN table UI)**. Increments do NOT carry a `Gate:` trailer; only the phase's close does. Two invariants are load-bearing and must never be weakened: **`LLM_INPUT_NOT_ENUM`** (an LLM-evaluated decision input must classify into a *closed enum* — without it there is no completeness proof, and the completeness proof is the moat) and **`EMAIL_REPLY_APPROVAL`** (an approval parsed out of an email reply body authenticates *nothing*: `From:` is spoofable, and SPF/DKIM authenticate a sending domain, not a human intent — use a signed, hashed, single-use magic link).

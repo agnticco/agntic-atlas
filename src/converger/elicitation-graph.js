@@ -23,6 +23,7 @@ import { interrupt }         from '../graph/interrupt.js';
 import { SystemMessage, HumanMessage } from '../core/message.js';
 import { scoreGap, unansweredGaps } from './gap-scorer.js';
 import { applyProposal, assembleSpec } from './spec-assembler.js';
+import { materialiseEscalations } from './escalation.js';
 import { nodeForAssertion, assertableConnectors, splitTarget } from '../workflows/outcome-oracle.js';
 import {
   buildSystemPrompt,
@@ -607,7 +608,23 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
   // ── ratify ─────────────────────────────────────────────────────────────────
   // Present the completed draft for final HITL approval before publish.
   graph.addNode('ratify', async (state) => {
-    const spec = assembleSpec(state.draft);
+    // ESCALATION BECOMES STRUCTURE HERE (P12 Increment D).
+    //
+    // Everything the user chose not to decide — every gap left on its default —
+    // has been carried this far as a NOTE. A note asks nobody anything. Before the
+    // spec is shown or saved, each escalated gap becomes a real shape in the
+    // graph: a failure policy that reaches a person's Approvals list, or a `human`
+    // gate that stops the run and asks. Otherwise "I'll ask you when it comes up"
+    // is a sentence with no mechanism behind it — and the user has already stopped
+    // worrying about it, which is the whole danger.
+    //
+    // It runs BEFORE the gap score below, deliberately: the materialised nodes are
+    // part of the spec and must be validated like anything else. A gate that would
+    // not publish is not a gate.
+    const { draft: materialisedDraft, materialised, unmaterialised } =
+      materialiseEscalations(state.draft, state.escalatedGaps ?? []);
+
+    const spec = assembleSpec(materialisedDraft);
 
     // WHAT STILL BLOCKS PUBLISH TRAVELS WITH THE DRAFT.
     //
@@ -618,7 +635,7 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
     // discovered only on clicking Publish that it could not be saved, with no
     // explanation of what to do. Ship the reason with the draft.
     // (Found by the independent verifier.)
-    const score    = scoreGap(state.draft, { capabilities: state.capabilities });
+    const score    = scoreGap(materialisedDraft, { capabilities: state.capabilities });
     const blockers = unansweredGaps(score).map(g => ({
       code: g.code, message: g.message, hint: g.hint, nodeId: g.nodeId,
     }));
@@ -627,6 +644,11 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
       type: 'ratify', spec, step: state.step,
       publishable: blockers.length === 0,
       blockers,
+      // What escalating actually BUILT, and — just as important — what it could
+      // not. An escalation we quietly failed to materialise must be named, or
+      // "escalated" degrades into a word that means nothing (§7.6.2).
+      escalations: materialised,
+      unmaterialisedEscalations: unmaterialised,
     });
 
     const logEntry = { step: state.step, type: 'ratify', spec, confirmation };

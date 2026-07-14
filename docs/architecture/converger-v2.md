@@ -779,7 +779,12 @@ A `human` node is **two halves**: an **ask**, delivered over one or more channel
       { "type": "inbox", "assignee": "user:abc" },
       { "type": "email", "to": "ops@acme.com" }
     ],
-    "quorum": 1,
+    // "quorum": 1,   ⚠️ NOT IMPLEMENTED (Increment D). There is no `quorum` in the
+    //                 human node's schema, so UNKNOWN_CONFIG_KEY REJECTS a spec
+    //                 carrying it — which is the check working, but it means a
+    //                 spec built from this shape verbatim will not save. Today the
+    //                 FIRST valid answer resolves the run, and that is all.
+    //                 Implement it or cut it; do not leave it here looking real.
     "timeout": { "after": "48h", "then": "escalate", "escalateTo": "inbox:owner" }
   }
 }
@@ -788,6 +793,22 @@ A `human` node is **two halves**: an **ask**, delivered over one or more channel
 Outputs `{{approve_send.decision}}` (`approve|reject|timeout`), `.by`, `.at`, `.channel` — so a
 downstream `branch` routes on it and the run log carries **who approved what, when, over which
 channel**. That is the audit trail.
+
+> ⚠️ **CORRECTED (Increment D). A `human` node ON ITS OWN IS NOT A GATE.** Nothing in the engine
+> stops the step after a `human` from running — `human` only *reports* the answer, exactly as
+> `branch` only *reports* a route (§4). So a spec of `draft → approve_send → send_email`, which is
+> what this section's shape reads like, **sends the email whether the person approved or rejected
+> it.** It looks precisely like an approval gate and is precisely a no-op, which is the worst
+> combination available. The answer must be ROUTED ON:
+>
+> ```
+>   draft → approve_send → gate ──approve──→ send_email
+>                            └──────*──────→ not_sent      (records that nothing went out)
+> ```
+>
+> The `*` catch-all is mandatory (`NON_EXHAUSTIVE_BRANCH`), and it is what makes `reject` **and**
+> `timeout` both land somewhere real instead of the run silently stopping. `escalation.js`
+> materialises exactly this shape, and `prompts.js` teaches it.
 
 ### 7.2 Channels and their trust levels — *the crux*
 
@@ -1006,7 +1027,7 @@ gaps) and a shape-derivation call.
   proven (§2.2); the example *picker* (pull three real emails from the inbox) is F; the decision
   TABLE is E.
 
-### Increment D — `human` approval gate + channels + Approvals inbox
+### Increment D — `human` approval gate + channels + Approvals inbox — ✅ **DONE**
 - `ApprovalStore` (hashed / single-use / TTL, per §7.3) · durable pause + resume (§7.4) ·
   `POST /connectors/slack/interactive` · `GET /approvals/:token` · timeout sweeper.
 - Escalation is the **default** gap resolution — this is what makes Increment C's
@@ -1016,6 +1037,34 @@ gaps) and a shape-derivation call.
   approval is accepted from Slack and from an email magic link, each recorded with *who* and
   *how*.** A replayed magic link is **rejected** (single-use). A run with no answer hits
   `timeout` and takes the declared path. `email_reply` is rejected by the validator.
+
+**What D actually built, where it differs from what this section assumed:**
+
+- **A `human` node is not enough on its own — it needs a `branch`.** A `human` followed directly
+  by the step it "approves" is an approval gate that **ignores the answer**: the step runs whether
+  the person said yes or no. It looks exactly like a gate and does exactly nothing. The sanctioned
+  shape is `human → branch(on: {{ask.decision}}) → [approved step | a step that records that
+  nothing was sent]`, and it is what the converger is now taught to emit.
+- **A branch may route on `{{<humanId>.decision}}`** — the spelling §7.1 has always documented.
+  It did not work: the engine's reference grammar accepted only `<id>` and `<id>.output`, so the
+  documented form was rejected at publish (`BRANCH_BAD_ON` + `BAD_TEMPLATE_REF`) and *every*
+  approval gate an LLM wrote would have bounced. `branch.js` `ON_REF` now accepts
+  `.output | .decision`, and **only** those: a branch may read a field whose domain
+  `closedDomainOf()` declares, and nothing else — read `classify.confidence` instead and the case
+  check is validating a value nobody is routing on.
+- **`timeout` is an answer the ENGINE gives, never a person.** It is in every human node's closed
+  domain (`closedDomainOf`), so a branch may carry a `timeout` case — but `human.run()` rejected
+  it, because before the sweeper existed nothing could produce it. An unanswered approval **never**
+  becomes an `approve`.
+- **§7.5's table is complete, plus:** `GET /api/approvals` + `POST /api/approvals/:runId/:nodeId`
+  (the in-app channel, session-authenticated), and `paused_at` / `pause_expires_at` on
+  `workflow_runs` (the deadline is **stored at pause**, not re-derived per tick — a workflow can be
+  edited while a run of it waits, and the deadline a person was promised must not move because
+  somebody changed the spec).
+- **`on_error: { then: 'escalate' }` is now real.** Increment B raised the flag and deliberately
+  left it inert (there was no inbox to escalate *into*). A failed step that says "tell a person"
+  now lands in that person's Approvals list. The run still **fails** — a person acknowledging a
+  failure does not turn it into a success.
 
 ### Increment E — `decision` node + table review UI + DMN gap analysis
 - Box subtraction, **never** cross-product enumeration (§12).
