@@ -368,3 +368,24 @@ describe('hasCatchAll', () => {
       'calling a partial rule a catch-all would let an unanticipated input fall through silently');
   });
 });
+
+// P12 — an `integer` domain is not the real line: `<=0` and `>=1` are exhaustive
+// over the integers, so the analyser must NOT invent a phantom gap in (0,1).
+test('an integer domain: <=0 and >=1 is exhaustive (no phantom (0,1) gap)', () => {
+  const intA = analyzeTable({
+    inputs: [{ key: 'n', type: 'integer' }],
+    rules: [{ when: { n: '<=0' }, then: 'lo' }, { when: { n: '>=1' }, then: 'hi' }],
+    hitPolicy: 'FIRST',
+  });
+  assert.equal(intA.decidable, true);
+  assert.deepEqual(intA.uncovered, [], 'over the integers there is nothing between 0 and 1 — no invented gap');
+
+  // The SAME rules over the REAL line DO leave (0,1) uncovered — proving the
+  // integer special-casing is what suppresses the phantom, not a blanket skip.
+  const realA = analyzeTable({
+    inputs: [{ key: 'n', type: 'number' }],
+    rules: [{ when: { n: '<=0' }, then: 'lo' }, { when: { n: '>=1' }, then: 'hi' }],
+    hitPolicy: 'FIRST',
+  });
+  assert.ok(realA.uncovered.length > 0, 'over the reals, (0,1) IS a real uncovered cell');
+});

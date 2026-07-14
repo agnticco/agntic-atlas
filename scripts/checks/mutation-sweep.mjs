@@ -58,6 +58,34 @@ const SUITES = [
   // table, duplicate assertion ids dropping an assertion, a phantom gap on
   // `integer` domains, and a null node crashing publish with a 500.
   'tests/converger/moat-adversarial.test.js',
+  // P12 Increment D — the approval gate. Without this suite in the list, every
+  // mutant the sweep generates in approval-store.js / approval-service.js / the
+  // scheduler's resume path is unkillable BY CONSTRUCTION (no test that could
+  // catch it is ever run), and the survivor list would report D's guards as
+  // untested when in fact they were merely unexecuted. A mutant is only killable
+  // by a suite the sweep RUNS.
+  'tests/approvals/approval-store.test.js',
+  // The ASK — Block Kit, the magic-link email, the in-app item — and each
+  // channel's answer coming back. These paths were covered ONLY by
+  // scripts/checks/approval-adversarial.mjs, which the sweep does not run, so it
+  // reported the whole Slack/email surface as unkillable. It was right to: a
+  // mutant is only killable by a suite that EXECUTES it, and "some other script
+  // covers it" is how a guard ends up pinned by nothing.
+  'tests/approvals/approval-channels.test.js',
+  // The scheduler had NO unit tests at all — and it is the choke point every real
+  // run passes through: the retry wrapper, the monthly-run PLAN CAP, the
+  // suspended-tenant gate, and (since D) the pause and the resume. Widening
+  // TARGETS to it, as the round-9 residual asked, made that visible immediately:
+  // `if (allowed === false)` — the plan cap itself — could be inverted with the
+  // whole suite still green.
+  'tests/workflows/scheduler.test.js',
+  // The moat + the human-gate + the catch-all guards (F1–F5) live here. Without
+  // it in the sweep, the guards it pins — HUMAN_ANSWER_NOT_ROUTED, the `.decision`
+  // moat, the silent-timeout write refusal at workflow-scheduler.js:603 — read as
+  // unpinned survivors. "Some other suite (the gate) runs it" is exactly how a
+  // guard ends up pinned by nothing the SWEEP can see. A mutant is only killable
+  // by a suite the sweep RUNS.
+  'tests/approvals/gate-adversarial.test.js',
 ];
 
 /**
@@ -84,6 +112,16 @@ const TARGETS = [
   'src/workflows/outcome-oracle.js',
   'src/workflows/decision-analysis.js',
   'src/converger/gap-scorer.js',
+  // P12 Increment D — the approval gate. Closes the residual the round-9 verifier
+  // recorded ("TARGETS excludes workflow-scheduler.js — widen it when a later
+  // increment touches that file"), because D touches it: the resume path, the
+  // timeout sweeper, and the ask deliverer all live there. These files decide
+  // whether an approval can be FORGED, whether an unanswered one can quietly
+  // become a yes, and whether one answer can resume a run twice — the sweep must
+  // be able to tell whether anything would notice if they stopped working.
+  'src/approvals/approval-store.js',
+  'src/approvals/approval-service.js',
+  'src/workflows/workflow-scheduler.js',
 ];
 
 const args    = process.argv.slice(2);
@@ -149,12 +187,48 @@ function mutantsFor(file) {
   return out;
 }
 
+/**
+ * Run EVERY suite in ONE node process, not one process per suite.
+ *
+ * Same suites, same pass/fail rule — `node --test a b c` exits non-zero if any
+ * test in any file fails, exactly as the old loop did. This is a speed fix, not a
+ * weakening, and it is worth spelling out because a diff against `scripts/` is how
+ * a verifier catches a builder loosening their own gate.
+ *
+ * Why it matters: the old loop paid a full node startup PER SUITE, and a
+ * SURVIVING mutant pays for all of them (it only short-circuits on a failure — and
+ * a survivor, by definition, never fails). Increment D took SUITES from 7 to 10,
+ * so every survivor went from 7 startups to 10 — and the sweep runs inside the
+ * PHASE GATE. A gate slow enough to be annoying is a gate people start skipping,
+ * which protects nothing. Node's own runner also executes the files concurrently,
+ * so this is a large win rather than a marginal one.
+ */
 function suitesPass() {
-  for (const s of SUITES) {
-    try { execFileSync('node', ['--test', s], { stdio: 'pipe' }); }
-    catch { return false; }
-  }
-  return true;
+  // TIMEOUT IS LOAD-BEARING, not a nicety. A mutant can make a test HANG rather
+  // than fail — e.g. neutering `WorkflowScheduler.stop()` leaves a live
+  // `setInterval` that keeps Node's event loop alive, so `node --test` reports
+  // the failing assertion and then NEVER EXITS. Without a timeout, `execFileSync`
+  // waits forever, the whole sweep stalls on that one mutant, and every killed
+  // gate run orphans the hung worker (observed: 4-hour-old zombies, an 83-minute
+  // sweep that would never finish). A hang is a FAILURE — the suite did not pass —
+  // so a timeout that throws is the CORRECT kill, not a false one. 120s is ~50x
+  // the normal run, so it never trips on a slow-but-passing suite.
+  //
+  // `killSignal: 'SIGKILL'` because a mutant that hangs on a timer will ignore
+  // SIGTERM; `--test-force-exit` so the child tears down even with a live handle.
+  //
+  // 30s, not 120s. A full clean run of all suites is ~0.15s wall (they execute
+  // concurrently), so 30s is ~200x headroom — no slow-but-passing suite trips it.
+  // The old 120s was calibrated against a wrong guess (2-4s); the real cost of the
+  // cap is that EVERY hang-inducing mutant (one that makes a test await something
+  // that never resolves) pays it, and there are ~20, so 120s turned a ~2-minute
+  // sweep into a ~45-minute one. A hang is still a FAILURE (correct kill); this
+  // only bounds how long we wait to record it.
+  try {
+    execFileSync('node', ['--test', '--test-force-exit', ...SUITES],
+      { stdio: 'pipe', timeout: 30_000, killSignal: 'SIGKILL' });
+    return true;
+  } catch { return false; }
 }
 
 // ── Run ──────────────────────────────────────────────────────────────────────

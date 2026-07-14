@@ -991,3 +991,27 @@ describe('complete ⇒ publishable, through WorkflowService + WorkflowStore', ()
     assert.equal(edited.ok, true, 'editing a v1 workflow must not demand a contract it never made');
   });
 });
+
+// ── P12 Increment D — the gap scorer fails closed on human channels ──────────
+test('a spec with a human node scores INCOMPLETE without an approval-channel catalog', () => {
+  const spec = {
+    name: 'x', kind: 'flow',
+    triggers: [{ type: 'schedule', config: { cron: '0 9 * * *' } }],
+    nodes: [
+      { id: 'draft', type: 'llm', config: { mode: 'freeform', prompt: 'd' } },
+      { id: 'ask',   type: 'human', config: { prompt: 'ok?', decisions: ['approve', 'reject'], channels: [{ type: 'inbox' }], timeout: { after: '48h', then: 'reject' } } },
+      { id: 'gate',  type: 'branch', config: { on: '{{ask.decision}}', cases: [{ when: 'approve', to: 'd' }, { when: '*', to: 'no' }] } },
+      { id: 'd',     type: 'deliver', config: { channel: 'slack', target: '#x' } },
+      { id: 'no',    type: 'assemble', config: { title: 'no', sections: '[]' } },
+    ],
+    edges: [{ from: 'draft', to: 'ask' }, { from: 'ask', to: 'gate' }, { from: 'gate', to: 'd' }, { from: 'gate', to: 'no' }],
+  };
+  // No approvalChannels on the caps → the scorer must refuse to certify (an
+  // approval it cannot confirm is deliverable is one that could hang forever).
+  const noAppr = scoreGap(spec, { capabilities: { channels: CAPS.channels } });
+  assert.ok(noAppr.gaps.some(g => g.code === 'CHANNELS_UNVERIFIED'), 'no approval catalog → CHANNELS_UNVERIFIED');
+
+  // WITH the approval catalog, that specific gap is gone (positive case).
+  const withAppr = scoreGap(spec, { capabilities: { channels: CAPS.channels, approvalChannels: ['inbox', 'slack', 'email'] } });
+  assert.ok(!withAppr.gaps.some(g => g.code === 'CHANNELS_UNVERIFIED'), 'with the catalog, the human channels are verified');
+});

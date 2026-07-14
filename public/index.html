@@ -1652,6 +1652,39 @@
                 </sc-for>
               </sc-if>
 
+              <!-- ── Approvals (P12 Increment D) ──────────────────────────────
+                   A workflow has STOPPED and is waiting on this person. It goes
+                   above the messages because it is the only thing on this page
+                   that something else is blocked on: a message is a record of
+                   work that happened; this is work that will not happen until it
+                   is answered. -->
+              <sc-if value="{{ inboxShowApprovals }}">
+                <div style="font-size:11px;font-weight:500;letter-spacing:.2em;text-transform:uppercase;color:#e0a63a;margin-bottom:12px">Waiting on you</div>
+                <sc-for list="{{ approvals }}" as="ap">
+                  <div style="border:1px solid rgba(224,166,58,.3);background:rgba(224,166,58,.04);border-radius:14px;padding:18px 20px;margin-bottom:8px">
+                    <div style="font-size:14.5px;font-weight:500;color:#fff;letter-spacing:-0.01em;margin-bottom:4px">{{ ap.prompt }}</div>
+                    <div style="font-size:12px;color:rgba(255,255,255,.35);margin-bottom:14px">{{ ap.meta }}</div>
+                    <!-- What they are actually approving. Never ask someone to
+                         approve something you have not shown them. -->
+                    <sc-if value="{{ ap.preview }}">
+                      <div style="border:1px solid rgba(255,255,255,.08);border-radius:10px;padding:14px 16px;margin-bottom:14px;font-size:13px;line-height:1.65;color:rgba(255,255,255,.72);white-space:pre-wrap;max-height:260px;overflow:auto">{{ ap.preview }}</div>
+                    </sc-if>
+                    <!-- The buttons offer THIS NODE'S declared answers, not a
+                         hardcoded Approve/Reject. A node may declare any closed
+                         set, and the engine refuses an answer that is not in it —
+                         so a hardcoded pair would leave a person unable to answer
+                         their own question. -->
+                    <div style="display:flex;gap:8px;align-items:center">
+                      <button onClick="{{ ap.onYes }}" disabled="{{ ap.busy }}" style="border:none;cursor:pointer;background:#fff;color:#101012;font-family:inherit;font-size:13px;font-weight:600;padding:9px 20px;border-radius:99px;letter-spacing:-.01em;text-transform:capitalize" style-hover="opacity:.85">{{ ap.yesLabel }}</button>
+                      <button onClick="{{ ap.onNo }}" disabled="{{ ap.busy }}" style="border:1px solid rgba(255,255,255,.16);cursor:pointer;background:none;color:rgba(255,255,255,.75);font-family:inherit;font-size:13px;font-weight:500;padding:9px 20px;border-radius:99px;letter-spacing:-.01em;text-transform:capitalize" style-hover="border-color:rgba(255,255,255,.3);color:#fff">{{ ap.noLabel }}</button>
+                      <sc-if value="{{ ap.busy }}"><span style="font-size:12px;color:rgba(255,255,255,.35);margin-left:4px">Recording…</span></sc-if>
+                      <sc-if value="{{ ap.error }}"><span style="font-size:12px;color:#e07a5f;margin-left:4px">{{ ap.error }}</span></sc-if>
+                    </div>
+                  </div>
+                </sc-for>
+                <div style="height:26px"></div>
+              </sc-if>
+
               <!-- Empty state (only when not searching) -->
               <sc-if value="{{ inboxShowEmpty }}">
                 <div style="border:1px solid rgba(255,255,255,.07);border-radius:16px;padding:56px 32px;text-align:center">
@@ -2627,6 +2660,8 @@ class Component extends DCLogic {
       fbOpen: false, fbType: 'bug', fbTitle: '', fbDescription: '', fbSeverity: 'medium',
       fbSteps: '', fbExpected: '', fbActual: '', fbShot: null, fbCapturing: false,
       fbSubmitting: false, fbDone: false, fbError: '', fbTechOpen: false, fbTicketId: null,
+      // P12 Increment D — runs paused on a `human` step, waiting on this person.
+      approvals: [], approvalBusy: {}, approvalErr: {},
     };
   }
 
@@ -2898,6 +2933,61 @@ class Component extends DCLogic {
         self.setState({ inboxMessages: d.messages || [], inboxUnread: d.unread || 0 });
       })
       .catch(() => {});
+    this._loadApprovals();
+  }
+  // ── Approvals (P12 Increment D) ────────────────────────────────────────────
+  // Workflows that have STOPPED and are waiting on this person.
+  _loadApprovals() {
+    const self = this;
+    fetch('/api/approvals', { headers: this._H() })
+      .then(r => r.ok ? r.json() : null)
+      .then(d => { if (d) self.setState({ approvals: d.approvals || [] }); })
+      .catch(() => {});
+  }
+  answerApproval(runId, nodeId, decision) {
+    const self = this;
+    const key = runId + ':' + nodeId;
+    this.setState({ approvalBusy: { ...(this.state.approvalBusy || {}), [key]: true } });
+    // `_H()` ALREADY sets Content-Type. Spreading it and adding a lowercase
+    // 'content-type' put BOTH keys in the object, and the Headers constructor
+    // APPENDS duplicate names rather than replacing them — so the request went out
+    // with `content-type: application/json, application/json`, which express.json()
+    // does not recognise. The body was never parsed, `decision` arrived undefined,
+    // and the click came back "no answer given" with the run still waiting.
+    fetch('/api/approvals/' + encodeURIComponent(runId) + '/' + encodeURIComponent(nodeId), {
+      method: 'POST', headers: this._H(),
+      body: JSON.stringify({ decision }),
+    })
+      .then(r => r.json())
+      .then(res => {
+        const busy = { ...(self.state.approvalBusy || {}) }; delete busy[key];
+        if (res && res.ok) {
+          // Gone from the list — the question has been answered, and leaving a
+          // live Approve button behind invites a second answer to a question that
+          // already has one.
+          self.setState({
+            approvals: (self.state.approvals || []).filter(a => (a.runId + ':' + a.nodeId) !== key),
+            approvalBusy: busy,
+          });
+          self._loadInbox();
+        } else {
+          // "Somebody already answered this" is a NORMAL outcome (a teammate got
+          // there first, or it timed out while this page was open) — not an error
+          // to swallow. Say what happened and refresh, so the stale card goes.
+          self.setState({
+            approvalBusy: busy,
+            approvalErr: { ...(self.state.approvalErr || {}), [key]: (res && res.reason) || 'could not record that' },
+          });
+          self._loadApprovals();
+        }
+      })
+      .catch(() => {
+        const busy = { ...(self.state.approvalBusy || {}) }; delete busy[key];
+        self.setState({
+          approvalBusy: busy,
+          approvalErr: { ...(self.state.approvalErr || {}), [key]: 'network error — nothing was recorded' },
+        });
+      });
   }
   openInboxMessage(id) {
     const self = this;
@@ -5861,8 +5951,27 @@ class Component extends DCLogic {
       inboxShowSearching:  !!(S.inboxSearch && S.inboxSearchLoading),
       inboxShowNoResults:  !!(S.inboxSearch && !S.inboxSearchLoading && Array.isArray(S.inboxSearchResults) && S.inboxSearchResults.length === 0),
       inboxShowResults:    !!(S.inboxSearch && !S.inboxSearchLoading && Array.isArray(S.inboxSearchResults) && S.inboxSearchResults.length > 0),
-      inboxShowEmpty:      !!(!S.inboxSearch && !(S.inboxMessages && S.inboxMessages.length)),
+      inboxShowEmpty:      !!(!S.inboxSearch && !(S.inboxMessages && S.inboxMessages.length) && !(S.approvals && S.approvals.length)),
       inboxShowList:       !!(!S.inboxSearch && S.inboxMessages && S.inboxMessages.length > 0),
+      // P12 Increment D. Hidden while searching, like every other section here.
+      inboxShowApprovals:  !!(!S.inboxSearch && S.approvals && S.approvals.length > 0),
+      approvals: (S.approvals || []).map(a => {
+        const key = a.runId + ':' + a.nodeId;
+        const d = (a.decisions && a.decisions.length >= 2) ? a.decisions : ['approve', 'reject'];
+        return {
+          ...a,
+          // The deadline is the part people actually need: an approval that
+          // silently expires into "reject" at 3am is a decision made by not
+          // deciding, and they should be able to see it coming.
+          meta: (a.workflowName ? a.workflowName + ' · ' : '')
+              + (a.expiresAt ? 'answer by ' + new Date(a.expiresAt).toLocaleString() : 'no deadline'),
+          busy:  !!(S.approvalBusy || {})[key],
+          error: (S.approvalErr || {})[key] || '',
+          yesLabel: d[0], noLabel: d[1],
+          onYes: () => this.answerApproval(a.runId, a.nodeId, d[0]),
+          onNo:  () => this.answerApproval(a.runId, a.nodeId, d[1]),
+        };
+      }),
       onInboxSearchInput: (e) => this.setState({ inboxSearch: e.target.value, inboxSearchResults: e.target.value ? S.inboxSearchResults : null }),
       onInboxSearchKeydown: (e) => { if (e.key === 'Enter') this.searchInbox(); },
       onInboxSearchClear: () => this.setState({ inboxSearch: '', inboxSearchResults: null }),

@@ -271,13 +271,19 @@ test('resume: what gets SENT is byte-identical to what the person APPROVED', asy
   const channels = stubChannels((args) => { sentBody = args.body; return { delivered: true }; });
   const tester = new FlowTester({ nodeTypes, llm: stubLlm(LONG_DRAFT), channelRegistry: channels });
 
+  // The approval must be ROUTED ON by a branch (HUMAN_ANSWER_NOT_ROUTED). The
+  // send sits behind `gate`; on approve the content flows through unchanged
+  // (a branch is a CONTROL node, so it does not become lastOutput), so this still
+  // pins exactly what it says: the SENT body equals the APPROVED draft.
   const flow = {
     nodes: [
       { id: 'draft',   type: 'llm', config: { prompt: 'Draft a reply.' } },
       { id: 'approve', type: 'human', config: { prompt: 'Send?', preview: '{{draft.output}}', decisions: ['approve', 'reject'] } },
+      { id: 'gate',    type: 'branch', config: { on: 'approve.decision', cases: [{ when: 'approve', to: 'send' }, { when: '*', to: 'drop' }] } },
       { id: 'send',    type: 'deliver', config: { channel: 'in_app' } },
+      { id: 'drop',    type: 'assemble', config: { title: 'Not sent', sections: '[]' } },
     ],
-    edges: [{ from: 'draft', to: 'approve' }, { from: 'approve', to: 'send' }],
+    edges: [{ from: 'draft', to: 'approve' }, { from: 'approve', to: 'gate' }, { from: 'gate', to: 'send' }, { from: 'gate', to: 'drop' }],
   };
 
   const first  = await runAll(tester, flow, { initialContext: 'an enquiry' });
@@ -328,6 +334,11 @@ test('human: a REJECT resumes down the other path', async () => {
 //      STRING: `output.to` was undefined, so propagate() lit EVERY edge.
 //   2. Nodes skipped before the pause were lumped in with completed ones, so
 //      they relit their own children on the way back through.
+// A human's decision must be ROUTED ON by a branch (P12 Increment D,
+// HUMAN_ANSWER_NOT_ROUTED) — a human wired straight to a deliver is a gate that
+// ignores the answer, and the engine no longer lights that edge. So the on-call
+// approval sits behind `page_gate`, which routes on `escalate.decision`. On
+// approve the page still goes out; on reject/timeout it lands on `not_paged`.
 const branchThenHumanFlow = {
   nodes: [
     { id: 'classify', type: 'llm', config: { mode: 'classify', categories: 'urgent\nroutine' } },
@@ -336,14 +347,21 @@ const branchThenHumanFlow = {
       cases: [{ when: 'urgent', to: 'escalate' }, { when: '*', to: 'auto_file' }],
     } },
     { id: 'escalate',  type: 'human', config: { prompt: 'Page the on-call?', decisions: ['approve', 'reject'] } },
+    { id: 'page_gate', type: 'branch', config: {
+      on: 'escalate.decision',
+      cases: [{ when: 'approve', to: 'paged' }, { when: '*', to: 'not_paged' }],
+    } },
     { id: 'auto_file', type: 'deliver', config: { channel: 'in_app', body: 'filed quietly' } },
     { id: 'paged',     type: 'deliver', config: { channel: 'in_app', body: 'PAGED' } },
+    { id: 'not_paged', type: 'assemble', config: { title: 'Not paged', sections: '[]' } },
   ],
   edges: [
     { from: 'classify', to: 'route' },
     { from: 'route', to: 'escalate' },
     { from: 'route', to: 'auto_file' },
-    { from: 'escalate', to: 'paged' },
+    { from: 'escalate', to: 'page_gate' },
+    { from: 'page_gate', to: 'paged' },
+    { from: 'page_gate', to: 'not_paged' },
   ],
 };
 
@@ -388,14 +406,18 @@ test('resume: a rehydrated branch relights ONLY the case it originally picked', 
         cases: [{ when: 'urgent', to: 'ask' }, { when: '*', to: 'auto_send' }],
       } },
       { id: 'ask',       type: 'human',   config: { prompt: 'Send?', decisions: ['approve', 'reject'] } },
+      { id: 'send_gate', type: 'branch',  config: { on: 'ask.decision', cases: [{ when: 'approve', to: 'sent' }, { when: '*', to: 'not_sent' }] } },
       { id: 'auto_send', type: 'deliver', config: { channel: 'in_app', body: 'sent automatically' } },
       { id: 'sent',      type: 'deliver', config: { channel: 'in_app', body: 'sent after approval' } },
+      { id: 'not_sent',  type: 'assemble', config: { title: 'Not sent', sections: '[]' } },
     ],
     edges: [
       { from: 'classify', to: 'route' },
       { from: 'route', to: 'ask' },
       { from: 'route', to: 'auto_send' },
-      { from: 'ask', to: 'sent' },
+      { from: 'ask', to: 'send_gate' },
+      { from: 'send_gate', to: 'sent' },
+      { from: 'send_gate', to: 'not_sent' },
     ],
   };
   let delivered = 0;
@@ -459,16 +481,20 @@ test('resume: a FAILED step\'s happy path stays dead (route_to lit only the erro
     nodes: [
       { id: 'charge', type: 'llm', config: { prompt: 'charge' }, on_error: { then: 'route_to:ask' } },
       { id: 'ask',    type: 'human', config: { prompt: 'Retry?', decisions: ['approve', 'reject'] } },
+      { id: 'retry_gate', type: 'branch', config: { on: 'ask.decision', cases: [{ when: 'approve', to: 'done' }, { when: '*', to: 'given_up' }] } },
       { id: 'happy',  type: 'deliver', config: { channel: 'in_app', body: 'RECEIPT' } },
       { id: 'happy_child', type: 'deliver', config: { channel: 'in_app', body: 'THANKS' } },
       { id: 'done',   type: 'deliver', config: { channel: 'in_app' } },
+      { id: 'given_up', type: 'assemble', config: { title: 'Gave up', sections: '[]' } },
     ],
     // charge->ask FIRST, so the pause is reached before `happy` in topo order —
     // which means `happy` is NOT in checkpoint.skipped and the only thing keeping
-    // it dead is the restored liveness.
+    // it dead is the restored liveness. The human's answer is routed by
+    // `retry_gate` (HUMAN_ANSWER_NOT_ROUTED); on approve it reaches `done`.
     edges: [
       { from: 'charge', to: 'ask' }, { from: 'charge', to: 'happy' },
-      { from: 'ask', to: 'done' }, { from: 'happy', to: 'happy_child' },
+      { from: 'ask', to: 'retry_gate' }, { from: 'retry_gate', to: 'done' }, { from: 'retry_gate', to: 'given_up' },
+      { from: 'happy', to: 'happy_child' },
     ],
   };
 
@@ -510,11 +536,18 @@ test('resume: a RESUMED run delivers exactly what the same spec delivers straigh
       { id: 'charge', type: 'llm', config: { prompt: 'Charge the card.' },
         on_error: { then: 'route_to:tell_ops' } },
       { id: 'tell_ops', type: 'deliver', config: { channel: 'in_app', body: 'ops: {{charge.output}}' } },
-      ...(withPause ? [{ id: 'ask', type: 'human', config: { prompt: 'Continue?', decisions: ['approve', 'reject'] } }] : []),
+      // The human's answer must be routed (HUMAN_ANSWER_NOT_ROUTED); `cont` gates
+      // `done` on it. Both the human AND the branch are CONTROL nodes, so neither
+      // becomes lastOutput — which is exactly the property under test.
+      ...(withPause ? [
+        { id: 'ask', type: 'human', config: { prompt: 'Continue?', decisions: ['approve', 'reject'] } },
+        { id: 'cont', type: 'branch', config: { on: 'ask.decision', cases: [{ when: 'approve', to: 'done' }, { when: '*', to: 'halted' }] } },
+        { id: 'halted', type: 'assemble', config: { title: 'Halted', sections: '[]' } },
+      ] : []),
       { id: 'done', type: 'deliver', config: { channel: 'in_app' } },
     ],
     edges: withPause
-      ? [{ from: 'charge', to: 'tell_ops' }, { from: 'tell_ops', to: 'ask' }, { from: 'ask', to: 'done' }]
+      ? [{ from: 'charge', to: 'tell_ops' }, { from: 'tell_ops', to: 'ask' }, { from: 'ask', to: 'cont' }, { from: 'cont', to: 'done' }, { from: 'cont', to: 'halted' }]
       : [{ from: 'charge', to: 'tell_ops' }, { from: 'tell_ops', to: 'done' }],
   });
 
@@ -600,7 +633,9 @@ test('resume: a checkpoint with a NON-EMPTY skipped[] keeps those nodes dead', a
       { id: 'quiet_send', type: 'deliver', config: { channel: 'in_app', body: 'QUIET' } },
       { id: 'urgent_path', type: 'llm', config: { prompt: 'escalate' } },
       { id: 'ask',        type: 'human', config: { prompt: 'page?', decisions: ['approve', 'reject'] } },
+      { id: 'page_gate',  type: 'branch', config: { on: 'ask.decision', cases: [{ when: 'approve', to: 'paged' }, { when: '*', to: 'not_paged' }] } },
       { id: 'paged',      type: 'deliver', config: { channel: 'in_app', body: 'PAGED' } },
+      { id: 'not_paged',  type: 'assemble', config: { title: 'Not paged', sections: '[]' } },
     ],
     edges: [
       { from: 'classify', to: 'route' },
@@ -608,7 +643,9 @@ test('resume: a checkpoint with a NON-EMPTY skipped[] keeps those nodes dead', a
       { from: 'route', to: 'quiet_path' },
       { from: 'quiet_path', to: 'quiet_send' },
       { from: 'urgent_path', to: 'ask' },
-      { from: 'ask', to: 'paged' },
+      { from: 'ask', to: 'page_gate' },
+      { from: 'page_gate', to: 'paged' },
+      { from: 'page_gate', to: 'not_paged' },
     ],
   };
   let delivered = [];
@@ -1004,13 +1041,38 @@ test('positive: a well-formed foreach validates', () => {
 });
 
 test('positive: a well-formed human step validates', () => {
+  // FIXTURE UPDATED BY INCREMENT D — the assertion is untouched.
+  //
+  // Increment B built the pause and could not yet deliver the question, so "well
+  // formed" then meant only "it has a prompt and two answers". D adds the two
+  // things that make a pause ANSWERABLE, and both are now errors without which
+  // the step is broken in a way B had no way to see:
+  //
+  //   channels  — a question with nowhere to go is asked of nobody, and the run
+  //               waits forever for an answer that cannot come.
+  //   timeout   — a pause with no deadline never ends, never fails, and never
+  //               tells anyone (HUMAN_WITHOUT_TIMEOUT).
+  //
+  // So the old fixture was not a well-formed human step; it was an unanswerable
+  // one that nothing had yet noticed. And the D verifier + adversary added a
+  // THIRD thing: the answer must be ROUTED ON by a branch (HUMAN_ANSWER_NOT_ROUTED)
+  // — a human wired straight to `d` is a gate that ignores the decision, so `d`
+  // runs whether the person approves or rejects. The well-formed shape puts a
+  // branch between them. The invariant this test pins — THE GOOD SHAPE IS
+  // ACCEPTED — is what matters, and it still holds.
   const res = validator.validate(spec(
     [
       { id: 'draft', type: 'llm', config: { prompt: 'draft' } },
-      { id: 'ask',   type: 'human', config: { prompt: 'Send it?', preview: '{{draft.output}}', decisions: ['approve', 'reject'] } },
+      { id: 'ask',   type: 'human', config: {
+        prompt: 'Send it?', preview: '{{draft.output}}', decisions: ['approve', 'reject'],
+        channels: [{ type: 'inbox' }],
+        timeout: { after: '48h', then: 'reject' },
+      } },
+      { id: 'gate',  type: 'branch', config: { on: 'ask.decision', cases: [{ when: 'approve', to: 'd' }, { when: '*', to: 'no' }] } },
       { id: 'd',     type: 'deliver', config: { channel: 'in_app' } },
+      { id: 'no',    type: 'assemble', config: { title: 'Not sent', sections: '[]' } },
     ],
-    [{ from: 'draft', to: 'ask' }, { from: 'ask', to: 'd' }],
+    [{ from: 'draft', to: 'ask' }, { from: 'ask', to: 'gate' }, { from: 'gate', to: 'd' }, { from: 'gate', to: 'no' }],
   ));
   assert.ok(res.ok, `a good human step must validate; got: ${codesOf(res).join(', ')}`);
 });
@@ -1243,9 +1305,12 @@ test('resume: recomputing lastOutput on replay would deliver a failed step\'s er
   // This test was LABELLED "(pinned)" and was not pinned: its fixture had a
   // `draft` LLM node between the approval and the delivery, which overwrote
   // lastOutput and masked the mutation entirely. Removing the guard left the whole
-  // suite green. The delivery must follow the approval DIRECTLY, with nothing in
-  // between to launder the value — and the assertion must be on the DELIVERED
-  // BODY, not on whether the node ran.
+  // suite green. Nothing that LAUNDERS the value may sit between the approval and
+  // the delivery — and the assertion must be on the DELIVERED BODY, not on whether
+  // the node ran. The gate below is a `branch`, a CONTROL node: it routes the
+  // decision but does NOT touch lastOutput (that is the very CONTROL_TYPES property
+  // under test), so it does not launder — it is the routing the approval requires
+  // (HUMAN_ANSWER_NOT_ROUTED), not a value-overwriting step.
   const bodies = [];
   const channels = stubChannels((a) => { bodies.push(a.body); return { delivered: true }; });
   const failing = { invoke: async () => { throw new Error('card declined'); } };
@@ -1255,9 +1320,11 @@ test('resume: recomputing lastOutput on replay would deliver a failed step\'s er
     nodes: [
       { id: 'charge', type: 'llm', config: { prompt: 'charge' }, on_error: { then: 'route_to:ask' } },
       { id: 'ask',    type: 'human', config: { prompt: 'Notify anyway?', decisions: ['approve', 'reject'] } },
-      { id: 'notify', type: 'deliver', config: { channel: 'in_app' } },   // ← directly after the approval
+      { id: 'gate',   type: 'branch', config: { on: 'ask.decision', cases: [{ when: 'approve', to: 'notify' }, { when: '*', to: 'no_notify' }] } },
+      { id: 'notify', type: 'deliver', config: { channel: 'in_app' } },   // ← nothing that launders between approval and delivery
+      { id: 'no_notify', type: 'assemble', config: { title: 'No notice', sections: '[]' } },
     ],
-    edges: [{ from: 'charge', to: 'ask' }, { from: 'ask', to: 'notify' }],
+    edges: [{ from: 'charge', to: 'ask' }, { from: 'ask', to: 'gate' }, { from: 'gate', to: 'notify' }, { from: 'gate', to: 'no_notify' }],
   };
 
   const first = await runAll(tester, flow, { initialContext: 'ORDER-1234' });
@@ -2128,13 +2195,18 @@ test('resume: a checkpoint round-tripped THROUGH WorkflowStore still delivers th
   const channels = stubChannels((args) => { sentBody = args.body; return { delivered: true }; });
   const tester = new FlowTester({ nodeTypes, llm: stubLlm(LONG_DRAFT), channelRegistry: channels });
 
+  // The approval routes through `gate` (HUMAN_ANSWER_NOT_ROUTED). A branch is a
+  // control node, so the full draft flows through it to `send` unchanged — which
+  // is exactly the round-trip fidelity under test.
   const flow = {
     nodes: [
       { id: 'draft',   type: 'llm', config: { prompt: 'Draft a reply.' } },
       { id: 'approve', type: 'human', config: { prompt: 'Send?', preview: '{{draft.output}}', decisions: ['approve', 'reject'] } },
+      { id: 'gate',    type: 'branch', config: { on: 'approve.decision', cases: [{ when: 'approve', to: 'send' }, { when: '*', to: 'drop' }] } },
       { id: 'send',    type: 'deliver', config: { channel: 'in_app' } },
+      { id: 'drop',    type: 'assemble', config: { title: 'Not sent', sections: '[]' } },
     ],
-    edges: [{ from: 'draft', to: 'approve' }, { from: 'approve', to: 'send' }],
+    edges: [{ from: 'draft', to: 'approve' }, { from: 'approve', to: 'gate' }, { from: 'gate', to: 'send' }, { from: 'gate', to: 'drop' }],
   };
 
   // Leg 1 — run to the pause, persisting EXACTLY as the scheduler does: append
@@ -2167,4 +2239,47 @@ test('resume: a checkpoint round-tripped THROUGH WorkflowStore still delivers th
     'after a full persistence round-trip, the customer must receive EXACTLY what was approved');
   assert.ok(!String(sentBody).includes('(truncated)'), 'never the shrink marker');
   store.close?.();
+});
+
+// P12 Increment D — a human node's `decisions` may arrive as a STRING (the config
+// schema allows it); normalizeDecisions must parse it, not treat it as opaque.
+test('human decisions given as a JSON string are parsed', async () => {
+  const { normalizeDecisions, allowedDecisions } = await import('../../src/workflows/node-types/human.js');
+  assert.deepEqual(normalizeDecisions('["ship","hold"]'), ['ship', 'hold'], 'a JSON-string list is parsed');
+  assert.deepEqual(normalizeDecisions('approve, reject'), ['approve', 'reject'], 'a comma string is parsed');
+  assert.deepEqual(normalizeDecisions(['a', 'b']), ['a', 'b'], 'an array passes through');
+  assert.ok(allowedDecisions('["ship","hold"]').includes('timeout'), 'timeout is always allowed, even from a string');
+});
+
+// P12 Increment D — normalize helpers accept the STRING forms the config allows.
+test('foreach + human normalizers parse their string/array forms', async () => {
+  const { normalizeSteps } = await import('../../src/workflows/node-types/foreach.js');
+  const { normalizeChannels } = await import('../../src/workflows/node-types/human.js');
+  // steps as a JSON string (textarea input) and as an array both parse:
+  assert.equal(normalizeSteps('[{"id":"s","type":"llm"}]').length, 1, 'a JSON-string steps list parses');
+  assert.equal(normalizeSteps([{ id: 's', type: 'llm' }]).length, 1, 'an array passes through');
+  assert.deepEqual(normalizeSteps('not json'), [], 'unparseable steps → empty, not a throw');
+  assert.deepEqual(normalizeSteps(null), [], 'missing steps → empty');
+  // channels as a JSON string and as an array both parse:
+  assert.equal(normalizeChannels('[{"type":"inbox"}]')[0].type, 'inbox', 'a JSON-string channels list parses');
+  assert.equal(normalizeChannels([{ type: 'slack' }])[0].type, 'slack', 'an array passes through');
+  assert.deepEqual(normalizeChannels('not json'), [], 'unparseable channels → empty, not a throw');
+});
+
+test('foreach: `over` given as a literal array is iterated directly', async () => {
+  // Kills the `if (typeof over === 'string')` always-true mutant: a real array
+  // (not a step-ref string) must not be sent through the string-parse path.
+  const seen = [];
+  const tester = new FlowTester({ nodeTypes, llm: { invoke: async () => ({ content: 'x' }) }, channelRegistry: stubChannels() });
+  const events = await runAll(tester, {
+    nodes: [
+      { id: 'loop', type: 'foreach', config: { over: ['a', 'b', 'c'], steps: [{ id: 's', type: 'llm', config: { prompt: 'Handle {{item}}' } }] } },
+      { id: 'send', type: 'deliver', config: { channel: 'in_app' } },
+    ],
+    edges: [{ from: 'loop', to: 'send' }],
+  });
+  const done = outputOf(events, 'loop');
+  assert.ok(done, 'the loop completed');
+  assert.equal(done.count, 3, 'a literal array is iterated directly (3 items)');
+  void seen;
 });

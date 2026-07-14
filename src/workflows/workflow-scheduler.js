@@ -16,6 +16,9 @@
 import { log } from '../utils/logger.js';
 import { translateError } from './error-translator.js';
 import { validateRunOutput } from './output-validator.js';
+import { deadlineFrom } from './duration.js';
+import { normalizeDecisions, TIMEOUT_DECISION } from './node-types/human.js';
+import { timeoutAuthorizesWrite } from './workflow-validator.js';
 
 const TICK_INTERVAL_MS = 60_000;
 
@@ -92,6 +95,18 @@ export class WorkflowScheduler {
         for (const workflow of due) {
           await this._execute(workflow);
         }
+      }
+
+      // 1b. Expired approvals (P12 Increment D). A pause holds no compute, so
+      //     this tick is the only thing in the system that ever notices a deadline
+      //     pass. Note what this is NOT: it never re-executes a parked run. A run
+      //     comes back to life only through resumeRun(), which requires an answer.
+      //     The sweeper's job is to supply the one answer nobody gave — the
+      //     declared timeout — and then resume like any other channel.
+      try {
+        await this.sweepTimeouts();
+      } catch (err) {
+        log.error(`[workflow-scheduler] timeout sweep error: ${err.message}`);
       }
 
       // 2. Email-triggered workflows — poll Gmail for each active flow with
@@ -173,6 +188,36 @@ export class WorkflowScheduler {
    */
   registerRunBudgetCheck(fn) {
     this._runBudgetCheck = fn;
+  }
+
+  /**
+   * Register the ask deliverer (P12 Increment D). Called the moment a run pauses
+   * on a `human` step, with everything needed to actually put the question in
+   * front of a person: `{ workflow, run, ask, expiresAt }`.
+   *
+   * The scheduler does not know what Slack is, and must not: it hands over the
+   * ask and the ApprovalService decides which channels it goes out over.
+   *
+   * NOT optional in the way the other hooks are. A pause with no deliverer is a
+   * question nobody will ever be asked — the exact hang Increment B refused to
+   * ship, and why `human` stayed unreachable until this hook existed. If it is
+   * unset, the run is FAILED rather than parked: an honest, visible failure beats
+   * a run that waits forever for an answer that cannot come.
+   * @param {(ctx: {workflow: object, run: object, ask: object, expiresAt: string|null}) => Promise<void>} fn
+   */
+  registerAskDeliverer(fn) {
+    this._deliverAsk = fn;
+  }
+
+  /**
+   * Register the escalation notifier (P12 Increment D). Called when a step fails
+   * under `on_error: { then: 'escalate' }` — the flag Increment B introduced and
+   * deliberately left inert, because escalating to a person requires a person's
+   * inbox to escalate INTO, and that did not exist yet. It does now.
+   * @param {(ctx: {workflow: object, run: object, nodeId: string, error: string}) => Promise<void>} fn
+   */
+  registerEscalationNotifier(fn) {
+    this._notifyEscalation = fn;
   }
 
   /**
@@ -284,18 +329,32 @@ export class WorkflowScheduler {
    * @param {string} [opts.trigger]
    * @param {string|null} [opts.sessionId]
    * @param {object|null} [opts.emailContext]
+   * @param {object|null} [opts.existingRun] — RESUME: continue this run row rather
+   *        than opening a new one (P12 Increment D).
+   * @param {object|null} [opts.checkpoint]  — RESUME: the state the run paused on.
+   * @param {object|null} [opts.decisions]   — RESUME: { [humanNodeId]: {decision,by,at,channel} }
    * @returns {Promise<null|Error>}
    */
-  async _runFlowOnce(workflow, { trigger = 'scheduled', sessionId = null, emailContext = null } = {}) {
+  async _runFlowOnce(workflow, {
+    trigger = 'scheduled', sessionId = null, emailContext = null,
+    existingRun = null, checkpoint = null, decisions = null,
+  } = {}) {
     if (!this.flowTester) {
       log.error(`[workflow-scheduler] flow-kind workflow "${workflow.slug}" is due but no flowTester is configured`);
       return new Error('flowTester not configured');
     }
     const startedAt = Date.now();
-    const run = this.workflowStore.startRun(workflow.id);
+    // A RESUME CONTINUES THE RUN; IT DOES NOT START ONE. Opening a fresh run row
+    // here would bill the tenant a second run against their monthly cap for a
+    // workflow that fired once, and it would split one story — the trigger, the
+    // pause, the person's answer, the delivery — across two rows in the console,
+    // neither of which is the truth.
+    const run = existingRun ?? this.workflowStore.startRun(workflow.id);
     // Register user attribution so every LLM cost record carries the tenant.
     this.costTracker?.setSessionUser(`flow-run-${run.id}`, workflow.user_id ?? null);
-    log.info(`[workflow-scheduler] executing flow "${workflow.slug}" (run ${run.id.slice(0, 8)})`);
+    log.info(existingRun
+      ? `[workflow-scheduler] resuming flow "${workflow.slug}" (run ${run.id.slice(0, 8)})`
+      : `[workflow-scheduler] executing flow "${workflow.slug}" (run ${run.id.slice(0, 8)})`);
 
     const stepCount = (workflow.nodes ?? []).length;
     let lastOutput = null;
@@ -316,6 +375,9 @@ export class WorkflowScheduler {
         workflowId: workflow.id,
       };
       if (emailContext) runOpts.initialContext = emailContext;
+      // RESUME (§7.4). The checkpoint — not the steps. The steps are display-shrunk.
+      if (checkpoint) runOpts.checkpoint = checkpoint;
+      if (decisions)  runOpts.decisions  = decisions;
       for await (const evt of this.flowTester.run(
         { nodes: wf.nodes, edges: wf.edges },
         runOpts,
@@ -341,15 +403,54 @@ export class WorkflowScheduler {
         // while it waits. It is NOT a failure and NOT still running — either
         // would be a lie, and 'running' would get it swept up as a stale run.
         //
-        // Nothing DELIVERS the ask yet — the Slack buttons, the signed magic
-        // links and the Approvals inbox are Increment D (§7.2/§7.3/§7.5). Until
-        // then a `human` step is unreachable by design: the converger does not
-        // emit one and the builder cannot add one, so no user workflow can park
-        // itself here waiting for a question nobody will ever be asked.
+        // Increment D delivers the ask: the run is parked, THEN the question goes
+        // out over the node's channels (Slack buttons, the Approvals inbox, a
+        // signed magic link). Park first, ask second — if the ask went first and
+        // a very fast approver answered before the row said `awaiting_human`, the
+        // answer would arrive at a run that is not yet waiting for it and be
+        // dropped on the floor.
         if (evt.type === 'run_paused') {
-          this.workflowStore.pauseRun(run.id, evt.nodeId, evt.ask, evt.checkpoint);
-          log.info(`[workflow-scheduler] flow "${workflow.slug}" paused at "${evt.nodeId}" awaiting a person`);
+          const expiresAt = deadlineFrom(evt.ask?.timeout?.after);
+
+          // A PAUSE WITH NO WAY TO ASK IS A HANG. The validator rejects a `human`
+          // node with no timeout, but nothing structural can stop this process
+          // from booting with no deliverer wired (a misconfiguration, a partial
+          // boot), and in that state a parked run waits for an answer that no
+          // surface will ever request. Fail loudly instead — an error somebody
+          // reads beats a silence nobody does.
+          if (!this._deliverAsk) {
+            const err = `"${evt.nodeId}" needs a person, but no approval channel is wired in this deployment — nobody could be asked.`;
+            log.error(`[workflow-scheduler] ${err}`);
+            this.workflowStore.failRun(run.id, err, null, translateError(err, { workflow }));
+            return err;
+          }
+
+          this.workflowStore.pauseRun(run.id, evt.nodeId, evt.ask, evt.checkpoint, expiresAt);
+          log.info(`[workflow-scheduler] flow "${workflow.slug}" paused at "${evt.nodeId}" awaiting a person (until ${expiresAt ?? 'never'})`);
+
+          try {
+            await this._deliverAsk({ workflow, run, ask: evt.ask, expiresAt });
+          } catch (e) {
+            // The run stays parked and the deadline still stands, so the timeout
+            // path will eventually fire and the run cannot hang. But a question
+            // that failed to reach anyone is not a detail to swallow.
+            log.error(`[workflow-scheduler] could not deliver the ask for run ${run.id.slice(0, 8)}: ${e.message}`);
+          }
           return null;   // not an error — there is simply nothing more to do yet
+        }
+
+        // ── on_error: escalate (Increment B's flag, Increment D's inbox) ──
+        // The step failed and the spec said a person should hear about it. B
+        // marked the run and said so out loud; it could do no more, because there
+        // was no surface to escalate INTO. There is now.
+        if (evt.type === 'run_failed' && evt.escalated && this._notifyEscalation) {
+          try {
+            await this._notifyEscalation({
+              workflow, run, nodeId: failedStep, error: evt.error,
+            });
+          } catch (e) {
+            log.warn(`[workflow-scheduler] escalation notice failed: ${e.message}`);
+          }
         }
       }
       const runCost = this.costTracker?.getSessionCost(`flow-run-${run.id}`) ?? null;
@@ -389,6 +490,156 @@ export class WorkflowScheduler {
       log.error(`[workflow-scheduler] flow "${workflow.slug}" crashed: ${err.message}`);
       return err;
     }
+  }
+
+  /**
+   * Resume a run that was waiting on a person (P12 Increment D).
+   *
+   * The ONE place a paused run comes back to life. Every channel — the in-app
+   * inbox, a Slack button, an emailed magic link, the timeout sweeper — converges
+   * here, having already ESTABLISHED WHO IS ANSWERING. This method does not
+   * authenticate anything and must never be reachable from an unauthenticated
+   * caller; that job belongs to ApprovalService, which owns the token and
+   * signature checks.
+   *
+   * @param {object} run — a hydrated `awaiting_human` row (checkpoint decoded)
+   * @param {{decision: string, by: string|null, channel: string|null}} answer
+   * @returns {Promise<{resumed: boolean, reason?: string}>}
+   */
+  async resumeRun(run, answer) {
+    if (!run || run.status !== 'awaiting_human') {
+      return { resumed: false, reason: 'this run is not waiting for an answer' };
+    }
+    const nodeId = run.paused_node;
+    if (!nodeId) return { resumed: false, reason: 'the paused run does not say which step it stopped at' };
+
+    // ONE ANSWER, ONCE. This flips awaiting_human → running conditionally, so of
+    // two answers racing (Approve in Slack while the sweeper fires the timeout;
+    // two people clicking at once) exactly one wins and the loser stops HERE —
+    // before the run is resumed a second time and the customer is emailed twice.
+    if (!this.workflowStore.markRunResumed(run.id)) {
+      return { resumed: false, reason: 'that question has already been answered' };
+    }
+
+    const workflow = this.workflowStore.get(run.workflow_id);
+    if (!workflow) {
+      const err = `run ${run.id} resumed but its workflow ${run.workflow_id} no longer exists`;
+      this.workflowStore.failRun(run.id, err);
+      return { resumed: false, reason: 'the workflow this run belongs to no longer exists' };
+    }
+
+    const decisions = {
+      [nodeId]: {
+        decision: String(answer?.decision),
+        by:       answer?.by ?? null,
+        at:       new Date().toISOString(),
+        channel:  answer?.channel ?? null,
+      },
+    };
+    // The audit trail: who answered what, when, over which channel — persisted in
+    // the run's own step stream, before any of the work it unblocks happens.
+    this.workflowStore.appendStep(run.id, {
+      type: 'human_answered', nodeId,
+      decision: decisions[nodeId].decision,
+      by: decisions[nodeId].by, channel: decisions[nodeId].channel,
+      at: decisions[nodeId].at,
+    });
+
+    // Resumes through the SAME executor, with the SAME token injection, from the
+    // checkpoint. Not through _executeFlow: the workflow-level retry wrapper
+    // re-runs a flow from the top, and re-running a flow that has already sent
+    // half of its side effects is not a retry, it is a duplicate.
+    const err = await this._runFlowOnce(workflow, {
+      trigger: 'event',
+      existingRun: run,
+      checkpoint:  run.checkpoint,
+      decisions,
+    });
+    return err ? { resumed: true, error: String(err.message ?? err) } : { resumed: true };
+  }
+
+  /**
+   * Fire the declared timeout path for every pause whose deadline has passed
+   * (§7.4). Runs on the existing 60s tick — a pending approval costs nothing
+   * while it waits, and this is the only thing that ever looks at it.
+   *
+   * `timeout.then` is one of the node's own decisions ("reject"), or `escalate`.
+   * Anything else is rejected at build time (HUMAN_BAD_TIMEOUT), so an unreadable
+   * one here can only come from a spec that predates the rule — and it resolves as
+   * `timeout`, which is in every human node's closed domain and can therefore be
+   * routed on. It never resolves as `approve`. An approval must never be the
+   * default, and silence is not consent.
+   */
+  async sweepTimeouts() {
+    const expired = this.workflowStore.listExpiredPauses();
+    for (const run of expired) {
+      const ask = run.pending_ask ?? {};
+      const then = ask.timeout?.then == null ? null : String(ask.timeout.then);
+      const allowed = new Set(normalizeDecisions(ask.decisions));
+      let decision = (then && allowed.has(then)) ? then : TIMEOUT_DECISION;
+
+      // SILENCE IS NOT CONSENT (F3). The validator now rejects `then: 'approve'`
+      // at build time, but a spec ALREADY IN THE DATABASE predates that rule — and
+      // the engine must not rely on the validator having run (the
+      // BRANCH_TARGET_EXTRA_PARENT doctrine). So trace what this decision would
+      // actually do: if it routes to a real send or write, the system would be
+      // approving on a person's behalf. Downgrade to `timeout` (which the mandatory
+      // catch-all handles) rather than perform it. The sweeper is INCAPABLE of
+      // auto-authorising an action nobody approved.
+      const workflow = this.workflowStore.get(run.workflow_id);
+      const writesOnSilence = (d) => workflow
+        && timeoutAuthorizesWrite({ nodes: workflow.nodes, edges: workflow.edges }, run.paused_node, d);
+      if (decision !== TIMEOUT_DECISION && writesOnSilence(decision)) {
+        log.warn(`[workflow-scheduler] pause on run ${run.id.slice(0, 8)}: timeout "${decision}" would act with nobody's approval — resolving as "${TIMEOUT_DECISION}" instead`);
+        decision = TIMEOUT_DECISION;
+      }
+
+      // Even the TIMEOUT floor routes to a write — the branch's timeout/catch-all
+      // case itself sends (an inverted gate: `*→send`). There is NO decision that
+      // does not perform an unapproved action, so the sweeper REFUSES to resume:
+      // it fails the run rather than move money on silence. The validator now
+      // rejects this shape at build time (HUMAN_BAD_TIMEOUT), but a spec already in
+      // the database predates that rule. (Found by the verifier, round 2.)
+      if (writesOnSilence(decision)) {
+        const err = `"${run.paused_node}" timed out, but every path from here sends or writes without anyone approving — refusing to act.`;
+        log.error(`[workflow-scheduler] run ${run.id.slice(0, 8)}: ${err}`);
+        if (this._onTimeout) { try { await this._onTimeout({ run, ask, decision }); } catch { /* best-effort link burn */ } }
+        try { this.workflowStore.failRun(run.id, err, null, translateError(err, { workflow })); }
+        catch (e) { log.error(`[workflow-scheduler] could not fail run ${run.id.slice(0, 8)}: ${e.message}`); }
+        continue;
+      }
+
+      log.info(`[workflow-scheduler] pause on run ${run.id.slice(0, 8)} expired — resolving as "${decision}"`);
+      try {
+        if (this._onTimeout) await this._onTimeout({ run, ask, decision });
+        // `then: 'escalate'` must actually TELL A PERSON (found by the verifier,
+        // R3). `escalate` is not one of the node's decisions, so it resolves as
+        // `timeout` (routing to the catch-all) — which is the safe path, but on its
+        // own it is silent, and the whole point of `escalate` over `reject` is that
+        // somebody hears about it. Put it in the owner's Approvals list.
+        if (then === 'escalate' && this._notifyEscalation && workflow) {
+          try {
+            await this._notifyEscalation({
+              workflow, run, nodeId: run.paused_node,
+              error: 'Nobody answered this approval in time — it was escalated.',
+            });
+          } catch (e) { log.warn(`[workflow-scheduler] timeout escalation notice failed: ${e.message}`); }
+        }
+        await this.resumeRun(run, { decision, by: 'system:timeout', channel: 'timeout' });
+      } catch (e) {
+        log.error(`[workflow-scheduler] timeout sweep failed for run ${run.id.slice(0, 8)}: ${e.message}`);
+      }
+    }
+    return expired.length;
+  }
+
+  /**
+   * Called just before a timed-out pause resolves, so the ApprovalService can
+   * burn the outstanding magic links: the question is answered, and a link that
+   * still works is a second answer waiting to happen.
+   */
+  registerTimeoutHook(fn) {
+    this._onTimeout = fn;
   }
 
   /**
