@@ -403,3 +403,39 @@ test('a NON-escalate timeout does NOT notify — escalation is not fired on ever
 
   assert.equal(escalations.length, 0, 'a plain `reject` timeout must not page anyone');
 });
+
+// ── More behavioral pins (mutation-sweep survivors) ──────────────────────────
+
+test('the tick polls email triggers and fires a flow per new message', async () => {
+  const ran = [];
+  const s = setup({ onDeliver: (a) => { ran.push(a.body); return { delivered: true }; } });
+  // An email-triggered flow, not schedule-due (so only the poller can fire it).
+  s.ws.db.prepare("UPDATE workflows SET triggers = ?")
+    .run(JSON.stringify([{ type: 'email', config: { filter: 'from:ups' } }]));
+  let polled = 0;
+  s.scheduler.registerEmailPoller(async () => { polled++; return polled === 1 ? [{ from: 'ups@x.com', text: 'shipped' }] : []; });
+
+  await s.scheduler._tick();
+
+  assert.equal(polled, 1, 'the poller was consulted');
+  assert.equal(ran.length, 1, 'a new email fired the flow exactly once');
+});
+
+test('resumeRun is a ONE-SHOT LATCH — a direct second call does not resume again', async () => {
+  // Isolates markRunResumed's guard (the race backstop): the inbox path refuses a
+  // second answer at getAwaitingHuman, so this drives resumeRun directly to prove
+  // the latch itself, not the surface above it.
+  const s = setup();
+  const run = s.ws.startRun(s.id);
+  s.ws.pauseRun(run.id, 'work', { prompt: 'ok?', decisions: ['approve', 'reject'] },
+    { outputs: {}, live: {}, skipped: [], ruledOut: [], lastOutput: null }, null);
+  const parked = s.ws.getAwaitingHuman(run.id);
+
+  const a = await s.scheduler.resumeRun(parked, { decision: 'approve' });
+  // Same (now-stale) parked object, as a lost race would hand in.
+  const b = await s.scheduler.resumeRun(parked, { decision: 'approve' });
+
+  assert.equal(a.resumed, true, 'the first call resumes');
+  assert.equal(b.resumed, false, 'the second is refused by the latch');
+  assert.match(b.reason, /already been answered/);
+});

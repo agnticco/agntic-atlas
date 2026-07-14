@@ -2240,3 +2240,28 @@ test('resume: a checkpoint round-tripped THROUGH WorkflowStore still delivers th
   assert.ok(!String(sentBody).includes('(truncated)'), 'never the shrink marker');
   store.close?.();
 });
+
+// P12 Increment D — a human node's `decisions` may arrive as a STRING (the config
+// schema allows it); normalizeDecisions must parse it, not treat it as opaque.
+test('human decisions given as a JSON string are parsed', async () => {
+  const { normalizeDecisions, allowedDecisions } = await import('../../src/workflows/node-types/human.js');
+  assert.deepEqual(normalizeDecisions('["ship","hold"]'), ['ship', 'hold'], 'a JSON-string list is parsed');
+  assert.deepEqual(normalizeDecisions('approve, reject'), ['approve', 'reject'], 'a comma string is parsed');
+  assert.deepEqual(normalizeDecisions(['a', 'b']), ['a', 'b'], 'an array passes through');
+  assert.ok(allowedDecisions('["ship","hold"]').includes('timeout'), 'timeout is always allowed, even from a string');
+});
+
+// P12 Increment D — normalize helpers accept the STRING forms the config allows.
+test('foreach + human normalizers parse their string/array forms', async () => {
+  const { normalizeSteps } = await import('../../src/workflows/node-types/foreach.js');
+  const { normalizeChannels } = await import('../../src/workflows/node-types/human.js');
+  // steps as a JSON string (textarea input) and as an array both parse:
+  assert.equal(normalizeSteps('[{"id":"s","type":"llm"}]').length, 1, 'a JSON-string steps list parses');
+  assert.equal(normalizeSteps([{ id: 's', type: 'llm' }]).length, 1, 'an array passes through');
+  assert.deepEqual(normalizeSteps('not json'), [], 'unparseable steps → empty, not a throw');
+  assert.deepEqual(normalizeSteps(null), [], 'missing steps → empty');
+  // channels as a JSON string and as an array both parse:
+  assert.equal(normalizeChannels('[{"type":"inbox"}]')[0].type, 'inbox', 'a JSON-string channels list parses');
+  assert.equal(normalizeChannels([{ type: 'slack' }])[0].type, 'slack', 'an array passes through');
+  assert.deepEqual(normalizeChannels('not json'), [], 'unparseable channels → empty, not a throw');
+});
