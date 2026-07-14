@@ -5,7 +5,7 @@
  * prose — it either produces a structured proposal or a structured question.
  */
 
-import { gapLabel } from './gap-scorer.js';
+import { gapLabel, unansweredGaps } from './gap-scorer.js';
 
 // ── Capability summary for system prompt ─────────────────────────────────────
 
@@ -204,6 +204,12 @@ AVAILABLE NODE TYPES (only these — every one is runnable by the engine today):
 - assemble: Stitch several upstream steps into ONE markdown document. No AI call, so it is free and exact. config: title, intro, sections (JSON array of { heading, content }, where content is "{{<nodeId>.output}}"), outro. Use it to combine sections; never use an llm node just to concatenate.
 - connector-action: Call a connector capability MID-workflow to GET or DO something, then pass the result to the next step (config: { action:"<id>", ...params }). Use this ONLY when the workflow genuinely needs to reach into a connector mid-flow — e.g. pull a Slack channel's history, look up a user, create/invite to a channel. Do NOT use it to "fetch" the data a trigger already delivers, and never for the final delivery (use deliver). If no connector action is needed, skip it entirely. Available actions:
 ${stepSummary(capabilities)}
+- branch: Route the workflow down exactly ONE path, based on a value an earlier step produced. config: { on: "<stepId>.output", cases: [ { when: "<value>", to: "<stepId>" }, … , { when: "*", to: "<stepId>" } ] }.
+  HARD RULES, all enforced at publish time:
+  • The catch-all { "when": "*" } is MANDATORY. Without it an unexpected value matches nothing and the workflow SILENTLY does nothing.
+  • It may ONLY route on an llm node with mode:"classify" (a closed set of categories). Routing on freeform AI prose is rejected (LLM_INPUT_NOT_ENUM) — cases match by exact value, so prose matches nothing and every run falls through the catch-all.
+  • Every case needs a real edge: { "from": "<branchId>", "to": "<case target>" }.
+  • A case's target must be reachable ONLY through the branch — nothing else may have an edge to it, or it runs whichever way the branch went and the branch decides nothing. To use another step's data there, reference it as {{stepId.output}} — a template needs no edge.
 - deliver: Send the final result to a destination. Choose config.channel from the destinations below and set ONLY its routing fields — the message body is filled automatically from the previous step's output, so never put the content in config. MULTIPLE DESTINATIONS: if the user asks to send the result to more than one place (e.g. "email me AND save a Google Doc", "post to Slack and email the team"), add ONE deliver node PER destination, each with its own edge from the final content node (fan-out) — the engine runs them all. Never silently drop a requested destination. Deliver nodes are always terminal (nothing runs after them).
   AVAILABLE DELIVERY DESTINATIONS (these are the only ones connected/runnable right now — never invent one):
 ${deliverySummary(capabilities)}
@@ -413,25 +419,207 @@ function setupResultsSummary(setupResults) {
   return '\n' + lines.join('\n') + '\n';
 }
 
-export function buildProposePrompt({ intent, clarifications, draft, gap, setupResults }) {
+export function buildProposePrompt({ intent, clarifications, draft, gap, setupResults, missingNote = null }) {
   const prior = (clarifications ?? []).map(({ q, a }) => `  Q: ${q}\n  A: ${a}`).join('\n');
   const draftStr = JSON.stringify({
     triggers: draft.triggers,
-    nodes:    draft.nodes?.map(n => ({ id: n.id, type: n.type, label: n.label })),
+    nodes:    draft.nodes?.map(n => ({ id: n.id, type: n.type, label: n.label, config: n.config })),
     edges:    draft.edges,
     name:     draft.name,
   }, null, 2);
 
+  // The gap now carries the VALIDATOR'S OWN message and hint, so the model is
+  // told exactly what is wrong and exactly how to fix it. v1 handed it a vague
+  // checklist item ("a processing step") and left it to guess — which is how the
+  // dead `"model"` key survived: nothing ever told the model it was wrong.
+  const open = unansweredGaps(gap);
+  const gapList = open.length
+    ? open.slice(0, 6).map(g => `  - [${g.class}] ${g.message}${g.hint ? `\n      FIX: ${g.hint}` : ''}`).join('\n')
+    // The spec is already valid and already meets its contract; what is left is
+    // work the INTENT asks for that no step does yet (buildSufficiencyPrompt).
+    : `  - ${missingNote ?? gapLabel(gap)}`;
+
   return `Build the next component of this workflow.
 
 INTENT: "${intent}"
-${prior ? `\nCLARIFICATIONS:\n${prior}\n` : ''}${setupResultsSummary(setupResults)}
+${prior ? `\nCLARIFICATIONS:\n${prior}\n` : ''}${setupResultsSummary(setupResults)}${outcomeBlock(draft.outcome)}
 CURRENT DRAFT:
 ${draftStr}
 
-NEXT GAP TO FILL: ${gapLabel(gap)}
-${gap.needsEdges ? `\nVALID NODE IDs: ${(draft.nodes ?? []).map(n => n.id).filter(Boolean).join(', ')}\nEdges must use only these IDs — never "trigger" or any other keyword.` : ''}
-Propose the single next component that fills this gap. Return JSON only.`;
+WHAT IS STILL WRONG OR MISSING (fix the FIRST one):
+${gapList}
+
+VALID NODE IDs: ${(draft.nodes ?? []).map(n => n.id).filter(Boolean).join(', ') || '(none yet)'}
+Edges must use only these IDs — never "trigger" or any other keyword.
+
+Propose the single next component that fixes the first item above. Return JSON only.`;
+}
+
+/**
+ * The outcome contract, pinned into every propose turn. This is what stops the
+ * converger dropping a delivery it already agreed to: the promise is in front of
+ * the model on every turn, not just the one where the user made it.
+ */
+function outcomeBlock(outcome) {
+  if (!outcome?.assertions?.length) return '';
+  const lines = outcome.assertions.map(a =>
+    `  - ${a.id}: ${a.kind} → ${a.target}${a.fields?.length ? ` (fields: ${a.fields.join(', ')})` : ''}${a.when ? `  [only when: ${a.when}]` : ''}`);
+  return `
+THE OUTCOME THIS WORKFLOW MUST DELIVER (the contract — every line needs a step that does it,
+and a workflow that quietly does less than this WILL NOT PUBLISH):
+${outcome.statement ? `  "${outcome.statement}"\n` : ''}${lines.join('\n')}
+`;
+}
+
+// ── Outcome prompt — "how would we know this worked?" ────────────────────────
+
+export function buildOutcomePrompt({ intent, capabilities }) {
+  return `Turn this intent into an OUTCOME CONTRACT: a plain-English statement of what must be
+true after the workflow runs, plus the machine-checkable assertions that prove it.
+
+INTENT: "${intent}"
+
+Offer 2-3 candidate contracts — different readings of what the user probably meant. The user
+picks one (or edits it). Order them best-guess first; the first one is pre-selected, so it must
+be the most likely reading, not the most cautious one.
+
+AN ASSERTION IS: { "id": "a1", "kind": "<kind>", "target": "<connector>:<destination>" }
+  kind is EXACTLY ONE OF — nothing else exists, and an unknown kind is REJECTED at publish:
+    message_sent     a message reached a person, a channel, or an endpoint
+    record_exists    a row or record was created in a data store
+    document_exists  a document or file was created
+  target is "<connector>:<destination>", e.g.
+    "slack:#logistics"   "slack:someone@acme.com"   "gmail:ops@acme.com"
+    "airtable:Leads"     "sheets:Q3 Pipeline"       "inbox:Daily digest"
+  Optional: "fields": ["Name","Budget"] — a record_exists that must carry named fields.
+
+RULES — these are what make the contract checkable, which is the whole point:
+- EVERY destination the user asked for gets its OWN assertion. If they said "post to Slack AND
+  email me", that is TWO assertions. A workflow that quietly does only one of them will not
+  publish (UNSATISFIED_ASSERTION) — that is the single most common way this system used to fail
+  its users, and the contract is what stops it.
+- ONLY assert things that are the workflow's OUTPUT. "The email is summarized" is not an
+  assertion — no connector can be checked for it. The Slack message that carries the summary IS.
+- Use ONLY connectors that appear in the AVAILABLE lists in your system prompt. If the intent
+  needs one that isn't connected, say so in the statement rather than asserting something that
+  cannot happen.
+- Keep the statement to ONE sentence a non-technical person would recognise as their own request.
+
+Return JSON only:
+{"candidates":[
+  {"id":"c1","statement":"<one sentence>","assertions":[{"id":"a1","kind":"…","target":"…"}]},
+  {"id":"c2","statement":"…","assertions":[…]}
+]}`;
+}
+
+// ── Sufficiency — "is this actually finished?" ───────────────────────────────
+
+/**
+ * The outcome contract is a FLOOR, not a ceiling.
+ *
+ * It guarantees that nothing the user asked for was silently DROPPED — that is
+ * what kills defect #1. It cannot guarantee that every transformation they asked
+ * for is PRESENT, because "a summary of the email" and "the email" arrive at
+ * Slack as the same assertion: `message_sent → slack:#logistics`. No
+ * machine-checkable assertion distinguishes them, and inventing one that claimed
+ * to would be a proof we cannot make.
+ *
+ * So the intent still drives construction, and the model still judges when the
+ * build is done — but only ONCE THE FLOOR IS MET, and it must name a concrete
+ * missing component to continue. That is the difference from v1's checklist,
+ * which DEMANDED a processing node and so invented one for workflows that
+ * genuinely had none (defect #4): here, "yes, it's finished" is always available
+ * and is the default reading for a simple workflow.
+ */
+export function buildSufficiencyPrompt({ intent, draft }) {
+  return `Is this workflow FINISHED — does it do everything the intent asks?
+
+INTENT: "${intent}"
+${outcomeBlock(draft?.outcome)}
+CURRENT DRAFT:
+${JSON.stringify({
+    triggers: draft?.triggers,
+    nodes: (draft?.nodes ?? []).map(n => ({ id: n.id, type: n.type, mode: n.config?.mode, label: n.label })),
+    edges: draft?.edges,
+    name: draft?.name,
+  }, null, 2)}
+
+It is already VALID and it already delivers everything the outcome promises. The only question
+is whether the intent asks for work this draft does not do.
+
+BE CONSERVATIVE. A workflow with no AI step is a perfectly good workflow — moving an email into a
+spreadsheet needs no model call, and adding one costs the user money on every single run, forever.
+Only say it is incomplete if the intent explicitly asks for something no step does: a summary
+nobody writes, a translation nobody makes, a field nobody extracts, a destination nobody sends to.
+"It could be nicer" is not incomplete. If in doubt, it is COMPLETE.
+
+Return JSON only:
+  {"complete":true}
+  {"complete":false,"missing":"<the ONE component that is missing, named concretely>"}`;
+}
+
+// ── Examples prompt ──────────────────────────────────────────────────────────
+
+export function buildExamplesPrompt({ intent, outcome }) {
+  return `The user is building this workflow:
+
+INTENT: "${intent}"
+OUTCOME: ${outcome?.statement ?? '(not yet stated)'}
+
+Propose up to 3 CONCRETE example cases they could confirm — realistic inputs this workflow would
+see, each with what the workflow should produce. These become the workflow's test cases, so they
+must be specific (a real-looking subject line, a real-looking amount), never generic placeholders.
+
+Include at least one case that should NOT trigger the workflow, if that is meaningful here — the
+negative example is the one that finds the bug.
+
+Return JSON only:
+{"examples":[{"id":"e1","label":"<short label>","given":{…},"expect":{…},"shouldTrigger":true}]}`;
+}
+
+// ── Decision prompt — induce a table / a routing shape from the examples ─────
+
+export function buildDecisionPrompt({ intent, outcome, examples }) {
+  return `Does this workflow need to make a JUDGEMENT — treating some inputs differently from others?
+
+INTENT: "${intent}"
+OUTCOME: ${outcome?.statement ?? ''}
+EXAMPLES: ${JSON.stringify(examples ?? [], null, 2)}
+
+If every input is treated identically, answer {"needsDecision":false} and stop.
+
+If some inputs are treated differently, the ONLY sanctioned shape is:
+  1. an "llm" node with mode:"classify" and a CLOSED list of categories, then
+  2. a "branch" node that routes on it.
+
+An AI step that emits free text CANNOT feed a branch: the branch matches by exact value, so
+prose matches nothing and every run falls through the catch-all — silently. The validator
+rejects it (LLM_INPUT_NOT_ENUM). A classifier returns exactly one of a closed set, which is
+what makes the routing checkable. This is not a style preference; it is the difference between
+a workflow whose behaviour can be proven complete and one that cannot.
+
+Return JSON only:
+{"needsDecision":true,
+ "classify":{"id":"<id>","categories":["…","…"],"instructions":"<how to decide>"},
+ "cases":[{"when":"<category>","to":"<what should happen>"}, {"when":"*","to":"<everything else>"}]}`;
+}
+
+// ── Gap prompt — suggest an answer for each open gap ─────────────────────────
+
+export function buildGapPrompt({ intent, gaps }) {
+  return `This workflow has cases nobody has decided about yet.
+
+INTENT: "${intent}"
+
+OPEN GAPS:
+${gaps.map((g, i) => `  ${i + 1}. [${g.class}] ${g.message}`).join('\n')}
+
+For each, suggest the single most likely answer, in plain language a non-technical person would
+click without hesitation. Be concrete and short (a few words). If the honest answer is "a person
+should look at this", say so — that is a good answer, not a failure.
+
+Return JSON only:
+{"suggestions":[{"gapId":"<id>","answer":"<short plain-language answer>"}]}`;
 }
 
 // ── Modify prompt — merge user override into a proposal ──────────────────────

@@ -91,6 +91,20 @@ const ADDITIVE_COLUMNS = [
   { col: 'baseline_duration_s',     type: 'INTEGER NOT NULL DEFAULT 0' },
   { col: 'baseline_recording_path', type: "TEXT NOT NULL DEFAULT ''" },
   { col: 'baseline_set_at',         type: "TEXT NOT NULL DEFAULT ''" },
+  // P12 Increment C — the outcome contract (spec v2). `outcome` is JSON:
+  // { statement, assertions[], examples[] }.
+  //
+  // NOTE: `version` above is the REVISION COUNTER (commit-like history in
+  // workflow_versions), NOT the spec version. They are different numbers and
+  // conflating them would silently mark every edited v1 workflow as v2. Hence a
+  // separate `spec_version`.
+  //
+  // This has to be PERSISTED, not merely validated at publish: without it the
+  // contract evaporates the moment the workflow is saved, and the next `update()`
+  // — the user deleting the Slack step — would have nothing to check against.
+  // Defect #1 would come straight back through the edit path.
+  { col: 'outcome',                 type: 'TEXT' },
+  { col: 'spec_version',            type: 'INTEGER NOT NULL DEFAULT 1' },
 ];
 
 // Additive columns for workflow_runs (same idempotent pattern as ADDITIVE_COLUMNS).
@@ -626,6 +640,11 @@ export class WorkflowStore {
       edges:           JSON.stringify(fields.edges ?? []),
       error_handling:  JSON.stringify(fields.errorHandling ?? {}),
       version:         1,
+      // The outcome contract (spec v2). Persisted so a LATER edit is still held
+      // to the promise the user confirmed at build time — validate-only would
+      // let the contract evaporate on save.
+      outcome:         fields.outcome ? JSON.stringify(fields.outcome) : null,
+      spec_version:    Number(fields.specVersion ?? (fields.outcome ? 2 : 1)),
       created_at:      now,
       updated_at:      now,
     };
@@ -634,11 +653,11 @@ export class WorkflowStore {
       INSERT INTO workflows (
         id, slug, session_id, user_id, tenant_id, user_intent, source_id, schedule, output_format, delivery,
         config, status, name, description, kind, triggers, nodes, edges, error_handling,
-        version, created_at, updated_at
+        version, outcome, spec_version, created_at, updated_at
       ) VALUES (
         @id, @slug, @session_id, @user_id, @tenant_id, @user_intent, @source_id, @schedule, @output_format, @delivery,
         @config, @status, @name, @description, @kind, @triggers, @nodes, @edges, @error_handling,
-        @version, @created_at, @updated_at
+        @version, @outcome, @spec_version, @created_at, @updated_at
       )
     `).run(row);
 
@@ -707,9 +726,13 @@ export class WorkflowStore {
       baseline_duration_s: 'baseline_duration_s',
       baseline_recording_path: 'baseline_recording_path',
       baseline_set_at: 'baseline_set_at',
+      // P12 Increment C. This map is a WHITELIST — `if (!Object.values(map)
+      // .includes(col)) continue;` below silently drops anything absent from it.
+      // So an outcome edit that isn't listed here does not fail; it vanishes.
+      outcome: 'outcome', specVersion: 'spec_version',
     };
-    const jsonCols = new Set(['config', 'triggers', 'nodes', 'edges', 'error_handling']);
-    const definitionCols = new Set(['name', 'description', 'triggers', 'nodes', 'edges', 'error_handling', 'config', 'schedule', 'delivery']);
+    const jsonCols = new Set(['config', 'triggers', 'nodes', 'edges', 'error_handling', 'outcome']);
+    const definitionCols = new Set(['name', 'description', 'triggers', 'nodes', 'edges', 'error_handling', 'config', 'schedule', 'delivery', 'outcome']);
 
     const sets = [];
     const vals = [];
@@ -719,7 +742,11 @@ export class WorkflowStore {
       const col = map[k] ?? k;
       if (!Object.values(map).includes(col)) continue;
       sets.push(`${col} = ?`);
-      vals.push(jsonCols.has(col) ? JSON.stringify(v) : v);
+      // A null JSON column is a real SQL NULL, not the four-character string
+      // "null" — retracting an outcome must leave no contract behind, and
+      // `_parse` distinguishes "no contract" (null) from "a contract with no
+      // assertions" (which is a different, rejectable thing).
+      vals.push(jsonCols.has(col) ? (v == null ? null : JSON.stringify(v)) : v);
       if (definitionCols.has(col)) definitionChanged = true;
     }
 
@@ -1233,6 +1260,12 @@ export class WorkflowStore {
       if (row[col] != null) {
         try { row[col] = JSON.parse(row[col]); } catch { row[col] = col === 'error_handling' ? {} : (col === 'config' ? {} : []); }
       }
+    }
+    // `outcome` is nullable: a v1 workflow has none, and null is NOT {} — an
+    // empty object would look like a contract with no assertions, which is a
+    // different (and rejectable) thing from having no contract at all.
+    if (row.outcome != null) {
+      try { row.outcome = JSON.parse(row.outcome); } catch { row.outcome = null; }
     }
     return row;
   }
