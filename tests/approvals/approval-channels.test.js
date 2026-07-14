@@ -415,3 +415,33 @@ test('an unsupported channel type REJECTS (its promise throws), it is not silent
   assert.equal(res.delivered, 1, 'exactly the inbox channel delivered');
   assert.equal(res.of, 2, 'and the unsupported one counted as a channel that failed');
 });
+
+test('a magic-link token is refused if the run has since paused on a DIFFERENT node', async () => {
+  // Kills the node-guard mutant: a token minted for `ask` must not resolve a run
+  // that is now waiting at some other step (defense in depth behind the token).
+  const h = harness({ channels: [{ type: 'email', to: 'ops@acme.test' }] });
+  const run = await h.park();
+  const token = [...h.mailed[0].text.matchAll(/approvals\/([A-Za-z0-9_-]+)/g)][0][1];
+  // Move the run's paused node out from under the token.
+  h.ws.db.prepare("UPDATE workflow_runs SET paused_node = 'some_other_step' WHERE id = ?").run(run.id);
+
+  const res = await h.service.resolveFromToken(token);
+  assert.equal(res.ok, false, 'the token is for "ask", but the run is parked elsewhere');
+  assert.equal(h.sent.length, 0);
+});
+
+test('the Slack ask omits the preview block when there is no preview', async () => {
+  // Kills `if (preview)` always-true: a node with no preview must not emit an
+  // empty ``` ``` code block.
+  const withPrev = harness({ channels: [{ type: 'slack', target: '#ops' }] });
+  await withPrev.park();
+  const nPrev = withPrev.posted[0].blocks.filter(b => b.type === 'section').length;
+
+  const noPrev = harness({ channels: [{ type: 'slack', target: '#ops' }] });
+  // Strip the preview from the human node.
+  noPrev.ws.db.prepare("UPDATE workflows SET nodes = REPLACE(nodes, '\"preview\":\"{{draft.output}}\",', '')").run();
+  await noPrev.park();
+  const nNoPrev = noPrev.posted[0].blocks.filter(b => b.type === 'section').length;
+
+  assert.ok(nNoPrev < nPrev, 'no preview → one fewer section block (no empty code block)');
+});

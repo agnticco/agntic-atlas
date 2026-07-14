@@ -2265,3 +2265,21 @@ test('foreach + human normalizers parse their string/array forms', async () => {
   assert.equal(normalizeChannels([{ type: 'slack' }])[0].type, 'slack', 'an array passes through');
   assert.deepEqual(normalizeChannels('not json'), [], 'unparseable channels → empty, not a throw');
 });
+
+test('foreach: `over` given as a literal array is iterated directly', async () => {
+  // Kills the `if (typeof over === 'string')` always-true mutant: a real array
+  // (not a step-ref string) must not be sent through the string-parse path.
+  const seen = [];
+  const tester = new FlowTester({ nodeTypes, llm: { invoke: async () => ({ content: 'x' }) }, channelRegistry: stubChannels() });
+  const events = await runAll(tester, {
+    nodes: [
+      { id: 'loop', type: 'foreach', config: { over: ['a', 'b', 'c'], steps: [{ id: 's', type: 'llm', config: { prompt: 'Handle {{item}}' } }] } },
+      { id: 'send', type: 'deliver', config: { channel: 'in_app' } },
+    ],
+    edges: [{ from: 'loop', to: 'send' }],
+  });
+  const done = outputOf(events, 'loop');
+  assert.ok(done, 'the loop completed');
+  assert.equal(done.count, 3, 'a literal array is iterated directly (3 items)');
+  void seen;
+});
