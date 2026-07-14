@@ -587,10 +587,26 @@ export class WorkflowScheduler {
       // catch-all handles) rather than perform it. The sweeper is INCAPABLE of
       // auto-authorising an action nobody approved.
       const workflow = this.workflowStore.get(run.workflow_id);
-      if (workflow && decision !== TIMEOUT_DECISION
-          && timeoutAuthorizesWrite({ nodes: workflow.nodes, edges: workflow.edges }, run.paused_node, decision)) {
+      const writesOnSilence = (d) => workflow
+        && timeoutAuthorizesWrite({ nodes: workflow.nodes, edges: workflow.edges }, run.paused_node, d);
+      if (decision !== TIMEOUT_DECISION && writesOnSilence(decision)) {
         log.warn(`[workflow-scheduler] pause on run ${run.id.slice(0, 8)}: timeout "${decision}" would act with nobody's approval — resolving as "${TIMEOUT_DECISION}" instead`);
         decision = TIMEOUT_DECISION;
+      }
+
+      // Even the TIMEOUT floor routes to a write — the branch's timeout/catch-all
+      // case itself sends (an inverted gate: `*→send`). There is NO decision that
+      // does not perform an unapproved action, so the sweeper REFUSES to resume:
+      // it fails the run rather than move money on silence. The validator now
+      // rejects this shape at build time (HUMAN_BAD_TIMEOUT), but a spec already in
+      // the database predates that rule. (Found by the verifier, round 2.)
+      if (writesOnSilence(decision)) {
+        const err = `"${run.paused_node}" timed out, but every path from here sends or writes without anyone approving — refusing to act.`;
+        log.error(`[workflow-scheduler] run ${run.id.slice(0, 8)}: ${err}`);
+        if (this._onTimeout) { try { await this._onTimeout({ run, ask, decision }); } catch { /* best-effort link burn */ } }
+        try { this.workflowStore.failRun(run.id, err, null, translateError(err, { workflow })); }
+        catch (e) { log.error(`[workflow-scheduler] could not fail run ${run.id.slice(0, 8)}: ${e.message}`); }
+        continue;
       }
 
       log.info(`[workflow-scheduler] pause on run ${run.id.slice(0, 8)} expired — resolving as "${decision}"`);

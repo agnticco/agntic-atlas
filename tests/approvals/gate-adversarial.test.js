@@ -358,3 +358,68 @@ test('WEAK_APPROVAL_FOR_WRITE sees a write INSIDE a foreach — one write or a h
     'a loop is the highest-risk write shape the engine has, not an exemption from the rule',
   );
 });
+
+// ═══════════════════════════════════════════════════════════════════════════
+// F5. SILENCE IS NOT CONSENT — THROUGH THE CATCH-ALL (verifier, round 2)
+//
+// F3 fixed `then: 'approve'`. But the value the sweeper injects MOST often is the
+// TIMEOUT floor (whenever `then` is unset), and that routes through the branch's
+// catch-all. An INVERTED gate — reject→drop, *→send — with no `then` validated
+// clean, and a silent timeout SENT: nobody approved, money moved. Both guards
+// exempted `TIMEOUT_DECISION`, so the one decision the sweeper injects most was
+// never traced. Fixed on both sides: the validator rejects the shape, and the
+// sweeper REFUSES to resume (fails the run) when even `timeout` writes.
+// ═══════════════════════════════════════════════════════════════════════════
+
+const INVERTED_GATE = flow([
+  { id: 'draft', type: 'llm',   config: { mode: 'freeform', prompt: 'draft a $4,000 refund' } },
+  { id: 'ask',   type: 'human', config: {
+    prompt: 'Approve this refund?', preview: '{{draft.output}}',
+    decisions: ['approve', 'reject'],
+    channels: [{ type: 'inbox' }],
+    timeout: { after: '48h' },            // ← no `then`: the sweeper injects `timeout`
+  } },
+  { id: 'gate',  type: 'branch', config: {
+    on: '{{ask.decision}}',
+    cases: [{ when: 'reject', to: 'drop' }, { when: '*', to: 'send' }],   // ← catch-all SENDS
+  } },
+  { id: 'send',  type: 'deliver',  config: { channel: 'slack', target: '#payouts' } },
+  { id: 'drop',  type: 'assemble', config: { title: 'Rejected', sections: '[]' } },
+], [
+  { from: 'draft', to: 'ask' }, { from: 'ask', to: 'gate' },
+  { from: 'gate', to: 'send' }, { from: 'gate', to: 'drop' },
+]);
+
+test('an inverted gate whose catch-all SENDS is rejected at build time', () => {
+  assert.ok(
+    codesOf(INVERTED_GATE).includes('HUMAN_BAD_TIMEOUT'),
+    'a silent timeout would take the catch-all straight to the send — the approval is bypassable, so it must not publish',
+  );
+  // Positive: the SANE shape (approve→send, catch-all→drop) with no `then` is fine
+  // — a silent timeout routes to `drop`, which does not send.
+  const sane = flow([
+    { id: 'draft', type: 'llm',   config: { mode: 'freeform', prompt: 'draft' } },
+    { id: 'ask',   type: 'human', config: { prompt: 'Send?', decisions: ['approve', 'reject'], channels: [{ type: 'inbox' }], timeout: { after: '48h' } } },
+    { id: 'gate',  type: 'branch', config: { on: '{{ask.decision}}', cases: [{ when: 'approve', to: 'send' }, { when: '*', to: 'drop' }] } },
+    { id: 'send',  type: 'deliver',  config: { channel: 'slack', target: '#c' } },
+    { id: 'drop',  type: 'assemble', config: { title: 'No', sections: '[]' } },
+  ], [{ from: 'draft', to: 'ask' }, { from: 'ask', to: 'gate' }, { from: 'gate', to: 'send' }, { from: 'gate', to: 'drop' }]);
+  assert.ok(!codesOf(sane).includes('HUMAN_BAD_TIMEOUT'), 'the safe shape (catch-all → drop) must still publish');
+});
+
+test('the sweeper REFUSES to send when even the timeout floor routes to a write', async () => {
+  // The engine half, for a DB spec that predates the validator rule. There is no
+  // decision that does not send, so the sweeper fails the run rather than move
+  // money on silence.
+  const h = harness({ spec: INVERTED_GATE });
+  await h.scheduler._executeFlow(h.workflow, { trigger: 'scheduled' });
+  const [paused] = h.ws.listAwaitingHuman({ tenantId: 'tenant-a' });
+  expireAllPauses(h.ws);
+
+  await h.scheduler.sweepTimeouts();
+
+  assert.deepEqual(h.sent, [], 'THE REFUND WAS NOT SENT — nobody approved it, and every path from the timeout writes');
+  const run = h.ws.getRun(paused.id);
+  assert.equal(run.status, 'error', 'the run failed loudly instead of acting');
+  assert.equal(h.ws.listAwaitingHuman({ tenantId: 'tenant-a' }).length, 0, 'and it is not left to be re-swept every tick');
+});
