@@ -188,7 +188,12 @@ export class WorkflowService {
       nodes:         merged.nodes,
       edges:         merged.edges,
       errorHandling: merged.errorHandling,
-      ...(patch.outcome !== undefined ? { outcome: patch.outcome } : {}),
+      // Retracting the outcome must also drop the spec version back to 1 —
+      // otherwise the row claims version 2 with no contract in it, and the next
+      // reader has to guess which of the two is lying.
+      ...(patch.outcome !== undefined
+        ? { outcome: patch.outcome, specVersion: patch.outcome ? 2 : 1 }
+        : {}),
     }, { userId, message: patch.message ?? null });
     if (!updated) return { ok: false, error: 'Update did not persist.', code: 'UPDATE_FAILED' };
 

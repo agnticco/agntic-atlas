@@ -35,6 +35,14 @@ import { NodeTypeRegistry }         from '../../src/workflows/node-type-registry
 import { registerBuiltInNodeTypes } from '../../src/workflows/node-types/index.js';
 import { scoreGap }                 from '../../src/converger/gap-scorer.js';
 
+/** The delivery catalog — the same shape the server's ChannelRegistry exposes. */
+const CHANNELS = [
+  { id: 'slack',         available: true, configSchema: [{ key: 'target' }] },
+  { id: 'slack_dm',      available: true, configSchema: [{ key: 'user' }] },
+  { id: 'gmail_send',    available: true, configSchema: [{ key: 'to' }, { key: 'subject' }] },
+  { id: 'inbox_deliver', available: true, configSchema: [{ key: 'subject' }] },
+];
+
 const validator = new WorkflowValidator({ nodeTypes: registerBuiltInNodeTypes(new NodeTypeRegistry()) });
 
 let failures = 0;
@@ -163,7 +171,26 @@ console.log('PART 1 — hostile SPECS: every assertion must land in a bucket.\n'
 // 6. `complete` must never outrun `publishable`. If the converger thinks a spec
 //    is finished but publish rejects it, the user is in a dead end they cannot
 //    argue their way out of: the builder says done, the save button says no.
+//
+//    THIS CHECK USED TO BE STRUCTURALLY INCAPABLE OF FAILING. It scored the spec
+//    with NO capabilities and validated it with NO channelRegistry — so both
+//    sides were equally blind, and the divergence was invisible BY CONSTRUCTION.
+//    Meanwhile production validates WITH a registry (server.js:542). That is
+//    CLAUDE.md architectural flaw #2 exactly: a check that exercises a
+//    configuration production never uses cannot see the bug production has. The
+//    independent verifier found a real divergence hiding behind it: a `deliver`
+//    to a hallucinated `channel: 'discord'` scored COMPLETE and then failed
+//    publish with UNKNOWN_CHANNEL.
+//
+//    So: validate the way PRODUCTION validates (registry wired), and score the
+//    way the converger scores (catalog handed in) — and, separately, assert the
+//    scorer REFUSES to certify when it has no catalog at all.
 {
+  const prodValidator = new WorkflowValidator({
+    nodeTypes: registerBuiltInNodeTypes(new NodeTypeRegistry()),
+    channelRegistry: { get: (id) => CHANNELS.find(c => c.id === id) ?? null },
+  });
+
   const corpus = [
     spec([{ id: 'd', type: 'deliver', config: { channel: 'slack', target: '#ops' } }],
          { assertions: [{ id: 'a1', kind: 'message_sent', target: 'slack:#ops' }] }),
@@ -172,12 +199,32 @@ console.log('PART 1 — hostile SPECS: every assertion must land in a bucket.\n'
     spec([{ id: 'd', type: 'deliver', config: { channel: 'slack', target: '#nope' } }],
          { assertions: [{ id: 'a1', kind: 'message_sent', target: 'slack:#ops' }] }),
     spec([], { assertions: [{ id: 'a1', kind: 'message_sent', target: 'slack:#ops' }] }),
+    // The one that broke it: a channel that does not exist anywhere.
+    spec([{ id: 'd', type: 'deliver', config: { channel: 'discord', target: '#ops' } }],
+         { assertions: [{ id: 'a1', kind: 'message_sent', target: 'slack:#ops' }] }),
+    spec([{ id: 'ok', type: 'deliver', config: { channel: 'slack', target: '#ops' } },
+          { id: 'no', type: 'deliver', config: { channel: 'discord', target: '#ops' } }],
+         { assertions: [{ id: 'a1', kind: 'message_sent', target: 'slack:#ops' }] }),
   ];
-  const bad = corpus.filter(s => scoreGap(s).complete && !validator.validate(s).ok);
+
+  const bad = corpus.filter(s =>
+    scoreGap(s, { capabilities: { channels: CHANNELS } }).complete && !prodValidator.validate(s).ok);
   bad.length === 0
-    ? ok('complete ⇒ publishable holds across the corpus')
+    ? ok('complete ⇒ publishable holds — scored WITH a catalog, validated the way production validates')
     : fail('THE CONVERGER WOULD RATIFY A SPEC THAT CANNOT PUBLISH',
-           `${bad.length} spec(s) scored complete but failed validation`);
+           `${bad.length} spec(s) scored complete but failed the production validator: ` +
+           bad.map(s => prodValidator.validate(s).errors.map(e => e.code).join('/')).join(' | '));
+
+  // And with NO catalog it must REFUSE to certify, rather than quietly skipping
+  // the channel checks that publish will still perform.
+  const noCatalog = scoreGap(
+    spec([{ id: 'd', type: 'deliver', config: { channel: 'discord', target: '#ops' } }],
+         { assertions: [{ id: 'a1', kind: 'message_sent', target: 'slack:#ops' }] }),
+    { capabilities: {} });
+  !noCatalog.complete
+    ? ok('with no connector catalog the scorer REFUSES to certify (fails closed)')
+    : fail('THE SCORER CERTIFIED A SPEC IT COULD NOT CHECK',
+           'no channel catalog ⇒ UNKNOWN_CHANNEL is skipped, but publish still enforces it');
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

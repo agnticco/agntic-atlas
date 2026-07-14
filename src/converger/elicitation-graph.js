@@ -161,16 +161,31 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
     // unfulfillable is one we must not offer. If that leaves nothing to offer, we
     // ASK — which is the honest answer to an intent we cannot serve.
     const canPromise = assertableConnectors(state.capabilities);
+    const unreachable = new Set();                   // connectors we had to refuse
     const offerable  = (parsed?.candidates ?? []).filter(c => {
       if (!c?.statement) return false;
       if (!canPromise.size) return true;             // unknown catalog — nothing to check against
-      return (c.assertions ?? []).every(a => {
+      const bad = (c.assertions ?? []).filter(a => {
         const { connector } = splitTarget(a?.target);
-        return !connector || canPromise.has(connector);
+        return connector && !canPromise.has(connector);
       });
+      for (const a of bad) unreachable.add(splitTarget(a.target).connector);
+      return bad.length === 0;
     });
 
     const candidates = offerable;
+
+    // AND THE USER IS TOLD WHAT WE REFUSED TO PROMISE.
+    //
+    // Filtering a candidate is legitimate — nothing was agreed yet. Filtering it
+    // WITHOUT SAYING SO is defect #1 relocated from the spec into the candidate
+    // list: the user asked for Notion, a Notion-less candidate was quietly
+    // offered instead, and nobody ever mentioned Notion again. The whole point of
+    // this increment is that a request is never dropped in silence.
+    // (Found by the independent verifier.)
+    const notice = unreachable.size
+      ? `I can't include ${[...unreachable].join(' or ')} — ${unreachable.size > 1 ? 'those connectors are' : 'that connector is'} not connected, so I won't promise something the workflow can't actually do. Connect ${unreachable.size > 1 ? 'them' : 'it'} and I'll add it.`
+      : null;
     if (!candidates.length) {
       // No contract could be drawn from the intent. Do NOT invent one — an
       // outcome nobody agreed to is worse than none, because every later turn is
@@ -184,7 +199,9 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
       if ((state.clarifications ?? []).length >= 2) {
         return { draft: { ...state.draft, outcome: null }, phase: 'analyzing' };
       }
-      const q = 'What should be true once this has run? (e.g. "every UPS email is summarized into #logistics")';
+      const q = notice
+        ? `${notice} What should this workflow do with what IS connected?`
+        : 'What should be true once this has run? (e.g. "every UPS email is summarized into #logistics")';
       const answer = await interrupt({ type: 'clarification', question: q, step: state.step });
       return {
         clarifications:  [{ q, a: answer?.answer ?? String(answer) }],
@@ -197,6 +214,8 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
     const confirmation = await interrupt({
       type:       'outcome_check',
       candidates,
+      notice,                                         // what we refused to promise, and why
+
       // Every interrupt carries a default (§11.9). The first candidate is the
       // model's best guess, and it is pre-selected.
       choices:    candidates.map((c, i) => ({
@@ -590,7 +609,25 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
   graph.addNode('ratify', async (state) => {
     const spec = assembleSpec(state.draft);
 
-    const confirmation = await interrupt({ type: 'ratify', spec, step: state.step });
+    // WHAT STILL BLOCKS PUBLISH TRAVELS WITH THE DRAFT.
+    //
+    // The gaps node falls through to `ratifying` when the propose loop cannot
+    // close a blocking gap within its bounds — which is the right call (a loop
+    // that cannot converge must end in a question, not a spin). But it used to
+    // arrive here silently, so the user was shown a finished-looking workflow and
+    // discovered only on clicking Publish that it could not be saved, with no
+    // explanation of what to do. Ship the reason with the draft.
+    // (Found by the independent verifier.)
+    const score    = scoreGap(state.draft, { capabilities: state.capabilities });
+    const blockers = unansweredGaps(score).map(g => ({
+      code: g.code, message: g.message, hint: g.hint, nodeId: g.nodeId,
+    }));
+
+    const confirmation = await interrupt({
+      type: 'ratify', spec, step: state.step,
+      publishable: blockers.length === 0,
+      blockers,
+    });
 
     const logEntry = { step: state.step, type: 'ratify', spec, confirmation };
 

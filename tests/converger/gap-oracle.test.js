@@ -1,7 +1,7 @@
 /**
  * The gap oracle — P12 Increment C.
  *
- * scoreGap() over crafted specs. This is the file the gate names, and the five
+ * score() over crafted specs. This is the file the gate names, and the five
  * cases it names are the five defects Increment C exists to kill:
  *
  *   unsatisfied assertion · table gap · UNIQUE overlap · non-exhaustive branch ·
@@ -29,6 +29,21 @@ import { analyzeTable }             from '../../src/workflows/decision-analysis.
 import { satisfiesAssertion, nodeEffect, checkOutcome } from '../../src/workflows/outcome-oracle.js';
 
 const validator = () => new WorkflowValidator({ nodeTypes: registerBuiltInNodeTypes(new NodeTypeRegistry()) });
+
+/**
+ * ALWAYS score with the delivery catalog — because that is what production does
+ * (builder.js hands the converger `capabilities.channels`, and server.js:542
+ * validates WITH a ChannelRegistry).
+ *
+ * Scoring without one was CLAUDE.md architectural flaw #2 in miniature: the gap
+ * scorer and the test's validator were BOTH blind to channels, so a spec
+ * delivering to a hallucinated `channel: 'discord'` scored complete and the test
+ * could not see that publish would reject it. A unit test that hand-passes what
+ * production omits — or omits what production passes — cannot see that class of
+ * bug by construction. The scorer now REFUSES to certify without a catalog
+ * (CHANNELS_UNVERIFIED), and these tests exercise the shape the app really runs.
+ */
+const score = (spec, caps = CAPS) => scoreGap(spec, { capabilities: caps });
 
 const codes = (result) => result.gaps.map(g => g.code);
 const has   = (result, code) => codes(result).includes(code);
@@ -76,7 +91,7 @@ describe('the control: a good spec is COMPLETE and PUBLISHABLE', () => {
   // Without this, every test below would pass if scoreGap simply rejected
   // everything — which is the exact way a guard ships broken behind a green run.
   test('a well-formed v2 spec has no unanswered gaps and validates', () => {
-    const result = scoreGap(goodSpec());
+    const result = score(goodSpec());
     assert.deepEqual(unansweredGaps(result), [], 'a correct spec must have NO unanswered gaps');
     assert.equal(result.complete, true);
     assert.equal(validator().validate(goodSpec()).ok, true);
@@ -100,7 +115,7 @@ describe('the control: a good spec is COMPLETE and PUBLISHABLE', () => {
       ],
       edges: [],
     };
-    const result = scoreGap(spec, { capabilities: CAPS });
+    const result = score(spec);
     assert.equal(result.complete, true, 'a 2-node workflow that meets its outcome is finished');
     assert.equal(result.gaps.some(g => /processing|llm|ai step/i.test(g.message)), false,
       'nothing may demand a processing node');
@@ -130,19 +145,19 @@ describe('a delivery channel declares its OWN config keys', () => {
   });
 
   test('an Airtable delivery validates when the channel declares baseId/tableId', () => {
-    const result = scoreGap(airtableSpec({
+    const result = score(airtableSpec({
       channel: 'airtable_create_record', baseId: 'app1', tableId: 'Leads', fields: { Name: 'x' },
-    }), { capabilities: CAPS });
+    }));
     assert.equal(result.complete, true,
       `a valid Airtable delivery must publish; got: ${codes(result).join(', ')}`);
   });
 
   test('…and a key NO channel declares is still rejected', () => {
     // The fix narrows a LIE in the schema; it does not widen the check.
-    const result = scoreGap(airtableSpec({
+    const result = score(airtableSpec({
       channel: 'airtable_create_record', baseId: 'app1', tableId: 'Leads', fields: { Name: 'x' },
       model: 'claude-opus-4-5',
-    }), { capabilities: CAPS });
+    }));
     assert.ok(has(result, 'UNKNOWN_CONFIG_KEY'));
   });
 
@@ -150,9 +165,9 @@ describe('a delivery channel declares its OWN config keys', () => {
     // The contract names a destination. Writing somewhere else is not "close
     // enough" — it is the promise going unmet, quietly, which is defect #1 in
     // its subtler form.
-    const result = scoreGap(airtableSpec({
+    const result = score(airtableSpec({
       channel: 'airtable_create_record', baseId: 'app1', tableId: 'Archive', fields: { Name: 'x' },
-    }), { capabilities: CAPS });
+    }));
     assert.ok(has(result, 'UNSATISFIED_ASSERTION'));
   });
 });
@@ -179,7 +194,7 @@ describe('outcome gaps: an assertion no node satisfies', () => {
   });
 
   test('the promised-but-missing delivery is reported as an OUTCOME gap', () => {
-    const result = scoreGap(slackAndEmail());
+    const result = score(slackAndEmail());
     assert.ok(has(result, 'UNSATISFIED_ASSERTION'));
     const gap = result.gaps.find(g => g.code === 'UNSATISFIED_ASSERTION');
     assert.equal(gap.class, 'outcome');
@@ -198,7 +213,7 @@ describe('outcome gaps: an assertion no node satisfies', () => {
     spec.nodes.push({ id: 'mail', type: 'deliver', label: 'Email rep',
                       config: { channel: 'gmail_send', to: 'rep@acme.com' } });
     spec.edges.push({ from: 'draft', to: 'mail' });
-    const result = scoreGap(spec);
+    const result = score(spec);
     assert.equal(has(result, 'UNSATISFIED_ASSERTION'), false);
     assert.equal(result.complete, true);
     assert.equal(validator().validate(spec).ok, true);
@@ -209,7 +224,7 @@ describe('outcome gaps: an assertion no node satisfies', () => {
     // the delivery it asked for: the contract reports met, and nobody tested it.
     const spec = goodSpec();
     spec.outcome.assertions.push({ id: 'a2', kind: 'vibes_improved', target: 'slack:#ops' });
-    const result = scoreGap(spec);
+    const result = score(spec);
     assert.ok(has(result, 'MALFORMED_ASSERTION'));
     assert.equal(result.complete, false);
     assert.ok(errorCodes(spec).includes('MALFORMED_ASSERTION'));
@@ -230,7 +245,7 @@ describe('outcome gaps: an assertion no node satisfies', () => {
       ],
       edges: [{ from: 'save', to: 'out' }],
     };
-    const result = scoreGap(spec);
+    const result = score(spec);
     const gap = result.gaps.find(g => g.code === 'UNSATISFIED_ASSERTION');
     assert.ok(gap, 'a record created without a promised field does not meet the promise');
     assert.match(gap.message, /Budget/);
@@ -251,7 +266,7 @@ describe('outcome gaps: an assertion no node satisfies', () => {
       ],
       edges: [{ from: 'save', to: 'out' }],
     };
-    assert.equal(has(scoreGap(spec), 'UNSATISFIED_ASSERTION'), false);
+    assert.equal(has(score(spec), 'UNSATISFIED_ASSERTION'), false);
   });
 });
 
@@ -276,7 +291,7 @@ describe('coverage gaps: a branch with no catch-all', () => {
   });
 
   test('no `*` case → a coverage gap that BLOCKS publish', () => {
-    const result = scoreGap(branchSpec([{ when: 'urgent', to: 'urgent' }, { when: 'routine', to: 'normal' }]));
+    const result = score(branchSpec([{ when: 'urgent', to: 'urgent' }, { when: 'routine', to: 'normal' }]));
     assert.ok(has(result, 'NON_EXHAUSTIVE_BRANCH'));
     const gap = result.gaps.find(g => g.code === 'NON_EXHAUSTIVE_BRANCH');
     assert.equal(gap.class, 'coverage');
@@ -285,7 +300,7 @@ describe('coverage gaps: a branch with no catch-all', () => {
   });
 
   test('with a `*` catch-all it is complete — the positive case', () => {
-    const result = scoreGap(branchSpec([{ when: 'urgent', to: 'urgent' }, { when: '*', to: 'normal' }]));
+    const result = score(branchSpec([{ when: 'urgent', to: 'urgent' }, { when: '*', to: 'normal' }]));
     assert.equal(has(result, 'NON_EXHAUSTIVE_BRANCH'), false);
     assert.equal(result.complete, true);
   });
@@ -309,7 +324,7 @@ describe('the moat: an LLM decision input must be a closed enum', () => {
       edges: [{ from: 'score', to: 'post' }],
     };
     assert.ok(errorCodes(spec).includes('LLM_INPUT_NOT_ENUM'), 'THE MOAT — never weaken this');
-    assert.ok(has(scoreGap(spec), 'LLM_INPUT_NOT_ENUM'));
+    assert.ok(has(score(spec), 'LLM_INPUT_NOT_ENUM'));
   });
 
   test('a closed enum with values is ACCEPTED', () => {
@@ -438,7 +453,7 @@ describe('coverage gaps: a decision table with a hole', () => {
       ],
       edges: [{ from: 'score', to: 'post' }],
     };
-    const result = scoreGap(spec);
+    const result = score(spec);
     const gap = result.gaps.find(g => g.code === 'DECISION_TABLE_GAP');
     assert.ok(gap, 'the uncovered `free` tier must be reported before publish');
     assert.equal(gap.class, 'coverage');
@@ -523,7 +538,7 @@ describe('coverage gaps: UNIQUE with overlapping rules', () => {
       ],
       edges: [{ from: 'score', to: 'post' }],
     };
-    const result = scoreGap(spec);
+    const result = score(spec);
     assert.ok(has(result, 'UNIQUE_HIT_OVERLAP'));
     assert.equal(result.complete, false, 'a table that promises one answer and can give two is not complete');
   });
@@ -534,7 +549,7 @@ describe('contract gaps: a config key the engine will silently ignore', () => {
   test('the dead "model" key is a contract gap that blocks', () => {
     const spec = goodSpec();
     spec.nodes[0].config.model = 'claude-opus-4-5';   // a model that does not exist, in no schema
-    const result = scoreGap(spec);
+    const result = score(spec);
     assert.ok(has(result, 'UNKNOWN_CONFIG_KEY'));
     const gap = result.gaps.find(g => g.code === 'UNKNOWN_CONFIG_KEY');
     assert.equal(gap.class, 'contract');
@@ -546,7 +561,7 @@ describe('contract gaps: a config key the engine will silently ignore', () => {
   test('a missing required config is a contract gap', () => {
     const spec = goodSpec();
     spec.nodes[0].config = { mode: 'freeform' };   // freeform with no prompt
-    assert.ok(has(scoreGap(spec), 'MISSING_CONFIG'));
+    assert.ok(has(score(spec), 'MISSING_CONFIG'));
   });
 });
 
@@ -568,7 +583,7 @@ describe('the invariant that keeps `complete` honest', () => {
 
   for (const [label, spec] of corpus) {
     test(`"${label}": complete ⇒ the validator says ok`, () => {
-      const result = scoreGap(spec);
+      const result = score(spec);
       if (result.complete) {
         assert.equal(validator().validate(spec).ok, true,
           `scoreGap called "${label}" complete, but it cannot publish — the converger would ratify a dead end`);
@@ -583,7 +598,7 @@ describe('the invariant that keeps `complete` honest', () => {
     // cannot publish has no run time, so calling it escalated is a lie told in
     // the language of safety.
     for (const [, spec] of corpus) {
-      for (const gap of scoreGap(spec).gaps) {
+      for (const gap of score(spec).gaps) {
         if (gap.blocking) {
           assert.equal(gap.resolution, 'unanswered',
             `a blocking gap (${gap.code}) defaulted to "${gap.resolution}" — it would be silently shipped`);
@@ -596,7 +611,7 @@ describe('the invariant that keeps `complete` honest', () => {
     const spec = goodSpec();
     spec.name = '';                                                        // contract gap
     spec.outcome.assertions.push({ id: 'a2', kind: 'message_sent', target: 'gmail:x@y.com' });  // outcome gap
-    assert.equal(nextGap(scoreGap(spec)).class, 'outcome');
+    assert.equal(nextGap(score(spec)).class, 'outcome');
   });
 });
 
@@ -661,7 +676,7 @@ describe('NO_ERROR_PATH: the one question every workflow needs asked', () => {
   // defect #5 ("the converger never asked a single exception question") was
   // riding on a line no test could see.
   test('a workflow where nothing says what happens on failure is ASKED about it', () => {
-    const result = scoreGap(goodSpec());
+    const result = score(goodSpec());
     const gap = result.gaps.find(g => g.code === 'NO_ERROR_PATH');
     assert.ok(gap, 'the most basic exception question there is must actually get asked');
     assert.equal(gap.severity, 'warning');
@@ -676,11 +691,11 @@ describe('NO_ERROR_PATH: the one question every workflow needs asked', () => {
     // a question people learn to click past.
     const spec = goodSpec();
     spec.nodes[0].on_error = { then: 'retry', attempts: 2 };
-    assert.equal(has(scoreGap(spec), 'NO_ERROR_PATH'), false);
+    assert.equal(has(score(spec), 'NO_ERROR_PATH'), false);
   });
 
   test('an EMPTY draft is not asked about error paths — it has no steps to fail', () => {
-    const result = scoreGap({ version: 2, name: '', triggers: [], nodes: [], edges: [] });
+    const result = score({ version: 2, name: '', triggers: [], nodes: [], edges: [] });
     assert.equal(has(result, 'NO_ERROR_PATH'), false);
     assert.equal(result.complete, false, 'but an empty draft is emphatically NOT complete');
   });
@@ -691,7 +706,7 @@ describe('a gap carries the validator\'s own message, hint and nodeId', () => {
   test('a spec-level gap has nodeId null and keeps the validator\'s hint', () => {
     const spec = goodSpec();
     spec.outcome.assertions.push({ id: 'a2', kind: 'message_sent', target: 'gmail:x@y.com' });
-    const gap = scoreGap(spec).gaps.find(g => g.code === 'UNSATISFIED_ASSERTION');
+    const gap = score(spec).gaps.find(g => g.code === 'UNSATISFIED_ASSERTION');
     assert.equal(gap.nodeId, null, 'undefined is not null — the UI highlights on `nodeId === null`');
     assert.ok(gap.hint, 'the propose prompt is fed the HINT; drop it and the model is told what is wrong but not how to fix it');
     assert.match(gap.id, /_spec_/, 'a gap with no node still needs a stable id');
@@ -700,7 +715,7 @@ describe('a gap carries the validator\'s own message, hint and nodeId', () => {
   test('a gap with no hint reports null, not undefined', () => {
     const spec = goodSpec();
     spec.nodes.push({ id: 'summarize', type: 'llm', config: { mode: 'summarize' } });   // duplicate id — a hintless rule
-    const gap = scoreGap(spec).gaps.find(g => g.code === 'DUPLICATE_NODE_ID');
+    const gap = score(spec).gaps.find(g => g.code === 'DUPLICATE_NODE_ID');
     assert.ok(gap);
     assert.equal(gap.hint, null);
   });
@@ -728,7 +743,7 @@ describe('an UNDECIDABLE decision table, through scoreGap', () => {
   });
 
   test('an unbounded input is reported as UNDECIDABLE and BLOCKS', () => {
-    const result = scoreGap(undecidableSpec());
+    const result = score(undecidableSpec());
     const gap = result.gaps.find(g => g.code === 'DECISION_UNDECIDABLE');
     assert.ok(gap, 'a table nobody can prove complete must not pass silently');
     assert.equal(gap.severity, 'error');
@@ -742,7 +757,7 @@ describe('an UNDECIDABLE decision table, through scoreGap', () => {
   });
 
   test('a CATCH-ALL downgrades it to escalatable — the one honest resolution', () => {
-    const result = scoreGap(undecidableSpec([{ when: { subject: '-' }, then: 'triage' }]));
+    const result = score(undecidableSpec([{ when: { subject: '-' }, then: 'triage' }]));
     const gap = result.gaps.find(g => g.code === 'DECISION_UNDECIDABLE');
     assert.ok(gap);
     assert.equal(gap.severity, 'warning');
@@ -765,7 +780,7 @@ describe('an UNDECIDABLE decision table, through scoreGap', () => {
       ],
       edges: [{ from: 'score', to: 'post' }],
     };
-    const gap = scoreGap(spec).gaps.find(g => g.code === 'DECISION_BAD_CONDITION');
+    const gap = score(spec).gaps.find(g => g.code === 'DECISION_BAD_CONDITION');
     assert.ok(gap);
     assert.equal(gap.blocking, true);
     assert.equal(gap.resolution, 'unanswered');
@@ -791,7 +806,7 @@ describe('an UNDECIDABLE decision table, through scoreGap', () => {
       ],
       edges: [{ from: 'score', to: 'post' }],
     };
-    const result = scoreGap(spec);
+    const result = score(spec);
     assert.ok(has(result, 'UNIQUE_HIT_OVERLAP'),
       `a UNIQUE table under config must still be checked for overlap; got: ${codes(result).join(', ')}`);
     assert.equal(result.complete, false);
@@ -816,7 +831,7 @@ describe('an UNDECIDABLE decision table, through scoreGap', () => {
       ],
       edges: [{ from: 'score', to: 'post' }],
     };
-    const gaps = scoreGap(spec).gaps.filter(g => g.code === 'DECISION_TABLE_GAP');
+    const gaps = score(spec).gaps.filter(g => g.code === 'DECISION_TABLE_GAP');
     const more = gaps.find(g => /further uncovered/.test(g.message));
     assert.ok(more, 'the un-listed holes must still be counted out loud');
     assert.match(more.message, /4 further/);
@@ -836,7 +851,7 @@ describe('an UNDECIDABLE decision table, through scoreGap', () => {
       ],
       edges: [{ from: 'score', to: 'post' }],
     };
-    const gaps = scoreGap(spec).gaps.filter(g => g.code === 'DECISION_TABLE_GAP');
+    const gaps = score(spec).gaps.filter(g => g.code === 'DECISION_TABLE_GAP');
     assert.equal(gaps.length, 1, 'one hole, one gap');
     assert.equal(gaps.some(g => /further uncovered/.test(g.message)), false,
       '"0 further uncovered combinations" is a message that must never be shown');
@@ -892,7 +907,7 @@ describe('complete ⇒ publishable, through WorkflowService + WorkflowStore', ()
   test('a spec the scorer calls COMPLETE actually publishes', () => {
     // If this ever fails the converger is ratifying a dead end: the builder says
     // "done", the save button says no, and the user has no way to argue.
-    assert.equal(scoreGap(contract()).complete, true);
+    assert.equal(score(contract()).complete, true);
   });
 
   test('…and it survives create() → SQLite → get(), outcome and all', async () => {

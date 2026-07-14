@@ -549,11 +549,7 @@ export class WorkflowValidator {
         // its value set, which is exactly the discipline that keeps the
         // completeness proof true.
         const mode = String(src.config?.mode ?? 'freeform').toLowerCase();
-        const closedDomain =
-          (src.type === 'llm' && mode === 'classify') ||
-          src.type === 'decision' ||
-          src.type === 'human';
-        if (closedDomain) continue;
+        if (closedDomainOf(src)) continue;
 
         const what = src.type === 'llm'
           ? `an AI step in ${mode} mode — it emits free text`
@@ -563,6 +559,44 @@ export class WorkflowValidator {
           message: `"${node.label || node.id}" routes on "${src.label || src.id}", ${what}, so the cases can never be proven to cover every value it might produce — an unanticipated one would fall through to the catch-all and the workflow would silently do nothing.`,
           nodeId: node.id, field: 'config.on',
           hint: `A branch may only route on a value with a closed, declared set of possibilities: an AI step in "classify" mode (list its categories), a decision table, or a human approval. Put a classify step in front of "${src.id}" and route on that.`,
+        });
+      }
+    }
+
+    // ── BRANCH_CASE_NOT_IN_ENUM ───────────────────────────────────────────
+    //
+    // We forced the routed-on value into a CLOSED ENUM (that is the moat) — and
+    // then never checked the cases against it. A branch whose cases name values
+    // the classifier CANNOT PRODUCE ("HIGH" when the categories are
+    // urgent|normal) matches nothing, so the mandatory catch-all swallows 100% of
+    // traffic — forever, silently, with `run_completed` — while the converger
+    // told the user the workflow was finished. That is verbatim the failure
+    // BRANCH_BAD_ON exists to prevent, reached through the case VALUES instead of
+    // the `on` reference.
+    //
+    // Making the domain closed is only half the job: the point of a closed domain
+    // is that membership becomes DECIDABLE. Not deciding it is a completeness
+    // claim we did not check. (Found by the independent verifier.)
+    for (const node of nodes) {
+      if (node?.type !== 'branch') continue;
+      const onRef = String(node.config?.on ?? '').trim().replace(/^\{\{\s*|\s*\}\}$/g, '').trim();
+      const onId  = /^([a-z0-9_-]+)(?:\.output)?$/i.exec(onRef)?.[1] ?? null;
+      const src   = onId ? byId.get(onId) : null;
+      if (!src) continue;
+
+      const domain = closedDomainOf(src);
+      if (!domain) continue;   // not a closed-domain source — LLM_INPUT_NOT_ENUM already fired
+
+      const known = new Set(domain.map(v => String(v).trim().toLowerCase()));
+      for (const c of normalizeCases(node.config?.cases)) {
+        const when = String(c?.when ?? '').trim();
+        if (!when || when === CATCH_ALL) continue;
+        if (known.has(when.toLowerCase())) continue;
+        issues.push({
+          severity: 'error', code: 'BRANCH_CASE_NOT_IN_ENUM',
+          message: `"${node.label || node.id}" has a case for "${when}", but "${src.label || src.id}" can only ever produce: ${domain.join(', ')}. That case can never match, so everything would fall through to the catch-all.`,
+          nodeId: node.id, field: 'config.cases',
+          hint: `Use one of: ${domain.join(', ')} — or add "${when}" to "${src.id}"'s list of possible answers.`,
         });
       }
     }
@@ -947,4 +981,53 @@ export class WorkflowValidator {
     const warnings = issues.filter(i => i.severity === 'warning');
     return { ok: errors.length === 0, errors, warnings, issues };
   }
+}
+
+/**
+ * The CLOSED SET OF VALUES a node can emit — or `null` if its domain is open.
+ *
+ * ONE definition, used by both branch rules: the allowlist that decides whether a
+ * branch may route on this node at all (LLM_INPUT_NOT_ENUM), and the check that
+ * its cases name values the node can actually produce (BRANCH_CASE_NOT_IN_ENUM).
+ * Two copies of "what can this node emit?" would drift, and a drift here means
+ * one rule believes the domain is closed while the other does not — which is how
+ * a branch ends up validated against an enum nobody enforced.
+ *
+ * A node type earns its place here by DECLARING its possible values. That is the
+ * whole discipline behind the completeness proof (converger-v2 §11.7): if you add
+ * a source whose values are not declarable, you have not extended the moat — you
+ * have deleted it.
+ */
+function closedDomainOf(node) {
+  if (!node || typeof node !== 'object') return null;
+
+  if (node.type === 'llm') {
+    const mode = String(node.config?.mode ?? 'freeform').toLowerCase();
+    if (mode !== 'classify') return null;
+    const cats = parseEnumList(node.config?.categories);
+    return cats.length >= 2 ? cats : null;
+  }
+
+  // decision (Increment E) — the output enum.
+  if (node.type === 'decision') {
+    const out = node.output ?? node.config?.output;
+    const vals = Array.isArray(out?.values) ? out.values.filter(v => v != null).map(String) : [];
+    return vals.length >= 2 ? vals : null;
+  }
+
+  // human (Increment D) — approve / reject, plus the timeout the engine can inject.
+  if (node.type === 'human') {
+    const declared = parseEnumList(node.config?.decisions);
+    const base = declared.length ? declared : ['approve', 'reject'];
+    return [...new Set([...base, 'timeout'])];
+  }
+
+  return null;
+}
+
+/** A declared value list may arrive newline-separated, comma-separated, or as an array. */
+function parseEnumList(v) {
+  if (Array.isArray(v)) return v.map(String).map(s => s.trim()).filter(Boolean);
+  if (typeof v !== 'string') return [];
+  return v.split(/[\n,]/).map(s => s.trim()).filter(Boolean);
 }

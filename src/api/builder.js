@@ -1068,6 +1068,25 @@ Rules:
       capabilities.knowledgeUploads = uploadSources.map(s => s.name || s.path);
     } catch { /* non-fatal — converger still works with empty capabilities */ }
 
+    // THE CHANNEL CATALOG IS NOT OPTIONAL.
+    //
+    // Everything above runs inside one try whose catch is "non-fatal" — but it is
+    // network-bound (three connector `resolveForTenant` calls), and the catalog is
+    // assigned near the END of it. So an expired refresh token or a rate limit
+    // left `capabilities.channels` UNSET, which silently switched off the
+    // converger's ability to check that a delivery channel exists at all
+    // (gap-scorer: CHANNELS_UNVERIFIED). The guard disappeared exactly when it was
+    // most needed: with no catalog, the model has none in its prompt either, so it
+    // is at its most likely to invent one.
+    //
+    // The registry is LOCAL and cannot fail for network reasons, so there is
+    // always a catalog to fall back to. An unannotated one is worse than the
+    // scope-aware one above — but it is infinitely better than none, because none
+    // means the check does not run. (Found by the independent verifier.)
+    if (!Array.isArray(capabilities.channels) || !capabilities.channels.length) {
+      try { capabilities.channels = spine.engine.channelRegistry.getAll(); } catch { /* registry itself is down */ }
+    }
+
     // Query RAG for knowledge relevant to this intent so the converger's LLM
     // calls can see what's actually in the knowledge base (not just folder names).
     if (intent) {
