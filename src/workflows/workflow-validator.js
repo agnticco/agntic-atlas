@@ -1296,6 +1296,35 @@ export class WorkflowValidator {
     // refused. (Found by the independent verifier.)
     if (node.type === 'connector-action' || node.type === 'deliver') {
       const f = cfg.fields;
+      // A STRING `fields` — templated OR plain JSON — is refused. (P12 Increment F,
+      // round 3.)
+      //
+      // The templated form was already refused: its column names are chosen by a model
+      // at RUN time, where nothing can check them. The PLAIN JSON string looked
+      // harmless and was worse, because it defeated every column guard while looking
+      // checked: the converger's harvest, its rewrite and its re-check each asked
+      // `typeof fields === 'object'` in a separate hand-copied line, and all three
+      // failed open on a string. So the destination was resolved, the base id written
+      // in — and the columns were never looked at. It published; Airtable silently
+      // discarded the invented column; the record was created with it empty.
+      //
+      // And the outcome oracle could not save it: it parses a string `fields` now, so
+      // the assertion is CHECKED against the node — but the node's invented column
+      // names and the assertion's invented column names HAVE THE SAME AUTHOR, so the
+      // check is trivially self-satisfied. Fail-open-and-silent became
+      // fail-open-and-confident. (Found by the independent verifier.)
+      //
+      // This check's own reasoning already settles it: the correct shape now EXISTS
+      // ({{step.field}} landed this increment), so the uncheckable one can be refused.
+      // An object is the only shape whose columns anything in this system can see.
+      if (typeof f === 'string' && !/\{\{/.test(f)) {
+        issues.push({
+          severity: 'error', code: 'UNCHECKABLE_WRITE_FIELDS',
+          message: `"${node.label || node.id}" writes its record as a block of JSON text, so its column names can't be checked against the table — a column that doesn't exist is silently ignored, leaving it empty with no error.`,
+          nodeId: node.id, field: 'config.fields',
+          hint: 'Write it as an object: { "Name": "{{extract.name}}", "Deal Size": "{{extract.budget}}" }. One template per column.',
+        });
+      }
       if (typeof f === 'string' && /\{\{/.test(f)) {
         issues.push({
           severity: 'error', code: 'UNCHECKABLE_WRITE_FIELDS',
@@ -1303,15 +1332,6 @@ export class WorkflowValidator {
           nodeId: node.id, field: 'config.fields',
           hint: 'Write the columns out: { "Name": "{{extract.name}}", "Deal Size": "{{extract.budget}}" }. One template per column, not one template for the whole record.',
         });
-      } else if (typeof f === 'string') {
-        try { JSON.parse(f); } catch {
-          issues.push({
-            severity: 'error', code: 'UNCHECKABLE_WRITE_FIELDS',
-            message: `"${node.label || node.id}" has a record whose fields can't be read — it isn't valid JSON, so it would fail at run time.`,
-            nodeId: node.id, field: 'config.fields',
-            hint: 'Use an object: { "Name": "{{extract.name}}" }.',
-          });
-        }
       }
     }
 

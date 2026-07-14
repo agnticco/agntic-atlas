@@ -232,12 +232,24 @@ describe('a template naming a field the step does not produce is caught', () => 
     assert.deepEqual(validator.validate(freeform).errors.map(e => e.code), []);
   });
 
-  test('a `fields` string that is not valid JSON is caught, and says so', () => {
-    const e = errsOn({ action: 'airtable_create_record', baseId: 'appX', tableId: 'Leads', fields: 'Name, Budget' })
-      .find(x => x.code === 'UNCHECKABLE_WRITE_FIELDS');
-    assert.ok(e, 'a record whose fields cannot be read would fail at run time');
-    assert.match(e.message, /can't be read|valid JSON/i,
-      'and the message must name the real problem — this arm is NOT the templated-columns one');
+  test('a `fields` STRING is refused — even when it is perfectly valid JSON', () => {
+    // THE ROUND-3 BLOCKER. The Airtable handler parses a JSON-string `fields`, and the
+    // converger's harvest, its rewrite and its RE-CHECK each asked
+    // `typeof fields === 'object'` in a separate hand-copied line — so all three failed
+    // open on a string. The destination was resolved, the base id written in, and the
+    // COLUMNS WERE NEVER LOOKED AT. It published; Airtable silently discarded the
+    // invented column; the record was created with it empty. Forever.
+    //
+    // The outcome oracle could not save it either: it parses a string `fields` now, so
+    // the assertion IS checked against the node — but the node's invented columns and
+    // the assertion's invented columns HAVE THE SAME AUTHOR, so the check is trivially
+    // self-satisfied. Fail-open-and-silent became fail-open-and-CONFIDENT.
+    //
+    // The correct shape now exists, so the uncheckable one is refused.
+    for (const f of ['{"Name":"x","Budget":"y"}', 'Name, Budget', '{{extract.output}}']) {
+      const codes = codesOn({ action: 'airtable_create_record', baseId: 'appX', tableId: 'Leads', fields: f });
+      assert.ok(codes.includes('UNCHECKABLE_WRITE_FIELDS'), `a string fields must be refused: ${f} → ${codes.join(', ')}`);
+    }
   });
 });
 

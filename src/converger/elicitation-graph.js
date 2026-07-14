@@ -138,6 +138,40 @@ function rewriteAssertionFields(outcome, renames, columns) {
 }
 
 /**
+ * A write node's columns, whatever shape they were written in.
+ *
+ * `fields` can arrive as an OBJECT or as a JSON STRING — the Airtable handler parses
+ * a string (`typeof fields === 'string' ? JSON.parse(fields)`) and the capability's
+ * own schema advertises the textarea form. And THREE separate guards each asked
+ * `typeof fields === 'object'` in their own hand-copied line:
+ *
+ *   · the harvest   — what the mapper is asked to map
+ *   · the rewrite   — what gets the real columns written into it
+ *   · the RE-CHECK  — the fix for the previous blocker
+ *
+ * Every one of them FAILED OPEN on a string. So a JSON-string `fields` was resolved
+ * (base id written in) and its columns were never looked at: the spec published,
+ * Airtable silently discarded the invented column, and the record was created with
+ * it empty. `run_completed`. Forever.
+ *
+ * Worse, the previous round's fix made the oracle PARSE a string `fields` — which was
+ * right on its own terms and made the shape pass MORE checks, all of them trivially
+ * self-satisfied, because the node's invented column names and the assertion's
+ * invented column names HAVE THE SAME AUTHOR. Fail-open-and-silent became
+ * fail-open-and-CONFIDENT. (Found by the independent verifier.)
+ *
+ * Three call sites with one copied predicate is exactly how that happens. There is one
+ * reader now, and the writer NORMALISES the string away.
+ */
+function readFields(config) {
+  let f = config?.fields;
+  if (typeof f === 'string') {
+    try { f = JSON.parse(f); } catch { return null; }
+  }
+  return f && typeof f === 'object' && !Array.isArray(f) ? f : null;
+}
+
+/**
  * Write the resolved destination into every node that needed one.
  *
  * `columnsRead` is the load-bearing argument. When we HAVE read the table's columns,
@@ -163,7 +197,9 @@ function fillDestination(nodes, { baseId, tableId, fields, columnsRead = false }
     if (tableId) config.tableId = tableId;
     // Only touch `fields` where the node HAS them (a create/update). A search or a
     // delete has none, and inventing some would be a config key nothing reads.
-    if (columnsRead && config.fields && typeof config.fields === 'object') {
+    // NORMALISES the string form away: what goes back is always an object, so every
+    // later reader (and every later guard) sees the same shape.
+    if (columnsRead && readFields(config)) {
       config.fields = fields ?? {};
     }
     return { ...n, config };
@@ -188,8 +224,8 @@ async function mapFieldsToColumns({ llm, sessionId, nodes, columns, outcome, tab
   const none = { fields: null, renames: {}, unmapped: [] };
   const wanted = {};
   for (const n of nodes) {
-    const f = n?.config?.fields;
-    if (f && typeof f === 'object' && !Array.isArray(f)) Object.assign(wanted, f);
+    const f = readFields(n?.config);
+    if (f) Object.assign(wanted, f);
   }
   if (!Object.keys(wanted).length || !columns.length) return none;
 
@@ -892,9 +928,13 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
     const cached = state.destination;
     if (cached?.columns) {
       const real = new Set(cached.columns.map(c => String(c.name).toLowerCase()));
-      const drifted = airtableNodes.some(n =>
-        n.config?.fields && typeof n.config.fields === 'object' &&
-        Object.keys(n.config.fields).some(k => !real.has(String(k).toLowerCase())));
+      const drifted = airtableNodes.some((n) => {
+        const f = readFields(n.config);
+        // A `fields` we cannot read AT ALL is drift too: it is a write whose columns
+        // nobody has checked, which is the whole thing we are guarding against.
+        if (!f) return typeof n.config?.fields === 'string';
+        return Object.keys(f).some(k => !real.has(String(k).toLowerCase()));
+      });
       if (!drifted) return { phase: 'gapping' };
 
       // A column crept back in. Re-map against the columns we already read, and
