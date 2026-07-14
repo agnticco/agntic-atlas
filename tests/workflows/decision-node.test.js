@@ -579,6 +579,63 @@ describe('a `from` says WHICH way it failed — the two paths are not interchang
   });
 });
 
+// ── 6c. The two guards added in the FIX for the adversary's findings ────────
+//
+// Both SURVIVED the curated mutation-guard when the fix first landed — i.e. each
+// could be deleted with the whole suite still green. Mutation-test the guards you
+// add in the FIX, not just the ones you started with (CLAUDE.md, Increment B).
+
+describe('a comma list must name only DECLARED values', () => {
+  test('"urgent, bogus" is an unreadable condition, not a rule that quietly covers half of what it says', () => {
+    // Without this, the undeclared member is silently dropped: the rule covers
+    // `urgent` alone while its author believes it covers both — and the SAME typo,
+    // alone, is correctly a hard error. A rule is unreadable if ANY part of it is.
+    const t = {
+      inputs: [{ key: 'tone', type: 'enum', values: ['urgent', 'calm'] }],
+      output: { key: 'p', type: 'enum', values: ['P1', 'P3'] },
+      hitPolicy: 'FIRST',
+      rules: [{ when: { tone: 'urgent, bogus' }, then: 'P1' }, { when: { tone: '-' }, then: 'P3' }],
+    };
+    const res = validator.validate(spec(t));
+    assert.ok(res.errors.some(e => e.code === 'DECISION_BAD_CONDITION'),
+      `a list with an undeclared member must surface; got: ${res.issues.map(i => i.code).join(', ')}`);
+  });
+
+  test('POSITIVE: a list of DECLARED values is accepted (the check is not "reject every list")', () => {
+    const t = {
+      inputs: [{ key: 'tone', type: 'enum', values: ['urgent', 'angry', 'calm'] }],
+      output: { key: 'p', type: 'enum', values: ['P1', 'P3'] },
+      hitPolicy: 'FIRST',
+      rules: [{ when: { tone: 'urgent, angry' }, then: 'P1' }, { when: { tone: '-' }, then: 'P3' }],
+    };
+    assert.equal(validator.validate(spec(t)).ok, true);
+  });
+});
+
+describe('an EMPTY extracted field says so, in those words', () => {
+  test('a null from an `extract` step names the real problem', async () => {
+    // Every type already throws on a null by some other route ("not one of its
+    // declared values" for an enum, "needs a number" for a number) — so this guard
+    // is invisible to a test that only asserts THAT it throws. It exists for WHAT
+    // it says: `llm` mode `extract` returns null for a field it could not find
+    // (llm.js's own system prompt says so), and telling the user their input "is
+    // \"null\", which is not one of calm, urgent" sends them to look for a bug in
+    // the wrong place. The message IS the behaviour here.
+    const t = {
+      inputs: [{ key: 'tone', type: 'enum', values: ['calm', 'urgent'], from: 'extract.tone' }],
+      output: { key: 'p', type: 'enum', values: ['P1', 'P3'] },
+      hitPolicy: 'FIRST',
+      rules: [{ when: { tone: 'urgent' }, then: 'P1' }, { when: { tone: '-' }, then: 'P3' }],
+    };
+    const ctx = ctxWith(null, { outputs: new Map([['extract', { tone: null }]]) });
+    await assert.rejects(() => run(t, ctx), (err) => {
+      assert.match(err.message, /came back empty/, `got: ${err.message}`);
+      assert.match(err.message, /tone/);
+      return true;
+    });
+  });
+});
+
 // ── 7. A branch may route on a decision — and only on a single-hit one ──────
 
 describe('the branch allowlist (closedDomainOf)', () => {

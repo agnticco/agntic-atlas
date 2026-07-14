@@ -51,6 +51,10 @@ const SUITES = [
   // is exactly how a guard ends up pinned by nothing (CLAUDE.md, Increment D:
   // the Slack/email surface).
   'tests/workflows/decision-node.test.js',
+  // The six defects the test-adversary + the verifier found in Increment E, now
+  // fixed. These are the suites that pin them.
+  'tests/workflows/decision-adversarial.test.js',
+  'tests/workflows/decision-pinning.test.js',
 ];
 
 /**
@@ -183,6 +187,41 @@ const MUTATIONS = [
   { file: 'src/workflows/node-types/human.js',
     name: 'human defaults to approved when no decision was given',
     find: '    if (!provided || !provided.decision) {', repl: '    if (false) {' },
+
+  // ── P12 Increment E: the six defects the test-adversary and the verifier found ──
+  // Every one reached candidate state behind a green suite, and three of them were
+  // SILENT — the workflow reported success while doing the wrong thing. They are
+  // history now, which is exactly what this list is for.
+  { file: 'src/workflows/node-types/foreach.js',
+    name: 'CONTROL_SUBSTEP_TYPES loses `decision` (the decided VALUE delivered to the customer, once per row)',
+    find: "const CONTROL_SUBSTEP_TYPES = new Set(['branch', 'human', 'decision']);",
+    repl: "const CONTROL_SUBSTEP_TYPES = new Set(['branch', 'human']);" },
+  { file: 'src/workflows/node-types/foreach.js',
+    name: 'DECISION_IN_FOREACH disabled (a decision in a loop publishes clean)',
+    find: "    if (steps.some(s => s?.type === 'decision')) {", repl: '    if (false) {' },
+  { file: 'src/workflows/node-types/decision.js',
+    name: 'coerce() stops checking an enum value against its declared set (free text takes the catch-all)',
+    find: '    if (!hit) {\n      throw new Error(\n        `decision input "${input.key}" is ${JSON.stringify(String(value).slice(0, 80))}, which is not one of its `',
+    repl: '    if (false) {\n      throw new Error(\n        `decision input "${input.key}" is ${JSON.stringify(String(value).slice(0, 80))}, which is not one of its `' },
+  { file: 'src/workflows/node-types/decision.js',
+    name: 'coerce() lets a NULL extracted field decide via the catch-all',
+    find: '  if (value === null) {', repl: '  if (false) {' },
+  { file: 'src/workflows/node-types/decision.js',
+    name: 'pickCategory accepts an AMBIGUOUS answer (a negated answer classifies as the value it negates)',
+    find: '  return hits.length === 1 ? hits[0] : null;',
+    repl: '  return hits.length >= 1 ? hits[0] : null;' },
+  { file: 'src/workflows/flow-tester.js',
+    name: "a decision's `from` gets template-substituted (the reference becomes the value; the engine hunts for a step named after the prose)",
+    find: "      const { inputs, ...rest } = rawCfg;\n      cfg = { ...this._substitute(rest, ctx), inputs };  // `inputs` stay RAW",
+    repl: '      cfg = this._substitute(rawCfg, ctx);' },
+  { file: 'src/workflows/decision-analysis.js',
+    name: 'the analyser reads an enum literal case-SENSITIVELY while the engine reads it case-insensitively',
+    find: '  const declared = (w) => atoms.find(a => String(a).toLowerCase() === String(w).toLowerCase());',
+    repl: '  const declared = (w) => atoms.find(a => String(a) === String(w));' },
+  { file: 'src/workflows/decision-analysis.js',
+    name: 'a comma list silently drops its undeclared members (the rule covers less than its author believes)',
+    find: '  if (wanted.some(w => !declared(w))) return { atoms: new Set(), ok: false };',
+    repl: '  if (false) return { atoms: new Set(), ok: false };' },
 ];
 
 const read  = (f) => readFileSync(f, 'utf8');

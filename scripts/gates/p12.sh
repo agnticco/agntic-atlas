@@ -243,6 +243,40 @@ grep -q 'UNIQUE_HIT_OVERLAP' "$VALIDATOR" \
   || next "E — decision node + table review UI + DMN gap analysis" \
           "src/workflows/node-types/decision.js missing. Gap analysis MUST use box subtraction, never cross-product enumeration (measured: 10 inputs x 10 values = 10^10 combinations in 1 ms — scripts/checks/gap-analysis-bench.mjs). Decompose at >4 inputs: the limit is cognitive, not computational."
 
+# ADDED (Increment E), never weakened. The three checks above are a grep and an
+# `ls`: they prove the SYMBOLS exist, not that anything enforces them — which is
+# architectural flaw #1 (this gate measured the EXISTENCE of tests, not their
+# POWER). The suites below are what make the E block mean something.
+#
+# decision-node: the table's run-time half — an uncovered case THROWS rather than
+# guessing; an AI-judged input is snapped to its closed enum or the run stops; a
+# decision's output never becomes the delivered body.
+DEC_TEST="tests/workflows/decision-node.test.js"
+[ -f "$DEC_TEST" ] \
+  || next "E — decision node + table review UI + DMN gap analysis" \
+          "$DEC_TEST missing. Must prove: an uncovered case FAILS LOUDLY (never null, never a guess — a null reaches the branch, matches no case, and the mandatory catch-all swallows 100% of traffic); the moat bites at run time; a decision is a CONTROL node."
+echo "p12: [E] decision node..."
+run_test "$DEC_TEST" "increment E"
+
+# The six defects the test-adversary and the independent verifier found in E —
+# three of them SILENT (a decision in a `foreach` delivering the decided value to
+# the customer once per row; free text laundered into the table through a non-LLM
+# enum input, with analyzeTable certifying `uncovered: []` over it; and a
+# classifier returning the value the model NEGATED). All fixed, all pinned here.
+DEC_ADV="tests/workflows/decision-adversarial.test.js"
+[ -f "$DEC_ADV" ] \
+  || next "E — decision node + table review UI + DMN gap analysis" \
+          "$DEC_ADV missing. Must pin: a decision in a foreach never becomes the delivered body; an off-enum value is never swallowed by the catch-all; a negated answer never classifies as the value it negates; a null extracted field never decides; a \`from\` publish accepts is one the engine can resolve; a condition the engine evaluates is one the analyser can read."
+echo "p12: [E] decision adversarial (the six defects)..."
+run_test "$DEC_ADV" "increment E"
+
+DEC_PIN="tests/workflows/decision-pinning.test.js"
+[ -f "$DEC_PIN" ] \
+  || next "E — decision node + table review UI + DMN gap analysis" \
+          "$DEC_PIN missing. The behavioural half of the sweep's survivor list: the numeric upper tail (a table with a hole ABOVE its highest cut reported a full completeness proof), the interior integer phantom gap, the boolean arm of matchesCondition, and a malformed rule that must become a MESSAGE rather than a crash."
+echo "p12: [E] decision pinning (the sweep's survivors)..."
+run_test "$DEC_PIN" "increment E"
+
 # ─────────────────────────────────────────────────────────────────────────────
 # F. `foreach` + schema-aware connectors + the example picker.
 # ─────────────────────────────────────────────────────────────────────────────

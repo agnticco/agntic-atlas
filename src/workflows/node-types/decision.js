@@ -435,7 +435,11 @@ function readInput(input, ctx) {
       throw new Error(`decision input "${key}" reads from "${from}", but step "${stepId}" produced no output on this run.`);
     }
     const out = ctx.outputs.get(stepId);
-    const v = field ? pick(out, field) : out;
+    // `<id>.output` means THE STEP'S OUTPUT — the spelling every other reference in
+    // the system uses (branch's ON_REF, {{id.output}} templates). Read as a field
+    // literally named "output" it threw on the one form a user is most likely to
+    // write. (Found by the test-adversary.)
+    const v = (field && field !== 'output') ? pick(out, field) : out;
     if (v === undefined) {
       throw new Error(`decision input "${key}" reads "${from}", but step "${stepId}" produced no "${field}".`);
     }
@@ -464,9 +468,64 @@ function pick(out, key) {
   return o[key];
 }
 
-/** A value read out of an upstream step is text until proven otherwise. */
+/**
+ * A value read out of an upstream step is text until proven otherwise — AND, for
+ * an enum, it must be a member of the declared set or the run stops.
+ *
+ * ── THE MOAT'S OTHER DOOR (found by the test-adversary) ─────────────────────
+ *
+ * `classifyInput()` (the `evaluator: 'llm'` path) has always thrown on an
+ * off-enum answer. This path — the ordinary one, where the value is READ from an
+ * upstream step — did not: it `String()`d whatever arrived and handed it to the
+ * table. So an input declared `type:'enum'` with NO evaluator, whose `from` points
+ * at a freeform `llm`, carried a whole paragraph of prose into a table whose
+ * coverage had been proven over {calm, urgent} — where it matched no rule but the
+ * catch-all, and the workflow quietly decided P3 on an input that said
+ * "EXTREMELY urgent". `analyzeTable` reported `decidable: true, uncovered: []`:
+ * a completeness proof, with a receipt, for a decision nobody made.
+ *
+ * §11.7's property is "the value being decided on has a CLOSED, DECLARED domain" —
+ * not "an LLM didn't type it". A value's domain is not bounded by who produced it,
+ * so the check belongs where the value ENTERS the table, on every path in.
+ * Membership is decidable precisely because we forced the domain closed; declining
+ * to decide it is a completeness claim nobody checked.
+ *
+ * An off-enum value is the one case that MUST reach a person: it is exactly the
+ * case the table's author never anticipated. So it throws, and the failure
+ * escalates (escalation.js) rather than being absorbed by the catch-all.
+ */
 function coerce(value, input) {
   const type = String(input?.type ?? '').toLowerCase();
+
+  // A NULL IS A MISSING VALUE, NOT A VALUE. `llm` in `extract` mode — the one
+  // producer the converger is taught to put in front of a table — states in its
+  // own system prompt that "if a field cannot be found, its value is null"
+  // (llm.js). So the canonical upstream emits precisely this, and a `null` handed
+  // to the table matches only `-` and decides via the catch-all: the table decides
+  // on a value nobody supplied, which is a wrong answer that looks exactly like a
+  // right one. readInput()'s docblock already forbade it; it only checked
+  // `undefined`. (Found by the test-adversary.)
+  if (value === null) {
+    throw new Error(
+      `decision input "${input.key}" came back empty from the step that produces it. ` +
+      'Refusing to decide: an input nobody supplied is not a value, and the table would silently take its catch-all.',
+    );
+  }
+
+  if (type === 'enum') {
+    const values = valuesOf(input);
+    const v = String(value).trim();
+    const hit = values.find(d => d.toLowerCase() === v.toLowerCase());
+    if (!hit) {
+      throw new Error(
+        `decision input "${input.key}" is ${JSON.stringify(String(value).slice(0, 80))}, which is not one of its ` +
+        `declared values (${values.join(', ')}). Refusing to decide: the table was proven complete over those values, ` +
+        'so anything else is a case nobody anticipated and must reach a person.',
+      );
+    }
+    return hit;   // the DECLARED spelling, so the rules match it exactly
+  }
+
   if (type === 'number' || type === 'integer') {
     const n = typeof value === 'number' ? value : Number(String(value).replace(/[$,\s]/g, ''));
     if (!Number.isFinite(n)) {
@@ -517,14 +576,58 @@ async function classifyInput(input, ctx, services) {
   ], ctx?.costConfig ?? undefined);
 
   const raw    = String(res?.content ?? '').trim();
-  const picked = values.find(v => v.toLowerCase() === raw.toLowerCase())
-              ?? values.find(v => raw.toLowerCase().includes(v.toLowerCase()));
+  const picked = pickCategory(raw, values);
   if (!picked) {
     throw new Error(
       `decision input "${input.key}": the AI answered "${raw.slice(0, 80)}", which is not one of ${values.join(', ')}.`,
     );
   }
   return picked;
+}
+
+/**
+ * Snap a model's answer to exactly one declared value — or to NOTHING, so the
+ * caller throws and the case reaches a person.
+ *
+ * ── WHY THE OBVIOUS FALLBACK IS A SILENT WRONG DECISION ─────────────────────
+ *
+ * The old rule was: exact match, else the first declared value that appears
+ * ANYWHERE in the answer. Both halves of that fallback are broken, and neither
+ * fails loudly — it never returns free text, it returns the WRONG MEMBER OF THE
+ * SET, which the table then decides on with complete confidence:
+ *
+ *   values ['approve','reject'], answer "I would reject this — do not approve."
+ *     → substring scan hits 'approve' FIRST (declaration order) → APPROVE.
+ *       It decides the exact opposite of what the model said. If that gates a
+ *       refund, the refund goes out.
+ *
+ *   values ['ship','ship_hold'], answer "Decision: ship_hold"
+ *     → 'ship' is a substring of 'ship_hold' → SHIP. A value that is a prefix of
+ *       another becomes unreachable the moment the model adds a preamble.
+ *
+ * So: an exact answer wins; otherwise the answer must contain EXACTLY ONE
+ * declared value, matched on WORD BOUNDARIES (which is what makes `ship_hold`
+ * beat `ship` — `_` is a word character, so \bship\b does not match inside it).
+ * Two candidates is an ambiguous answer, and an ambiguous answer to a closed
+ * question is not an answer. Refuse, and let it escalate.
+ *
+ * (Found by the test-adversary. The identical fallback in `llm.js` mode
+ * `classify` — the OTHER sanctioned way an LLM feeds a decision — had the same
+ * defect and is fixed with this same function.)
+ */
+export function pickCategory(raw, values) {
+  const answer = String(raw ?? '').trim();
+  const exact = values.find(v => v.toLowerCase() === answer.toLowerCase());
+  if (exact) return exact;
+
+  const hits = values.filter(v => wordBoundary(v).test(answer));
+  return hits.length === 1 ? hits[0] : null;
+}
+
+/** `\b` around a value, with the value's own regex metacharacters escaped. */
+function wordBoundary(value) {
+  const esc = String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return new RegExp(`(?:^|[^\\w-])${esc}(?:[^\\w-]|$)`, 'i');
 }
 
 export { IRRELEVANT };

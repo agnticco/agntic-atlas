@@ -26,6 +26,7 @@
 
 import { SystemMessage, HumanMessage } from '../../core/message.js';
 import { resolveTransformInput } from './_node-input.js';
+import { pickCategory } from './decision.js';
 
 export const LLM_MODES = ['summarize', 'extract', 'rewrite', 'classify', 'freeform'];
 
@@ -208,8 +209,17 @@ export const llmNodeType = {
     }
     if (mode === 'classify') {
       const categories = parseCategories(cfg.categories);
-      const picked = categories.find(c => c.toLowerCase() === String(raw).trim().toLowerCase())
-                  ?? categories.find(c => String(raw).toLowerCase().includes(c.toLowerCase()));
+      // pickCategory: exact answer, else the answer must contain EXACTLY ONE
+      // category, on word boundaries. The old fallback took the first category
+      // appearing ANYWHERE in the answer, in declaration order — so
+      // "I would reject this — do not approve" classified as `approve`, and a
+      // category that is a PREFIX of another ("ship" vs "ship_hold") made the
+      // longer one unreachable. It never returned free text; it returned the WRONG
+      // MEMBER OF THE SET, which a branch then routed on with full confidence.
+      // This node is the sanctioned way an LLM feeds a decision (§11.7), so a
+      // silent misclassification here is a silent misroute everywhere.
+      // (Found by the test-adversary in decision.js; the same bug lived here.)
+      const picked = pickCategory(raw, categories);
       // Fail loudly rather than pass an off-enum value downstream — an
       // unclassifiable input is exactly the case a decision must escalate on.
       if (!picked) {

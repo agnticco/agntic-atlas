@@ -604,9 +604,15 @@ export class WorkflowValidator {
 
     for (const node of nodes) {
       if (node?.type === 'decision') {
-        const inputs = Array.isArray(node.inputs) ? node.inputs
-                     : Array.isArray(node.config?.inputs) ? node.config.inputs
-                     : [];
+        // tableOf(), NOT a private re-read. The private one accepted only a real
+        // ARRAY — but `listOf` deliberately parses a JSON-STRING config (the
+        // textarea path), and tableOf / _checkDecisionTables / closedDomainOf all
+        // honour that spelling. So a decision whose `config.inputs` was a string
+        // carrying an `evaluator:'llm'` free-text input published clean: the moat's
+        // build-time half silently did not run on a spelling the rest of the system
+        // reads. One reader, or the checks disagree about what the table even says.
+        // (Found by the independent verifier, R1.)
+        const inputs = tableOf(node).inputs;
         for (const input of inputs) {
           if (String(input?.evaluator ?? '').toLowerCase() !== 'llm') continue;
           const isEnum  = String(input?.type ?? '').toLowerCase() === 'enum';

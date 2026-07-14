@@ -93,6 +93,21 @@ const SUITES = [
   // unkillable by construction, and the survivor list would report the newest
   // guards in the engine as untested when they were merely unexecuted.
   'tests/workflows/decision-node.test.js',
+  // P12 Increment E — the test-adversary's pass. Each test in here kills a mutant
+  // that SURVIVED this sweep on the increment-E tree: the keyless output, the
+  // malformed rule that crashed the validator instead of being read by it, the
+  // numeric upper tail that was never partitioned (a full completeness proof for a
+  // table with a hole above its highest cut), the interior integer phantom gap, and
+  // the boolean arm of matchesCondition. The survivor list is the coverage report,
+  // and this is the behavioural part of it.
+  //
+  'tests/workflows/decision-pinning.test.js',
+  // Its sibling. It held the six LIVE DEFECTS and was RED when the adversary handed
+  // it over; the Builder fixed all six, so it is green and belongs here. It pins the
+  // three SILENT ones — a decision in a loop delivering the decided value to the
+  // customer once per row, free text laundered into the table through a non-LLM enum
+  // input, and a classifier returning the value the model NEGATED.
+  'tests/workflows/decision-adversarial.test.js',
 ];
 
 /**
