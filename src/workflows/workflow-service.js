@@ -111,6 +111,8 @@ export class WorkflowService {
       nodes:        def.nodes,
       edges:        def.edges,
       errorHandling: def.errorHandling,
+      outcome:      def.outcome ?? null,
+      specVersion:  def.outcome ? 2 : 1,
       status,
     });
     events?.push({ type: 'workflow_created', workflow });
@@ -155,6 +157,20 @@ export class WorkflowService {
       };
     }
 
+    // THE CONTRACT SURVIVES THE EDIT. A workflow published with an outcome is
+    // still held to it when it is changed — otherwise defect #1 simply walks back
+    // in through the edit path: publish "post to Slack AND email the rep" (checked,
+    // passes), then delete the email step in a later edit and nobody objects.
+    // The promise was made to the user, not to the publish button.
+    //
+    // `patch.outcome === null` is how you deliberately RETRACT a contract; an
+    // absent key inherits the stored one.
+    const inheritedOutcome = patch.outcome !== undefined ? patch.outcome : (current.outcome ?? null);
+    if (inheritedOutcome) {
+      merged.outcome = inheritedOutcome;
+      merged.version = 2;
+    }
+
     const result = this.workflowValidator.validate(merged);
     if (!result.ok) {
       return {
@@ -172,6 +188,12 @@ export class WorkflowService {
       nodes:         merged.nodes,
       edges:         merged.edges,
       errorHandling: merged.errorHandling,
+      // Retracting the outcome must also drop the spec version back to 1 —
+      // otherwise the row claims version 2 with no contract in it, and the next
+      // reader has to guess which of the two is lying.
+      ...(patch.outcome !== undefined
+        ? { outcome: patch.outcome, specVersion: patch.outcome ? 2 : 1 }
+        : {}),
     }, { userId, message: patch.message ?? null });
     if (!updated) return { ok: false, error: 'Update did not persist.', code: 'UPDATE_FAILED' };
 
@@ -264,6 +286,14 @@ export class WorkflowService {
         def: {
           name:          String(input.name ?? '').trim(),
           description:   String(input.description ?? '').trim(),
+          // The outcome contract (P12 Increment C, spec v2). It MUST reach the
+          // definition the validator sees: `UNSATISFIED_ASSERTION` is what makes
+          // the "Slack AND email" silent drop unpublishable, and a def that has
+          // dropped its own outcome on the way in cannot be checked against it.
+          // Stripping it here would leave the whole contract decorative — the
+          // unit tests green, and the real publish path unguarded.
+          ...(input.outcome ? { outcome: input.outcome } : {}),
+          ...(input.version ? { version: input.version } : {}),
           triggers:      input.triggers ?? [],
           nodes:         this._applyConfigDefaults(input.nodes ?? []),
           edges:         input.edges ?? [],

@@ -41,11 +41,37 @@ import { execFileSync } from 'node:child_process';
 const SUITES = [
   'tests/workflows/control-flow.test.js',
   'tests/workflows/validator-config-keys.test.js',
+  'tests/converger/gap-oracle.test.js',
+  // Added by the test-adversary pass on Increment C. The sweep widened TARGETS to
+  // workflow-validator.js + the three C files and the survivor list came back
+  // showing that essentially the ENTIRE legacy publish gate (MISSING_NAME,
+  // EMPTY_WORKFLOW, MISSING_TRIGGER, MISSING_DELIVER, SELF_LOOP, CYCLE_DETECTED,
+  // UNKNOWN_CHANNEL, …) was pinned by nothing at all, and that `nodeForAssertion`
+  // — the half of the oracle the elicitation graph actually calls — was executed
+  // by no test whatsoever. A mutant is only killable by a suite the sweep RUNS.
+  'tests/workflows/validator-rules.test.js',
+  'tests/workflows/outcome-oracle.test.js',
+  'tests/workflows/decision-analysis.test.js',
+  // The five defects the test-adversary found in Increment C, now fixed and
+  // pinned: the moat bypassed by one laundering hop (an `assemble` between a
+  // freeform llm and a branch), a malformed rule silently covering the whole
+  // table, duplicate assertion ids dropping an assertion, a phantom gap on
+  // `integer` domains, and a null node crashing publish with a 500.
+  'tests/converger/moat-adversarial.test.js',
 ];
 
 /**
- * The engine surface Increment B owns. Deliberately NOT the whole repo: a sweep
+ * The engine surface the phase owns. Deliberately NOT the whole repo: a sweep
  * that takes an hour gets disabled, and a disabled check protects nothing.
+ *
+ * Increment C widens this to `workflow-validator.js` and the three files that
+ * carry the completeness proof. The round-9 readiness verifier flagged the
+ * validator as graded only by the CURATED mutation-guard — i.e. only against
+ * defects its own author had already thought of, which is the tautology this
+ * sweep exists to break. C makes that worse, not better, if left alone: the moat
+ * (LLM_INPUT_NOT_ENUM) and the outcome contract (UNSATISFIED_ASSERTION) both
+ * live in the validator, and a guard nothing pins is a guard the next person can
+ * delete with the gate still smiling.
  */
 const TARGETS = [
   'src/workflows/flow-tester.js',
@@ -53,6 +79,11 @@ const TARGETS = [
   'src/workflows/node-types/foreach.js',
   'src/workflows/node-types/human.js',
   'src/workflows/idempotency-store.js',
+  // P12 Increment C — the completeness proof.
+  'src/workflows/workflow-validator.js',
+  'src/workflows/outcome-oracle.js',
+  'src/workflows/decision-analysis.js',
+  'src/converger/gap-scorer.js',
 ];
 
 const args    = process.argv.slice(2);
@@ -75,9 +106,13 @@ const args    = process.argv.slice(2);
  *
  * RULE: when the rate goes up, RAISE this number. NEVER lower it to make a run
  * pass — lowering it is exactly the "weaken the check to force a pass" move the
- * constitution forbids. It was 0.65 when 69.5% was the measured rate.
+ * constitution forbids. It was 0.65 when 69.5% was the measured rate; 0.72 when
+ * 75.0% was; and 0.78 after the test-adversary pass on Increment C took the
+ * measured rate to 81.7% (299/366) by pinning the legacy publish gate, the
+ * `nodeForAssertion` backward-chainer, and the FEEL-A grammar — none of which any
+ * test had ever executed.
  */
-const FLOOR   = Number(args[args.indexOf('--floor') + 1]) || 0.72;
+const FLOOR   = Number(args[args.indexOf('--floor') + 1]) || 0.78;
 const VERBOSE = args.includes('--verbose');
 
 /** Generate every mutant for one file. Line-oriented and blunt, on purpose. */

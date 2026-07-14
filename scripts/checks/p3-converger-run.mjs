@@ -49,6 +49,14 @@ try {
         slack:  { actions: [{ id: 'post_message', label: 'Post a message to a channel', available: true }] },
         google: { actions: [{ id: 'gmail_search',  label: 'Search Gmail messages',       available: true }] },
       },
+      // The delivery catalog — the SAME view the server hands the converger
+      // (builder.js). This harness used to pass none, which is a configuration
+      // production never uses: without a catalog the converger cannot check that a
+      // delivery channel exists, and P12-C makes that refusal explicit
+      // (CHANNELS_UNVERIFIED). A check that drives the code in a shape the app
+      // never runs cannot see the bugs the app has (CLAUDE.md, architectural
+      // flaw #2). Strengthening the harness, not weakening the check.
+      channels: spine.engine.channelRegistry.getAll(),
     },
     llm:             spine.engine.llm,
     checkpointerDir: join(tmp, 'converger'),
