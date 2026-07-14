@@ -111,6 +111,9 @@ const SUITES = [
   // The fan-out: a delivery's return value is a RECEIPT, not the work product.
   // Without this the CONTROL_TYPES `deliver` guard is unkillable by construction.
   'tests/workflows/fan-out.test.js',
+  // P12 Increment F — connector params checked against the capability's own schema.
+  // Without it, the `capSchema` / `capResolved` guards are unkillable by construction.
+  'tests/workflows/connector-schema.test.js',
 ];
 
 /**
