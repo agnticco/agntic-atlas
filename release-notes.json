@@ -1,5 +1,14 @@
 [
   {
+    "version": "1.5.2",
+    "date": "2026-07-15",
+    "title": "Upload & builder fixes",
+    "notes": [
+      "Larger Knowledge files — like brand kits with images — now upload without errors.",
+      "The Feedback button no longer overlaps the test panel's action buttons."
+    ]
+  },
+  {
     "version": "1.5.1",
     "date": "2026-07-15",
     "title": "A clearer, more reliable builder",
