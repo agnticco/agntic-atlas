@@ -82,6 +82,49 @@ function aliasesFor(connector) {
 }
 
 /**
+ * Connectors whose "locator" is a DESCRIPTION, not an ADDRESS.
+ *
+ * The Atlas inbox is a single per-user destination — there is no second inbox to
+ * mis-route to. An `inbox:Daily CRM Summary` assertion names a *title*, and a title
+ * is a label chosen by the model, not an address the delivery is sent to. Matching
+ * an inbox delivery's actual title against the assertion's title is therefore a
+ * comparison of two free-text strings that legitimately differ — and when they did
+ * (the converger titled the item `[Name] — [Company]` while the assertion said
+ * `Daily CRM Summary`), the oracle reported "nothing reached inbox:…" on a genuine
+ * delivery, stranding fan-out and foreach builds that could never satisfy their own
+ * contract. For these connectors the locator is informational: ANY delivery to the
+ * connector satisfies the assertion. This does NOT weaken the moat — a spec that
+ * promises the inbox and delivers nothing to it still fails; we only stop treating a
+ * label as an address it never was.
+ */
+const LOCATOR_FREE_CONNECTORS = new Set(['inbox']);
+function isLocatorFree(connector) {
+  for (const alias of aliasesFor(connector)) if (LOCATOR_FREE_CONNECTORS.has(alias)) return true;
+  return LOCATOR_FREE_CONNECTORS.has(String(connector ?? '').toLowerCase());
+}
+
+/**
+ * An in-app inbox item is BOTH a message (it notifies the user) and a record (it
+ * persists in a list). The converger describes it either way — `message_sent →
+ * inbox:…` and `record_exists → inbox:…` are both natural and both appear in the
+ * outcome candidates it renders. `CHANNEL_EFFECTS.inbox_deliver` can only carry one
+ * `kind`, so a `record_exists → inbox` assertion failed the kind check against an
+ * inbox delivery and produced an UNSATISFIED_ASSERTION that no amount of "Accept all
+ * defaults" could clear (the derived node kept producing `message_sent`). Treating
+ * the inbox as dual-kind recognises what it actually is. This is NOT widening the
+ * closed assertion set — both kinds remain checkable; one connector's effect is
+ * genuinely both.
+ */
+const INBOX_DUAL_KINDS = new Set(['message_sent', 'record_exists']);
+function kindSatisfies(effKind, wantKind, connectors) {
+  if (effKind === wantKind) return true;
+  const inbox = connectors instanceof Set
+    ? [...connectors].some(c => LOCATOR_FREE_CONNECTORS.has(c))
+    : isLocatorFree(connectors);
+  return inbox && INBOX_DUAL_KINDS.has(effKind) && INBOX_DUAL_KINDS.has(wantKind);
+}
+
+/**
  * Deliver channels → (connector, effect). The `deliver` node's `channel` is the
  * only place the destination is named, so this table is how a deliver node gets
  * an effect at all.
@@ -276,10 +319,14 @@ export function assertionDefect(assertion) {
 export function satisfiesAssertion(assertion, node) {
   const eff = nodeEffect(node);
   if (!eff) return false;
-  if (eff.kind !== assertion.kind) return false;
+  if (!kindSatisfies(eff.kind, assertion.kind, eff.connectors)) return false;
 
   const { connector, locator } = splitTarget(assertion.target);
   if (connector && !eff.connectors.has(connector)) return false;
+
+  // For a locator-free connector (the inbox), the locator is a label, not an
+  // address — any delivery to the connector satisfies the assertion.
+  if (isLocatorFree(connector)) return true;
 
   if (locator && !isTemplate(locator)) {
     const want = normLocator(locator);
@@ -395,6 +442,16 @@ export function nodeForAssertion(assertion, { capabilities = {} } = {}) {
     return chans.some(c => c?.id === channel && c.available !== false);
   };
 
+  // The inbox is derivable for ANY kind — it is dual-nature (see kindSatisfies),
+  // handles messages and records alike, and needs no schema to write to. Deriving
+  // it only for `message_sent` was the other half of the fan-out/foreach dead end:
+  // a `record_exists → inbox` gap had no auto-fix, so "Accept all defaults" left the
+  // build stranded on an assertion the system itself refused to satisfy.
+  if (aliasesFor('inbox').has(connector) && available('inbox_deliver')) {
+    return { id, type: 'deliver', label: 'Save to the Atlas inbox',
+             config: { channel: 'inbox_deliver', subject: (locator && !isTemplate(locator)) ? locator : 'Workflow result' } };
+  }
+
   if (assertion.kind === 'message_sent') {
     const isSlack = aliasesFor('slack').has(connector);
     const isMail  = aliasesFor('gmail').has(connector) && connector !== 'google';
@@ -414,16 +471,12 @@ export function nodeForAssertion(assertion, { capabilities = {} } = {}) {
       return { id, type: 'deliver', label: `Email ${locator}`,
                config: { channel: 'gmail_send', to: locator } };
     }
-    if (aliasesFor('inbox').has(connector) && available('inbox_deliver')) {
-      return { id, type: 'deliver', label: 'Save to the Atlas inbox',
-               config: { channel: 'inbox_deliver', subject: locator || 'Workflow result' } };
-    }
   }
 
-  // record_exists / document_exists need a destination schema (base, table,
-  // folder) we cannot invent. Increment F reads it from the connector; until
-  // then this correctly returns null and the assertion stays an open gap rather
-  // than becoming a node with a made-up id in it.
+  // Other record_exists / document_exists targets (airtable, sheets, docs) need a
+  // destination schema (base, table, folder) we cannot invent. Increment F reads it
+  // from the connector; until then this correctly returns null and the assertion
+  // stays an open gap rather than becoming a node with a made-up id in it.
   return null;
 }
 
@@ -490,16 +543,24 @@ export function normalizeDelivery(node, output) {
                 : node?.type === 'connector-action' ? String(node.config?.action  ?? '')
                 : String(o.channel ?? '');
   const eff = CHANNEL_EFFECTS[channel];
-  // The destination the assertion matches against: whatever the handler already
-  // named, else the channel's own locator key read off the output or the node config.
-  let target = o.target ?? o.to ?? o.user ?? o.slackChannel ?? o.channelName ?? null;
-  if (!target && eff) {
-    for (const k of eff.locatorKeys) {
-      const v = o[k] ?? node?.config?.[k];
-      if (typeof v === 'string' && v.trim()) { target = v; break; }
-    }
-  }
-  return { ...o, delivered: true, channel, ...(target != null ? { target } : {}) };
+  // Collect EVERY plausible destination this delivery reached, in one array —
+  // both what the handler RESOLVED and what the node DECLARED. The two can differ,
+  // and the assertion is written in the DECLARED terms:
+  //   a Slack DM handler returns `target: "U0B3LM5KRGV"` (the resolved user id) while
+  //   the node declares `user: "amy@acme.co"` (the email the assertion names). Keying
+  //   the match to the resolved id alone reported "nothing reached slack:amy@acme.co"
+  //   on a DM that was genuinely delivered — the exact false PROMISE BROKEN found in
+  //   live testing. Carrying both lets `checkAssertionAtRuntime` match either.
+  const locators = [];
+  const push = (v) => { if (typeof v === 'string' && v.trim()) locators.push(v); };
+  push(o.target); push(o.to); push(o.user); push(o.slackChannel); push(o.channelName);
+  if (o.channel && o.channel !== channel) push(o.channel);
+  if (eff) for (const k of eff.locatorKeys) { push(o[k]); push(node?.config?.[k]); }
+  // Also fold in any declared locator the channel table doesn't list (e.g. a
+  // connector-action's own destination keys), so a write's target is never lost.
+  for (const l of collectLocators(node?.config)) push(l);
+  const target = locators[0] ?? null;
+  return { ...o, delivered: true, channel, ...(target != null ? { target } : {}), locators };
 }
 
 /** Is this node a delivery — a `deliver` node, or a `connector-action` that WRITES? */
@@ -519,17 +580,30 @@ export function checkAssertionAtRuntime(assertion, deliveries = []) {
   const wantConnector = canonicalConnector(connector);
   const wantLocator   = normLocator(locator);
 
+  const locatorFree = isLocatorFree(connector);
+
   for (const d of deliveries) {
     if (!d?.delivered) continue;
     if (deliveryConnector(d) !== wantConnector) continue;
-    // No locator on the assertion ⇒ "some delivery to this connector" is enough.
-    if (!wantLocator) return { ok: true, detail: describeDelivery(d) };
-    // The delivery names its own destination in one of a few keys; a template
-    // locator (resolved at run time) matches anything, exactly as at build time.
-    const got = normLocator(d.target ?? d.to ?? d.user ?? d.channelName ?? d.slackChannel ?? '');
-    if (isTemplate(locator) || got === wantLocator || (got && wantLocator && got.includes(wantLocator))) {
+    // No locator on the assertion, a template locator (resolved at run time), or a
+    // locator-free connector (the inbox — its "locator" is a label, not an address)
+    // ⇒ "some delivery to this connector" is enough.
+    if (!wantLocator || isTemplate(locator) || locatorFree) {
       return { ok: true, detail: describeDelivery(d) };
     }
+    // The delivery reached one or more destinations (its resolved value AND its
+    // declared one — see normalizeDelivery). It satisfies the assertion if ANY of
+    // them names the wanted locator. `includes` both ways mirrors the build-time
+    // check, so "amy@acme.co" (the declared DM user) matches "slack:amy@acme.co"
+    // even though the handler only returned the resolved user id.
+    const cands = (Array.isArray(d.locators) && d.locators.length)
+      ? d.locators
+      : [d.target ?? d.to ?? d.user ?? d.channelName ?? d.slackChannel ?? ''];
+    const hit = cands.some((c) => {
+      const got = normLocator(c);
+      return got && (got === wantLocator || got.includes(wantLocator) || wantLocator.includes(got));
+    });
+    if (hit) return { ok: true, detail: describeDelivery(d) };
   }
   return { ok: false, reason: `nothing reached ${assertion.target}` };
 }
