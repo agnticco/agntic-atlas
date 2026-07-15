@@ -567,7 +567,12 @@ function buildLLM(costTracker = null) {
     const fast      = new ChatModel({ provider: 'anthropic', model: 'claude-haiku-4-5-20251001', apiKey: anthropicKey });
     const balanced  = new ChatModel({ provider: 'anthropic', model: 'claude-sonnet-4-6',         apiKey: anthropicKey });
     const powerful  = new ChatModel({ provider: 'anthropic', model: 'claude-sonnet-4-6',         apiKey: anthropicKey });
-    return new ModelPool({ tiers: { fast, balanced, powerful }, defaultTier: 'balanced', costTracker });
+    // architect: the converger's whole-spec generation — the one reasoning-heavy
+    // call per build (n8n-level workflow in a single pass) — runs on Opus. Model
+    // id is env-overridable so the exact Opus version is set without a code change.
+    // Cost is attributed per build via costContext 'converger' + the build's threadId.
+    const architect = new ChatModel({ provider: 'anthropic', model: process.env.CONVERGER_ARCHITECT_MODEL?.trim() || 'claude-opus-4-6', apiKey: anthropicKey });
+    return new ModelPool({ tiers: { fast, balanced, powerful, architect }, defaultTier: 'balanced', costTracker });
   }
 
   if (openaiKey) {

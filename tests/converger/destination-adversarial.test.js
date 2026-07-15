@@ -113,6 +113,29 @@ async function converge({ baseId = 'appPLACEHOLDER', mapping = { Name: 'Name', B
     if (p.includes('cases nobody has decided about')) return J({ suggestions: [] });
     if (p.includes("REAL columns are"))               return J({ map: mapping });
 
+    // The whole-spec `generate` pass is now the PRIMARY builder (converger
+    // rearchitecture, Increment 3): `analyze` routes the first build here, emitting the
+    // complete { triggers, nodes, edges } in one call instead of the one-at-a-time
+    // propose drip. It leaves the model's PLACEHOLDER base id and the intended `Budget`
+    // field on the write node — the `destinations` tail, which still runs AFTER
+    // generate, resolves both against the live connector (base lookup, table, columns).
+    if (p.includes('Build the COMPLETE workflow')) {
+      return J({
+        triggers: [{ type: 'email', filter: 'to:leads@acme.com' }],
+        nodes: [
+          { id: 'extract', type: 'llm', label: 'Extract the lead',
+            config: { mode: 'extract', fields: 'name: the sender\nbudget: the stated budget' } },
+          { id: 'save', type: 'connector-action', label: 'Save the lead',
+            config: { action: 'airtable_create_record', baseId, tableId: 'Leads',
+                      fields: { Name: '{{extract.output}}', Budget: '{{extract.output}}' } },
+            idempotency: { key: '{{extract.output}}', on_conflict: 'skip' } },
+          { id: 'notify', type: 'deliver', label: 'Tell #ops',
+            config: { channel: 'slack', target: '#ops' } },
+        ],
+        edges: [{ from: 'extract', to: 'save' }, { from: 'save', to: 'notify' }],
+      });
+    }
+
     if (p.includes('Build the next component')) {
       const d       = draftIn(p);
       const has     = (id) => (d.nodes ?? []).some(n => n.id === id);
@@ -388,21 +411,25 @@ describe('a blocking gap arrives at the user with an answer in the box', () => {
         const ids = [...p.matchAll(/^ {2}- id: (\S+)$/gm)].map(m => m[1]);
         return J({ suggestions: ids.map(id => ({ gapId: id, answer: 'Set it on that step' })) });
       }
+      // The whole-spec `generate` pass builds extract + the Airtable write and
+      // DELIBERATELY omits the Slack delivery the outcome promises — leaving a BLOCKING
+      // UNSATISFIED_ASSERTION, exactly what this scenario needs to test that a blocking
+      // gap reaches the user with an answer already in the box.
+      if (p.includes('Build the COMPLETE workflow')) {
+        return J({
+          triggers: [{ type: 'email', filter: 'to:leads@acme.com' }],
+          nodes: [
+            { id: 'extract', type: 'llm', label: 'E', config: { mode: 'extract', fields: 'budget: the budget' } },
+            { id: 'save', type: 'connector-action', label: 'Save',
+              config: { action: 'airtable_create_record', baseId: 'appPLACEHOLDER', tableId: 'Leads', fields: { Name: '{{extract.output}}', Budget: '{{extract.output}}' } },
+              idempotency: { key: '{{extract.output}}', on_conflict: 'skip' } },
+          ],
+          edges: [{ from: 'extract', to: 'save' }],
+        });
+      }
+      // `propose` survives for gap-driven single fixes. Here it has nothing left to add
+      // (generate already built extract + save), so it just names the workflow.
       if (p.includes('Build the next component')) {
-        const d = draftIn(p);
-        const has = (id) => (d.nodes ?? []).some(n => n.id === id);
-        const hasEdge = (f, t) => (d.edges ?? []).some(e => e.from === f && e.to === t);
-        const deliver = (d.nodes ?? []).find(n => n.type === 'deliver');
-        if (!(d.triggers ?? []).length) return J({ component: 'trigger', spec: { type: 'email', filter: 'to:leads@acme.com' } });
-        if (!has('extract')) return J({ component: 'node', spec: { id: 'extract', type: 'llm', label: 'E', config: { mode: 'extract', fields: 'budget: the budget' } } });
-        if (!has('save'))    return J({ component: 'node', spec: { id: 'save', type: 'connector-action', label: 'Save',
-          config: { action: 'airtable_create_record', baseId: 'appPLACEHOLDER', tableId: 'Leads', fields: { Name: '{{extract.output}}', Budget: '{{extract.output}}' } },
-          idempotency: { key: '{{extract.output}}', on_conflict: 'skip' } } });
-        if (!hasEdge('extract', 'save')) return J({ component: 'edge', spec: { from: 'extract', to: 'save' } });
-        // NOTE: the Slack delivery the outcome promises is never proposed. That is
-        // deliberate — it leaves a BLOCKING UNSATISFIED_ASSERTION gap, which is what
-        // this scenario needs in order to test that a blocking gap reaches the user
-        // with an answer already in the box.
         return J({ component: 'name', spec: 'Leads' });
       }
       return J({});

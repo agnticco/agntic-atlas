@@ -77,6 +77,23 @@ async function drive({
       return J({ suggestions: ids.map(id => ({ gapId: id, answer: 'send it to #ops' })) });
     }
     if (p.includes('REAL columns are'))               return J({ map: { Name: 'Name' } });
+    // The whole-spec `generate` pass is now the PRIMARY builder (converger
+    // rearchitecture, Increment 3): `analyze` routes the first build here, not to
+    // `propose`. It emits the complete { triggers, nodes, edges } in one call —
+    // mirroring what the propose drip used to build cumulatively — leaving a
+    // PLACEHOLDER base id + the intended `fields`, which `destinations` then resolves
+    // against the live connector (that tail still runs AFTER generate). `propose`
+    // survives only for gap-driven single fixes (exercised below via `blockingGap`).
+    if (p.includes('Build the COMPLETE workflow')) {
+      const nodes = [{ id: 'save', type: 'connector-action', label: 'Save',
+        config: { action: 'airtable_create_record', baseId: 'appPLACEHOLDER', tableId: 'Leads', fields: { Name: 'x' } } }];
+      if (searchToo) nodes.push({ id: 'find', type: 'connector-action', label: 'Find',
+        config: { action: 'airtable_search_records', baseId: 'appPLACEHOLDER', tableId: 'Leads', filterByFormula: '{Status}="New"' } });
+      // NOTE: the Slack delivery the `blockingGap` outcome promises is deliberately
+      // NOT emitted — that leaves a BLOCKING UNSATISFIED_ASSERTION, the only way to
+      // route back through `propose` and exercise the gap-fix path + the latch.
+      return J({ name: 'Leads', triggers: [{ type: 'email', filter: 'to:leads@acme.com' }], nodes, edges: [] });
+    }
     if (p.includes('Build the next component')) {
       const d = draftIn(p);
       const has = (id) => (d.nodes ?? []).some(n => n.id === id);
@@ -151,24 +168,31 @@ describe('choosing the base', () => {
   });
 });
 
-// ── The propose loop ────────────────────────────────────────────────────────
+// ── The propose loop — now the GAP-FIX path, not the main builder ────────────
+// After the rearchitecture (Increment 3) `generate` builds the whole spec in one
+// pass; `propose` survives only for gap-driven single fixes. So these tests drive it
+// through a BLOCKING gap (`blockingGap` — the outcome promises Slack, which `generate`
+// deliberately never builds), which is the production route back into `propose`.
 
 describe('a proposal that changes nothing is not a proposal', () => {
   test('the loop does not spin on a re-proposed edge', async () => {
     // applyProposal DEDUPES, so a duplicate edge leaves the draft identical and the
     // model proposes it again — forever. Against the live model this produced
-    // FOURTEEN consecutive identical "add this connection" cards.
-    const r = await drive({ proposeSameEdgeForever: true });
+    // FOURTEEN consecutive identical "add this connection" cards. The gap-fix propose
+    // path (reached here via the unsatisfied Slack assertion) must still not spin.
+    const r = await drive({ proposeSameEdgeForever: true, blockingGap: true });
     const proposals = r.seen.filter(iv => iv.type === 'proposal');
     assert.ok(proposals.length <= 4,
       `the propose loop spun ${proposals.length} times on a proposal that changed nothing`);
     assert.ok(r.spec, 'and it still converges to a spec');
   });
 
-  test('POSITIVE: a proposal that DOES change the draft is applied', async () => {
+  test('POSITIVE: the generate pass builds the node and names the workflow', async () => {
+    // The main build now goes through `generate` (one whole-spec pass), not the propose
+    // drip: the write node and the workflow name both come from that single call.
     const r = await drive();
-    assert.ok(r.save, 'the node the model proposed is in the spec');
-    assert.equal(r.spec.name, 'Leads', 'and so is the name it proposed afterwards');
+    assert.ok(r.save, 'the node the whole-spec generate pass emitted is in the spec');
+    assert.equal(r.spec.name, 'Leads', 'and so is the name it carried');
   });
 });
 
@@ -205,6 +229,8 @@ describe('unparseable model output becomes a QUESTION, not a tight loop', () => 
     // conversational builder has: it looks like it is working.
     let asked = null;
     await drive({
+      // Reach the gap-fix `propose` path (blockingGap), then feed it garbage.
+      blockingGap: true,
       answers: { 'Build the next component': {} },   // the model returns nothing usable
       onInterrupt: (iv) => { if (!asked && iv.type === 'clarification' && /more detail/i.test(iv.question ?? '')) asked = iv; },
     });
@@ -236,14 +262,61 @@ describe('the paths nothing was driving', () => {
   });
 
   test('a MODIFIED proposal is merged, not discarded', async () => {
-    const r = await drive({
-      answers: { "USER'S MODIFICATION REQUEST": { component: 'node', spec: { id: 'save', type: 'connector-action', label: 'RENAMED',
-        config: { action: 'airtable_create_record', baseId: 'appPLACEHOLDER', tableId: 'Leads', fields: { Name: 'x' } } } } },
-      reply: { proposal: (iv) => (iv.proposal?.component === 'node'
-        ? { type: 'modify', modification: 'call it RENAMED' }
-        : { type: 'accept' }) },
-    });
-    assert.equal(r.save?.label, 'RENAMED',
+    // `propose`'s modify path is now the GAP-FIX path: `generate` builds the Airtable
+    // write and leaves the promised Slack delivery unbuilt (a BLOCKING gap), so `propose`
+    // is asked to add it — and the user MODIFIES that proposal (renames the delivery
+    // step). The invariant is unchanged from before the rearchitecture: a user's
+    // correction is MERGED, never silently dropped. A dedicated inline harness so the
+    // proposed component is a NODE we can rename and the run then converges (the added
+    // delivery satisfies the gap). Mutation: discard the modification ⇒ the label stays
+    // 'Tell #ops' and the assertion fails.
+    const J = (o) => ({ content: JSON.stringify(o) });
+    const draftIn = (p) => { const m = /CURRENT DRAFT:\n(\{[\s\S]*?\n\})\n/.exec(p); try { return JSON.parse(m[1]); } catch { return {}; } };
+    const invokeCapability = async (id) => {
+      if (id === 'airtable_list_bases')    return { bases: [{ id: 'appAAAAAAAAAAAAA1', name: 'Sales CRM' }] };
+      if (id === 'airtable_describe_base') return { tables: [{ id: 't1', name: 'Leads', fields: [{ id: 'f1', name: 'Name', type: 'singleLineText', choices: [] }] }] };
+      if (id === 'gmail_search')           return { messages: [] };
+      throw new Error(`unstubbed: ${id}`);
+    };
+    const llm = { invoke: async (msgs) => {
+      const p = String(msgs[msgs.length - 1].content);
+      if (p.includes("USER'S MODIFICATION REQUEST")) return J({ component: 'node', spec: { id: 'notify', type: 'deliver', label: 'RENAMED', config: { channel: 'slack', target: '#ops' } } });
+      if (p.includes('OUTCOME CONTRACT')) return J({ candidates: [{ id: 'c1', statement: 'Leads are saved and #ops is told.',
+        assertions: [{ id: 'a1', kind: 'record_exists', target: 'airtable:Leads', fields: ['Name'] },
+                     { id: 'a2', kind: 'message_sent', target: 'slack:#ops' }] }] });
+      if (p.includes('What starts this workflow'))      return J({ trigger: { type: 'email', filter: 'to:leads@acme.com' } });
+      if (p.includes('CONCRETE example cases'))         return J({ examples: [] });
+      if (p.includes('Analyze this automation intent')) return J({ ready: true });
+      if (p.includes('Is this workflow FINISHED'))      return J({ complete: true });
+      if (p.includes('cases nobody has decided about')) return J({ suggestions: [] });
+      if (p.includes('REAL columns are'))               return J({ map: { Name: 'Name' } });
+      // generate builds the Airtable write ONLY — the Slack delivery stays unbuilt.
+      if (p.includes('Build the COMPLETE workflow')) return J({ triggers: [{ type: 'email', filter: 'to:leads@acme.com' }],
+        nodes: [{ id: 'save', type: 'connector-action', label: 'Save', config: { action: 'airtable_create_record', baseId: 'appPLACEHOLDER', tableId: 'Leads', fields: { Name: 'x' } } }], edges: [] });
+      // the gap-fix propose round proposes the missing Slack delivery (which the user then renames)
+      if (p.includes('Build the next component')) {
+        const d = draftIn(p);
+        if (!(d.nodes ?? []).some(n => n.id === 'notify')) return J({ component: 'node', spec: { id: 'notify', type: 'deliver', label: 'Tell #ops', config: { channel: 'slack', target: '#ops' } } });
+        if (!(d.edges ?? []).some(e => e.from === 'save' && e.to === 'notify')) return J({ component: 'edge', spec: { from: 'save', to: 'notify' } });
+        return J({ component: 'name', spec: 'Leads' });
+      }
+      return J({});
+    } };
+
+    const conv = createConverger({ llm, capabilities: CAPS, invokeCapability, checkpointerDir: scratch() });
+    const reply = { outcome_check: () => ({ id: 'c1' }), example_request: () => ({ type: 'skip' }),
+                    proposal: (iv) => (iv.proposal?.component === 'node' && iv.proposal?.spec?.id === 'notify'
+                      ? { type: 'modify', modification: 'call the delivery step RENAMED' }
+                      : { type: 'accept' }),
+                    clarification: () => ({ answer: 'yes' }), gap_review: () => ({ acceptDefaults: true }), ratify: () => ({ type: 'approve' }) };
+    let iv;
+    try { await conv.run('mod1', 'save leads to airtable and tell ops'); iv = { type: 'done' }; }
+    catch (err) { iv = err.interruptValue ?? err; }
+    for (let i = 0; i < 60 && iv?.type !== 'done'; i++) iv = await conv.resume('mod1', (reply[iv.type] ?? (() => ({ type: 'accept' })))(iv));
+
+    const notify = iv?.spec?.nodes?.find(n => n.id === 'notify');
+    assert.ok(notify, 'the gap-fix proposal added the Slack delivery node');
+    assert.equal(notify.label, 'RENAMED',
       'a user who corrects a proposal must get their correction — silently dropping it is worse than not offering it');
   });
 
@@ -251,5 +324,103 @@ describe('the paths nothing was driving', () => {
     const r = await drive();
     assert.deepEqual(r.spec.triggers, [{ type: 'email', filter: 'to:leads@acme.com' }],
       'the trigger is the entry point of the graph — process derives it, and the example picker needs its filter');
+  });
+});
+
+// ── The whole-spec generate pass, through the REAL graph ─────────────────────
+// The headline of the rearchitecture (Increment 3): the production path now runs
+// `outcome → process → examples → analyze → GENERATE → analyze → gapping → …`, and
+// the ratified spec is a COMPLETE, connected, branch-fed graph — even when the model
+// drops a structural edge, because `generate → mergeGeneratedSpec → wireEdges` repairs
+// it. This drives the compiled graph end-to-end (not the merge helper in isolation),
+// with `generate` emitting a lead-router whose branch INPUT edge is DELIBERATELY missing
+// (the exact live defect that motivated this work).
+describe('generate builds a connected, branch-fed spec through the graph', () => {
+  // The router the whole-spec pass emits — with classify_lead→route DROPPED.
+  const ROUTER = {
+    triggers: [{ type: 'email', filter: 'to:leads@acme.com' }],
+    nodes: [
+      { id: 'classify_lead', type: 'llm', label: 'Classify', config: { mode: 'classify', categories: 'hot\nwarm\ncold' } },
+      { id: 'route', type: 'branch', label: 'Route', config: { on: 'classify_lead.output', cases: [
+        { when: 'hot',  to: 'summ_hot' },
+        { when: 'warm', to: 'summ_hot' },
+        { when: '*',    to: 'summ_cold' } ] } },
+      { id: 'summ_hot',  type: 'llm', label: 'Summarize hot',  config: { mode: 'summarize', instructions: 'One paragraph. Slack mrkdwn.' } },
+      { id: 'summ_cold', type: 'llm', label: 'Note the rest',  config: { mode: 'summarize', length: 'short', instructions: 'One line. Slack mrkdwn.' } },
+      { id: 'notify_sales', type: 'deliver', label: 'Post #sales', config: { channel: 'slack', target: '#sales' } },
+      { id: 'notify_ops',   type: 'deliver', label: 'Post #ops',   config: { channel: 'slack', target: '#ops' } },
+    ],
+    // classify_lead→route is DELIBERATELY MISSING — wireEdges must add it.
+    edges: [
+      { from: 'route', to: 'summ_hot' },
+      { from: 'route', to: 'summ_cold' },
+      { from: 'summ_hot',  to: 'notify_sales' },
+      { from: 'summ_cold', to: 'notify_ops' },
+    ],
+  };
+
+  async function driveRouter() {
+    const J = (o) => ({ content: JSON.stringify(o) });
+    const invokeCapability = async (id) => {
+      if (id === 'gmail_search') return { messages: [] };
+      throw new Error(`unstubbed: ${id}`);      // no Airtable — a pure delivery router
+    };
+    const llm = { invoke: async (msgs) => {
+      const p = String(msgs[msgs.length - 1].content);
+      if (p.includes('OUTCOME CONTRACT')) return J({ candidates: [{ id: 'c1', statement: 'Every lead is routed to the right Slack channel.',
+        assertions: [{ id: 'a1', kind: 'message_sent', target: 'slack:#sales' },
+                     { id: 'a2', kind: 'message_sent', target: 'slack:#ops' }] }] });
+      if (p.includes('What starts this workflow'))      return J({ trigger: { type: 'email', filter: 'to:leads@acme.com' } });
+      if (p.includes('CONCRETE example cases'))         return J({ examples: [] });
+      if (p.includes('Analyze this automation intent')) return J({ ready: true });
+      if (p.includes('Is this workflow FINISHED'))      return J({ complete: true });
+      if (p.includes('cases nobody has decided about')) return J({ suggestions: [] });
+      if (p.includes('Build the COMPLETE workflow'))    return J(ROUTER);
+      if (p.includes('Build the next component'))       return J({ component: 'name', spec: 'Lead Router' });
+      return J({});
+    } };
+    const conv = createConverger({ llm, capabilities: CAPS, invokeCapability, checkpointerDir: scratch() });
+    const reply = { outcome_check: () => ({ id: 'c1' }), example_request: () => ({ type: 'skip' }),
+                    proposal: () => ({ type: 'accept' }), clarification: () => ({ answer: 'yes' }),
+                    gap_review: () => ({ acceptDefaults: true }), ratify: () => ({ type: 'approve' }) };
+    const seen = [];
+    let iv;
+    try { await conv.run('r1', 'route inbound leads to the right slack channel'); iv = { type: 'done' }; }
+    catch (err) { iv = err.interruptValue ?? err; }
+    for (let i = 0; i < 60 && iv?.type !== 'done'; i++) { seen.push(iv); iv = await conv.resume('r1', (reply[iv.type] ?? (() => ({ type: 'accept' })))(iv)); }
+    return { spec: iv?.spec ?? null, seen };
+  }
+
+  test('the ratified spec exists and carries the branch and its classifier', async () => {
+    const { spec } = await driveRouter();
+    assert.ok(spec, 'the run reaches a ratified spec through the generate → wire path');
+    const ids = spec.nodes.map(n => n.id);
+    assert.ok(ids.includes('classify_lead') && ids.includes('route'), 'the router shape survives into the spec');
+    const branch = spec.nodes.find(n => n.type === 'branch');
+    assert.ok(branch?.config?.cases?.some(c => c.when === '*'), 'the branch keeps its mandatory catch-all');
+  });
+
+  test('the DROPPED branch INPUT edge is wired — the branch is actually fed', async () => {
+    const { spec } = await driveRouter();
+    assert.ok(spec.edges.some(e => e.from === 'classify_lead' && e.to === 'route'),
+      'wireEdges must add classify_lead→route even though generate dropped it — otherwise the branch has no feed');
+  });
+
+  test('no non-entry node is an orphan; the entry has no inbound edge', async () => {
+    const { spec } = await driveRouter();
+    const entry = 'classify_lead';                       // fed by the email trigger, not by an edge
+    const hasInbound = (id) => spec.edges.some(e => e.to === id);
+    for (const n of spec.nodes) {
+      if (n.id === entry) assert.equal(hasInbound(n.id), false, 'the entry classifier is fed by the trigger, not an edge');
+      else assert.ok(hasInbound(n.id), `${n.id} must have an inbound edge (no orphan)`);
+    }
+  });
+
+  test('both lanes stay routed, each ending in its own delivery', async () => {
+    const { spec } = await driveRouter();
+    assert.ok(spec.edges.some(e => e.from === 'route' && e.to === 'summ_hot'),  'lane A routed');
+    assert.ok(spec.edges.some(e => e.from === 'route' && e.to === 'summ_cold'), 'lane B routed');
+    assert.ok(spec.edges.some(e => e.from === 'summ_hot'  && e.to === 'notify_sales'), 'lane A ends in a delivery');
+    assert.ok(spec.edges.some(e => e.from === 'summ_cold' && e.to === 'notify_ops'),   'lane B ends in a delivery');
   });
 });

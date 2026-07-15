@@ -120,6 +120,58 @@ export function applyProposal(draft, proposal, confirmation = { type: 'accept' }
 }
 
 /**
+ * Extract a node id from a reference: "id.output", "id.decision", "{{id.field}}", "id".
+ * A branch's `on` and a decision's input `from` are REFERENCES to the node whose
+ * output they read — the base id is everything before the first dot, minus any
+ * `{{ }}` wrapper.
+ */
+export function refNodeId(ref) {
+  if (typeof ref !== 'string') return null;
+  const s = ref.trim().replace(/^\{\{\s*/, '').replace(/\s*\}\}$/, '').split('.')[0].trim();
+  return s || null;
+}
+
+/**
+ * Deterministically wire the structural edges a correct graph MUST have, derived
+ * from each node's own config — so the model no longer has to remember to emit
+ * every connecting edge one at a time (the root cause of orphaned classifiers and
+ * branches with no feed; see docs/handoff/converger-rearchitecture.md).
+ *
+ * ADDITIVE: keeps the model's edges, adds only the missing structural ones.
+ *   - a `branch` gets an INPUT edge from the node its `config.on` routes on, and an
+ *     OUTPUT edge to each `config.cases[].to` (so it actually forks).
+ *   - a `decision` gets an INPUT edge from each `config.inputs[].from` node.
+ * The base of "make a branch actually branch": with this, classify→branch and
+ * branch→{lead,other} are guaranteed even if the model dropped them.
+ *
+ * @param {{nodes, edges, triggers}} draft
+ * @returns {object} draft with a complete structural edge set
+ */
+export function wireEdges(draft) {
+  const nodes   = [...(draft.nodes ?? [])];
+  const nodeIds = new Set(nodes.map(n => n && n.id).filter(Boolean));
+  const edges   = [...(draft.edges ?? [])];
+  const hasEdge = (from, to) => edges.some(e => e.from === from && e.to === to);
+  const addEdge = (from, to) => {
+    if (from && to && from !== to && nodeIds.has(from) && nodeIds.has(to) && !hasEdge(from, to)) {
+      edges.push({ from, to });
+    }
+  };
+
+  for (const n of nodes) {
+    if (!n) continue;
+    if (n.type === 'branch') {
+      addEdge(refNodeId(n.config?.on), n.id);                       // input: routed-on node → branch
+      for (const c of (n.config?.cases ?? [])) addEdge(n.id, c?.to); // outputs: branch → each case target
+    } else if (n.type === 'decision') {
+      for (const inp of (n.config?.inputs ?? [])) addEdge(refNodeId(inp?.from), n.id);
+    }
+  }
+
+  return { ...draft, edges };
+}
+
+/**
  * Emit the final spec from a completed draft.
  *
  * Spec v2 (P12 Increment C) adds `outcome` — the contract the workflow is held

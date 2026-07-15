@@ -2,15 +2,24 @@
  * elicitation-graph — the converger's StateGraph.
  *
  * Nodes:
- *   analyze   → decide: clarify (vague intent) or propose (enough signal)
- *   clarify   → ask one targeted question, interrupt for answer
- *   propose   → generate next component proposal, interrupt for confirmation
- *   ratify    → present complete draft for final HITL approval
+ *   outcome      → agree the contract ("how would we know this worked?")
+ *   process      → backward-chain the derivable nodes + the trigger (no LLM)
+ *   examples     → the acceptance suite (real inbox emails when available)
+ *   analyze      → phase router: clarify (vague) · generate (first build) ·
+ *                  propose (gap-driven single fix) · gapping/ratifying (done)
+ *   clarify      → ask one targeted question, interrupt for answer
+ *   generate     → emit the WHOLE spec in one pass, then wireEdges (Increment 3)
+ *   propose      → gap-driven single-component fix, interrupt for confirmation
+ *   destinations → resolve Airtable base/table/columns from the live connector
+ *   decisions    → review the induced decision table(s)
+ *   gaps         → the exception review + structural auto-repair
+ *   ratify       → present complete draft for final HITL approval
  *
- * Routing:
- *   analyze → clarify | propose | ratify
- *   clarify → analyze
- *   propose → analyze
+ * Routing (clarify-first → generate-whole-spec → wire → gaps → ratify):
+ *   outcome → process → examples → analyze
+ *   analyze → clarify | generate | propose | destinations | ratify
+ *   clarify → analyze ;  generate → analyze ;  propose → analyze
+ *   destinations → decisions → gaps → (propose | ratify)
  *   ratify  → propose (if changes requested) | END (if approved)
  *
  * Persistence: FileCheckpointer — sessions survive restarts and are resumable
@@ -22,7 +31,7 @@ import { FileCheckpointer }  from '../graph/checkpointer/index.js';
 import { interrupt }         from '../graph/interrupt.js';
 import { SystemMessage, HumanMessage } from '../core/message.js';
 import { scoreGap, unansweredGaps } from './gap-scorer.js';
-import { applyProposal, assembleSpec } from './spec-assembler.js';
+import { applyProposal, assembleSpec, wireEdges } from './spec-assembler.js';
 import { materialiseEscalations } from './escalation.js';
 import { nodeForAssertion, assertableConnectors, splitTarget } from '../workflows/outcome-oracle.js';
 import { analyzeTable } from '../workflows/decision-analysis.js';
@@ -36,6 +45,7 @@ import {
   buildExamplesPrompt,
   buildGapPrompt,
   buildSufficiencyPrompt,
+  buildGeneratePrompt,
 } from './prompts.js';
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -106,6 +116,57 @@ export const DRAFT_DEFAULT = {
   edges:         [],
   errorHandling: {},
 };
+
+/**
+ * Merge a whole-spec model output into the draft, then GUARANTEE its structure.
+ * (Converger rearchitecture, Increment 2 — the pure core the `generate` node calls.)
+ *
+ * The `generate` step emits the COMPLETE spec — `{ triggers, nodes, edges }` — in
+ * one call, replacing the one-component-at-a-time propose loop's node-building. Its
+ * `nodes`/`edges` become the draft's, because emitting the whole graph at once is
+ * the entire point. Everything ALREADY GATHERED is preserved and NOT overwritten:
+ *   - `outcome` (the contract), `name`, `description`, `errorHandling` — kept as-is.
+ *   - `triggers` — the draft's are preferred when present, because `process` derived
+ *     and confirmed the trigger and the example picker already searched on its
+ *     filter; the generated trigger is only a fallback for a draft that has none.
+ *
+ * The merged draft is then run through `wireEdges` (Increment 1): even if the model
+ * dropped a branch's input edge or a case's output edge — the exact failure that
+ * motivated this rearchitecture — the structural edges a branch/decision MUST have
+ * are added deterministically. So the result is a connected, branched graph by
+ * construction, not by hoping the model remembered every edge.
+ *
+ * ADDITIVE and pure — no draft mutation, no side effects. The result still goes
+ * through the validator downstream; this does not bypass it.
+ *
+ * @param {object} draft      the draft gathered so far (outcome, name, triggers…)
+ * @param {{triggers?, nodes?, edges?, name?, description?}} generated  the model's whole-spec output
+ * @returns {object} a draft with a complete, wired edge set
+ */
+export function mergeGeneratedSpec(draft, generated) {
+  const base = draft ?? { ...DRAFT_DEFAULT };
+  const g    = generated ?? {};
+
+  const nodes = Array.isArray(g.nodes) ? g.nodes : [];
+  const edges = Array.isArray(g.edges) ? g.edges : [];
+
+  const existingTriggers = Array.isArray(base.triggers) ? base.triggers : [];
+  const genTriggers      = Array.isArray(g.triggers)    ? g.triggers    : [];
+  const triggers = existingTriggers.length ? existingTriggers : genTriggers;
+
+  const merged = {
+    ...base,
+    name:          base.name ?? g.name ?? null,
+    description:   base.description ?? g.description ?? null,
+    outcome:       base.outcome ?? null,      // the contract is never rewritten here
+    triggers,
+    nodes,
+    edges,
+    errorHandling: base.errorHandling ?? {},
+  };
+
+  return wireEdges(merged);
+}
 
 // ── Schema-aware destinations (P12 Increment F) ───────────────────────────────
 
@@ -390,6 +451,13 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
       _missingNote:      null,
       // The last accepted proposal was a NO-OP (see `propose`). Read by `analyze`.
       _noProgress:       false,
+      // The whole-spec `generate` pass has run once (converger rearchitecture,
+      // Increment 3). Tracked (replacement semantics, so it MUST be declared to
+      // persist across steps) and read by `analyze`'s router: the FIRST build routes
+      // to `generate` (one Opus whole-spec pass); later targeted gap-driven single
+      // fixes route to `propose`. Without it, `analyze` would re-enter `generate`
+      // every round and rebuild the entire spec on each gap fix.
+      _generated:        false,
       // The destination (Airtable base + table + columns) has been resolved from the
       // live connector once (P12 Increment F). Without this the gap loop would
       // re-enter `destinations` on its way back to ratify and ask "which base?"
@@ -901,6 +969,81 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
     };
   });
 
+  // ── generate ─────────────────────────────────────────────────────────────────
+  // Emit the WHOLE spec in one model call. (Converger rearchitecture, Increment 2.)
+  //
+  // Replaces the one-component-at-a-time propose loop's node-building: one `llmJson`
+  // call returns the complete `{ triggers, nodes, edges }`, which is merged into the
+  // draft (preserving the already-gathered outcome/name/triggers) and then run through
+  // `wireEdges` so the structural edges a branch/decision MUST have are guaranteed even
+  // if the model dropped one — the exact failure this rearchitecture fixes.
+  //
+  // NOT YET WIRED INTO THE ROUTING (Increment 3 does that). Adding it here as an
+  // unrouted node leaves the default flow unchanged — `_validate` does not require a
+  // node to be reachable — while making it drivable/unit-testable. The generated spec
+  // still goes through the validator downstream; this does not bypass it.
+  graph.addNode('generate', async (state, cfg) => {
+    const sessionId = cfg?.configurable?.threadId;
+    const draft = state.draft ?? { ...DRAFT_DEFAULT };
+
+    const generated = await llmJson(llm, [
+      new SystemMessage(buildSystemPrompt(state.capabilities)),
+      new HumanMessage(buildGeneratePrompt({
+        intent:         state.intent,
+        clarifications: state.clarifications,
+        outcome:        draft.outcome,
+        draft,
+        capabilities:   state.capabilities,
+        setupResults:   state.setup_results,
+      })),
+      // The whole-spec call is the n8n-level reasoning step — it emits every node, every
+      // edge and every branch case at once — so it runs on a DEDICATED top tier,
+      // 'architect' (wired to Opus in the ModelPool via server.js). It is deliberately
+      // NOT 'powerful'/'balanced' (those map to sonnet and are used by the chatty
+      // clarify/modify/gap calls): a dedicated tier keeps the expensive Opus call scoped
+      // to exactly ONE high-value generation per build. The ModelPool falls back to its
+      // default tier if 'architect' isn't mapped yet, so this is safe before the mapping
+      // lands. Cost is attributed to the tenant via tierCfg(name, sessionId): sessionId
+      // (the build's threadId) is what the CostTracker resolves session→user→tenant with,
+      // and costContext:'converger' labels the spend — so an un-attributed call that drops
+      // out of per-tenant/per-build aggregates cannot happen here.
+    ], tierCfg('architect', sessionId));
+
+    // DEFENSIVE: the model returned nothing usable (no nodes). Do NOT crash and do
+    // NOT ship an empty spec — fall back to a clarification interrupt, the same honest
+    // move `propose` makes on unparseable output.
+    if (!generated || !Array.isArray(generated.nodes) || !generated.nodes.length) {
+      const q = 'I couldn\'t assemble the workflow from that. Could you describe, step by step, what it should do?';
+      const answer = await interrupt({ type: 'clarification', question: q, step: state.step });
+      return {
+        clarifications:  [{ q, a: answer?.answer ?? String(answer) }],
+        confirmationLog: [{ step: state.step, type: 'clarification', question: q, answer }],
+        step:            state.step + 1,
+        phase:           'analyzing',
+      };
+    }
+
+    const merged = mergeGeneratedSpec(draft, generated);
+
+    return {
+      draft: merged,
+      // The whole-spec pass has run: `analyze` re-scores this now-complete draft and
+      // routes it onward (gapping → destinations → …). `_generated` latches so any
+      // later gap-driven round takes the single-fix `propose` path, not another full
+      // rebuild. No per-node interrupt — whole-graph HITL approval is Increment 4.
+      _generated: true,
+      confirmationLog: [{
+        step: state.step, type: 'generate',
+        nodes: merged.nodes.map(n => ({ id: n.id, type: n.type })),
+        edges: merged.edges,
+      }],
+      step:  state.step + 1,
+      // Back to `analyze` (via the new generate → analyze edge) to re-score the
+      // complete draft and route it to gapping.
+      phase: 'analyzing',
+    };
+  });
+
   // ── destinations ───────────────────────────────────────────────────────────
   // "Which base? Which table?" — as CLICKS, never as a pasted id. (Increment F.)
   //
@@ -1403,10 +1546,18 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
   // FIRST; the process is derived from them, which is why `process` needs almost
   // no user turns at all.
   //
-  //   outcome → examples → process → (analyze ⇄ clarify|propose) → decisions → gaps → ratify
+  //   outcome → process → examples → (analyze ⇄ clarify) → generate → analyze
+  //           → destinations → decisions → gaps → ratify
   //
-  // analyze/clarify/propose are v1's loop, kept intact and now driven by the new
-  // gap oracle rather than the old five-item checklist.
+  // CLARIFY-FIRST, THEN GENERATE THE WHOLE SPEC (converger rearchitecture, Increment 3).
+  // `analyze` clarifies the intent to completion, then routes the FIRST build to
+  // `generate` — one whole-spec pass that emits every node, edge and branch case at once
+  // (mergeGeneratedSpec + wireEdges guarantee a connected, branch-fed graph) — and back
+  // to `analyze`, which re-scores the now-complete draft and sends it on to the tail.
+  // `propose` is no longer the primary builder: it survives only for gap-driven single
+  // fixes (a blocking gap or a named-missing component routes `proposing` → `propose`
+  // once `_generated` has latched). analyze/clarify/propose are v1's loop, kept intact
+  // and now driven by the new gap oracle rather than the old five-item checklist.
   //
   // `decisions` (Increment E) sits immediately BEFORE `gaps`, and that order is
   // load-bearing: the gap list must be about the table AS CORRECTED. Review the
@@ -1436,11 +1587,20 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
     if (state.phase === 'gapping')    return 'destinations'; // …→ decisions → gaps,
     if (state.phase === 'ratifying')  return 'ratify';       //   each a pass-through
     if (state.phase === 'clarifying') return 'clarify';      //   when it has nothing
-    return 'propose';                                        //   to do
+    // proposing: the FIRST build routes to the whole-spec `generate` (one Opus pass
+    // that emits every node, edge and branch case at once); later targeted gap-driven
+    // single fixes still use `propose`. `_generated` latches after the first pass, so
+    // generate runs exactly once and the drip becomes the exception, not the builder.
+    return state._generated ? 'propose' : 'generate';
   });
 
   graph.addEdge('clarify', 'analyze');
   graph.addEdge('propose', 'analyze');
+  // After the whole-spec pass, re-enter `analyze` so it re-scores the now-complete
+  // draft and routes it onward (gapping → destinations → decisions → gaps → ratify).
+  // The generated spec is NOT bypassed: it still flows through `gaps` (validator +
+  // gap-scorer) and the destinations tail resolves live schemas into its write-nodes.
+  graph.addEdge('generate', 'analyze');
   // destinations → decisions → gaps. The order is load-bearing in both places:
   // the table under review must be the one whose columns were just resolved, and
   // the gap list must be about the draft AS CORRECTED by both.

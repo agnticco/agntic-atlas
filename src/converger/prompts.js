@@ -564,6 +564,108 @@ ${outcome.statement ? `  "${outcome.statement}"\n` : ''}${lines.join('\n')}
 `;
 }
 
+// ── Generate prompt — emit the WHOLE spec at once (rearchitecture, Increment 2) ─
+
+/**
+ * Ask the model for the COMPLETE spec in ONE structured JSON object —
+ * `{ triggers, nodes, edges }` — instead of one component per round.
+ *
+ * This is the same vocabulary as `buildProposePrompt` (llm modes, decision
+ * tables, the moat's closed-enum routing rule, the deliver channels — all taught
+ * by `buildSystemPrompt`, which is the SYSTEM message alongside this one); it is
+ * simply emitted all at once. The one-component loop reliably emitted visible
+ * NODES but dropped invisible EDGES, so branches never branched and classifiers
+ * dangled (docs/handoff/converger-rearchitecture.md). Emitting the whole graph —
+ * with every edge and branch case — then wiring deterministically (`wireEdges`)
+ * is what guarantees a connected, branched result.
+ *
+ * @param {{ intent, clarifications, outcome, draft, capabilities, setupResults }} args
+ * @returns {string} the user-message prompt
+ */
+export function buildGeneratePrompt({ intent, clarifications, outcome, draft, capabilities, setupResults } = {}) {
+  const prior = (clarifications ?? []).map(({ q, a }) => `  Q: ${q}\n  A: ${a}`).join('\n');
+  const contract = outcome ?? draft?.outcome ?? null;
+  const existing = JSON.stringify({
+    triggers: draft?.triggers ?? [],
+    nodes:    (draft?.nodes ?? []).map(n => ({ id: n.id, type: n.type, label: n.label })),
+  }, null, 2);
+
+  return `Build the COMPLETE workflow in ONE structured JSON object. You are NOT proposing a single
+component — you are emitting the entire spec at once: the trigger, every node with its full config,
+and EVERY edge that connects them.
+
+INTENT: "${intent}"
+${prior ? `\nCLARIFICATIONS:\n${prior}\n` : ''}${setupResultsSummary(setupResults)}${outcomeBlock(contract)}
+ALREADY DERIVED (reuse these exact ids and triggers where present — do not contradict them):
+${existing}
+
+Use the node-type vocabulary, the llm modes, the decision-table rules, the closed-enum routing rule
+and the delivery channels EXACTLY as defined in your system prompt. This is the SAME grammar — emitted
+all at once instead of one component per turn.
+
+RETURN THIS SHAPE (JSON only):
+{
+  "triggers": [ { …one trigger spec… } ],
+  "nodes":    [ { "id": "<snake_case>", "type": "<nodeType>", "label": "<human label>", "config": { … } }, … ],
+  "edges":    [ { "from": "<nodeId>", "to": "<nodeId>" }, … ]
+}
+
+STRUCTURE RULES — these are what make the graph actually RUN. The single most common failure is a node
+with no inbound edge, or a branch with no feed:
+- EVERY node except the ENTRY node has at least one INBOUND edge. The entry node — the first step, fed
+  by the trigger — has NONE. The trigger is NOT a node: never write an edge whose "from" is "trigger".
+- A ROUTER is exactly this shape: an "llm" node with mode:"classify" and a CLOSED list of categories
+  → a "branch" whose config.on is "<classifyId>.output" and whose config.cases has one { when, to } per
+  category PLUS the mandatory { when:"*", to:… } catch-all → each case's "to" is a lane, and EACH lane
+  ends in a delivery. Emit the branch's INPUT edge (classify→branch) AND one OUTPUT edge per case
+  (branch→caseTarget).
+- THE MOAT: a branch may route ONLY on a value with a closed, declared domain — an "llm" mode:"classify"
+  (its categories), a "decision" (its output.values), or a "human" (its decisions). NEVER route a branch
+  on freeform AI prose; cases match by exact value, so prose matches nothing and every run silently falls
+  through the catch-all.
+- EXACTLY ONE delivery node per distinct destination. If two lanes both end at #ops, that is still ONE
+  deliver node targeting #ops (reachable from both lanes) — never two deliver nodes writing the same
+  place with different ids.
+- USE ONLY the connector actions, triggers, delivery channels and ids listed in your system prompt and in
+  ALREADY DERIVED above. NEVER invent a connector id, a base id, a table id or a channel — leave a base or
+  table you cannot know as the placeholder the system prompt describes; the builder resolves it.
+
+WORKED EXAMPLE — a lead router (study the shape, then build for the REAL intent):
+{
+  "triggers": [ { "type": "email", "filter": "to:leads@acme.com" } ],
+  "nodes": [
+    { "id": "classify_lead", "type": "llm", "label": "Classify the email",
+      "config": { "mode": "classify", "categories": "hot\\nwarm\\nnot_a_lead", "instructions": "Sort the inbound email." } },
+    { "id": "route", "type": "branch", "label": "Route by lead type",
+      "config": { "on": "classify_lead.output", "cases": [
+        { "when": "hot",        "to": "summarize_hot" },
+        { "when": "warm",       "to": "summarize_hot" },
+        { "when": "not_a_lead", "to": "log_other" },
+        { "when": "*",          "to": "log_other" } ] } },
+    { "id": "summarize_hot", "type": "llm", "label": "Summarize for sales",
+      "config": { "mode": "summarize", "instructions": "One-paragraph summary. Format output as Slack mrkdwn." } },
+    { "id": "log_other", "type": "llm", "label": "One-line note",
+      "config": { "mode": "summarize", "length": "short", "instructions": "One line. Slack mrkdwn." } },
+    { "id": "notify_sales", "type": "deliver", "label": "Post to #sales",
+      "config": { "channel": "slack", "target": "#sales" } },
+    { "id": "notify_ops",   "type": "deliver", "label": "Post to #ops",
+      "config": { "channel": "slack", "target": "#ops" } }
+  ],
+  "edges": [
+    { "from": "classify_lead", "to": "route" },
+    { "from": "route",         "to": "summarize_hot" },
+    { "from": "route",         "to": "log_other" },
+    { "from": "summarize_hot", "to": "notify_sales" },
+    { "from": "log_other",     "to": "notify_ops" }
+  ]
+}
+Note: the entry node "classify_lead" has NO inbound edge (the email trigger feeds it); the branch has
+its INPUT edge and BOTH output edges; each lane ends in its own delivery; and no destination has two
+deliver nodes.
+
+Return ONLY the JSON object — no prose, no markdown fences, no explanation.`;
+}
+
 // ── Outcome prompt — "how would we know this worked?" ────────────────────────
 
 export function buildOutcomePrompt({ intent, capabilities }) {

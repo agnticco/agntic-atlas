@@ -61,20 +61,25 @@ async function converge(map) {
     if (p.includes('Is this workflow FINISHED'))       return J({ complete: true });
     if (p.includes('cases nobody has decided about'))  return J({ suggestions: [] });
     if (p.includes('REAL columns are'))                return J({ map });
+    // The whole-spec `generate` pass (converger rearchitecture, Increment 3) is now the
+    // primary builder — it emits extract + the Airtable write in one call, leaving the
+    // PLACEHOLDER base id and the intended `Budget` field for `destinations` (which still
+    // runs AFTER generate) to resolve. NO `deliver` NODE: the Airtable record IS the
+    // outcome (a write-only workflow is a complete workflow — MISSING_DELIVER was retired
+    // in Increment F).
+    if (p.includes('Build the COMPLETE workflow')) {
+      return J({ triggers: [{ type: 'email', filter: 'to:leads@acme.com' }],
+        nodes: [
+          { id: 'extract', type: 'llm', label: 'E', config: { mode: 'extract', fields: 'name: the name\nbudget: the budget' } },
+          { id: 'save', type: 'connector-action', label: 'Save',
+            config: { action: 'airtable_create_record', baseId: 'appPLACEHOLDER', tableId: 'Leads',
+                      fields: { Name: '{{extract.name}}', Budget: '{{extract.budget}}' } },
+            idempotency: { key: '{{extract.name}}', on_conflict: 'skip' } },
+        ],
+        edges: [{ from: 'extract', to: 'save' }] });
+    }
     if (p.includes('Build the next component')) {
-      const d   = draftIn(p);
-      const has = (id) => (d.nodes ?? []).some(n => n.id === id);
-      if (!has('extract')) return J({ component: 'node', spec: { id: 'extract', type: 'llm', label: 'E',
-        config: { mode: 'extract', fields: 'name: the name\nbudget: the budget' } } });
-      if (!has('save'))    return J({ component: 'node', spec: { id: 'save', type: 'connector-action', label: 'Save',
-        config: { action: 'airtable_create_record', baseId: 'appPLACEHOLDER', tableId: 'Leads',
-                  fields: { Name: '{{extract.name}}', Budget: '{{extract.budget}}' } },
-        idempotency: { key: '{{extract.name}}', on_conflict: 'skip' } } });
-      if (!(d.edges ?? []).some(e => e.from === 'extract' && e.to === 'save')) return J({ component: 'edge', spec: { from: 'extract', to: 'save' } });
-      // NO `deliver` NODE. This workflow's whole job is to move data: the Airtable
-      // record IS the outcome. It used to need a pointless delivery bolted on to
-      // satisfy MISSING_DELIVER — a checklist shaped like one workflow, imposed on
-      // every workflow. (Raised by the operator.)
+      // propose survives only for gap-driven fixes; generate already built everything.
       return J({ component: 'name', spec: 'Leads' });
     }
     return J({});
@@ -129,6 +134,21 @@ async function convergeWithGapLoop() {
       return J({ suggestions: ids.map(id => ({ gapId: id, answer: 'write the company too' })) });
     }
     if (p.includes('REAL columns are')) return J({ map: { Name: 'Name', Company: null } });   // no such column
+    // The whole-spec `generate` pass builds the initial spec (extract + the Airtable
+    // write promising Name AND Company). `destinations` then drops Company (the table has
+    // no such column), which leaves a BLOCKING gap — and THAT is what routes back through
+    // `propose` below, where the gap loop hands the model the motive to put Company back.
+    if (p.includes('Build the COMPLETE workflow')) {
+      return J({ triggers: [{ type: 'email', filter: 'to:leads@acme.com' }],
+        nodes: [
+          { id: 'extract', type: 'llm', label: 'E', config: { mode: 'extract', fields: 'name: the name\ncompany: the company' } },
+          { id: 'save', type: 'connector-action', label: 'Save',
+            config: { action: 'airtable_create_record', baseId: 'appPLACEHOLDER', tableId: 'Leads',
+                      fields: { Name: '{{extract.name}}', Company: '{{extract.company}}' } },
+            idempotency: { key: '{{extract.name}}', on_conflict: 'skip' } },
+        ],
+        edges: [{ from: 'extract', to: 'save' }] });
+    }
     if (p.includes('Build the next component')) {
       const d = draftIn(p);
       const save = (d.nodes ?? []).find(n => n.id === 'save');
