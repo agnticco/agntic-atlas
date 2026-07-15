@@ -129,6 +129,9 @@ const SUITES = [
   // file whose mutants are unkillable by construction.
   'tests/converger/graph-paths.test.js',
   'tests/converger/destination-mapping.test.js',
+  // #19 — the structural auto-repair (autoRepairStructural in elicitation-graph.js,
+  // already a TARGET). Without this suite the repair's mutants are unkillable.
+  'tests/converger/auto-repair.test.js',
 ];
 
 /**

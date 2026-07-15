@@ -197,6 +197,12 @@ export function scoreGap(spec = {}, { capabilities = {}, validator = null } = {}
       severity: issue.severity,
       message:  issue.message,
       hint:     issue.hint ?? null,
+      // A deterministic, machine-applicable repair the validator computed for a
+      // STRUCTURAL defect (a missing branch/route edge to add, an ambiguous extra
+      // edge to remove). Present only on codes whose fix is unambiguous. The gaps
+      // node applies it directly — no LLM guess, no question — because a missing
+      // edge is a bug in the builder's own output, not a decision a user can make.
+      fix:      issue.fix ?? null,
       // A blocking gap cannot be escalated — see the header. It must be ANSWERED.
       resolution: blocking ? 'unanswered' : 'escalated',
       decidable:  !UNDECIDABLE_CODES.has(issue.code),
