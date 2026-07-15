@@ -204,6 +204,43 @@ describe('evaluateExampleRun — the contract is gated, expect is shown', () => 
     assert.equal(r.ran, false);
   });
 
+  // THE CONTENT-ERROR GUARD (live-testing finding). A content llm node that can't
+  // find its input outputs EXACTLY the converger's sentinel "ERROR: required data
+  // not found", which then flows to the delivery. `message_sent → inbox` is a floor
+  // and passed anyway — so a workflow that delivered an ERROR STRING read as
+  // "Contract kept / Go live". It must NOT: a delivery of the sentinel keeps nothing.
+  test('a delivery whose content is the error sentinel does NOT keep the contract', () => {
+    const inboxSpec = { outcome: { assertions: [{ id: 'a1', kind: 'message_sent', target: 'inbox:Digest' }] } };
+    const run = {
+      completed: true,
+      deliveries: [deliv({ channel: 'inbox_deliver', subject: 'Digest' })],
+      steps: [
+        { nodeId: 'classify', output: 'urgent' },
+        { nodeId: 'summarize_email', output: 'ERROR: required data not found' },
+        { nodeId: 'deliver', output: { inbox_message_id: 'm1', subject: 'Digest', delivered: true } },
+      ],
+    };
+    const r = evaluateExampleRun(inboxSpec, { id: 'e1', label: 'x' }, run);
+    assert.equal(r.contractPassed, false, 'a delivered error string is not a kept promise');
+    const failed = r.contract.find(c => !c.ok);
+    assert.match(failed.reason, /content was an error/);
+    assert.match(failed.reason, /summarize_email/);
+  });
+
+  test('a clean run with the same shape still passes (guard is not over-eager)', () => {
+    const inboxSpec = { outcome: { assertions: [{ id: 'a1', kind: 'message_sent', target: 'inbox:Digest' }] } };
+    const run = {
+      completed: true,
+      deliveries: [deliv({ channel: 'inbox_deliver', subject: 'Digest' })],
+      steps: [
+        { nodeId: 'classify', output: 'urgent' },
+        { nodeId: 'summarize_email', output: 'The database is down; engineering is investigating.' },
+        { nodeId: 'deliver', output: { inbox_message_id: 'm1', subject: 'Digest', delivered: true } },
+      ],
+    };
+    assert.equal(evaluateExampleRun(inboxSpec, { id: 'e1', label: 'x' }, run).contractPassed, true);
+  });
+
   test('EXPECT IS SHOWN, NOT GATED — a wrong expect value does not fail the contract', () => {
     // The run kept every contract promise. `expect.urgent` was the SME's word and the
     // run produced `tier: hot` instead — a workflow-agnostic oracle CANNOT know those

@@ -614,6 +614,32 @@ function describeDelivery(d) {
   return `${d.channel ?? 'delivered'}${where ? ` → ${where}` : ''}${d.ts ? ` (${d.ts})` : ''}`;
 }
 
+// The exact sentinel the converger writes into every content llm node's guard
+// ("If the provided data is empty or missing, output EXACTLY: ERROR: required data
+// not found"). Its presence in a run means a content step could not find its input
+// and emitted an error string instead of real content — which then flows to the
+// delivery. Matched precisely so a genuine summary that merely says "error" is not
+// caught.
+const CONTENT_ERROR_SENTINEL = /\bERROR:\s*required data not found\b/i;
+
+/**
+ * Did any step in the run emit the content-error sentinel? Returns {step, snippet}
+ * for the first offender, else null. Scans every step's output (string or the
+ * common content fields of an object) so a broken content node is caught wherever
+ * it sits on the path to a delivery.
+ */
+function runProducedContentError(runResult) {
+  for (const s of (runResult?.steps ?? [])) {
+    let o = s.output;
+    const text = typeof o === 'string' ? o
+      : (o && typeof o === 'object' ? String(o.text ?? o.body ?? o.summary ?? o.output ?? '') : String(o ?? ''));
+    if (CONTENT_ERROR_SENTINEL.test(text)) {
+      return { step: s.nodeId ?? s.type ?? 'a step', snippet: text.trim().slice(0, 60) };
+    }
+  }
+  return null;
+}
+
 /**
  * Evaluate one example's RUN against the outcome contract. (P12 Increment G.)
  *
@@ -642,10 +668,24 @@ export function evaluateExampleRun(spec, example, runResult) {
     ...checkAssertionAtRuntime(a, deliveries),
   }));
 
+  // CONTENT-ERROR GUARD. `message_sent → inbox` is a FLOOR — any delivery satisfies
+  // it, even one whose body is the converger's own "I couldn't do my job" sentinel
+  // (an llm node that can't find its input outputs EXACTLY "ERROR: required data not
+  // found"). A run that delivered that string kept nothing — the inbox got an error,
+  // not a summary — so it must NOT read as "Contract kept / Go live". If any step
+  // produced the sentinel, the promise it fed is broken: fail every satisfied
+  // assertion with a plain reason, and fail the example.
+  const broken = runProducedContentError(runResult);
+  if (broken) {
+    for (const c of contract) {
+      if (c.ok) { c.ok = false; c.reason = `a message was delivered, but its content was an error — "${broken.step}" couldn't find the data it needed and produced "${broken.snippet}" instead of real content`; }
+    }
+  }
+
   // The run itself failing is a contract failure — a workflow that errored on this
   // input did not keep any promise.
   const ran = runResult?.completed === true && !runResult?.error;
-  const contractPassed = ran && contract.every(c => c.ok);
+  const contractPassed = ran && !broken && contract.every(c => c.ok);
 
   return {
     exampleId: example?.id ?? null,
