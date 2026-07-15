@@ -110,12 +110,27 @@ describe('normalizeDelivery — the real handler shapes reach the oracle (G)', (
     assert.equal(isDeliveryNode({ id: 'l', type: 'llm', config: { mode: 'summarize' } }), false);
   });
 
-  test('the WRONG inbox title still fails — the fix widens matching, it does not blunt it', () => {
+  // The inbox is a SINGLE destination and its "locator" is a descriptive TITLE, not a
+  // routing address — the converger sets the item's title (e.g. `[Name] — [Company]`)
+  // independently of the assertion's descriptive locator (`Daily CRM Summary`), and the
+  // two legitimately differ. Matching them as if the title were an address produced a
+  // false "nothing reached inbox:…" on genuinely-delivered items, stranding fan-out and
+  // foreach builds (live P12 hardening). So an inbox delivery of ANY title satisfies an
+  // inbox assertion — the destination is what the moat guards, and there is one inbox.
+  test('inbox is a single destination — any title satisfies an inbox assertion', () => {
     const node   = { id: 'd', type: 'deliver', config: { channel: 'inbox_deliver', subject: 'Something Else' } };
     const output = { inbox_message_id: 'm2', subject: 'Something Else', delivered: true };
-    const r = run(node, output, { kind: 'message_sent', target: 'inbox:Support Email Summary' });
+    assert.equal(run(node, output, { kind: 'message_sent', target: 'inbox:Support Email Summary' }).ok, true);
+  });
+
+  // …but the guard is NOT blunted: it still bites on the DESTINATION. A delivery to the
+  // WRONG connector does not satisfy an inbox promise, and NO inbox delivery fails it.
+  test('a NON-inbox delivery does NOT satisfy an inbox assertion (destination still checked)', () => {
+    const node   = { id: 's', type: 'connector-action', config: { action: 'slack', target: '#ops' } };
+    const output = { delivered: true, channel: 'slack', target: '#ops', ts: '1' };
+    const r = run(node, output, { kind: 'message_sent', target: 'inbox:Daily Digest' });
     assert.equal(r.ok, false);
-    assert.match(r.reason, /nothing reached inbox:Support Email Summary/);
+    assert.match(r.reason, /nothing reached inbox:Daily Digest/);
   });
 
   test('a MALFORMED assertion is reported, never silently passed', () => {
