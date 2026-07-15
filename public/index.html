@@ -330,7 +330,7 @@
             <div style="font-size:13.5px;line-height:1.5;color:rgba(255,255,255,.88)">{{ outcomePin.statement }}</div>
             <div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:8px">
               <sc-for list="{{ outcomePin.assertions }}" as="a" hint-placeholder-count="2">
-                <div style="font-size:11.5px;font-family:ui-monospace,monospace;color:rgba(255,255,255,.5);border:1px solid rgba(255,255,255,.1);border-radius:999px;padding:3px 10px">{{ a.label }}</div>
+                <div style="font-size:11.5px;color:rgba(255,255,255,.6);border:1px solid rgba(255,255,255,.12);border-radius:999px;padding:3px 11px">{{ a.label }}</div>
               </sc-for>
             </div>
           </div>
@@ -400,11 +400,13 @@
                   <div style="flex:none;width:32px;height:32px"></div>
                   <div style="min-width:0;flex:1">
                     <div style="font-size:15px;line-height:1.5;color:#fff;font-weight:500">{{ item.q }}</div>
+                    <div style="font-size:13px;line-height:1.55;color:rgba(255,255,255,.5);margin-top:6px;max-width:52ch">{{ item.sub }}</div>
                     <div style="display:flex;flex-direction:column;gap:10px;margin-top:14px">
                       <sc-for list="{{ item.cards }}" as="card" hint-placeholder-count="2">
                         <button onClick="{{ card.onPick }}" style="{{ card.style }}" style-hover="border-color:rgba(240,191,107,.55)">
+                          <div style="font-size:9.5px;letter-spacing:.16em;text-transform:uppercase;font-weight:600;color:{{ card.tagColor }};margin-bottom:7px">{{ card.tag }}</div>
                           <div style="font-size:14px;line-height:1.5;color:#fff;font-weight:500;margin-bottom:6px">{{ card.statement }}</div>
-                          <div style="font-size:12px;line-height:1.5;color:rgba(255,255,255,.45);font-family:ui-monospace,monospace">{{ card.hint }}</div>
+                          <div style="font-size:12.5px;line-height:1.5;color:rgba(255,255,255,.55)">{{ card.deliversText }}</div>
                         </button>
                       </sc-for>
                     </div>
@@ -422,6 +424,7 @@
                   <div style="flex:none;width:32px;height:32px"></div>
                   <div style="min-width:0;flex:1">
                     <div style="font-size:15px;line-height:1.5;color:#fff;font-weight:500">{{ item.q }}</div>
+                    <div style="font-size:13px;line-height:1.55;color:rgba(255,255,255,.5);margin-top:6px;max-width:52ch">{{ item.sub }}</div>
                     <div style="display:flex;flex-direction:column;gap:8px;margin-top:14px">
                       <sc-for list="{{ item.rows }}" as="row" hint-placeholder-count="2">
                         <div style="border:1px solid rgba(255,255,255,.09);border-radius:12px;padding:13px 15px;background:rgba(255,255,255,.02)">
@@ -4676,17 +4679,25 @@ class Component extends DCLogic {
       const notice = iv.notice ? [{ isAtlas: true, text: iv.notice, hasReason: false }] : [];
       const cards = cands.map((c, i) => ({
         statement: c.statement,
-        hint: (c.assertions || []).map(a => (a.kind || "").replace(/_/g, " ") + " → " + (a.target || "")).join("   ·   "),
-        // The first card is the default — visibly so, or "pre-selected" is a lie.
-        style: "text-align:left;width:100%;font-family:inherit;cursor:pointer;padding:13px 16px;border-radius:12px;"
+        // Plain-language promise, not the schema shape. The first reading is the
+        // builder's confident answer; the rest are there only in case it misread.
+        deliversText: this._deliversText(c.assertions),
+        tag: i === 0 ? "What I'll build" : "Or did you mean",
+        tagColor: i === 0 ? "rgba(240,191,107,.9)" : "rgba(255,255,255,.4)",
+        // The first card is the confident default — visibly so, or "pre-selected"
+        // is a lie. Alternatives are dimmer, so this reads as "confirm" not "quiz".
+        style: "text-align:left;width:100%;font-family:inherit;cursor:pointer;padding:14px 16px;border-radius:12px;"
              + (i === 0
-                ? "border:1px solid rgba(240,191,107,.45);background:rgba(240,191,107,.08)"
-                : "border:1px solid rgba(255,255,255,.1);background:rgba(255,255,255,.02)"),
+                ? "border:1px solid rgba(240,191,107,.5);background:rgba(240,191,107,.09)"
+                : "border:1px solid rgba(255,255,255,.08);background:rgba(255,255,255,.015);opacity:.82"),
         onPick: () => pick(c),
       }));
       this.setState({
         msgs: [...this.state.msgs, ...lead, ...notice,
-               { isOutcome: true, q: "Here's what I think this needs to deliver. Which is right?", cards }],
+               { isOutcome: true,
+                 q: "Here's what I'll build — does this capture it?",
+                 sub: "This is the promise your workflow has to keep. I'll test the finished build against it before it can go live. Pick the top one if it's right, or a closer reading below.",
+                 cards }],
         thinking: false, inputMode: "clarify", phase: "building",
       });
       return;
@@ -4749,6 +4760,7 @@ class Component extends DCLogic {
                 ? "I pulled a real email from your inbox to test this workflow on. Keep it as a test case?"
                 : "I pulled " + items.length + " real emails from your inbox to test this workflow on. Deselect any that shouldn't be a test case.")
             : "I'll use these as test cases to check the workflow before it goes live — tell me if any looks wrong.",
+          sub: "For testing only — these run in the test panel so you can see the workflow work before publishing. They're never part of the published workflow, and it never touches these emails once it's live.",
           rows: buildRows(),
           acceptLabel: "Use as test cases",
           onAcceptAll: () => send("accept"),
@@ -4933,10 +4945,11 @@ class Component extends DCLogic {
         msgs: [...this.state.msgs, {
           isGaps: true, _id: gid, _res: defaults,
           q: gaps.length === 1
-            ? "There's one case nobody has decided about yet."
-            : "There are " + gaps.length + " cases nobody has decided about yet.",
+            ? "Your workflow's ready. One optional edge case you can weigh in on:"
+            : "Your workflow's ready. " + gaps.length + " optional edge cases you can weigh in on:",
+          sub: "These aren't blocking anything — I've already picked a safe default for each (a person gets notified). Leave them as-is, or change any you have an opinion on.",
           rows: buildRows(defaults),
-          acceptLabel: "Accept all defaults",
+          acceptLabel: "Keep the safe defaults",
           onAcceptAll: () => {
             const m = self.state.msgs.find(x => x._id === gid);
             send((m && m._res) || defaults);
@@ -5906,6 +5919,35 @@ class Component extends DCLogic {
   }
   _stringify(v) { if (v == null) return ""; if (typeof v === "string") return v; try { return JSON.stringify(v); } catch (e) { return String(v); } }
 
+  // Plain-language rendering of one outcome assertion. The user should read what
+  // the workflow DELIVERS ("Saves it to your Atlas inbox"), never the schema
+  // shape ("record exists → inbox:Email Summary"), which reads as a database
+  // constraint and tells a non-technical operator nothing.
+  _deliverySentence(a) {
+    const parts = String((a && a.target) || "").split(":");
+    const conn = (parts[0] || "").toLowerCase();
+    const loc = parts.slice(1).join(":").trim();
+    const kind = (a && a.kind) || "";
+    if (conn === "inbox" || conn === "in_app" || conn === "inbox_deliver") return "Saves it to your Atlas inbox";
+    if (conn === "slack")        return "Posts it to Slack " + (loc || "a channel");
+    if (conn === "slack_dm")     return "Sends it as a Slack DM to " + (loc || "you");
+    if (conn === "gmail" || conn === "email" || conn === "mail" || conn === "gmail_send") return "Emails it to " + (loc || "the recipient");
+    if (conn === "airtable")     return "Adds a record to Airtable" + (loc ? " (" + loc + ")" : "");
+    if (conn === "sheets")       return "Adds a row to your spreadsheet" + (loc ? " (" + loc + ")" : "");
+    if (conn === "docs")         return "Creates a Google Doc" + (loc ? ": " + loc : "");
+    if (conn === "calendar")     return "Creates a calendar event" + (loc ? ": " + loc : "");
+    if (kind === "record_exists")   return "Creates a record in " + (loc || conn || "your system");
+    if (kind === "document_exists") return "Creates a document in " + (loc || conn || "your system");
+    return "Sends it to " + (loc || conn || "the destination");
+  }
+  // One readable line for a candidate's full set of promises.
+  _deliversText(assertions) {
+    const s = (assertions || []).map(a => this._deliverySentence(a));
+    if (!s.length) return "";
+    if (s.length === 1) return s[0];
+    return s.slice(0, -1).join("; ") + "; and " + s[s.length - 1];
+  }
+
   // "The deal" reads as a sentence with the load-bearing parts — the trigger, the
   // action, the destination — emphasized (bold + underline), exactly as the Claude
   // Design source did. We return SEGMENTS rather than an HTML string because the DC
@@ -6241,7 +6283,7 @@ class Component extends DCLogic {
       outcomePin: S.outcome && S.outcome.statement ? {
         statement: S.outcome.statement,
         assertions: (S.outcome.assertions || []).map((a) => ({
-          label: (a.kind || '').replace(/_/g, ' ') + ' → ' + (a.target || ''),
+          label: this._deliverySentence(a),
         })),
       } : null,
       chatInputRef: (el) => {
