@@ -1155,6 +1155,13 @@ export function createApp(spine) {
   });
 
   app.use(cookieParser());
+  // Browser Knowledge uploads carry each file's contents inline as base64 (a brand
+  // kit with logos/images is easily tens of MB), so this ONE path needs a much
+  // larger JSON limit than the rest of the API. Mount it BEFORE the global 4mb
+  // parser: body-parser marks the body parsed and the global parser then skips it,
+  // so every other endpoint keeps the tighter 4mb ceiling. Without this, a large
+  // upload 500s with PayloadTooLargeError before the route ever runs.
+  app.use('/rag/ingest-files', express.json({ limit: '64mb' }));
   // Capture the raw body so connector webhooks (e.g. Slack Events) can verify
   // request signatures over the exact bytes Slack signed.
   app.use(express.json({ limit: '4mb', verify: (req, _res, buf) => { req.rawBody = buf; } }));
