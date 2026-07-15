@@ -402,13 +402,23 @@
                     <div style="font-size:15px;line-height:1.5;color:#fff;font-weight:500">{{ item.q }}</div>
                     <div style="font-size:13px;line-height:1.55;color:rgba(255,255,255,.5);margin-top:6px;max-width:52ch">{{ item.sub }}</div>
                     <div style="display:flex;flex-direction:column;gap:10px;margin-top:14px">
-                      <sc-for list="{{ item.cards }}" as="card" hint-placeholder-count="2">
-                        <button onClick="{{ card.onPick }}" style="{{ card.style }}" style-hover="border-color:rgba(240,191,107,.55)">
-                          <div style="font-size:9.5px;letter-spacing:.16em;text-transform:uppercase;font-weight:600;color:{{ card.tagColor }};margin-bottom:7px">{{ card.tag }}</div>
-                          <div style="font-size:14px;line-height:1.5;color:#fff;font-weight:500;margin-bottom:6px">{{ card.statement }}</div>
-                          <div style="font-size:12.5px;line-height:1.5;color:rgba(255,255,255,.55)">{{ card.deliversText }}</div>
-                        </button>
-                      </sc-for>
+                      <button onClick="{{ item.primaryCard.onPick }}" style="{{ item.primaryCard.style }}" style-hover="border-color:rgba(240,191,107,.55)">
+                        <div style="font-size:9.5px;letter-spacing:.16em;text-transform:uppercase;font-weight:600;color:{{ item.primaryCard.tagColor }};margin-bottom:7px">{{ item.primaryCard.tag }}</div>
+                        <div style="font-size:14px;line-height:1.5;color:#fff;font-weight:500;margin-bottom:6px">{{ item.primaryCard.statement }}</div>
+                        <div style="font-size:12.5px;line-height:1.5;color:rgba(255,255,255,.55)">{{ item.primaryCard.deliversText }}</div>
+                      </button>
+                      <sc-if value="{{ item.hasAlts }}" hint-placeholder-val="{{ false }}">
+                        <button onClick="{{ item.onToggleAlts }}" style="align-self:flex-start;background:none;border:none;cursor:pointer;font-family:inherit;font-size:12.5px;color:rgba(255,255,255,.45);padding:2px 0" style-hover="color:rgba(255,255,255,.75)"><sc-if value="{{ item.altsOpen }}" hint-placeholder-val="{{ false }}">Hide other readings ▴</sc-if><sc-if value="{{ !item.altsOpen }}" hint-placeholder-val="{{ false }}">Not quite? See {{ item.altCount }} ▾</sc-if></button>
+                      </sc-if>
+                      <sc-if value="{{ item.altsOpen }}" hint-placeholder-val="{{ false }}">
+                        <sc-for list="{{ item.altCards }}" as="card" hint-placeholder-count="2">
+                          <button onClick="{{ card.onPick }}" style="{{ card.style }}" style-hover="border-color:rgba(240,191,107,.55)">
+                            <div style="font-size:9.5px;letter-spacing:.16em;text-transform:uppercase;font-weight:600;color:{{ card.tagColor }};margin-bottom:7px">{{ card.tag }}</div>
+                            <div style="font-size:14px;line-height:1.5;color:#fff;font-weight:500;margin-bottom:6px">{{ card.statement }}</div>
+                            <div style="font-size:12.5px;line-height:1.5;color:rgba(255,255,255,.55)">{{ card.deliversText }}</div>
+                          </button>
+                        </sc-for>
+                      </sc-if>
                     </div>
                   </div>
                 </div>
@@ -441,6 +451,30 @@
                     <div style="display:flex;gap:10px;margin-top:14px">
                       <button onClick="{{ item.onAcceptAll }}" style="border:1px solid rgba(240,191,107,.45);background:rgba(240,191,107,.14);color:#f3cd86;font-family:inherit;font-size:14px;font-weight:600;padding:10px 20px;border-radius:999px;cursor:pointer" style-hover="background:rgba(240,191,107,.22)">{{ item.acceptLabel }}</button>
                     </div>
+                  </div>
+                </div>
+              </sc-if>
+
+              <!-- ACTION CONFIRMATION (isActionConfirm) — an outward-facing action the
+                   chat proposed (send email, post, write). NOTHING has run: it is held
+                   here until the user clicks Confirm. This is the safety gate that stops
+                   the chat firing live sends while the user is still talking. -->
+              <sc-if value="{{ item.isActionConfirm }}" hint-placeholder-val="{{ false }}">
+                <div style="display:flex;gap:13px;align-items:flex-start;animation:msgIn .45s ease both">
+                  <div style="flex:none;width:32px;height:32px"></div>
+                  <div style="min-width:0;flex:1">
+                    <div style="font-size:15px;line-height:1.5;color:#fff;font-weight:500">{{ item.view.title }}</div>
+                    <div style="display:flex;flex-direction:column;gap:8px;margin-top:12px;border:1px solid rgba(255,255,255,.1);border-radius:12px;padding:13px 15px;background:rgba(255,255,255,.02)">
+                      <sc-for list="{{ item.view.rows }}" as="row" hint-placeholder-count="2">
+                        <div style="display:flex;gap:9px;align-items:flex-start;font-size:13.5px;line-height:1.5;color:rgba(255,255,255,.84)"><span style="color:{{ row.markColor }};flex:none;font-weight:600">{{ row.mark }}</span><span style="min-width:0">{{ row.label }}</span></div>
+                      </sc-for>
+                    </div>
+                    <sc-if value="{{ item.view.showButtons }}" hint-placeholder-val="{{ false }}">
+                      <div style="display:flex;gap:10px;margin-top:13px">
+                        <button onClick="{{ item.onConfirm }}" style="border:1px solid rgba(240,191,107,.45);background:rgba(240,191,107,.14);color:#f3cd86;font-family:inherit;font-size:14px;font-weight:600;padding:9px 18px;border-radius:999px;cursor:pointer" style-hover="background:rgba(240,191,107,.22)">Confirm &amp; run</button>
+                        <button onClick="{{ item.onCancel }}" style="border:1px solid rgba(255,255,255,.14);background:transparent;color:rgba(255,255,255,.6);font-family:inherit;font-size:14px;padding:9px 18px;border-radius:999px;cursor:pointer" style-hover="color:#fff">Cancel</button>
+                      </div>
+                    </sc-if>
                   </div>
                 </div>
               </sc-if>
@@ -2654,6 +2688,26 @@ class Component extends DCLogic {
       const self = this, bi = item.buildIntent;
       item = Object.assign({}, item, { onClick: () => self.startBuild(bi) });
     }
+    // Confirmation card for outward-facing actions the chat proposed. Nothing has
+    // run; the buttons run (or dismiss) it. Handlers are rebuilt here so a restored
+    // card still works — though on reload the pending actions are gone, which is the
+    // SAFE default (nothing pending survives to fire unseen).
+    if (item.isActionConfirm) {
+      const self = this, mid = item._id, status = item.status || "pending";
+      const rows = (status === "done" || status === "error")
+        ? (item.results || []).map(r => ({ mark: r.ok ? "✓" : "!", markColor: r.ok ? "#9fd6a8" : "#f0a896", label: r.label + (r.error ? " — " + r.error : "") }))
+        : (item.actions || []).map(a => ({ mark: "•", markColor: "rgba(255,255,255,.42)", label: a.label }));
+      const title = status === "pending" ? "I'd like to do this — nothing has run yet. Want me to go ahead?"
+        : status === "running" ? "Running…"
+        : status === "done" ? "Done — here's what ran:"
+        : status === "error" ? "Some of these didn't go through:"
+        : "Okay — I won't run these.";
+      return Object.assign({}, item, {
+        view: { status, rows, title, showButtons: status === "pending" },
+        onConfirm: () => self._runChatActions(mid),
+        onCancel:  () => self._dismissChatActions(mid),
+      });
+    }
     if (item.text == null) return item;
     const parts = this._parseMentions(item.text);
     const result = Object.assign({}, item, { parts });
@@ -2852,7 +2906,7 @@ class Component extends DCLogic {
     this.setState({
       phase: "chat", intent: null, threadId: null, msgs: [], inputMode: "chat",
       inputValue: "", thinking: false, spec: null, outcome: null, testState: "idle", runSteps: [], contractOpenRow: null,
-      runStepIndex: 0, failIndex: -1, deliveries: [], runOutput: null, runError: "", workflowId: null, isEditing: false, isDraftBuild: false, editingIntro: null,
+      runStepIndex: 0, failIndex: -1, deliveries: [], runOutput: null, runError: "", outcomeResults: [], workflowId: null, isEditing: false, isDraftBuild: false, editingIntro: null,
       renamingWfId: null, renamingValue: "", draftName: null,
       connectionsOpen: false, accountOpen: false, profileOpen: false, connectionsClosing: false, accountClosing: false,
       mentionOpen: false, mentionQuery: "", mentionAt: -1,
@@ -4523,6 +4577,13 @@ class Component extends DCLogic {
               const buildIntent = twDone.buildIntent || null;
               newMsgs.push({ isCta: true, ctaAction: "build", buildIntent, text: "", btn: "Build it →", btnBg: "#7fc28a", btnFg: "#06210d", onClick: () => self.startBuild(buildIntent) });
             }
+            // Outward-facing actions the chat proposed are HELD for confirmation —
+            // nothing was sent. Render a confirm card; the action runs only on click.
+            if (Array.isArray(twDone.pendingActions) && twDone.pendingActions.length) {
+              const aid = "act" + (self._pc = (self._pc || 0) + 1);
+              newMsgs.push({ isActionConfirm: true, _id: aid, status: "pending",
+                actions: twDone.pendingActions.map(a => ({ name: a.name, args: a.args, label: a.label })) });
+            }
             self.setState({ msgs: newMsgs, thinking: false, thinkingLabel: null });
             twDone = null;
           }
@@ -4591,6 +4652,31 @@ class Component extends DCLogic {
     }
   }
 
+  // Run the outward-facing actions the chat proposed — ONLY after the user clicked
+  // "Confirm & run". Each executes via /chat/execute-action (the sole path a chat
+  // send/write actually runs). Results are shown back in the same card.
+  async _runChatActions(msgId) {
+    const cur = this.state.msgs.find(m => m._id === msgId);
+    if (!cur || (cur.status && cur.status !== "pending")) return;
+    this.setState({ msgs: this.state.msgs.map(m => (m._id === msgId ? { ...m, status: "running" } : m)) });
+    const results = [];
+    for (const a of (cur.actions || [])) {
+      try {
+        const r = await fetch("/api/builder/chat/execute-action", { method: "POST", headers: this._H(), body: JSON.stringify({ name: a.name, args: a.args }) });
+        const d = await this._readJson(r);
+        const body = d.data || {};
+        results.push({ label: a.label, ok: r.ok && body.ok === true, error: body.error || (!r.ok ? ("Error " + r.status) : null) });
+      } catch (e) {
+        results.push({ label: a.label, ok: false, error: String(e) });
+      }
+    }
+    const allOk = results.length && results.every(x => x.ok);
+    this.setState({ msgs: this.state.msgs.map(m => (m._id === msgId ? { ...m, status: allOk ? "done" : "error", results } : m)) });
+  }
+  _dismissChatActions(msgId) {
+    this.setState({ msgs: this.state.msgs.map(m => (m._id === msgId ? { ...m, status: "dismissed" } : m)) });
+  }
+
   // Transition out of conversation into the structured converger build. Keeps the
   // chat thread; the converger's proposals append below it.
   startBuild(intent) {
@@ -4604,8 +4690,11 @@ class Component extends DCLogic {
       phase: "building", intent, inputValue: "", thinking: true, inputMode: "locked",
       msgs: [...this.state.msgs, { isNote: true, text: "Great — let's build it. I'll propose each piece; confirm or tweak as we go." }],
       // The pinned outcome belongs to ONE build. Carrying it into the next one
-      // would show the user a contract they never agreed to for this workflow.
-      spec: null, threadId: null, testState: "idle", outcome: null
+      // would show the user a contract they never agreed to for this workflow —
+      // and stale run results (outcomeResults/deliveries) would show "Contract
+      // kept ✓" before this workflow has been tested at all.
+      spec: null, threadId: null, testState: "idle", outcome: null,
+      outcomeResults: [], deliveries: [], runOutput: null, runError: ""
     });
     fetch("/api/builder/sessions", { method: "POST", headers: this._H(), body: JSON.stringify({ intent }) })
       .then(r => this._readJson(r))
@@ -4677,27 +4766,33 @@ class Component extends DCLogic {
       // did not get MUST be said out loud — dropping it in silence is defect #1
       // relocated from the spec into the candidate list.
       const notice = iv.notice ? [{ isAtlas: true, text: iv.notice, hasReason: false }] : [];
-      const cards = cands.map((c, i) => ({
+      const mkCard = (c, i) => ({
         statement: c.statement,
-        // Plain-language promise, not the schema shape. The first reading is the
-        // builder's confident answer; the rest are there only in case it misread.
+        // Plain-language promise, not the schema shape.
         deliversText: this._deliversText(c.assertions),
         tag: i === 0 ? "What I'll build" : "Or did you mean",
         tagColor: i === 0 ? "rgba(240,191,107,.9)" : "rgba(255,255,255,.4)",
-        // The first card is the confident default — visibly so, or "pre-selected"
-        // is a lie. Alternatives are dimmer, so this reads as "confirm" not "quiz".
         style: "text-align:left;width:100%;font-family:inherit;cursor:pointer;padding:14px 16px;border-radius:12px;"
              + (i === 0
                 ? "border:1px solid rgba(240,191,107,.5);background:rgba(240,191,107,.09)"
-                : "border:1px solid rgba(255,255,255,.08);background:rgba(255,255,255,.015);opacity:.82"),
+                : "border:1px solid rgba(255,255,255,.08);background:rgba(255,255,255,.015)"),
         onPick: () => pick(c),
-      }));
+      });
+      // Lead with ONE confident reading; the alternatives are collapsed behind a
+      // quiet toggle, so the default is "confirm this" — not "read three long,
+      // near-identical paragraphs and choose." (Operator: the 3-card wall is clunky.)
+      const oid = "oc" + (this._pc = (this._pc || 0) + 1);
+      const primaryCard = mkCard(cands[0], 0);
+      const altCards = cands.slice(1).map((c, i) => mkCard(c, i + 1));
+      const nAlt = altCards.length;
       this.setState({
         msgs: [...this.state.msgs, ...lead, ...notice,
-               { isOutcome: true,
+               { isOutcome: true, _id: oid,
                  q: "Here's what I'll build — does this capture it?",
-                 sub: "This is the promise your workflow has to keep. I'll test the finished build against it before it can go live. Pick the top one if it's right, or a closer reading below.",
-                 cards }],
+                 sub: "This is the promise your workflow has to keep — I'll test the finished build against it before it can go live.",
+                 primaryCard, altCards, altsOpen: false, hasAlts: nAlt > 0,
+                 altCount: nAlt + " other reading" + (nAlt === 1 ? "" : "s"),
+                 onToggleAlts: () => self.setState({ msgs: self.state.msgs.map(m => (m._id === oid ? { ...m, altsOpen: !m.altsOpen } : m)) }) }],
         thinking: false, inputMode: "clarify", phase: "building",
       });
       return;
@@ -6366,7 +6461,7 @@ class Component extends DCLogic {
         : (TS === "running" ? ("Running against the real engine — this can take a few minutes for web search or multi-source steps." + (S.runElapsed ? "  ·  " + S.runElapsed + "s elapsed" : ""))
         : (TS === "passed" ? "Every step ran cleanly — no breaks." : "One step failed — review the break below."))),
       testSteps: contract.show ? [] : testSteps, slackChannel: this._slackChannel(), deliveryTarget: this._deliveryMeta().header, summaryText: this._summaryText(),
-      outcomeCards: this._outcomeCards(), showOutcomes: (S.outcomeResults || []).length > 0 && TS !== "running" && !contract.show,
+      outcomeCards: this._outcomeCards(), showOutcomes: (S.outcomeResults || []).length > 0 && (TS === "passed" || TS === "failed") && !contract.show,
       contract,
       showVerdict: verdict.show && !contract.show, verdictText: verdict.text, verdictIcon: verdict.icon, verdictColor: verdict.color,
       verdictBorder: verdict.border, verdictBg: verdict.bg, verdictIconBg: verdict.iconBg,
