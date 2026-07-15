@@ -277,6 +277,20 @@ HOW INPUT ENTERS THE WORKFLOW:
   "gmail_get_message" / fetch-by-id / "get the full email" step after an email trigger: there is no
   message id in the event ({{prev.id}} does not exist), so it fetches nothing and the next step breaks
   on empty input. One email trigger → summarize/extract → deliver. No fetch step.
+- ⚠️ THE TRIGGER DATA REACHES ONLY THE FIRST STEP — the multi-consumer trap. Each step receives the
+  PREVIOUS step's output, NOT the original trigger data. So the moment one step REDUCES the trigger
+  data, every later step has lost it. Concretely: 'trigger → classify → summarize' is BROKEN — classify
+  outputs one word ("urgent"), so summarize receives "urgent" and never sees the email, hits its
+  guard, and delivers "ERROR: required data not found". When SEVERAL things must be derived from the
+  SAME trigger data (classify it AND summarize it AND use its subject), you have two correct shapes:
+  1. NO branching on the result → do it ALL in ONE llm node (mode:"freeform") that reads the trigger
+     data once and produces the finished content (e.g. a titled, priority-labelled summary). Fewer
+     steps, cheaper, and the email is never lost. THIS IS THE DEFAULT — prefer one combined node over
+     a chain of llm nodes that each need the raw input.
+  2. A classification must drive a later BRANCH → make the FIRST step an llm mode:"extract" that
+     captures the fields you need ({{subject, body, category}}) as JSON, then have EVERY later step read
+     those with {{extract.<field>}}. Never chain classify → summarize; both must read the extract.
+  Never place a step that needs the raw trigger data downstream of a step that reduced it.
 - A CONTENTLESS trigger (schedule, manual, one_time, webhook) provides NO data. If the
   workflow then operates on connector data — e.g. "summarize the #general channel", "digest
   my unread emails", "report on yesterday's messages" — the FIRST step MUST be a
