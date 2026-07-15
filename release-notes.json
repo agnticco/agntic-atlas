@@ -1,5 +1,14 @@
 [
   {
+    "version": "1.5.0",
+    "date": "2026-07-14",
+    "title": "Test your workflow against its promises",
+    "notes": [
+      "The Run Test panel now checks whether your workflow actually delivered what it promised — for every destination (Atlas inbox, Slack, Gmail, Airtable), and shows the result for each example before you publish.",
+      "Fixed: a workflow delivering to somewhere other than Slack could show a false failure in testing even when the delivery succeeded."
+    ]
+  },
+  {
     "version": "1.4.0",
     "date": "2026-07-14",
     "title": "Build Airtable workflows by clicking, not by pasting IDs",
