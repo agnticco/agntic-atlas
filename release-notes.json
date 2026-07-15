@@ -1,5 +1,15 @@
 [
   {
+    "version": "1.5.3",
+    "date": "2026-07-15",
+    "title": "Safer chat actions + a clearer builder",
+    "notes": [
+      "Atlas now shows you a confirmation before it sends an email, posts a message, or writes a record from chat — nothing goes out until you click confirm.",
+      "When you describe something recurring or for a whole list, Atlas builds it as a workflow instead of doing it on the spot.",
+      "The build view is clearer: one confident summary of what it'll build, and test results no longer linger from a previous workflow."
+    ]
+  },
+  {
     "version": "1.5.2",
     "date": "2026-07-15",
     "title": "Upload & builder fixes",
