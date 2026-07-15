@@ -16,7 +16,7 @@
 import { test, describe } from 'node:test';
 import assert             from 'node:assert/strict';
 
-import { checkAssertionAtRuntime, evaluateExampleRun } from '../../src/workflows/outcome-oracle.js';
+import { checkAssertionAtRuntime, evaluateExampleRun, normalizeDelivery, isDeliveryNode } from '../../src/workflows/outcome-oracle.js';
 
 const deliv = (over) => ({ delivered: true, ...over });
 
@@ -60,6 +60,62 @@ describe('checkAssertionAtRuntime — did the effect actually happen', () => {
     const r = checkAssertionAtRuntime({ kind: 'record_exists', target: 'airtable:Leads' },
       [deliv({ channel: 'airtable_create_record', target: 'Leads', id: 'rec1' })]);
     assert.equal(r.ok, true);
+  });
+});
+
+// ── THE PRODUCTION PATH — real handler shapes, not synthetic ones ──────────────
+// Every test above hand-builds a delivery that already carries `{delivered, channel,
+// target}`. NO handler except Slack returns that shape: inbox omits `channel`,
+// gmail_send / airtable_create omit BOTH `channel` and `delivered`. So the checks
+// above were green while the runtime oracle confirmed ONLY Slack — every inbox,
+// gmail, or airtable delivery read back as "nothing reached …" on a SUCCESSFUL run.
+// (P12 G defect; CLAUDE.md flaw #2 — "a test that exercises a configuration
+// production never uses cannot see the bug production has".)
+//
+// These feed `normalizeDelivery` the EXACT object each handler returns (source line
+// cited), through the same node→delivery assembly the /workflows/run route uses.
+describe('normalizeDelivery — the real handler shapes reach the oracle (G)', () => {
+  const run = (node, handlerOutput, assertion) => {
+    assert.equal(isDeliveryNode(node), true, 'the node is recognised as a delivery');
+    return checkAssertionAtRuntime(assertion, [normalizeDelivery(node, handlerOutput)]);
+  };
+
+  test('INBOX: {inbox_message_id, subject, delivered} — no channel (src/inbox/index.js:63)', () => {
+    const node   = { id: 'd', type: 'deliver', config: { channel: 'inbox_deliver', subject: 'Support Email Summary' } };
+    const output = { inbox_message_id: 'm1', subject: 'Support Email Summary', delivered: true };
+    assert.equal(run(node, output, { kind: 'message_sent', target: 'inbox:Support Email Summary' }).ok, true);
+  });
+
+  test('GMAIL: {messageId, threadId} — no delivered, no channel (src/connectors/google/index.js:338)', () => {
+    const node   = { id: 'g', type: 'connector-action', config: { action: 'gmail_send', to: 'ops@acme.com' } };
+    const output = { messageId: 'x1', threadId: 't1' };
+    assert.equal(run(node, output, { kind: 'message_sent', target: 'gmail:ops@acme.com' }).ok, true);
+  });
+
+  test('AIRTABLE: {id, fields} — no delivered, no channel (src/connectors/airtable/index.js:188)', () => {
+    const node   = { id: 'a', type: 'connector-action', config: { action: 'airtable_create_record', baseId: 'appX', tableId: 'Interactions' } };
+    const output = { id: 'rec1', fields: { Name: 'Alice' } };
+    assert.equal(run(node, output, { kind: 'record_exists', target: 'airtable:Interactions' }).ok, true);
+  });
+
+  test('SLACK still passes through the node path (src/connectors/slack/index.js:262)', () => {
+    const node   = { id: 's', type: 'connector-action', config: { action: 'slack', target: '#support' } };
+    const output = { delivered: true, channel: 'slack', target: '#support', ts: '123' };
+    assert.equal(run(node, output, { kind: 'message_sent', target: 'slack:#support' }).ok, true);
+  });
+
+  test('a READ connector-action is NOT a delivery (it satisfies nothing)', () => {
+    assert.equal(isDeliveryNode({ id: 'r', type: 'connector-action', config: { action: 'airtable_get_record' } }), false);
+    assert.equal(isDeliveryNode({ id: 'c', type: 'connector-action', config: { action: 'slack_list_channels' } }), false);
+    assert.equal(isDeliveryNode({ id: 'l', type: 'llm', config: { mode: 'summarize' } }), false);
+  });
+
+  test('the WRONG inbox title still fails — the fix widens matching, it does not blunt it', () => {
+    const node   = { id: 'd', type: 'deliver', config: { channel: 'inbox_deliver', subject: 'Something Else' } };
+    const output = { inbox_message_id: 'm2', subject: 'Something Else', delivered: true };
+    const r = run(node, output, { kind: 'message_sent', target: 'inbox:Support Email Summary' });
+    assert.equal(r.ok, false);
+    assert.match(r.reason, /nothing reached inbox:Support Email Summary/);
   });
 
   test('a MALFORMED assertion is reported, never silently passed', () => {
