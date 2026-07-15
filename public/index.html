@@ -754,7 +754,46 @@
 
               <div class="ab-scroll" style="position:relative;flex:1;overflow-y:auto;margin-top:18px;min-height:0">
 
-                <!-- STEP FIRING PIPELINE -->
+                <!-- CONTRACT PANEL (right-panel redesign · Claude Design "Contract Panel — States").
+                     Plain-language: contract status → the deal → the evidence. Shown at rest
+                     (proposed / passed / failed); the step pipeline below shows while building/running. -->
+                <sc-if value="{{ contract.show }}" hint-placeholder-val="{{ false }}">
+                  <div style="display:flex;flex-direction:column;border:1px solid rgba(255,255,255,.12);border-radius:16px;overflow:hidden;background:#000">
+                    <!-- 1 · contract status -->
+                    <div style="padding:20px 20px 18px;border-bottom:1px solid rgba(255,255,255,.10);display:flex;flex-direction:column;gap:9px">
+                      <div style="font-size:25px;font-weight:500;letter-spacing:-0.035em;line-height:1.1">Contract <em style="font-family:'Instrument Serif',serif;font-style:italic;font-weight:400;color:{{ contract.accent }}">{{ contract.verdictWord }}</em></div>
+                      <div style="font-size:13px;line-height:1.5;color:rgba(255,255,255,.6)">{{ contract.verdictNote }}</div>
+                    </div>
+                    <!-- 2 · the deal -->
+                    <div style="padding:18px 20px;border-bottom:1px solid rgba(255,255,255,.10);display:flex;flex-direction:column;gap:11px">
+                      <div style="font-size:10.5px;letter-spacing:.18em;text-transform:uppercase;font-weight:600;color:rgba(255,255,255,.42)">The deal</div>
+                      <div style="font-size:16px;line-height:1.6;letter-spacing:-0.012em;color:rgba(255,255,255,.86)"><sc-for list="{{ contract.dealSegments }}" as="seg" hint-placeholder-count="3"><span style="font-weight:{{ seg.weight }};color:{{ seg.color }};border-bottom:{{ seg.underline }}">{{ seg.text }}</span></sc-for></div>
+                    </div>
+                    <!-- 3 · the evidence -->
+                    <div style="padding:18px 20px 14px;display:flex;flex-direction:column;gap:11px">
+                      <div style="font-size:10.5px;letter-spacing:.18em;text-transform:uppercase;font-weight:600;color:rgba(255,255,255,.42)">{{ contract.evidenceLabel }}</div>
+                      <div style="border:1px solid rgba(255,255,255,.10);border-radius:12px;overflow:hidden">
+                        <sc-for list="{{ contract.rows }}" as="r" hint-placeholder-count="3">
+                          <div style="border-top:{{ r.borderTop }}">
+                            <div onClick="{{ r.toggle }}" style="padding:12px 14px;display:flex;align-items:center;justify-content:space-between;gap:10px;cursor:pointer;background:#0a0a0a" style-hover="background:#101010">
+                              <div style="display:flex;align-items:center;gap:11px;min-width:0">
+                                <span style="width:16px;flex:none;display:grid;place-items:center;font-size:11px;color:{{ r.chipColor }}">{{ r.mark }}</span>
+                                <span style="font-size:13px;letter-spacing:-0.01em;color:rgba(255,255,255,.86);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ r.simpleLine }}</span>
+                              </div>
+                              <span style="color:rgba(255,255,255,.35);font-size:11px;flex:none;display:inline-block;transform:{{ r.chevTransform }};transition:transform .15s">▾</span>
+                            </div>
+                            <div style="display:{{ r.bodyDisplay }};background:#000;border-top:1px solid rgba(255,255,255,.08)">
+                              <div style="padding:12px 14px 14px 41px;font-size:12.5px;line-height:1.6;color:rgba(255,255,255,.6)">{{ r.simpleDetail }}</div>
+                            </div>
+                          </div>
+                        </sc-for>
+                      </div>
+                      <div style="font-size:11.5px;line-height:1.5;color:rgba(255,255,255,.42)">{{ contract.evidenceNote }}</div>
+                    </div>
+                  </div>
+                </sc-if>
+
+                <!-- STEP FIRING PIPELINE — the build/run narration (empty at rest; see contract panel above) -->
                 <sc-for list="{{ testSteps }}" as="s" hint-placeholder-count="3">
                   <div>
                     <sc-if value="{{ s.showConnector }}" hint-placeholder-val="{{ false }}">
@@ -850,6 +889,13 @@
                 <sc-if value="{{ footLocked }}" hint-placeholder-val="{{ true }}">
                   <button disabled="{{ true }}" style="width:100%;border:1px solid rgba(255,255,255,.08);background:rgba(255,255,255,.03);color:rgba(255,255,255,.3);font-family:inherit;font-weight:500;font-size:15px;padding:14px;border-radius:999px;cursor:not-allowed">Run test</button>
                   <div style="text-align:center;font-size:11.5px;color:rgba(255,255,255,.32);margin-top:9px">Confirm every step to start testing</div>
+                </sc-if>
+                <!-- CONTRACT FOOTER (redesign) — state-driven pair: secondary + primary CTA -->
+                <sc-if value="{{ footContract }}" hint-placeholder-val="{{ false }}">
+                  <div style="display:flex;gap:10px">
+                    <button onClick="{{ contract.onSecondary }}" type="button" style="flex:1;font-size:13.5px;font-weight:500;color:rgba(255,255,255,.85);background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.14);border-radius:11px;padding:13px;cursor:pointer;font-family:inherit" style-hover="background:rgba(255,255,255,.1)">{{ contract.secondaryCta }}</button>
+                    <button onClick="{{ contract.onCta }}" type="button" style="flex:1.4;font-size:13.5px;font-weight:600;color:#06210d;background:{{ contract.accent }};border:none;border-radius:11px;padding:13px;cursor:pointer;font-family:inherit">{{ contract.cta }}</button>
+                  </div>
                 </sc-if>
               </div>
 
@@ -2802,7 +2848,7 @@ class Component extends DCLogic {
     if (tid) { fetch('/api/builder/sessions/' + tid, { method: 'DELETE', headers: this._H() }).catch(function(e) {}); }
     this.setState({
       phase: "chat", intent: null, threadId: null, msgs: [], inputMode: "chat",
-      inputValue: "", thinking: false, spec: null, outcome: null, testState: "idle", runSteps: [],
+      inputValue: "", thinking: false, spec: null, outcome: null, testState: "idle", runSteps: [], contractOpenRow: null,
       runStepIndex: 0, failIndex: -1, deliveries: [], runOutput: null, runError: "", workflowId: null, isEditing: false, isDraftBuild: false, editingIntro: null,
       renamingWfId: null, renamingValue: "", draftName: null,
       connectionsOpen: false, accountOpen: false, profileOpen: false, connectionsClosing: false, accountClosing: false,
@@ -4583,6 +4629,9 @@ class Component extends DCLogic {
 
   _handleInterrupt(iv) {
     if (!iv) return;
+    // A duplicate/racing respond that the server already handled — silently ignore,
+    // so a fast double-click never spawns a stray message or a raw graph error.
+    if (iv.type === "noop") { this.setState({ thinking: false }); return; }
     if (iv.type === "done") { this.setState({ spec: iv.spec }); this._saveWorkflow(iv.spec, iv.confirmationLog); return; }
 
     if (iv.type === "clarification") {
@@ -5030,7 +5079,12 @@ class Component extends DCLogic {
 
   _apiError(msg) {
     let clean = msg || 'Something went wrong.';
-    try {
+    // Defense in depth: no internal/engine text ever reaches the chat as-is. A raw
+    // graph error, a tool-loop limit, or a stack trace becomes a plain, human line —
+    // the user sees "Atlas hit a snag", not `CompiledGraph.resume()…`.
+    const rawInternal = /CompiledGraph|resumeFrom|Max tool rounds|max tool rounds|interruptBefore|interrupt\(\)|checkpoint for thread|at Object\.|\n\s+at /i.test(String(msg));
+    if (rawInternal) clean = "Atlas hit a snag on that step.";
+    else try {
       const m = String(msg).match(/^(\d+)\s*(\{[\s\S]+\})/);
       if (m) {
         const body = JSON.parse(m[2]);
@@ -5851,6 +5905,132 @@ class Component extends DCLogic {
     });
   }
   _stringify(v) { if (v == null) return ""; if (typeof v === "string") return v; try { return JSON.stringify(v); } catch (e) { return String(v); } }
+
+  // "The deal" reads as a sentence with the load-bearing parts — the trigger, the
+  // action, the destination — emphasized (bold + underline), exactly as the Claude
+  // Design source did. We return SEGMENTS rather than an HTML string because the DC
+  // binding escapes text; the markup renders each segment as a span. If nothing
+  // matches, the whole sentence is one plain segment (never worse than before).
+  _dealSegments(statement) {
+    const s = String(statement || "");
+    if (!s) return [];
+    const EMPH = [
+      /\b(?:a\s+)?(?:new\s+)?(?:unread\s+)?(?:gmail\s+)?(?:email|message)\s+(?:arrives?|comes?\s+in|lands?)\b/gi,
+      /\bevery\s+(?:day|morning|weekday|week|hour)(?:\s+at\s+[0-9:apm. ]+)?/gi,
+      /\bsummari[sz]e[sd]?\b/gi,
+      /\bextract[sed]*\b/gi,
+      /\bclassif(?:y|ies|ied)\b/gi,
+      /\b(?:the\s+)?Atlas\s+(?:in-app\s+)?inbox\b/gi,
+      /\bSlack(?:\s+(?:DM|channel))?\b/gi,
+      /\bGmail\b/gi,
+      /\bAirtable\b/gi,
+      /\bGoogle\s+(?:Sheet|Doc)s?\b/gi,
+      /\bflagged?\s+urgent\b/gi,
+      /\bsend[s]?\b|\bpost[s]?\b|\bsave[s]?\b|\bcreate[s]?\b|\bdeliver[s]?\b/gi,
+    ];
+    const ranges = [];
+    for (const re of EMPH) { let m; while ((m = re.exec(s))) { if (m.index === re.lastIndex) re.lastIndex++; ranges.push([m.index, m.index + m[0].length]); } }
+    ranges.sort((a, b) => a[0] - b[0]);
+    const merged = [];
+    for (const r of ranges) { const last = merged[merged.length - 1]; if (last && r[0] <= last[1]) last[1] = Math.max(last[1], r[1]); else merged.push([r[0], r[1]]); }
+    const style = (emph) => emph
+      ? { weight: "500", color: "#fff", underline: "1px solid rgba(255,255,255,.28)" }
+      : { weight: "400", color: "rgba(255,255,255,.86)", underline: "none" };
+    const segs = []; let cur = 0;
+    for (const [a, b] of merged) { if (a > cur) segs.push({ text: s.slice(cur, a), ...style(false) }); segs.push({ text: s.slice(a, b), ...style(true) }); cur = b; }
+    if (cur < s.length) segs.push({ text: s.slice(cur), ...style(false) });
+    return segs.length ? segs : [{ text: s, ...style(false) }];
+  }
+
+  // ── CONTRACT PANEL (right-panel redesign) ────────────────────────────────
+  // The finalized design (Claude Design · "Contract Panel — States"): contract
+  // status → the deal → the evidence → actions. It replaces the dev-y assertion
+  // dump ("message sent → inbox:Email Summary") with a plain-language account a
+  // non-technical operator can read. Three lifecycle states map to Atlas state:
+  //   proposed  (white) — phase===proposed, not yet tested: the deal is drafted,
+  //                       the checks are listed but not run.
+  //   passed    (sage)  — testState==="passed": every promise held.
+  //   failed    (clay)  — testState==="failed": a promise broke.
+  // (testState==="running" is the build-narration pipeline, handled separately.)
+  _contractPanel() {
+    const S = this.state;
+    const TS = S.testState;
+    const testUnlocked = S.phase === "proposed";
+    const SAGE = "#9fd6a8", CLAY = "#f0a896", SLATE = "#fff", DIM = "rgba(255,255,255,.35)";
+    const openIdx = (S.contractOpenRow == null) ? null : S.contractOpenRow;
+    const rowFrom = (i, mark, chipColor, simpleLine, simpleDetail) => {
+      const open = openIdx === i;
+      return { mark, chipColor, simpleLine, simpleDetail,
+        borderTop: i === 0 ? "none" : "1px solid rgba(255,255,255,.08)",
+        chevTransform: open ? "rotate(180deg)" : "rotate(0deg)",
+        bodyDisplay: open ? "block" : "none",
+        toggle: () => this.setState({ contractOpenRow: open ? null : i }) };
+    };
+    // The deal: the outcome statement, verbatim (the converger already writes it
+    // in plain English for the pinned "what this must deliver" card).
+    const deal = (S.outcome && S.outcome.statement) || (S.spec && S.spec.outcome && S.spec.outcome.statement) || "";
+
+    // Not yet proposed (still building in chat / incomplete) — no contract to show.
+    if (!testUnlocked && TS !== "passed" && TS !== "failed") return { show: false, building: TS === "running" };
+
+    let state, accent, verdictWord, verdictNote, evidenceLabel, evidenceNote, rows, secondaryCta, cta;
+
+    if (TS === "passed" || TS === "failed") {
+      const failed = TS === "failed";
+      const results = S.outcomeResults || [];
+      rows = results.map((o, i) => {
+        const kept = !!o.contractPassed;
+        const brokeReason = (o.contract || []).find(c => !c.ok);
+        const detail = kept
+          ? ("What came back matched the deal — " + (this._clip(this._stringify(o.produced && (o.produced.summary || o.produced.text || o.produced)), 140) || "delivered as promised") + ".")
+          : ("This one fell short — " + ((brokeReason && (brokeReason.reason || ("nothing reached " + brokeReason.target))) || (o.error || "a promise wasn't kept")) + ". Fix it and re-test.");
+        return rowFrom(i, kept ? "✓" : "!", kept ? SAGE : CLAY, o.label || ("Example " + (i + 1)), detail);
+      });
+      const total = rows.length, broke = rows.filter(r => r.mark === "!").length;
+      state = failed ? "failed" : "passed";
+      accent = failed ? CLAY : SAGE;
+      verdictWord = failed ? "not met." : "kept.";
+      verdictNote = failed
+        ? ("We ran " + total + " real example" + (total === 1 ? "" : "s") + " through your workflow. " + broke + " of " + total + " promise" + (broke === 1 ? "" : "s") + " fell short — nothing goes live until the contract holds.")
+        : ("We ran " + total + " real example" + (total === 1 ? "" : "s") + " through your workflow. Every promise held — it's cleared to go live.");
+      evidenceLabel = "The evidence · " + total + " real example" + (total === 1 ? "" : "s");
+      evidenceNote = "Kept means what came back matched the deal above — checked automatically, shown here so you can see it yourself.";
+      secondaryCta = "Try again";
+      cta = failed ? "Fix & re-test" : "Go live";
+    } else {
+      // proposed — the checks are the worked examples the run will be tested against.
+      // These live on the SPEC's outcome (S.spec.outcome.examples); S.outcome is only
+      // the pinned {statement, assertions} and carries none, so reading it left the
+      // section empty. (Found in live redesign review.)
+      const ex = (S.spec && S.spec.outcome && Array.isArray(S.spec.outcome.examples)) ? S.spec.outcome.examples
+               : (S.outcome && Array.isArray(S.outcome.examples) ? S.outcome.examples : []);
+      rows = ex.map((e, i) => {
+        const g = e.given || {};
+        const about = g.subject || g.body || (typeof e.given === "string" ? e.given : "") || "a real example";
+        return rowFrom(i, "○", DIM,
+          e.label || ("Sample " + (i + 1)),
+          "We'll run this through the real engine — " + this._clip(String(about), 120) + " — and check the result matches the deal above.");
+      });
+      if (!rows.length) rows = [ rowFrom(0, "○", DIM, "Your samples will appear here", "Add or accept sample messages and we'll test the workflow against them.") ];
+      state = "proposed"; accent = SLATE; verdictWord = "proposed.";
+      verdictNote = "The deal below is drafted from your conversation. Nothing is promised yet — run the test to see if the workflow can keep it.";
+      evidenceLabel = "The checks · " + rows.length + " sample" + (rows.length === 1 ? "" : "s") + ", not yet run";
+      evidenceNote = "Each check runs against a real example. Tap a row to see what will be verified.";
+      secondaryCta = "Keep building";
+      cta = "Run the test";
+    }
+
+    // Primary action follows the state; the secondary is always a safe "re-run /
+    // keep working" that never advances past a broken contract.
+    const onCta = state === "passed" ? (() => this.reviewDraft())
+                : (() => this.runTest());                 // proposed → run · failed → re-test
+    const onSecondary = state === "proposed" ? (() => {})   // "Keep building" — the chat is right there
+                : (() => this.runTest());                    // "Try again"
+    return { show: true, building: false, state, accent, verdictWord, verdictNote,
+      dealText: deal, dealSegments: this._dealSegments(deal), evidenceLabel, evidenceNote, rows, secondaryCta, cta, onCta, onSecondary,
+      canRun: state === "proposed", canGoLive: state === "passed", canFix: state === "failed" };
+  }
+
   // Adaptive "What starts it" card — replaces the hardcoded UPS email mock.
   _sampleTriggerView(trg) {
     const t = trg || {}; const ty = t.type || (t.cron ? "schedule" : "manual");
@@ -5884,6 +6064,7 @@ class Component extends DCLogic {
     const SVG_PAUSE = `url('data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 10 12%27%3E%3Crect x=%271%27 y=%271%27 width=%273.5%27 height=%2710%27 rx=%271%27 fill=%27%23e87461%27/%3E%3Crect x=%275.5%27 y=%271%27 width=%273.5%27 height=%2710%27 rx=%271%27 fill=%27%23e87461%27/%3E%3C/svg%3E') no-repeat center/contain`;
     const testUnlocked = S.phase === "proposed";
     const TS = S.testState;
+    const contract = this._contractPanel();
     const pipeline = this._pipeline();
     const last = pipeline.length - 1;
 
@@ -6142,12 +6323,13 @@ class Component extends DCLogic {
         : (TS === "idle" ? "Run the workflow once against the real engine to catch breaks before publishing."
         : (TS === "running" ? ("Running against the real engine — this can take a few minutes for web search or multi-source steps." + (S.runElapsed ? "  ·  " + S.runElapsed + "s elapsed" : ""))
         : (TS === "passed" ? "Every step ran cleanly — no breaks." : "One step failed — review the break below."))),
-      testSteps, slackChannel: this._slackChannel(), deliveryTarget: this._deliveryMeta().header, summaryText: this._summaryText(),
-      outcomeCards: this._outcomeCards(), showOutcomes: (S.outcomeResults || []).length > 0 && TS !== "running",
-      showVerdict: verdict.show, verdictText: verdict.text, verdictIcon: verdict.icon, verdictColor: verdict.color,
+      testSteps: contract.show ? [] : testSteps, slackChannel: this._slackChannel(), deliveryTarget: this._deliveryMeta().header, summaryText: this._summaryText(),
+      outcomeCards: this._outcomeCards(), showOutcomes: (S.outcomeResults || []).length > 0 && TS !== "running" && !contract.show,
+      contract,
+      showVerdict: verdict.show && !contract.show, verdictText: verdict.text, verdictIcon: verdict.icon, verdictColor: verdict.color,
       verdictBorder: verdict.border, verdictBg: verdict.bg, verdictIconBg: verdict.iconBg,
       isPublished: published,
-      footLocked: !testUnlocked, footRunTest: testUnlocked && TS === "idle", footTesting: TS === "running", footProceed: testUnlocked && TS === "passed",
+      footLocked: !testUnlocked, footRunTest: testUnlocked && TS === "idle" && !contract.show, footTesting: TS === "running", footProceed: testUnlocked && TS === "passed" && !contract.show, footContract: contract.show,
       onRunTest: () => this.runTest(), onReviewDraft: () => this.reviewDraft(),
 
       // workspace modes
