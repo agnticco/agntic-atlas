@@ -264,9 +264,21 @@ BEHAVIOR:
 - ready_to_build stays false until the user clearly signals they want to build (e.g. "let's do it", "set it up", "yes, build it", "go ahead"). At that point set ready_to_build:true and write build_intent: one clear paragraph covering trigger + steps + destination, folding in everything discussed.
 - If they seem close but haven't confirmed, gently offer ("Want me to set this up?") but keep ready_to_build:false.
 
-BUILD A WORKFLOW vs DO ONE THING NOW — decide this FIRST:
-- If the user describes something to happen AUTOMATICALLY, ON A SCHEDULE, ON A TRIGGER, or FOR MANY items ("send a branded email to my CRM list", "every morning…", "whenever an email arrives…", "for everyone on the sheet…"), that is a WORKFLOW. Do NOT perform it. Gather any context you need with READ-ONLY tools, then set ready_to_build:true with a build_intent. A list/bulk send is ALWAYS a workflow, never a live chat action.
-- Only treat it as a one-off DIRECT ACTION when the user clearly wants a single thing done right now ("email Bob this note", "DM me the summary", "what's on my calendar today?").
+BUILD A WORKFLOW vs DO ONE THING NOW — decide this FIRST, and get it right:
+- A TRIGGER or RECURRING phrase — "when/whenever a … arrives", "every morning/day/week", "each new …",
+  "for everyone on …", "automatically" — is ALWAYS a WORKFLOW, no matter how the sentence ends.
+  "When a new email arrives, summarize it … build it now" is a WORKFLOW; "build it now" / "set it up now"
+  means BUILD THE WORKFLOW now, NOT perform an action now. Set ready_to_build:true with a build_intent and
+  call NO tools.
+- THERE IS NO TOOL THAT CREATES A WORKFLOW. Building happens ONLY via ready_to_build:true. So if you are
+  about to call a delivery/action tool (inbox, email, Slack, a record) to "set up", "start", "turn on",
+  or "test" a recurring workflow — STOP: that is the wrong path. Set ready_to_build instead.
+- NEVER claim a workflow is "built", "running", "live", "set up", or "on" from the chat. You cannot build
+  it here — you only signal ready_to_build and the build UI takes over. Saying it is running when it is
+  not is a lie the user will act on.
+- Only a genuinely ONE-OFF request for a single thing right now ("email Bob this note", "DM me today's
+  summary", "what's on my calendar?") is a direct action.
+- Don't do both in one turn: a build turn calls NO action tools; an action turn does not set ready_to_build.
 
 DIRECT ACTIONS — you have tools for each connected service.
 - READ-ONLY tools (search/list/read/get — calendar, drive, sheets, email search, web) you may call freely to answer a question or gather context.
@@ -926,6 +938,11 @@ Rules:
       let replyBuf  = '';
       let streamedText = '';
       let escapeNext = false;
+      // True once we've streamed reply text to the client THIS round. If the model
+      // then reveals a mid-stream tool call, that streamed reply is stale (the round
+      // is discarded and re-run), so the client must clear it — otherwise the re-run's
+      // reply is APPENDED to it and the message renders twice (found in live testing).
+      let clientHasPartial = false;
 
       const processStreamChar = (ch) => {
         if (escapeNext) {
@@ -959,7 +976,7 @@ Rules:
             processStreamChar(ch);
           }
         }
-        if (replyBuf && !closed) { sseWrite({ type: 'chunk', text: replyBuf }); replyBuf = ''; }
+        if (replyBuf && !closed) { sseWrite({ type: 'chunk', text: replyBuf }); replyBuf = ''; clientHasPartial = true; }
       };
 
       // Tool-use + streaming loop.
@@ -1011,6 +1028,9 @@ Rules:
           // while executeChatTools still appended tool_result blocks referencing their
           // ids — Anthropic then 400s ("tool_use ids without tool_result blocks") and the
           // raw error leaked to the operator (R17). Mirror the clean-round path (above).
+          // If we already streamed a reply this round, tell the client to drop it so the
+          // re-run's reply replaces it rather than doubling it.
+          if (clientHasPartial && !closed) { sseWrite({ type: 'reset' }); clientHasPartial = false; }
           extractState = 'searching'; searchBuf = ''; replyBuf = ''; streamedText = ''; escapeNext = false;
           for (const tc of midStreamToolCalls) sseWrite({ type: 'tool', name: tc.name });
           msgArray.push(new AIMessage(midStreamChunk?.content ?? '', midStreamChunk?.additionalKwargs ?? { toolCalls: midStreamToolCalls }));

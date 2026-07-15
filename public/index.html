@@ -4615,6 +4615,16 @@ class Component extends DCLogic {
           if (!line) continue;
           let ev; try { ev = JSON.parse(line); } catch { continue; }
           if (ev.type === "error") { self.setState({ thinking: false, thinkingLabel: null }); self._apiError(ev.error); return; }
+          if (ev.type === "reset") {
+            // The server discarded this round's partial reply (a mid-stream tool call).
+            // Clear the streaming bubble so the re-run's reply replaces it, not appends.
+            twQueue = "";
+            if (twMsgIdx >= 0 && twMsgIdx < self.state.msgs.length) {
+              const nm = self.state.msgs.slice();
+              nm[twMsgIdx] = { ...nm[twMsgIdx], text: "" };
+              self.setState({ msgs: nm });
+            }
+          }
           if (ev.type === "tool") {
             self.setState({ thinkingLabel: TOOL_LABELS[ev.name] || ("Using " + ev.name + "…") });
           }
