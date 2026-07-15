@@ -104,6 +104,28 @@ describe('normalizeDelivery — the real handler shapes reach the oracle (G)', (
     assert.equal(run(node, output, { kind: 'message_sent', target: 'slack:#support' }).ok, true);
   });
 
+  // THE BLOCKER found in live testing (P12 hardening). A Slack DM handler resolves
+  // the declared EMAIL to a Slack user id and returns only that id as `target`
+  // (src/connectors/slack/index.js:284: {channel:'slack_dm', target:<userId>, slackChannel}).
+  // The assertion is written in the DECLARED email. Keying the match to the resolved
+  // id alone reported "nothing reached slack:amy@acme.co" on a DM that WAS delivered —
+  // a false PROMISE BROKEN. normalizeDelivery must carry BOTH the resolved id and the
+  // node's declared user, so the assertion in either spelling matches.
+  test('SLACK DM: declared email matches even though the handler returns the resolved user id', () => {
+    const node   = { id: 'dm', type: 'deliver', config: { channel: 'slack_dm', user: 'amy@acme.co' } };
+    const output = { delivered: true, channel: 'slack_dm', target: 'U0B3LM5KRGV', ts: '1.2', slackChannel: 'D0AMY' };
+    const norm   = normalizeDelivery(node, output);
+    assert.ok(norm.locators.includes('amy@acme.co'), 'the declared DM email is carried');
+    assert.ok(norm.locators.includes('U0B3LM5KRGV'), 'the resolved user id is carried too');
+    assert.equal(
+      checkAssertionAtRuntime({ kind: 'message_sent', target: 'slack:amy@acme.co' }, [norm]).ok,
+      true, 'the assertion written in the declared email is satisfied');
+    // …and the guard is NOT blunted: a DM to a DIFFERENT person is not satisfied.
+    assert.equal(
+      checkAssertionAtRuntime({ kind: 'message_sent', target: 'slack:someone-else@acme.co' }, [norm]).ok,
+      false, 'a DM to a different person does not satisfy it');
+  });
+
   test('a READ connector-action is NOT a delivery (it satisfies nothing)', () => {
     assert.equal(isDeliveryNode({ id: 'r', type: 'connector-action', config: { action: 'airtable_get_record' } }), false);
     assert.equal(isDeliveryNode({ id: 'c', type: 'connector-action', config: { action: 'slack_list_channels' } }), false);
