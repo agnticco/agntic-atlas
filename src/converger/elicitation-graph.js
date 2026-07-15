@@ -40,6 +40,45 @@ import {
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
+/**
+ * Silently repair STRUCTURAL defects the builder produced in its own output.
+ *
+ * A missing branch/route edge, or an ambiguous extra parent edge, is not a
+ * decision a user can make — it is a bug in the graph the converger drew. The
+ * validator already computes the exact mechanical fix and hands it over as
+ * `gap.fix` ({op:'add_edge'|'remove_edges', ...}); we apply it directly through
+ * `applyProposal`, with no LLM round-trip and no question. This is what lets the
+ * zero-typing path publish a spec that would otherwise strand at "Incomplete"
+ * with Run test disabled — the recurring live-testing failure (#19).
+ *
+ * Only gaps carrying a `fix` are touched; a fix that throws is skipped and left
+ * as a gap. The CALLER re-scores after applying, so a repair that introduced a
+ * new problem surfaces as a fresh gap rather than shipping silently.
+ *
+ * @returns {{ draft: object, applied: Array<{gapId,code,op,from,to}> }}
+ */
+export function autoRepairStructural(draft, gaps) {
+  const applied = [];
+  let d = draft;
+  for (const g of (gaps ?? [])) {
+    const fix = g?.fix;
+    if (!fix) continue;
+    try {
+      if (fix.op === 'add_edge' && fix.from && fix.to) {
+        d = applyProposal(d, { component: 'edge', spec: { from: fix.from, to: fix.to } });
+        applied.push({ gapId: g.id, code: g.code, op: 'add_edge', from: fix.from, to: fix.to });
+      } else if (fix.op === 'remove_edges' && Array.isArray(fix.edges)) {
+        for (const e of fix.edges) {
+          if (!e?.from || !e?.to) continue;
+          d = applyProposal(d, { component: 'remove_edge', spec: { from: e.from, to: e.to } });
+          applied.push({ gapId: g.id, code: g.code, op: 'remove_edge', from: e.from, to: e.to });
+        }
+      }
+    } catch { /* leave as a gap — the re-score will re-surface it */ }
+  }
+  return { draft: d, applied };
+}
+
 /** Strip markdown fences and extract raw JSON from LLM output. */
 function extractJson(text) {
   const fenced = text.match(/```(?:json)?\s*([\s\S]*?)```/);
@@ -1163,12 +1202,38 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
 
   graph.addNode('gaps', async (state, cfg) => {
     const sessionId = cfg?.configurable?.threadId;
-    const result    = scoreGap(state.draft, { capabilities: state.capabilities });
+    let   draft     = state.draft;
+    let   result    = scoreGap(draft, { capabilities: state.capabilities });
+
+    // ── Silently auto-repair the builder's OWN structural bugs (#19) ─────────
+    // A missing branch/route edge is not a user's decision; it is a defect in the
+    // spec the converger drew, and the validator already knows the exact fix. We
+    // apply every such fix directly (no LLM, no question), re-scoring after each
+    // pass so a repair that revealed another problem is caught. Bounded, and
+    // idempotent on resume (adding an existing edge is a no-op). This is what
+    // stops zero-typing builds stranding at "Incomplete" with Run test disabled.
+    const repairs = [];
+    for (let pass = 0; pass < 4; pass++) {
+      const r = autoRepairStructural(draft, result.gaps);
+      if (!r.applied.length) break;
+      repairs.push(...r.applied);
+      draft  = r.draft;
+      result = scoreGap(draft, { capabilities: state.capabilities });
+    }
+    // Everything the node returns must carry the repaired draft so it persists.
+    const carry = repairs.length ? { draft } : {};
+    const repairLog = repairs.length
+      ? [{ step: state.step, type: 'auto_repair', repairs }]
+      : [];
 
     const blocking = unansweredGaps(result);                       // must be ANSWERED
     const soft     = result.gaps.filter(g => !g.blocking);         // may be ESCALATED
 
-    if (!blocking.length && !soft.length) return { phase: 'ratifying' };
+    if (!blocking.length && !soft.length) {
+      return { ...carry,
+        ...(repairLog.length ? { confirmationLog: repairLog, step: state.step + 1 } : {}),
+        phase: 'ratifying' };
+    }
 
     // One cheap call so every row arrives with an answer already in it. A gap
     // list with empty boxes is an interrogation; a gap list with defaults is a
@@ -1228,8 +1293,9 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
     // cannot close ends in a question rather than a spin.
     if (clarifications.length && (state.gapRounds ?? 0) < MAX_GAP_ROUNDS) {
       return {
+        ...carry,
         clarifications,
-        confirmationLog: [logEntry],
+        confirmationLog: [...repairLog, logEntry],
         escalatedGaps:   escalated,
         gapRounds:       (state.gapRounds ?? 0) + 1,
         proposeRounds:   0,
@@ -1239,7 +1305,8 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
     }
 
     return {
-      confirmationLog: [logEntry],
+      ...carry,
+      confirmationLog: [...repairLog, logEntry],
       escalatedGaps:   escalated,
       step:            state.step + 1,
       phase:           'ratifying',
