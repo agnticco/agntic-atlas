@@ -1020,6 +1020,50 @@ refactor them without an explicit decision recorded here:
     was "NOT MEASURED".** Four of the nine defects lived there. **A file the sweep does not target is
     a file whose absence from the survivor list proves nothing.** 49 curated mutations, all killed.
 
+- **The zero-typing path + the test-panel oracle + the SOP (2026-07-14, P12 increment G)** — G closes
+  the phase with three deliverables: (1) the **test panel is a live outcome oracle** — "Run test"
+  loops `outcome.examples` through the real engine and, per example, GATES on the machine-checkable
+  contract (`outcome.assertions`) while SHOWING the freeform `expect` beside what the run produced
+  ("show, don't gate" — a workflow-agnostic judge cannot truthfully check an SME's own words). (2) the
+  **SOP carries** the outcome contract, the escalation policy (derived from the spec's own
+  `on_error`/`human`/catch-all structure, so it is true even for a hand-edited workflow), and the
+  provenance ("how this was decided"). (3) the **zero-typing path** — every interrupt carries a
+  pre-selected default and the default for every unknown is "escalate to a person", so a
+  provably-complete workflow publishes having answered NOTHING (`tests/e2e/zero-typing-build.test.js`,
+  real model, in the gate).
+  - **THE RUNTIME ORACLE ONLY WORKED FOR SLACK — found by driving the real UI (2026-07-14).** The
+    test panel reported **PROMISE BROKEN on a workflow whose delivery SUCCEEDED**: an inbox summary was
+    saved, the chat's own summary said "the message did reach your destination channel", and the oracle
+    said "nothing reached inbox". Root cause: the runtime oracle (`deliveryConnector`) reads a
+    delivery's connector from `delivery.channel`, but **delivery handlers are inconsistent about what
+    they return** — Slack stamps `{delivered:true, channel:'slack'}`, **inbox omits `channel`**
+    (`src/inbox/index.js:63`), and **gmail_send / airtable_create omit BOTH `channel` and `delivered`**
+    (so `server.js`'s `.filter(o=>o.delivered)` dropped them before the oracle ever saw them). So every
+    delivery target EXCEPT Slack — inbox is the *default* — showed a false PROMISE BROKEN on a correct
+    run. **This is CLAUDE.md flaw #2 verbatim:** the 14 unit tests hand-built synthetic deliveries that
+    all carried `{delivered, channel, target}`; NO handler but Slack returns that shape, so the suite
+    was green while the feature confirmed only Slack.
+  - **The fix assembles deliveries from the delivering NODE, not the handler's return.** New
+    `normalizeDelivery(node, output)` + `isDeliveryNode(node)` in `outcome-oracle.js`: the channel comes
+    from the node (`deliver`→`config.channel`, `connector-action`→`config.action`) and the destination
+    from the channel's own locator keys read off the output or the node config — the one place they are
+    always present. `server.js`'s `/workflows/run` now builds `deliveries` through this, keyed on
+    `isDeliveryNode` (a `deliver` node, or a `connector-action` that WRITES per `nodeEffect`), so
+    gmail/airtable are no longer dropped for lacking `delivered`. Verified end-to-end through the live
+    authenticated server: a successful inbox run now returns `outcomeCheck.contractPassed:true`
+    (`inbox_deliver → Support Email Summary`). Pinned by a new block in `example-oracle.test.js` that
+    feeds `normalizeDelivery` the **EXACT object each handler returns** (source line cited), closing the
+    synthetic-shape hole. 609 workflow/converger/approvals tests green.
+  - **RESIDUAL — a trigger-fed `llm` node's generated examples can be too thin to clear its own guard.**
+    The converger writes a guard clause into a summarize node's instructions ("If the provided email
+    data is empty or missing, output EXACTLY: ERROR: required data not found", `prompts.js:203`). With
+    a substantive email in the example's `given` the node summarizes correctly (proven); but the
+    auto-generated worked examples for an email-triggered summarize carried a `given` the model read as
+    "missing", so the guard fired and the test panel showed a false red. The oracle was CORRECT (it
+    reported a genuinely failed run); the defect is upstream in **example-generation quality** — a
+    trigger-fed node's `given` must be a realistic sample event, not a label. Follow-up for the
+    converger's example generator; not an oracle bug.
+
 ## Support tickets (in-app feedback / bug reporting) — added 2026-07-08
 
 Users submit bugs/ideas/requests from a floating **Feedback** button in the operator
@@ -1213,6 +1257,18 @@ Deploying is outward-facing: do it only when the operator asks. Committing/pushi
 
 ## Working rules
 
+- **EVERY live UI verification is done in a VISIBLE browser the operator can watch
+  (rule set 2026-07-14, operator).** When driving the real app with Chrome DevTools
+  (or claude-in-chrome) to prove a change works, do it in a **headed, foregrounded**
+  window — never headless, never a background tab the operator can't see. Narrate
+  each step *before* the tool call ("clicking Build it", "filling the base field"),
+  and **save each screenshot to disk** (`save_to_disk: true` / a `filePath`) so the
+  frame lands in the conversation rather than only in the agent's context. The point
+  is that the operator watches the verification happen in real time — "the scripts
+  pass" is not the same as a person seeing the button work (the D `Approve`-button
+  Content-Type bug proved that), and the operator seeing it is not the same as the
+  agent claiming it. If a headed window cannot be opened, say so and stop, rather
+  than silently falling back to a check the operator cannot witness.
 - **One deliverable per session, ending at a gate.** Rehydrate from this file +
   the module map, not from scrollback. Don't span a phase boundary in one session.
 - **The doc is the memory — keep it true, in the same commit.** Fresh sessions only

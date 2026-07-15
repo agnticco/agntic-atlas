@@ -367,7 +367,17 @@ export function mountConsoleRoutes(app, { spine, requireActiveTenant }) {
       const wf = store.get(req.params.id, { userId: req.user.id });
       if (!wf || wf.tenant_id !== req.tenant.id) return res.status(404).json({ error: 'Not found' });
 
-      const markdown = generateSopMarkdown(wf);
+      // Provenance (P12 Increment G): the build-time record of which promises were
+      // agreed and which gaps were escalated. Read via the workflow's session_id;
+      // absent for a hand-built or pre-C workflow, which is fine — the SOP just omits
+      // the "How this was decided" section. Best-effort: a SOP must never fail to
+      // export because the provenance store hiccuped.
+      let provenance = null;
+      try {
+        if (wf.session_id) provenance = spine.interactionStore?.getProvenance(req.tenant.id, wf.session_id) ?? null;
+      } catch { /* provenance is a bonus, not a dependency */ }
+
+      const markdown = generateSopMarkdown(wf, { provenance });
 
       if (req.query.format === 'pdf') {
         const { generateSopPdf } = await import('../workflows/sop-pdf.js');
