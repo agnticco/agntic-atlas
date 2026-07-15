@@ -546,7 +546,7 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
     if (!proposed.length) {
       const parsed = await llmJson(llm, [
         new SystemMessage(buildSystemPrompt(state.capabilities)),
-        new HumanMessage(buildExamplesPrompt({ intent: state.intent, outcome: state.draft?.outcome })),
+        new HumanMessage(buildExamplesPrompt({ intent: state.intent, outcome: state.draft?.outcome, triggers: state.draft?.triggers })),
       ], tierCfg('fast', sessionId));
       proposed = (parsed?.examples ?? []).filter(e => e?.given);
       source   = null;

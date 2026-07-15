@@ -602,7 +602,7 @@ Return JSON only:
 
 // ── Examples prompt ──────────────────────────────────────────────────────────
 
-export function buildExamplesPrompt({ intent, outcome }) {
+export function buildExamplesPrompt({ intent, outcome, triggers }) {
   return `The user is building this workflow:
 
 INTENT: "${intent}"
@@ -612,11 +612,39 @@ Propose up to 3 CONCRETE example cases they could confirm — realistic inputs t
 see, each with what the workflow should produce. These become the workflow's test cases, so they
 must be specific (a real-looking subject line, a real-looking amount), never generic placeholders.
 
+${triggerGivenGuidance(triggers)}
+
 Include at least one case that should NOT trigger the workflow, if that is meaningful here — the
 negative example is the one that finds the bug.
 
 Return JSON only:
 {"examples":[{"id":"e1","label":"<short label>","given":{…},"expect":{…},"shouldTrigger":true}]}`;
+}
+
+/**
+ * `given` is the EVENT the workflow's first step actually receives — and the first
+ * step is fed by `given` verbatim. If its shape does not match the trigger's event,
+ * the first step gets nonsense: an email→summarize node handed a `{scenario:"…"}`
+ * blob reads its OWN guard clause ("if the email is empty or missing → ERROR") and
+ * fails a run that would have worked. So the example's `given` MUST be a realistic
+ * instance of the trigger's own event shape, with the real content IN `given` (not
+ * in `expect` — `expect` is what the workflow PRODUCES from `given`). (P12 G residual.)
+ */
+function triggerGivenGuidance(triggers) {
+  const t = (Array.isArray(triggers) ? triggers : []).find(x => x?.type) ?? triggers?.[0] ?? null;
+  const type = t?.type ?? null;
+  if (type === 'email') {
+    return `This workflow is TRIGGERED BY an incoming email. Each \`given\` MUST be a realistic instance of
+that email with these exact keys — and real content, because the first step reads this verbatim:
+  {"from": "<sender name and email>", "subject": "<a real-looking subject line>", "body": "<the full email body, 2-4 sentences of realistic content>"}
+Put the email IN \`given\`. \`expect\` is what the workflow should PRODUCE from it (e.g. the summary), NOT the email.`;
+  }
+  if (type === 'schedule') {
+    return `This workflow is TRIGGERED ON A SCHEDULE — there is no inbound event, so \`given\` may be an empty
+object {} or a minimal context. The first step gathers its own data (a search, a fetch); \`expect\` is what it produces.`;
+  }
+  return `\`given\` is the exact event the workflow's FIRST step receives and reads verbatim — shape it as a
+realistic instance of that event (the real fields, real content), and put the content in \`given\`, not in \`expect\`.`;
 }
 
 // ── Decision prompt — induce a table / a routing shape from the examples ─────
