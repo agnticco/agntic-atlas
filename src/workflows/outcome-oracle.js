@@ -469,6 +469,47 @@ function deliveryConnector(delivery) {
   return canonicalConnector(head || ch);
 }
 
+/**
+ * Build a runtime delivery object from the delivering NODE + the handler's return.
+ *
+ * Delivery handlers are inconsistent about what they return — only Slack stamps
+ * both `channel` and a destination. Inbox omits `channel`; gmail_send / airtable
+ * writes omit both `channel` AND `delivered`. But the NODE always knows its channel
+ * (a deliver node's `config.channel`, a connector-action's `config.action`), and the
+ * SME's destination lives in the node config (or the handler output) under that
+ * channel's own locator keys. So connector + locator are derived from the node — the
+ * one place they are reliably present — and merged over the handler output. Without
+ * this the runtime oracle could only ever confirm a Slack delivery: every inbox,
+ * gmail, or airtable delivery read back as "nothing reached …" on a SUCCESSFUL run.
+ * (P12 Increment G — the unit tests hand-built deliveries that carried these fields,
+ * so they never exercised the real handler shapes; CLAUDE.md flaw #2.)
+ */
+export function normalizeDelivery(node, output) {
+  const o = (output && typeof output === 'object') ? output : {};
+  const channel = node?.type === 'deliver'          ? String(node.config?.channel ?? 'in_app')
+                : node?.type === 'connector-action' ? String(node.config?.action  ?? '')
+                : String(o.channel ?? '');
+  const eff = CHANNEL_EFFECTS[channel];
+  // The destination the assertion matches against: whatever the handler already
+  // named, else the channel's own locator key read off the output or the node config.
+  let target = o.target ?? o.to ?? o.user ?? o.slackChannel ?? o.channelName ?? null;
+  if (!target && eff) {
+    for (const k of eff.locatorKeys) {
+      const v = o[k] ?? node?.config?.[k];
+      if (typeof v === 'string' && v.trim()) { target = v; break; }
+    }
+  }
+  return { ...o, delivered: true, channel, ...(target != null ? { target } : {}) };
+}
+
+/** Is this node a delivery — a `deliver` node, or a `connector-action` that WRITES? */
+export function isDeliveryNode(node) {
+  if (!node || typeof node !== 'object') return false;
+  if (node.type === 'deliver') return true;
+  if (node.type === 'connector-action') return nodeEffect(node) != null;
+  return false;
+}
+
 /** Did this run produce the effect this assertion promises? */
 export function checkAssertionAtRuntime(assertion, deliveries = []) {
   const defect = assertionDefect(assertion);

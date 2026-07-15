@@ -90,7 +90,7 @@ import { renderResetEmail } from '../auth/reset-email.js';
 import { ApprovalStore } from '../approvals/approval-store.js';
 import { ApprovalService } from '../approvals/approval-service.js';
 import { availableApprovalChannels, approvalChannelView } from '../workflows/approval-channels.js';
-import { evaluateExampleRun } from '../workflows/outcome-oracle.js';
+import { evaluateExampleRun, normalizeDelivery, isDeliveryNode } from '../workflows/outcome-oracle.js';
 import { oauthRedirectBase } from '../connectors/oauth-redirect.js';
 import { entitlementsFor, PUBLIC_PLANS, PLAN_META, isSelfServe } from '../entitlements/index.js';
 import { BillingEventStore } from '../billing/billing-event-store.js';
@@ -2173,7 +2173,21 @@ export function createApp(spine) {
         if (typeof o === 'string') { try { return JSON.parse(o); } catch { /* not json */ } }
         return null;
       };
-      const deliveries = steps.map((s) => coerce(s.output)).filter((o) => o && o.delivered);
+      // Assemble the run's deliveries from the delivering NODE, not from the
+      // handler's return: handlers are inconsistent (only Slack stamps channel +
+      // delivered; inbox omits channel; gmail/airtable omit both), so filtering on
+      // a bare `o.delivered` dropped gmail/airtable entirely and left inbox with no
+      // channel — the runtime oracle could then confirm only Slack. normalizeDelivery
+      // derives channel + destination from the node config, which always has them.
+      const nodeById = new Map((spec.nodes ?? []).map((n) => [n.id, n]));
+      const deliveries = steps
+        .map((s) => {
+          const node = nodeById.get(s.nodeId);
+          const o = coerce(s.output);
+          if (!isDeliveryNode(node) && !(o && o.delivered === true)) return null;
+          return normalizeDelivery(node, o);
+        })
+        .filter(Boolean);
       // R14: a step can "complete" (not throw) yet emit the ERROR sentinel that
       // prompts.js instructs LLM nodes to return when required upstream data is
       // missing ("ERROR: required data not found — do not compose content."). That
