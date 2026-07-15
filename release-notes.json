@@ -1,5 +1,15 @@
 [
   {
+    "version": "1.5.1",
+    "date": "2026-07-15",
+    "title": "A clearer, more reliable builder",
+    "notes": [
+      "The builder now explains what each workflow will deliver in plain language, and tests it against real sample data before you publish.",
+      "When a workflow's wiring needs a fix, Atlas repairs it automatically instead of getting stuck.",
+      "Test examples are clearly for testing only — they're never part of your published workflow."
+    ]
+  },
+  {
     "version": "1.5.0",
     "date": "2026-07-14",
     "title": "Test your workflow against its promises",
