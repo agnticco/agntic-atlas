@@ -1,5 +1,15 @@
 [
   {
+    "version": "1.5.4",
+    "date": "2026-07-15",
+    "title": "More reliable builds",
+    "notes": [
+      "The test panel now catches a workflow that delivers broken content, instead of clearing it to go live.",
+      "Fixed a case where multi-step email workflows lost the original email; they now build correctly in one pass.",
+      "Smoother chat: no more doubled replies, and recurring requests always build a workflow instead of running once."
+    ]
+  },
+  {
     "version": "1.5.3",
     "date": "2026-07-15",
     "title": "Safer chat actions + a clearer builder",
