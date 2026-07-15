@@ -264,8 +264,15 @@ BEHAVIOR:
 - ready_to_build stays false until the user clearly signals they want to build (e.g. "let's do it", "set it up", "yes, build it", "go ahead"). At that point set ready_to_build:true and write build_intent: one clear paragraph covering trigger + steps + destination, folding in everything discussed.
 - If they seem close but haven't confirmed, gently offer ("Want me to set this up?") but keep ready_to_build:false.
 
-DIRECT ACTIONS — you have tools for each connected service. When the user asks you to DO something now (e.g. "send an email", "search my calendar", "DM me"), use the appropriate tool immediately — do not ask them to confirm, just act. After the tool completes, report what happened in your reply field in the JSON format below. Do NOT use tools speculatively or when the user is just exploring — only when they explicitly ask you to perform an action.
-- IMPORTANT: building a workflow is NOT a direct action and has NO tool. When the user says "build it" / "set it up" / "go ahead", do NOT call any tool and do NOT look for a build tool — that is the signal to set ready_to_build:true with a build_intent, nothing more. Tools are only for one-off actions the user wants performed live in the chat.
+BUILD A WORKFLOW vs DO ONE THING NOW — decide this FIRST:
+- If the user describes something to happen AUTOMATICALLY, ON A SCHEDULE, ON A TRIGGER, or FOR MANY items ("send a branded email to my CRM list", "every morning…", "whenever an email arrives…", "for everyone on the sheet…"), that is a WORKFLOW. Do NOT perform it. Gather any context you need with READ-ONLY tools, then set ready_to_build:true with a build_intent. A list/bulk send is ALWAYS a workflow, never a live chat action.
+- Only treat it as a one-off DIRECT ACTION when the user clearly wants a single thing done right now ("email Bob this note", "DM me the summary", "what's on my calendar today?").
+
+DIRECT ACTIONS — you have tools for each connected service.
+- READ-ONLY tools (search/list/read/get — calendar, drive, sheets, email search, web) you may call freely to answer a question or gather context.
+- OUTWARD-FACING actions (sending an email, posting to Slack, creating or updating a record) are NEVER performed silently. When you call such a tool it is HELD for the user's confirmation and NOT executed — the user gets a Confirm button. So: describe plainly what you propose to do (who it goes to, the subject, the gist), then STOP and let them confirm. NEVER say you sent / posted / created something unless a tool result actually confirms it ran — a "NOT_PERFORMED" result means it is waiting on the user.
+- Do NOT use tools speculatively or when the user is just exploring.
+- IMPORTANT: building a workflow is NOT a direct action and has NO tool. When the user says "build it" / "set it up" / "go ahead", do NOT call any tool — set ready_to_build:true with a build_intent.
 ${connectorBlock}
 
 OUTPUT FORMAT — every response MUST be valid JSON, no exceptions, no markdown fences:
@@ -370,7 +377,41 @@ async function introMessage(spine, intent, sessionId) {
 // aggregates. Mirrors the engine's connector-action contract (sessionId +
 // costContext). costContext is left to each capability's own default so it
 // self-labels (web_search → 'web_search', keeping the cost-by-surface view honest).
-function makeChatToolExecutor(spine, req, sessionId) {
+// An id-level fallback signal for a mutating/outward-facing capability, for the
+// rare case a write action is registered `step`-only (e.g. drive_create_folder,
+// gmail_mark_read). Word-boundaried so "address" ≠ "add".
+const CHAT_WRITE_VERB = /(?:^|_)(create|update|delete|remove|append|write|add|send|post|move|mark|archive|invite|share|reply|upload)(?:_|$)/i;
+
+/**
+ * Is this chat tool OUTWARD-FACING / side-effecting — i.e. does calling it change
+ * something outside Atlas (send an email, post to Slack, write/create a record)?
+ * Such actions are NEVER performed silently from chat; they are captured and held
+ * for the user's explicit confirmation (see the executor gate below).
+ *
+ * FAIL-CLOSED: an unknown capability is treated as side-effecting. Under-gating a
+ * send is the dangerous direction; over-confirming a harmless read is merely a
+ * click. A `delivery` position is the authoritative "this sends" signal; the verb
+ * regex catches the few write actions registered step-only.
+ */
+function isSideEffectingChatTool(cap) {
+  if (!cap) return true;
+  if (Array.isArray(cap.positions) && cap.positions.includes('delivery')) return true;
+  return CHAT_WRITE_VERB.test(cap.id || '');
+}
+
+// Build the human-facing confirmation line for a pending action.
+function describePendingAction(cap, args = {}) {
+  const to = args.to || args.target || args.user || args.channel || args.email;
+  const subject = args.subject || args.title;
+  const base = cap?.name || cap?.id || 'action';
+  return [base, to ? `→ ${to}` : null, subject ? `“${subject}”` : null].filter(Boolean).join(' ');
+}
+
+// When `pending` is supplied, side-effecting tool calls are CAPTURED into it and
+// NOT executed — the chat surfaces them for confirmation and they run only via the
+// dedicated /chat/execute-action endpoint. Read-only tools always run.
+function makeChatToolExecutor(spine, req, sessionId, opts = {}) {
+  const pending = Array.isArray(opts.pending) ? opts.pending : null;
   return async function executeChatTools(toolCalls, msgArray) {
     await Promise.all(toolCalls.map(async (tc) => {
       let resultStr;
@@ -379,11 +420,23 @@ function makeChatToolExecutor(spine, req, sessionId) {
         const handler  = registry?.getHandler(tc.name);
         if (!handler) throw new Error(`Unknown tool: ${tc.name}`);
         const cap    = registry.get(tc.name);
-        const config = { ...(tc.args ?? {}) };
-        await injectCapabilityCredentials(cap, config, { auth: spine.auth, tenant: req.tenant, user: req.user });
-        const result = await handler({ config, body: config.body ?? null, title: config.title ?? null, sessionId });
-        resultStr = JSON.stringify(result ?? {});
-        logEvent('chat.tool.ok', { tenant: req.tenant?.id ?? null, tool: tc.name });
+        // ── THE CONFIRMATION GATE ────────────────────────────────────────────
+        // An outward-facing action (send email, post to Slack, create/write a
+        // record) is NEVER performed straight from chat. It is captured and
+        // returned to the user to confirm — because "send a branded email to my
+        // CRM list" must not fire live emails while the user is still talking.
+        // The action runs only when the user clicks confirm (→ execute-action).
+        if (pending && isSideEffectingChatTool(cap)) {
+          pending.push({ id: `act${pending.length + 1}`, name: tc.name, args: tc.args ?? {}, label: describePendingAction(cap, tc.args ?? {}) });
+          resultStr = JSON.stringify({ status: 'NOT_PERFORMED', reason: 'This outward-facing action was NOT performed. It is held for the user to confirm. Tell the user plainly what you propose to do (who it goes to, what it says) and let them confirm — do NOT claim it is done.' });
+          logEvent('chat.tool.gated', { tenant: req.tenant?.id ?? null, tool: tc.name });
+        } else {
+          const config = { ...(tc.args ?? {}) };
+          await injectCapabilityCredentials(cap, config, { auth: spine.auth, tenant: req.tenant, user: req.user });
+          const result = await handler({ config, body: config.body ?? null, title: config.title ?? null, sessionId });
+          resultStr = JSON.stringify(result ?? {});
+          logEvent('chat.tool.ok', { tenant: req.tenant?.id ?? null, tool: tc.name });
+        }
       } catch (toolErr) {
         resultStr = JSON.stringify({ error: toolErr.message ?? String(toolErr) });
         logEvent('chat.tool.error', { tenant: req.tenant?.id ?? null, tool: tc.name, ...errFields(toolErr) });
@@ -835,7 +888,10 @@ Rules:
 
       const chatUser = { name: req.user.display_name || req.user.email, email: req.user.email };
       const chatTools = buildChatTools(spine.engine?.capabilityRegistry, connectedSet);
-      const executeChatTools = makeChatToolExecutor(spine, req, chatSessionId);
+      // Outward-facing actions the model tried to perform are captured here, held
+      // for the user to confirm, and surfaced on the terminal `done` event.
+      const pendingActions = [];
+      const executeChatTools = makeChatToolExecutor(spine, req, chatSessionId, { pending: pendingActions });
       const invokeConfig = {
         configurable: { modelTier: 'balanced', sessionId: chatSessionId, costContext: 'chat' },
         ...(chatTools.length ? { tools: chatTools } : {}),
@@ -910,7 +966,11 @@ Rules:
       // Anthropic tool-use turns yield NO intermediate text chunks — only a single
       // final AIMessage with toolCalls. Text turns yield many small delta AIMessages.
       // Peeking at the first gen.next() cleanly distinguishes the two cases.
-      const MAX_TOOL_ROUNDS = 3;
+      // A complex intent can legitimately touch several connectors before it has
+      // enough to reply (e.g. list Drive files → describe the sheet → read the sheet
+      // → look at Knowledge). Give it room; the forced-reply fallback below still
+      // guarantees a response if it somehow never converges.
+      const MAX_TOOL_ROUNDS = 6;
       for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
         const gen = llm.stream(msgArray, invokeConfig);
         const { value: firstChunk, done: firstDone } = await gen.next();
@@ -971,22 +1031,81 @@ Rules:
         const readyToBuild = parsedMeta ? !!parsedMeta.ready_to_build : false;
         const buildIntent  = (parsedMeta && typeof parsedMeta.build_intent === 'string' && parsedMeta.build_intent.trim()) ? parsedMeta.build_intent.trim() : null;
 
-        logEvent('chat.reply', { tenant: req.tenant?.id ?? null, turns: messages.length, readyToBuild, parsed: !!parsedMeta?.reply });
-        sseWrite({ type: 'done', readyToBuild, buildIntent });
+        logEvent('chat.reply', { tenant: req.tenant?.id ?? null, turns: messages.length, readyToBuild, parsed: !!parsedMeta?.reply, pending: pendingActions.length });
+        sseWrite({ type: 'done', readyToBuild, buildIntent, pendingActions });
         clearInterval(heartbeat);
         res.end();
         return;
       }
 
-      // Exhausted tool rounds without a text response (shouldn't happen in practice).
-      sseWrite({ type: 'error', error: 'Max tool rounds reached without a text reply.' });
-      clearInterval(heartbeat);
-      res.end();
+      // Exhausted the tool-round budget without the model producing a text reply.
+      // Rather than dumping an error on the user (which is exactly what happened with
+      // a brand-kit + Sheets intent — the model kept calling tools, including a wasted
+      // web_fetch on an asset path, and never replied), FORCE a final answer: one more
+      // turn with tools DISABLED, so the model MUST respond from what it has gathered.
+      // This guarantees the chat always returns something usable.
+      try {
+        msgArray.push({ role: 'user', content: 'You now have enough information. Do NOT call any more tools. Reply now, using what you have gathered, with exactly: {"reply":"<your message>","ready_to_build":<true or false>,"build_intent":<a string or null>}' });
+        const finalConfig = { configurable: invokeConfig.configurable }; // NO tools → the model has to answer
+        extractState = 'searching'; searchBuf = ''; replyBuf = ''; streamedText = ''; escapeNext = false;
+        for await (const chunk of llm.stream(msgArray, finalConfig)) {
+          processToken(typeof chunk.content === 'string' ? chunk.content : '');
+        }
+        if (extractState === 'searching' && streamedText && !closed) {
+          const CHUNK = 40;
+          for (let i = 0; i < streamedText.length; i += CHUNK) sseWrite({ type: 'chunk', text: streamedText.slice(i, i + CHUNK) });
+        }
+        let parsedMeta = null;
+        try { parsedMeta = JSON.parse(extractJsonLoose(streamedText)); } catch {}
+        const readyToBuild = parsedMeta ? !!parsedMeta.ready_to_build : false;
+        const buildIntent  = (parsedMeta && typeof parsedMeta.build_intent === 'string' && parsedMeta.build_intent.trim()) ? parsedMeta.build_intent.trim() : null;
+        logEvent('chat.reply', { tenant: req.tenant?.id ?? null, turns: messages.length, readyToBuild, parsed: !!parsedMeta?.reply, forcedFinal: true, pending: pendingActions.length });
+        sseWrite({ type: 'done', readyToBuild, buildIntent, pendingActions });
+        clearInterval(heartbeat);
+        res.end();
+        return;
+      } catch (e) {
+        logEvent('chat.error', { tenant: req.tenant?.id ?? null, ...errFields(e), phase: 'forced-final-reply' });
+        sseWrite({ type: 'error', error: 'Atlas gathered your data but had trouble replying. Try again, or rephrase in a sentence or two.' });
+        clearInterval(heartbeat);
+        res.end();
+      }
     } catch (err) {
       clearInterval(heartbeat);
       logEvent('chat.error', { tenant: req.tenant?.id ?? null, ...errFields(err) });
       sseWrite({ type: 'error', error: cleanLLMError(err) });
       res.end();
+    }
+  });
+
+  // ── POST /api/builder/chat/execute-action ───────────────────────────────────
+  // Runs ONE outward-facing action the chat proposed, AFTER the user has clicked
+  // confirm in the UI. This is the ONLY path by which a chat-initiated send / post
+  // / write actually executes — the chat tool loop itself never performs one (see
+  // the confirmation gate in makeChatToolExecutor). The capability is re-validated
+  // here and MUST be side-effecting, so this endpoint can't be repurposed to run an
+  // arbitrary or read-only handler. Body: { name, args }.
+  app.post('/api/builder/chat/execute-action', requireActiveTenant, async (req, res) => {
+    const { name, args } = req.body ?? {};
+    if (!name || typeof name !== 'string') return res.status(400).json({ error: 'name is required' });
+    try {
+      const registry = spine.engine?.capabilityRegistry;
+      const handler  = registry?.getHandler(name);
+      const cap      = registry?.get(name);
+      if (!handler || !cap) return res.status(404).json({ error: `Unknown action: ${name}` });
+      if (!isSideEffectingChatTool(cap)) return res.status(400).json({ error: 'That action does not require confirmation.' });
+      const sessionId = `chat-action-${req.user?.id ?? 'anon'}-${Date.now()}`;
+      spine.costTracker?.setSessionUser?.(sessionId, req.user?.id);
+      const config = { ...(args ?? {}) };
+      await injectCapabilityCredentials(cap, config, { auth: spine.auth, tenant: req.tenant, user: req.user });
+      const result = await handler({ config, body: config.body ?? null, title: config.title ?? null, sessionId });
+      logEvent('chat.action.executed', { tenant: req.tenant?.id ?? null, tool: name });
+      // App-level failures stay 2xx so the UI can read them (Cloudflare replaces
+      // origin 5xx with its own page); a real success is ok:true.
+      res.json({ ok: true, result: result ?? {} });
+    } catch (err) {
+      logEvent('chat.action.error', { tenant: req.tenant?.id ?? null, tool: name, ...errFields(err) });
+      res.status(200).json({ ok: false, error: err.message ?? String(err) });
     }
   });
 
