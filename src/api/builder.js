@@ -211,6 +211,30 @@ Channel name aliases — map user requests to the correct channel id:
 // Sessions are short-lived (one building conversation), so in-memory is correct.
 const sessions = new Map();
 
+// Per-session serialization for /respond. The build graph is a single stateful
+// thread: resuming it twice concurrently is a race — the first resume advances past
+// the interrupt and the second finds no `resumeFrom` and throws, leaking a raw
+// `CompiledGraph.resume()…` string into the chat. A double-click, a retry, or two
+// tabs are enough to trigger it. Chaining every /respond for a threadId through one
+// promise makes resumes strictly sequential, so a duplicate runs AFTER the first has
+// settled (and is then handled as an already-advanced no-op) rather than racing it.
+const respondChains = new Map();
+function serializePerThread(threadId, task) {
+  const prev = respondChains.get(threadId) || Promise.resolve();
+  const next = prev.catch(() => {}).then(task);
+  // Keep the chain from growing unbounded / holding rejections.
+  respondChains.set(threadId, next.catch(() => {}));
+  next.finally(() => { if (respondChains.get(threadId) === next.catch(() => {})) respondChains.delete(threadId); }).catch(() => {});
+  return next;
+}
+// True for the "you resumed a thread that already advanced / finished" family —
+// never load-bearing (the prior resume already did the work), so it must not reach
+// the user as a stack trace.
+function isStaleResumeError(err) {
+  const m = String(err?.message ?? err ?? '');
+  return /has no resumeFrom|no checkpoint found for thread|session not found or already complete/i.test(m);
+}
+
 function pubUser(u) {
   return { id: u.id, email: u.email, display_name: u.display_name ?? u.email, role: u.role };
 }
@@ -236,6 +260,7 @@ BEHAVIOR:
 - When they describe automation: explore ONE question at a time — trigger (what starts it?), processing, destination. Don't dump a list of fields.
 - YOU BUILD IT. Building a workflow from a plain-language description is exactly what you do. Never tell the user you can't build it, that it needs a developer, or that a separate human team will take it from here — when they confirm, YOU assemble it. The only thing that happens after ready_to_build:true is the system turning YOUR build_intent into a running workflow.
 - FILE ACCESS: if the intent involves reading files, documents, PDFs, or attachments — check the connectors list. If Filesystem is listed, name the folder. If not, surface the gap before building: e.g. "To read that file in the workflow you'd need a folder connected under Knowledge. Set that up first?"
+- MAILBOX / SOURCE GROUNDING: only promise to read a source that is actually CONNECTED. An email workflow reads the ONE Gmail account this workspace has connected — it cannot open a different mailbox. If the user names another address (support@…, sales@…, a shared mailbox or group) that isn't the connected account, do NOT say you'll "read support@…" or "watch that inbox". Either treat it as a filter on the connected inbox and say so plainly ("I'll watch your connected inbox for mail addressed to support@… — that works if support@ forwards there"), or, if it's a separate mailbox, name the gap: "That looks like a separate mailbox — the workflow reads the Gmail account you've connected. Does support@ forward into it?" Never claim to read, access, or monitor a source that isn't a connected connector; when unsure, ask.
 - ready_to_build stays false until the user clearly signals they want to build (e.g. "let's do it", "set it up", "yes, build it", "go ahead"). At that point set ready_to_build:true and write build_intent: one clear paragraph covering trigger + steps + destination, folding in everything discussed.
 - If they seem close but haven't confirmed, gently offer ("Want me to set this up?") but keep ready_to_build:false.
 
@@ -1240,15 +1265,28 @@ Rules:
   // Returns: the next interrupt payload, or { type: 'done', spec, confirmationLog }
   app.post('/api/builder/sessions/:threadId/respond', requireActiveTenant, async (req, res) => {
     const { threadId } = req.params;
-    const converger = sessions.get(threadId);
-    if (!converger) return res.status(404).json({ error: 'session not found or already complete' });
+    if (!sessions.get(threadId)) return res.status(404).json({ error: 'session not found or already complete' });
 
     let result;
     try {
-      result = await converger.resume(threadId, req.body);
+      // Serialize: a concurrent /respond for this thread waits for the in-flight one,
+      // so two resumes can never race on the same graph checkpoint.
+      result = await serializePerThread(threadId, async () => {
+        const converger = sessions.get(threadId);
+        if (!converger) { const e = new Error('session not found or already complete'); e._stale = true; throw e; }
+        return converger.resume(threadId, req.body);
+      });
     } catch (err) {
+      // A stale/duplicate resume (the thread already advanced) is not a failure — the
+      // real work was done by the resume that got there first. Return a benign no-op the
+      // client ignores, and NEVER surface the raw `CompiledGraph.resume()…` text.
+      if (err?._stale || isStaleResumeError(err)) {
+        logEvent('respond.duplicate', { tenant: req.tenant?.id ?? null, threadId, sent: req.body?.type });
+        return res.json({ type: 'noop', reason: 'already_handled' });
+      }
       logEvent('respond.error', { tenant: req.tenant?.id ?? null, threadId, sent: req.body?.type, ...errFields(err) });
-      return res.status(500).json({ error: err.message ?? String(err) });
+      // A genuine failure gets a plain, human message — not a stack trace in the chat.
+      return res.status(500).json({ error: 'Atlas hit a snag finishing that step. Try again, or start over from “+ New workflow”.' });
     }
 
     logEvent('respond.ok', { tenant: req.tenant?.id ?? null, threadId, sent: req.body?.type, interrupt: result?.type });

@@ -766,6 +766,9 @@ export class WorkflowValidator {
               message: `"${node.label || node.id}" routes to "${to}", but there is no connection drawn from it to "${to}" — so "${to}" would run no matter which case matched.`,
               nodeId: node.id, field: 'edges',
               hint: `Add an edge { "from": "${node.id}", "to": "${to}" } for every case.`,
+              // Unambiguous mechanical repair: the case names its target, so the
+              // one correct edge is branch→target. Applied silently by the gaps node.
+              fix: { op: 'add_edge', from: node.id, to },
             });
           }
 
@@ -784,6 +787,10 @@ export class WorkflowValidator {
               message: `"${to}" is a destination of "${node.label || node.id}", but ${otherParents.map(p => `"${p}"`).join(', ')} also connects to it — so it would run even when the branch routes the other way, and the branch would decide nothing.`,
               nodeId: to, field: 'edges',
               hint: `Remove the connection${otherParents.length > 1 ? 's' : ''} from ${otherParents.map(p => `"${p}"`).join(', ')} to "${to}". To use that step's data, reference it as {{${otherParents[0]}.output}} — a template needs no connection.`,
+              // The branch owns this target; the fix is to drop the ambiguous
+              // extra parent edge(s). The gaps node applies it and RE-SCORES, so
+              // a removal that orphaned something would resurface as a fresh gap.
+              fix: { op: 'remove_edges', edges: otherParents.map(p => ({ from: p, to })) },
             });
           }
         }
@@ -809,6 +816,9 @@ export class WorkflowValidator {
             message: `"${node.label || node.id}" sends failures to "${target}", but there is no connection drawn from it to "${target}" — the failure path would never run, and the workflow would report success anyway.`,
             nodeId: node.id, field: 'edges',
             hint: `Add an edge { "from": "${node.id}", "to": "${target}" }.`,
+            // Unambiguous: the on_error route names its target, so the one correct
+            // edge is failingNode→target. Applied silently by the gaps node.
+            fix: { op: 'add_edge', from: node.id, to: target },
           });
         }
       }

@@ -1,0 +1,387 @@
+<title>Atlas Builder — redesign preview</title>
+<style>
+  :root{
+    --ground:#15110c; --panel:#1e1913; --panel-2:#241d15; --line:#332a1f;
+    --ink:#efe7d8; --ink-soft:#cdbfab; --muted:#a2917f; --faint:#7c6d5c;
+    --amber:#e2a860; --amber-deep:#c98f45; --amber-ghost:#e2a86022;
+    --green:#84b06a; --green-ghost:#84b06a1f;
+    --coral:#e07a63; --coral-ghost:#e07a631c;
+    --blue:#7fa8c9; --blue-ghost:#7fa8c91c;
+    --radius:14px; --radius-sm:9px;
+    --serif:"Iowan Old Style","Palatino Linotype",Palatino,Georgia,"Times New Roman",serif;
+    --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    --mono:"SF Mono",ui-monospace,"Cascadia Code","JetBrains Mono",Menlo,Consolas,monospace;
+    --shadow:0 18px 50px -24px rgba(0,0,0,.7);
+  }
+  :root[data-theme="light"]{
+    --ground:#f4efe6; --panel:#fbf8f2; --panel-2:#f2ece1; --line:#e2d8c8;
+    --ink:#2c241a; --ink-soft:#4d4234; --muted:#7a6c5a; --faint:#a3947f;
+    --amber:#b7802f; --amber-deep:#9c6c26; --amber-ghost:#b7802f18;
+    --green:#5c8a44; --green-ghost:#5c8a4418;
+    --coral:#c25236; --coral-ghost:#c2523614;
+    --blue:#3f6f96; --blue-ghost:#3f6f9614;
+    --shadow:0 18px 46px -26px rgba(90,70,40,.35);
+  }
+  @media (prefers-color-scheme:light){
+    :root:not([data-theme="dark"]){
+      --ground:#f4efe6; --panel:#fbf8f2; --panel-2:#f2ece1; --line:#e2d8c8;
+      --ink:#2c241a; --ink-soft:#4d4234; --muted:#7a6c5a; --faint:#a3947f;
+      --amber:#b7802f; --amber-deep:#9c6c26; --amber-ghost:#b7802f18;
+      --green:#5c8a44; --green-ghost:#5c8a4418;
+      --coral:#c25236; --coral-ghost:#c2523614;
+      --blue:#3f6f96; --blue-ghost:#3f6f9614;
+      --shadow:0 18px 46px -26px rgba(90,70,40,.35);
+    }
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--ground);color:var(--ink);font-family:var(--sans);
+    font-size:15px;line-height:1.5;-webkit-font-smoothing:antialiased}
+  h1,h2,h3{margin:0;text-wrap:balance}
+  button{font-family:inherit;cursor:pointer}
+  .wrap{max-width:1180px;margin:0 auto;padding:22px 20px 80px}
+
+  /* ---- top bar: title + controls ---- */
+  .top{display:flex;flex-wrap:wrap;gap:14px;align-items:flex-end;justify-content:space-between;margin-bottom:18px}
+  .brandline{display:flex;align-items:center;gap:11px}
+  .globe{width:30px;height:30px;border-radius:50%;border:1.5px solid var(--amber);
+    display:grid;place-items:center;color:var(--amber);font-size:15px;flex:none}
+  .brandline .t{font-family:var(--serif);font-size:20px;letter-spacing:.2px}
+  .brandline .s{color:var(--muted);font-size:12.5px}
+  .controls{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+  .ctl{background:var(--panel);border:1px solid var(--line);color:var(--ink-soft);
+    padding:7px 13px;border-radius:99px;font-size:12.5px;transition:.15s;display:inline-flex;gap:7px;align-items:center}
+  .ctl:hover{border-color:var(--amber);color:var(--ink)}
+  .ctl.on{background:var(--amber-ghost);border-color:var(--amber);color:var(--amber)}
+  .ctl[disabled]{opacity:.4;cursor:default}
+
+  /* ---- app shell ---- */
+  .shell{display:grid;grid-template-columns:196px 1fr 340px;gap:0;background:var(--panel);
+    border:1px solid var(--line);border-radius:var(--radius);overflow:hidden;box-shadow:var(--shadow);min-height:660px}
+  @media (max-width:900px){.shell{grid-template-columns:1fr}.side,.rail{display:none}}
+
+  /* sidebar */
+  .side{border-right:1px solid var(--line);padding:16px 12px;background:var(--panel-2);display:flex;flex-direction:column;gap:3px}
+  .side .lbl{font-size:10.5px;letter-spacing:.14em;color:var(--faint);text-transform:uppercase;margin:2px 6px 8px}
+  .wf{display:flex;align-items:center;gap:8px;padding:7px 8px;border-radius:8px;font-size:13px;color:var(--ink-soft)}
+  .wf .dot{width:7px;height:7px;border-radius:50%;background:var(--faint);flex:none}
+  .wf.live .dot{background:var(--green)}
+  .wf.cur{background:var(--amber-ghost);color:var(--ink)}
+  .side .spacer{flex:1}
+  .side .foot{font-size:12px;color:var(--muted);padding:7px 8px;display:flex;gap:8px;align-items:center}
+  .avatar{width:22px;height:22px;border-radius:50%;background:var(--amber-deep);color:#fff;display:grid;place-items:center;font-size:11px;flex:none}
+
+  /* conversation column */
+  .conv{padding:22px 26px;display:flex;flex-direction:column;min-width:0;position:relative}
+  .stage-h{font-family:var(--serif);font-size:23px;line-height:1.25;margin-bottom:4px}
+  .stage-sub{color:var(--muted);font-size:13px;margin-bottom:18px}
+  .flow{display:flex;flex-direction:column;gap:14px;flex:1}
+
+  .msg{max-width:82%;padding:11px 14px;border-radius:13px;font-size:14px;line-height:1.5}
+  .msg.user{align-self:flex-end;background:var(--panel-2);border:1px solid var(--line)}
+  .msg.sys{align-self:flex-start;border-left:2px solid var(--amber);padding-left:14px;color:var(--ink-soft);max-width:88%}
+
+  /* destination chooser (reframed) */
+  .card{background:var(--panel-2);border:1px solid var(--line);border-radius:var(--radius-sm);padding:15px}
+  .card .k{font-size:10.5px;letter-spacing:.13em;text-transform:uppercase;color:var(--faint);margin-bottom:10px}
+  .dest{display:flex;align-items:center;gap:12px;padding:12px 13px;border:1px solid var(--line);
+    border-radius:10px;background:var(--panel);transition:.15s;margin-bottom:9px}
+  .dest:hover{border-color:var(--amber)}
+  .dest.pick{border-color:var(--amber);background:var(--amber-ghost)}
+  .dest .ic{width:30px;height:30px;border-radius:8px;background:var(--panel-2);display:grid;place-items:center;flex:none;color:var(--amber)}
+  .dest .body{flex:1;min-width:0}
+  .dest .body b{font-weight:600;font-size:13.5px}
+  .dest .body span{display:block;color:var(--muted);font-size:12px}
+  .dest .radio{width:16px;height:16px;border-radius:50%;border:1.5px solid var(--faint);flex:none}
+  .dest.pick .radio{border-color:var(--amber);background:var(--amber);box-shadow:inset 0 0 0 3px var(--panel)}
+  .addmore{display:inline-flex;align-items:center;gap:7px;color:var(--muted);font-size:12.5px;
+    background:transparent;border:1px dashed var(--line);border-radius:9px;padding:8px 12px;width:100%;justify-content:center;transition:.15s}
+  .addmore:hover{border-color:var(--amber);color:var(--ink)}
+
+  /* THE HERO: build narration */
+  .build{background:linear-gradient(180deg,var(--panel-2),var(--panel));border:1px solid var(--line);
+    border-radius:var(--radius);padding:16px 18px}
+  .build .bh{display:flex;align-items:center;gap:10px;margin-bottom:14px}
+  .build .bh .spin{width:15px;height:15px;border-radius:50%;border:2px solid var(--amber-ghost);
+    border-top-color:var(--amber);animation:sp 1s linear infinite}
+  @keyframes sp{to{transform:rotate(360deg)}}
+  @media (prefers-reduced-motion:reduce){.build .bh .spin{animation:none}}
+  .build .bh b{font-size:14px}
+  .build .bh .cnt{margin-left:auto;font-size:12px;color:var(--muted);font-variant-numeric:tabular-nums}
+  .steps{display:flex;flex-direction:column;gap:2px}
+  .st{display:flex;gap:11px;align-items:flex-start;padding:7px 2px;font-size:13.5px;position:relative}
+  .st .mark{width:18px;height:18px;border-radius:50%;flex:none;display:grid;place-items:center;font-size:11px;margin-top:1px}
+  .st.done .mark{background:var(--green-ghost);color:var(--green)}
+  .st.now .mark{background:var(--amber-ghost);color:var(--amber)}
+  .st.adjust .mark{background:var(--blue-ghost);color:var(--blue)}
+  .st .txt{flex:1}
+  .st .txt .sub{color:var(--muted);font-size:12px;margin-top:1px}
+  .st.adjust .txt .sub{color:var(--blue)}
+  .st.now .txt b{color:var(--amber)}
+  /* the connective spine */
+  .st:not(:last-child)::before{content:"";position:absolute;left:8.5px;top:24px;bottom:-4px;width:1px;background:var(--line)}
+
+  /* genuine decision (surfaced cleanly, distinct from narration) */
+  .decide{border:1px solid var(--amber);border-radius:var(--radius);background:var(--amber-ghost);padding:16px 18px}
+  .decide .dk{font-size:10.5px;letter-spacing:.13em;text-transform:uppercase;color:var(--amber);margin-bottom:8px;display:flex;align-items:center;gap:7px}
+  .decide h3{font-size:15px;margin-bottom:5px}
+  .decide p{color:var(--ink-soft);font-size:13px;margin:0 0 13px}
+  .row{display:flex;gap:9px;flex-wrap:wrap}
+  .btn{border:none;border-radius:99px;padding:9px 18px;font-size:13px;font-weight:600;transition:.15s}
+  .btn.primary{background:var(--green);color:#10140c}
+  .btn.primary:hover{filter:brightness(1.08)}
+  .btn.ghost{background:transparent;border:1px solid var(--line);color:var(--ink-soft)}
+  .btn.ghost:hover{border-color:var(--amber);color:var(--ink)}
+  .btn.amber{background:var(--amber);color:#1a1206}
+
+  /* review: reframed defaults + examples */
+  .review{display:flex;flex-direction:column;gap:11px}
+  .defline{display:flex;align-items:center;gap:11px;padding:11px 13px;border:1px solid var(--line);border-radius:10px;background:var(--panel-2);font-size:13px}
+  .defline .chk{width:18px;height:18px;border-radius:50%;background:var(--green-ghost);color:var(--green);display:grid;place-items:center;font-size:11px;flex:none}
+  .defline .edit{margin-left:auto;color:var(--muted);font-size:12px;border:1px solid var(--line);border-radius:7px;padding:4px 9px;background:transparent}
+  .defline .edit:hover{border-color:var(--amber);color:var(--ink)}
+  .disc{border:1px solid var(--line);border-radius:10px;background:var(--panel-2);overflow:hidden}
+  .disc summary{list-style:none;cursor:pointer;padding:11px 13px;font-size:13px;color:var(--ink-soft);display:flex;align-items:center;gap:9px}
+  .disc summary::-webkit-details-marker{display:none}
+  .disc summary .car{margin-left:auto;color:var(--faint);transition:.15s}
+  .disc[open] summary .car{transform:rotate(90deg)}
+  .disc .inner{padding:0 13px 13px;border-top:1px solid var(--line)}
+  .samp{display:flex;gap:9px;align-items:center;padding:8px 0;font-size:12.5px;color:var(--muted);border-bottom:1px dashed var(--line)}
+  .samp:last-child{border-bottom:none}
+  .samp .tg{font-size:10px;letter-spacing:.08em;text-transform:uppercase;color:var(--amber);border:1px solid var(--amber);border-radius:5px;padding:1px 6px;flex:none}
+
+  /* composer */
+  .composer{margin-top:16px;display:flex;align-items:center;gap:10px;border:1px solid var(--line);
+    background:var(--panel-2);border-radius:12px;padding:11px 14px;color:var(--faint);font-size:13.5px}
+  .composer .arrow{color:var(--muted)}
+
+  /* right panel (PROVISIONAL) */
+  .rail{border-left:1px solid var(--line);background:var(--panel-2);padding:18px 16px;display:flex;flex-direction:column;position:relative}
+  .provtag{position:absolute;top:10px;right:12px;font-size:9.5px;letter-spacing:.1em;text-transform:uppercase;
+    color:var(--blue);border:1px dashed var(--blue);border-radius:6px;padding:2px 7px;background:var(--blue-ghost)}
+  .rail .rt{font-family:var(--serif);font-size:17px;margin:6px 0 3px}
+  .rail .status{font-size:12px;color:var(--muted);display:flex;align-items:center;gap:7px;margin-bottom:16px}
+  .rail .status .pl{width:8px;height:8px;border-radius:50%;background:var(--green)}
+  .promise{background:var(--panel);border:1px solid var(--line);border-radius:11px;padding:14px;margin-bottom:12px}
+  .promise .pk{font-size:10px;letter-spacing:.13em;text-transform:uppercase;color:var(--faint);margin-bottom:8px}
+  .promise .line{display:flex;gap:9px;align-items:flex-start;font-size:13px;margin-bottom:9px}
+  .promise .line:last-child{margin-bottom:0}
+  .promise .line .k2{width:17px;height:17px;border-radius:50%;background:var(--green-ghost);color:var(--green);display:grid;place-items:center;font-size:10px;flex:none;margin-top:1px}
+  .promise .line em{font-style:normal;color:var(--muted)}
+  .outputprev{background:var(--panel);border:1px solid var(--line);border-radius:11px;padding:13px;font-size:12.5px;color:var(--ink-soft);line-height:1.55}
+  .outputprev .oh{display:flex;align-items:center;gap:8px;font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:var(--faint);margin-bottom:9px}
+  .outputprev .oh .app{background:var(--amber-ghost);color:var(--amber);border-radius:5px;padding:1px 6px;font-size:9.5px}
+  .rail .runbtn{margin-top:auto;background:var(--green);color:#10140c;border:none;border-radius:11px;padding:12px;font-weight:600;font-size:14px}
+
+  /* annotation layer */
+  .note{border-left:2px solid var(--blue);background:var(--blue-ghost);border-radius:0 8px 8px 0;
+    padding:9px 12px;font-size:12px;color:var(--ink-soft);margin:2px 0;display:none}
+  .note b{color:var(--blue)}
+  body.annot .note{display:block}
+  .note .why{color:var(--faint);font-size:11px;display:block;margin-top:2px}
+
+  .stagepane{display:none}
+  .stagepane.show{display:flex;flex-direction:column;min-height:0}
+  .legend{display:flex;gap:16px;flex-wrap:wrap;margin-top:18px;font-size:11.5px;color:var(--muted)}
+  .legend span{display:inline-flex;align-items:center;gap:6px}
+  .sw{width:10px;height:10px;border-radius:3px}
+</style>
+
+<div class="wrap">
+  <div class="top">
+    <div class="brandline">
+      <div class="globe">◍</div>
+      <div>
+        <div class="t">Atlas builder — redesign preview</div>
+        <div class="s">Click through the flow · nothing here is live</div>
+      </div>
+    </div>
+    <div class="controls">
+      <button class="ctl" id="prev" onclick="go(-1)" disabled>‹ Back</button>
+      <button class="ctl" id="stagelbl" disabled style="min-width:150px;justify-content:center"></button>
+      <button class="ctl" id="next" onclick="go(1)">Next ›</button>
+      <button class="ctl" id="annotbtn" onclick="toggleAnnot()">✦ Show design notes</button>
+      <button class="ctl" onclick="toggleTheme()">☾ Theme</button>
+    </div>
+  </div>
+
+  <div class="shell">
+    <!-- sidebar -->
+    <aside class="side">
+      <div class="lbl">Workflows</div>
+      <div class="wf cur"><span class="dot"></span>Support email → Slack DM</div>
+      <div class="wf live"><span class="dot"></span>Daily CRM digest</div>
+      <div class="wf live"><span class="dot"></span>Invoice watcher</div>
+      <div class="wf"><span class="dot"></span>New workflow</div>
+      <div class="spacer"></div>
+      <div class="foot"><div class="avatar">C</div><div>Charles</div></div>
+    </aside>
+
+    <!-- conversation -->
+    <main class="conv">
+      <!-- STAGE 0 — intent -->
+      <section class="stagepane" data-stage="0">
+        <h1 class="stage-h">What would you like to automate?</h1>
+        <div class="stage-sub">Say it plainly — Atlas figures out the steps.</div>
+        <div class="flow">
+          <div class="note"><b>Unchanged, on purpose.</b> The one screen that already works. Everything after it is what we're redesigning.</div>
+          <div style="flex:1"></div>
+          <div class="msg user">When a support email comes in, summarize it and send me the summary as a Slack DM.</div>
+        </div>
+        <div class="composer"><span class="arrow">›</span> Message Atlas…</div>
+      </section>
+
+      <!-- STAGE 1 — destination (reframed) -->
+      <section class="stagepane" data-stage="1">
+        <h1 class="stage-h">Where should the summary go?</h1>
+        <div class="stage-sub">You said Slack — here's what that means. Add a second place only if you want one.</div>
+        <div class="flow">
+          <div class="note"><b>Fixes:</b> "the delivery cards always suggest multiple locations."
+            <span class="why">Old flow offered 3 whole re-phrasings that each hallucinated an extra destination. New flow states your literal ask as the default and makes a second destination an explicit, single opt-in — no guessing.</span></div>
+          <div class="card">
+            <div class="k">Deliver to</div>
+            <div class="dest pick">
+              <div class="ic">◆</div>
+              <div class="body"><b>Slack — direct message to you</b><span>@charles · the summary lands in your DMs</span></div>
+              <div class="radio"></div>
+            </div>
+            <button class="addmore">＋ Also send it somewhere else</button>
+          </div>
+          <div class="note"><b>Grounded in real connections.</b>
+            <span class="why">Only connectors this workspace has actually connected are offered. Atlas never says it will "watch an inbox" or "read a base" that isn't linked — if a workflow needs one, it asks you to connect it first.</span></div>
+          <div style="flex:1"></div>
+          <div class="row"><button class="btn primary">Looks right →</button><button class="btn ghost">Change</button></div>
+        </div>
+      </section>
+
+      <!-- STAGE 2 — THE HERO: styled build narration -->
+      <section class="stagepane" data-stage="2">
+        <h1 class="stage-h">Building your workflow</h1>
+        <div class="stage-sub">Watch Atlas assemble and pressure-test it. This is the part that used to leak.</div>
+        <div class="flow">
+          <div class="note"><b>Fixes:</b> "live builds &amp; failed attempts with fixes are visible — it's chain-of-thought that needs to be surfaced differently."
+            <span class="why">Same transparency you liked — but the model's self-repair reads as calm, plain-language <em>activity</em>, not confirmable step-cards. Internal fixes are quiet "adjusting" lines. Nothing here is a gate; nothing here is raw code.</span></div>
+          <div class="build">
+            <div class="bh"><span class="spin"></span><b>Assembling &amp; checking</b><span class="cnt">4 of 5</span></div>
+            <div class="steps">
+              <div class="st done"><div class="mark">✓</div><div class="txt"><b>Trigger set</b><div class="sub">Watches your support inbox for new email</div></div></div>
+              <div class="st done"><div class="mark">✓</div><div class="txt"><b>Summarize step ready</b><div class="sub">Reads the email and writes a short summary</div></div></div>
+              <div class="st adjust"><div class="mark">↻</div><div class="txt"><b>Tidying the delivery</b><div class="sub">First pass pointed the DM at the wrong field — corrected it to send the summary itself.</div></div></div>
+              <div class="st now"><div class="mark">◍</div><div class="txt"><b>Confirming it reaches Slack</b><div class="sub">Checking the message actually lands in your DMs…</div></div></div>
+              <div class="st"><div class="mark" style="opacity:.35">○</div><div class="txt" style="opacity:.5"><b>Final review</b></div></div>
+            </div>
+          </div>
+          <div class="note"><b>Errors become status, never stack traces.</b>
+            <span class="why">If the internal loop hits a snag it shows "Atlas hit a hiccup and is retrying" — the raw <code>CompiledGraph.resume()…</code> / "max tool rounds" text never reaches you. And it converges internally, so it doesn't ask you for details mid-flow.</span></div>
+          <div class="legend">
+            <span><span class="sw" style="background:var(--green)"></span> done</span>
+            <span><span class="sw" style="background:var(--amber)"></span> working now</span>
+            <span><span class="sw" style="background:var(--blue)"></span> self-correcting (informational)</span>
+          </div>
+        </div>
+      </section>
+
+      <!-- STAGE 3 — genuine decision -->
+      <section class="stagepane" data-stage="3">
+        <h1 class="stage-h">One thing to confirm</h1>
+        <div class="stage-sub">Atlas surfaces only the choices that are genuinely yours to make.</div>
+        <div class="flow">
+          <div class="note"><b>Fixes:</b> confirmation-step fatigue &amp; mid-flow "I need more detail."
+            <span class="why">The model no longer asks you to confirm each internal node. It converges first, then surfaces the small number of decisions a <em>person</em> actually owns — here, the tone of the summary. Everything else is a sensible default you can review, not approve.</span></div>
+          <div class="decide">
+            <div class="dk">◆ Your call</div>
+            <h3>How detailed should the summary be?</h3>
+            <p>Most people want the gist — sender, subject, and the ask in a sentence or two.</p>
+            <div class="row">
+              <button class="btn amber">Just the gist</button>
+              <button class="btn ghost">Full detail</button>
+              <button class="btn ghost">Let Atlas decide</button>
+            </div>
+          </div>
+          <div style="flex:1"></div>
+        </div>
+      </section>
+
+      <!-- STAGE 4 — review before publish (reframed gaps + examples) -->
+      <section class="stagepane" data-stage="4">
+        <h1 class="stage-h">Ready to turn on</h1>
+        <div class="stage-sub">Here's what it will do, and how we've covered the edges.</div>
+        <div class="flow review">
+          <div class="note"><b>Fixes:</b> "what if a step fails" appears in every workflow; examples' purpose is unclear.
+            <span class="why">Error-handling is a <em>default</em>, not a per-workflow question — applied silently, shown as a reviewable line. Examples are reframed as "sample messages we'll test it on," collapsed by default. Neither blocks you.</span></div>
+
+          <div class="defline"><span class="chk">✓</span> When a support email arrives, Atlas summarizes it and DMs you the summary on Slack.</div>
+          <div class="defline"><span class="chk">✓</span> If a step ever fails, Atlas alerts you instead of failing silently.<button class="edit">Change</button></div>
+          <div class="defline"><span class="chk">✓</span> Only runs on real support email — skips automated/no-reply noise.<button class="edit">Change</button></div>
+
+          <details class="disc">
+            <summary>Sample messages we'll test it on <span class="car">›</span></summary>
+            <div class="inner">
+              <div class="samp"><span class="tg">bug</span> Customer reporting a broken checkout page</div>
+              <div class="samp"><span class="tg">billing</span> Invoice discrepancy, overcharged $700</div>
+              <div class="samp"><span class="tg">how-to</span> How do I export my data from the API?</div>
+            </div>
+          </details>
+
+          <div class="note"><b>The right panel proves it before you publish</b> — run these samples through the real engine and confirm the DM actually arrived (that's the moat, now shown in plain language →).</div>
+          <div style="flex:1"></div>
+          <div class="row"><button class="btn primary">Test &amp; turn on</button><button class="btn ghost">Keep editing</button></div>
+        </div>
+      </section>
+    </main>
+
+    <!-- right panel (provisional) -->
+    <aside class="rail">
+      <div class="provtag">Provisional · your artifacts go here</div>
+      <div class="rt">Support email → Slack DM</div>
+      <div class="status"><span class="pl"></span> Tested · every promise kept</div>
+
+      <div class="promise">
+        <div class="pk">Did it do what it promised?</div>
+        <div class="line"><span class="k2">✓</span><div>The summary <b>reached your Slack DMs</b> <em>— confirmed on all 3 samples</em></div></div>
+        <div class="line"><span class="k2">✓</span><div>Nothing was <b>silently dropped</b> <em>— the one destination you asked for was delivered</em></div></div>
+      </div>
+
+      <div class="outputprev">
+        <div class="oh"><span class="app">Slack</span> what you'll receive</div>
+        <b>From:</b> Finance @ Global Consulting<br>
+        <b>Subject:</b> Invoice discrepancy — Q2<br>
+        <b>Key ask:</b> They were charged $3,200 vs the agreed $2,500 and want a review by end of week.
+      </div>
+
+      <button class="runbtn">▶ Run test again</button>
+    </aside>
+  </div>
+</div>
+
+<script>
+  var STAGES=["Intent","Destination","Building","Confirm","Review"];
+  var i=0;
+  function render(){
+    document.querySelectorAll('.stagepane').forEach(function(p){
+      p.classList.toggle('show', +p.dataset.stage===i);
+    });
+    document.getElementById('stagelbl').textContent=(i+1)+" / "+STAGES.length+" · "+STAGES[i];
+    document.getElementById('prev').disabled=(i===0);
+    document.getElementById('next').disabled=(i===STAGES.length-1);
+  }
+  function go(d){ i=Math.max(0,Math.min(STAGES.length-1,i+d)); render(); }
+  function toggleAnnot(){
+    document.body.classList.toggle('annot');
+    var on=document.body.classList.contains('annot');
+    var b=document.getElementById('annotbtn');
+    b.classList.toggle('on',on); b.textContent=on?"✦ Hide design notes":"✦ Show design notes";
+  }
+  function toggleTheme(){
+    var r=document.documentElement;
+    var cur=r.getAttribute('data-theme');
+    var next = cur==='light' ? 'dark' : (cur==='dark' ? 'light' : (matchMedia('(prefers-color-scheme: dark)').matches?'light':'dark'));
+    r.setAttribute('data-theme',next);
+  }
+  document.addEventListener('keydown',function(e){
+    if(e.key==='ArrowRight')go(1); if(e.key==='ArrowLeft')go(-1);
+  });
+  document.body.classList.add('annot');
+  document.getElementById('annotbtn').classList.add('on');
+  document.getElementById('annotbtn').textContent="✦ Hide design notes";
+  render();
+</script>
