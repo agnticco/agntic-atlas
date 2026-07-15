@@ -785,6 +785,47 @@
                   </div>
                 </sc-for>
 
+                <!-- OUTCOME ORACLE — per-example contract verdicts (P12 Increment G).
+                     Each card: did this example keep the workflow's PROMISES (gated),
+                     and — when the SME gave an expectation — what it expected next to
+                     what actually happened (shown, not gated). -->
+                <sc-if value="{{ showOutcomes }}" hint-placeholder-val="{{ false }}">
+                  <div style="margin-top:16px;display:flex;flex-direction:column;gap:10px">
+                    <div style="font-size:10px;font-weight:600;letter-spacing:.16em;text-transform:uppercase;color:rgba(255,255,255,.4)">Outcome — did it deliver on its promises?</div>
+                    <sc-for list="{{ outcomeCards }}" as="oc" hint-placeholder-count="2">
+                      <div style="border-radius:12px;border:1px solid rgba(255,255,255,.09);background:rgba(255,255,255,.02);padding:13px 15px">
+                        <div style="display:flex;align-items:center;gap:9px;margin-bottom:10px">
+                          <span style="font-size:13px;font-weight:600;color:#fff;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ oc.label }}</span>
+                          <span style="flex:none;font-size:9.5px;font-weight:600;letter-spacing:.08em;color:{{ oc.badgeColor }};background:{{ oc.badgeBg }};border:1px solid {{ oc.badgeBorder }};padding:3px 9px;border-radius:999px">{{ oc.badge }}</span>
+                        </div>
+                        <div style="display:flex;flex-direction:column;gap:6px">
+                          <sc-for list="{{ oc.checks }}" as="ck" hint-placeholder-count="2">
+                            <div style="display:flex;gap:8px;align-items:flex-start;font-size:12px;line-height:1.4"><span style="flex:none;color:{{ ck.color }};font-weight:700">{{ ck.icon }}</span><span style="color:rgba(255,255,255,.8);font-family:ui-monospace,monospace">{{ ck.text }}</span></div>
+                          </sc-for>
+                        </div>
+                        <sc-if value="{{ oc.error }}" hint-placeholder-val="{{ false }}">
+                          <div style="margin-top:8px;font-size:11.5px;color:#f0a896;line-height:1.4">{{ oc.error }}</div>
+                        </sc-if>
+                        <sc-if value="{{ oc.showExpect }}" hint-placeholder-val="{{ false }}">
+                          <div style="margin-top:11px;padding-top:10px;border-top:1px solid rgba(255,255,255,.07)">
+                            <div style="display:flex;gap:12px;font-size:11px">
+                              <div style="flex:1;min-width:0">
+                                <div style="color:rgba(255,255,255,.35);margin-bottom:5px;font-weight:600;letter-spacing:.05em">EXPECTED</div>
+                                <sc-for list="{{ oc.expect }}" as="ex" hint-placeholder-count="2"><div style="color:rgba(255,255,255,.7);font-family:ui-monospace,monospace;line-height:1.5">{{ ex.k }}: {{ ex.v }}</div></sc-for>
+                              </div>
+                              <div style="flex:1;min-width:0">
+                                <div style="color:rgba(255,255,255,.35);margin-bottom:5px;font-weight:600;letter-spacing:.05em">PRODUCED</div>
+                                <sc-for list="{{ oc.produced }}" as="pr" hint-placeholder-count="2"><div style="color:rgba(255,255,255,.7);font-family:ui-monospace,monospace;line-height:1.5">{{ pr.k }}: {{ pr.v }}</div></sc-for>
+                              </div>
+                            </div>
+                            <div style="margin-top:7px;font-size:10.5px;color:rgba(255,255,255,.3);font-style:italic">Shown for you to review — the contract above is what's checked automatically.</div>
+                          </div>
+                        </sc-if>
+                      </div>
+                    </sc-for>
+                  </div>
+                </sc-if>
+
                 <!-- verdict -->
                 <sc-if value="{{ showVerdict }}" hint-placeholder-val="{{ false }}">
                   <div style="margin-top:16px;border-radius:13px;border:1px solid {{ verdictBorder }};background:{{ verdictBg }};padding:13px 15px;display:flex;align-items:center;gap:11px">
@@ -2715,7 +2756,7 @@ class Component extends DCLogic {
       spec: null,
       testState: "idle",       // idle | running | passed | failed
       runStepIndex: 0,         // which step is currently firing (during running)
-      runSteps: [], failIndex: -1, deliveries: [], runOutput: null, runError: "",
+      runSteps: [], failIndex: -1, deliveries: [], runOutput: null, runError: "", outcomeResults: [],
       workflowId: null, isEditing: false, isDraftBuild: false, editingIntro: null, introMsg: null,
       renamingWfId: null, renamingValue: "", draftName: null,
       leftOpen: true, leftW: null, leftDragging: false, rightOpen: true,
@@ -3395,7 +3436,7 @@ class Component extends DCLogic {
       // threadId points at a dead session ("session not found"). Omitting it means
       // a restored draft routes change requests through the spec-based edit-change
       // path (which works from the spec alone) instead of a dead converger session.
-      const F = ["view","phase","intent","inputMode","spec","testState","runSteps","failIndex","deliveries","runOutput","runError","workflowId"];
+      const F = ["view","phase","intent","inputMode","spec","testState","runSteps","failIndex","deliveries","runOutput","runError","workflowId","outcomeResults"];
       const slice = {}; F.forEach(k => { slice[k] = S[k]; });
       slice.msgs = cleanMsgs;
       const str = JSON.stringify(slice);
@@ -5142,26 +5183,51 @@ class Component extends DCLogic {
       }
     }, 750);
 
-    fetch("/workflows/run", { method: "POST", headers: this._H(), body: JSON.stringify({ spec: S.spec, initialContext: this._sampleEvent() }) })
-      .then(r => this._readJson(r))
-      .then(function(r) {
-        if (self._testInterval) {
-          // Timer still running — store result; animation will apply it when done
-          pendingResult = { r: r, d: r.data || {} };
-        } else {
-          // Animation already finished — apply immediately
-          self._applyTestResult(r, r.data || {});
-        }
-      })
-      .catch(function(e) {
-        clearInterval(self._testInterval);
-        self._testInterval = null;
-        self.setState({ testState: "failed", runStepIndex: 0, failIndex: 0, runError: String(e) });
-        if (self.state.workflowId) {
-          fetch('/api/builder/workflows/' + self.state.workflowId + '/status', { method: 'PATCH', headers: self._H(), body: JSON.stringify({ status: 'error' }) })
-            .then(function() { self._loadWorkflows(); }).catch(function() {});
-        }
-      });
+    // ── THE OUTCOME ORACLE (P12 Increment G) ──────────────────────────────
+    // If the workflow carries worked examples, the test panel asserts EACH of
+    // them against the contract — not one sample against "did it complete". Each
+    // example runs LIVE (real Slack/record/email), sequentially, and the run's
+    // own contract verdict comes back as `outcomeCheck`. A workflow with no
+    // examples falls back to the single sample run (v1 behaviour, unchanged).
+    const examples = (S.spec.outcome && Array.isArray(S.spec.outcome.examples)) ? S.spec.outcome.examples : [];
+    const runs = examples.length
+      ? examples.map(function(ex, i) { return { initialContext: ex.given, example: Object.assign({ id: ex.id || ("e" + (i + 1)) }, ex) }; })
+      : [{ initialContext: this._sampleEvent(), example: null }];
+
+    const outcomeResults = [];
+    let lastData = {};
+
+    // Run them one at a time — live deliveries should not be fired in a burst.
+    const runOne = function(i) {
+      if (i >= runs.length) {
+        // Every example has run. The verdict is the CONTRACT: a workflow passes
+        // only if it kept its outcome's promises on every example. With no
+        // examples, `outcomeResults` is empty and the old structural check stands.
+        const r = { ok: true, data: Object.assign({}, lastData, { outcomeResults: outcomeResults }) };
+        if (self._testInterval) { pendingResult = { r: r, d: r.data }; }
+        else { self._applyTestResult(r, r.data); }
+        return;
+      }
+      fetch("/workflows/run", { method: "POST", headers: self._H(),
+        body: JSON.stringify({ spec: S.spec, initialContext: runs[i].initialContext, example: runs[i].example }) })
+        .then(function(res) { return self._readJson(res); })
+        .then(function(res) {
+          const d = res.data || {};
+          lastData = d;   // keep the last run's steps for the pipeline animation
+          if (d.outcomeCheck) outcomeResults.push(d.outcomeCheck);
+          runOne(i + 1);
+        })
+        .catch(function(e) {
+          clearInterval(self._testInterval);
+          self._testInterval = null;
+          self.setState({ testState: "failed", runStepIndex: 0, failIndex: 0, runError: String(e) });
+          if (self.state.workflowId) {
+            fetch('/api/builder/workflows/' + self.state.workflowId + '/status', { method: 'PATCH', headers: self._H(), body: JSON.stringify({ status: 'error' }) })
+              .then(function() { self._loadWorkflows(); }).catch(function() {});
+          }
+        });
+    };
+    runOne(0);
   }
 
   _applyTestResult(r, d) {
@@ -5170,14 +5236,23 @@ class Component extends DCLogic {
     // ERROR sentinel (required upstream data missing) and deliver it as content —
     // the backend flags those in d.issues. A run with issues is NOT safe to publish.
     const issues = d.issues || [];
-    const passed = r.ok && d.completed && issues.length === 0;
+    // ── THE VERDICT IS THE CONTRACT (P12 Increment G) ─────────────────────
+    // With worked examples, "passed" means every example KEPT ITS OUTCOME'S
+    // PROMISES — a record actually created, a message actually sent, on each
+    // sample input. "It completed" is no longer the bar; "it did what it said"
+    // is. With no examples the old structural check stands (v1, unchanged).
+    const outcomeResults = d.outcomeResults || [];
+    const contractPassed = outcomeResults.length
+      ? outcomeResults.every(function(o) { return o.contractPassed; })
+      : (r.ok && d.completed && issues.length === 0);
+    const passed = contractPassed;
     const self = this;
     // R8: capture the real wall-clock test duration so the persisted test run
     // records true timing, not the ~1ms gap between back-to-back DB writes.
     const runDurationMs = this._testStartMs ? (Date.now() - this._testStartMs) : null;
 
     if (passed) {
-      this.setState({ testState: "passed", runSteps: d.steps || [], deliveries: d.deliveries || [], runOutput: d.output, runDurationMs: runDurationMs });
+      this.setState({ testState: "passed", runSteps: d.steps || [], deliveries: d.deliveries || [], runOutput: d.output, runDurationMs: runDurationMs, outcomeResults: outcomeResults });
     } else {
       const steps = d.steps || [];
       let failIndex = steps.length;
@@ -5188,7 +5263,7 @@ class Component extends DCLogic {
         failIndex = idx >= 0 ? idx : 0;
         runError = "A step returned no usable data — it would deliver an error message, not real content";
       }
-      this.setState({ testState: "failed", runSteps: steps, failIndex: failIndex, runError: runError, runDurationMs: runDurationMs });
+      this.setState({ testState: "failed", runSteps: steps, failIndex: failIndex, runError: runError, runDurationMs: runDurationMs, outcomeResults: outcomeResults });
       if (this.state.workflowId) {
         fetch('/api/builder/workflows/' + this.state.workflowId + '/status', { method: 'PATCH', headers: this._H(), body: JSON.stringify({ status: 'error' }) })
           .then(() => this._loadWorkflows()).catch(function() {});
@@ -5744,6 +5819,38 @@ class Component extends DCLogic {
   _summaryText() {
     return this._deliveredMessage() || "The delivered message will appear here after you run a test.";
   }
+
+  // ── The outcome oracle's per-example verdict cards (P12 Increment G) ────────
+  // One card per worked example. The CONTRACT badge is a real pass/fail — the
+  // machine-checkable promise the workflow made. Below it, each promise with a
+  // ✓/✗ and what actually happened. Then, when the SME gave an `expect`, that is
+  // shown NEXT TO what the run produced — never a ✓/✗, because a workflow-agnostic
+  // panel cannot honestly judge a value whose meaning it does not know. "Show,
+  // don't gate."
+  _outcomeCards() {
+    const results = this.state.outcomeResults || [];
+    return results.map((o, i) => {
+      const passed = !!o.contractPassed;
+      const kv = (obj) => Object.keys(obj || {}).map((k) => ({ k: k, v: this._clip(this._stringify(obj[k]), 60) }));
+      return {
+        label: o.label || ("Example " + (i + 1)),
+        badge: passed ? "CONTRACT KEPT" : (o.ran ? "PROMISE BROKEN" : "RUN FAILED"),
+        badgeColor: passed ? "#9fd6a8" : "#f0a896",
+        badgeBg: passed ? "rgba(127,194,138,.12)" : "rgba(232,116,97,.12)",
+        badgeBorder: passed ? "rgba(127,194,138,.4)" : "rgba(232,116,97,.4)",
+        checks: (o.contract || []).map((c) => ({
+          icon: c.ok ? "✓" : "✗",
+          color: c.ok ? "#9fd6a8" : "#f0a896",
+          text: c.target + (c.ok ? ("  ·  " + (c.detail || "delivered")) : ("  ·  " + (c.reason || "not satisfied"))),
+        })),
+        error: o.error ? String(o.error) : "",
+        showExpect: !!o.expect && Object.keys(o.expect).length > 0,
+        expect: kv(o.expect),
+        produced: kv(o.produced),
+      };
+    });
+  }
+  _stringify(v) { if (v == null) return ""; if (typeof v === "string") return v; try { return JSON.stringify(v); } catch (e) { return String(v); } }
   // Adaptive "What starts it" card — replaces the hardcoded UPS email mock.
   _sampleTriggerView(trg) {
     const t = trg || {}; const ty = t.type || (t.cron ? "schedule" : "manual");
@@ -6036,6 +6143,7 @@ class Component extends DCLogic {
         : (TS === "running" ? ("Running against the real engine — this can take a few minutes for web search or multi-source steps." + (S.runElapsed ? "  ·  " + S.runElapsed + "s elapsed" : ""))
         : (TS === "passed" ? "Every step ran cleanly — no breaks." : "One step failed — review the break below."))),
       testSteps, slackChannel: this._slackChannel(), deliveryTarget: this._deliveryMeta().header, summaryText: this._summaryText(),
+      outcomeCards: this._outcomeCards(), showOutcomes: (S.outcomeResults || []).length > 0 && TS !== "running",
       showVerdict: verdict.show, verdictText: verdict.text, verdictIcon: verdict.icon, verdictColor: verdict.color,
       verdictBorder: verdict.border, verdictBg: verdict.bg, verdictIconBg: verdict.iconBg,
       isPublished: published,

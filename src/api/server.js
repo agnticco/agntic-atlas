@@ -90,6 +90,7 @@ import { renderResetEmail } from '../auth/reset-email.js';
 import { ApprovalStore } from '../approvals/approval-store.js';
 import { ApprovalService } from '../approvals/approval-service.js';
 import { availableApprovalChannels, approvalChannelView } from '../workflows/approval-channels.js';
+import { evaluateExampleRun, normalizeDelivery, isDeliveryNode } from '../workflows/outcome-oracle.js';
 import { oauthRedirectBase } from '../connectors/oauth-redirect.js';
 import { entitlementsFor, PUBLIC_PLANS, PLAN_META, isSelfServe } from '../entitlements/index.js';
 import { BillingEventStore } from '../billing/billing-event-store.js';
@@ -2172,7 +2173,21 @@ export function createApp(spine) {
         if (typeof o === 'string') { try { return JSON.parse(o); } catch { /* not json */ } }
         return null;
       };
-      const deliveries = steps.map((s) => coerce(s.output)).filter((o) => o && o.delivered);
+      // Assemble the run's deliveries from the delivering NODE, not from the
+      // handler's return: handlers are inconsistent (only Slack stamps channel +
+      // delivered; inbox omits channel; gmail/airtable omit both), so filtering on
+      // a bare `o.delivered` dropped gmail/airtable entirely and left inbox with no
+      // channel — the runtime oracle could then confirm only Slack. normalizeDelivery
+      // derives channel + destination from the node config, which always has them.
+      const nodeById = new Map((spec.nodes ?? []).map((n) => [n.id, n]));
+      const deliveries = steps
+        .map((s) => {
+          const node = nodeById.get(s.nodeId);
+          const o = coerce(s.output);
+          if (!isDeliveryNode(node) && !(o && o.delivered === true)) return null;
+          return normalizeDelivery(node, o);
+        })
+        .filter(Boolean);
       // R14: a step can "complete" (not throw) yet emit the ERROR sentinel that
       // prompts.js instructs LLM nodes to return when required upstream data is
       // missing ("ERROR: required data not found — do not compose content."). That
@@ -2184,7 +2199,19 @@ export function createApp(spine) {
         .filter((s) => /^\s*ERROR:/i.test(s.text))
         .map((s) => ({ nodeId: s.nodeId, message: s.text.trim().replace(/\s+/g, ' ').slice(0, 300) }));
       const clean = completed && issues.length === 0;
-      res.json({ runId, completed, clean, issues, output, deliveries, steps, cost: runCost });
+
+      // ── THE OUTCOME CONTRACT, checked against what the run PRODUCED (P12 G) ──
+      // The test panel stops asking "did it complete?" and starts asking "did it do
+      // what its outcome promised?". The contract is machine-checkable and generic;
+      // the run's deliveries are right here. So return the per-assertion verdict —
+      // the client renders it, and loops examples through this same route. When the
+      // spec carries no outcome (v1, or a bare run), this is simply absent.
+      let outcomeCheck = null;
+      if (Array.isArray(spec.outcome?.assertions) && spec.outcome.assertions.length) {
+        outcomeCheck = evaluateExampleRun(spec, req.body?.example ?? { given: initialContext },
+          { completed, deliveries, steps, error: null });
+      }
+      res.json({ runId, completed, clean, issues, output, deliveries, steps, cost: runCost, outcomeCheck });
     } catch (err) {
       logEvent('run.error', { tenant: tenantId, ms: Date.now() - t0, ...errFields(err) });
       res.status(500).json({ error: `run failed: ${err.message ?? String(err)}` });
