@@ -59,8 +59,21 @@ refactor them without an explicit decision recorded here:
 - **Execution engine** — topological DAG executor with real inter-step data
   threading (`{{prev}}`, `{{nodeId.output}}`, transitive fan-in), durable
   cost-tracked run logs. Best-built part of the codebase.
-- **MCP connector runtime** — per-user subprocess isolation, isolation-tested,
-  manifest-driven (connector #N is a config edit).
+- **MCP connector runtime** — ⚠️ **NOT IN THIS REPO** (doc corrected 2026-07-14). The
+  per-user subprocess-isolation / isolation-tested / manifest-driven runtime
+  (`mcp-client.js`, `per-user-mcp-pool.js`, `cross-user-mcp-isolation.test.js`, …)
+  exists **only in the read-only `agntic-prod` archive** and was **never migrated**.
+  Atlas has just `src/connectors/connector-manifest.js` (an **inert** `mcp` data
+  template, marked inert in its own header, consumed only for OAuth provider config)
+  and a dead `registerMcpChannel` wrapper (`src/workflows/channel-handlers.js`) gated
+  on a `ToolRegistry` class that **does not exist** here; the `mcp_tool` node type was
+  deleted in P12-A (`REMOVED_NODE_TYPE`). So "connector #N is a config edit" is **false
+  for the native OAuth connectors** (`src/connectors/`, ~4,170 LOC — each needs
+  oauth.js + index.js + server.js routes + a `CONNECTOR_INJECTORS` entry). The intended
+  MCP path is **new construction**, not salvage: see
+  [`docs/architecture/mcp-capability-adapter.md`](docs/architecture/mcp-capability-adapter.md)
+  — an adapter that projects remote (Streamable-HTTP) MCP tools **into** the
+  `CapabilityRegistry`, deliberately NOT resurrecting the archived stdio pool.
 - **Auth + credential vault** — argon2id, revocable JWT sessions,
   AES-256-GCM-encrypted OAuth tokens, per-user store scoping.
 - **RAG + local inference** (migrated 2026-06-08, pulled forward from the deferred
