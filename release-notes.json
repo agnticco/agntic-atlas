@@ -1,5 +1,13 @@
 [
   {
+    "version": "1.5.5",
+    "date": "2026-07-16",
+    "title": "Atlas builds workflows by talking",
+    "notes": [
+      "Atlas now builds workflows conversationally: it reasons through your request out loud, asks only when it needs a real decision, refuses to wire to a channel that doesn't exist, and tests its own build on real sample data before handing it to you."
+    ]
+  },
+  {
     "version": "1.5.4",
     "date": "2026-07-15",
     "title": "More reliable builds",
