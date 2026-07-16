@@ -132,6 +132,13 @@ const SUITES = [
   // #19 — the structural auto-repair (autoRepairStructural in elicitation-graph.js,
   // already a TARGET). Without this suite the repair's mutants are unkillable.
   'tests/converger/auto-repair.test.js',
+  // #23 — the self-verification loop. `verify-loop.test.js` drives the `verify` node
+  // through the real graph (pass → ratify, runtime-fail → bounded fix, the fail-safe
+  // pass-throughs); `dry-run-verify.test.js` pins the engine core that makes the loop
+  // cause ZERO real sends. Without them the verify node's guards in elicitation-graph.js
+  // (a TARGET) and the whole of dry-run-runner.js are unkillable by construction.
+  'tests/converger/verify-loop.test.js',
+  'tests/workflows/dry-run-verify.test.js',
 ];
 
 /**
@@ -182,6 +189,11 @@ const TARGETS = [
   // survivor list proves nothing.
   'src/converger/elicitation-graph.js',
   'src/workflows/node-types/connector-action.js',
+  // #23 — the self-verification loop's engine core. The ONE non-negotiable property
+  // is `dryRunDeliveries: true`; flip it and the loop fires real sends on every
+  // fix-retry. dry-run-verify.test.js pins it (a recording registry that must stay
+  // empty), so the sweep must be able to tell if that guard stopped working.
+  'src/workflows/dry-run-runner.js',
 ];
 
 const args    = process.argv.slice(2);

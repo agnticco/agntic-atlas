@@ -75,11 +75,17 @@ export function createConverger({
   // the right-panel REASONING surface. Purely additive: absent ⇒ nodes narrate to
   // nothing and the build is byte-for-byte unchanged.
   narrate = null,
+  // Dry-run tester (Increment #23). The server binds this to the build's tenant/user
+  // and puts it in configurable, so the `verify` node can run the draft through the
+  // REAL engine with terminal side-effects stubbed — `runDryRun(spec, given)` →
+  // { outputs, oracleResult, … }. Purely additive + fail-safe: absent ⇒ `verify`
+  // passes through to ratify and the build is unchanged (never blocked on the tester).
+  runDryRun = null,
 } = {}) {
   const graph = buildElicitationGraph({ llm, checkpointerDir, invokeCapability });
 
   // Each converger turn = ~3 node executions (analyze + propose/clarify + interrupt).
-  const cfg = (threadId) => ({ configurable: { threadId, ...(narrate ? { narrate } : {}) }, recursionLimit: 300 });
+  const cfg = (threadId) => ({ configurable: { threadId, ...(narrate ? { narrate } : {}), ...(runDryRun ? { runDryRun } : {}) }, recursionLimit: 300 });
 
   async function run(threadId, intent) {
     if (interactionStore && tenantId) {

@@ -666,7 +666,7 @@ function healthRating(score) {
   return 'Needs attention';
 }
 
-export function mountBuilderRoutes(app, { spine, requireActiveTenant, requireAuth, readSources, tenantGuard }) {
+export function mountBuilderRoutes(app, { spine, requireActiveTenant, requireAuth, readSources, tenantGuard, dryRunSpecForTenant = null }) {
   // No-op guard when not supplied (keeps the builder mountable in isolation/tests).
   const guard = tenantGuard ?? ((_req, _res, next) => next());
 
@@ -1425,6 +1425,15 @@ Rules:
       // threadId so every converger node can call cfg.configurable.narrate(beat)
       // without knowing which session it is in. Additive — absent, the graph is silent.
       narrate:          (beat) => narrate(threadId, beat),
+      // Run the draft through the real engine in DRY-RUN mode (#23). The `verify`
+      // node calls this to test its own workflow on a sample event before handing
+      // off — no real sends/writes, terminal side-effects stubbed. Bound to this
+      // tenant/user so the run injects the right credentials and stays cost-attributed.
+      // Additive + fail-safe: absent (no server wrapper) ⇒ `verify` passes straight
+      // through to ratify, so a build is never blocked on the self-test being wired.
+      runDryRun:        dryRunSpecForTenant
+        ? (spec, given) => dryRunSpecForTenant(spine, spec, { tenantId: req.tenant.id, userId: req.user?.id, initialContext: given })
+        : null,
     });
 
     sessions.set(threadId, converger);

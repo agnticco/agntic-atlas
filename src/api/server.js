@@ -91,6 +91,7 @@ import { ApprovalStore } from '../approvals/approval-store.js';
 import { ApprovalService } from '../approvals/approval-service.js';
 import { availableApprovalChannels, approvalChannelView } from '../workflows/approval-channels.js';
 import { evaluateExampleRun, normalizeDelivery, isDeliveryNode } from '../workflows/outcome-oracle.js';
+import { runSpecDryRun } from '../workflows/dry-run-runner.js';
 import { oauthRedirectBase } from '../connectors/oauth-redirect.js';
 import { entitlementsFor, PUBLIC_PLANS, PLAN_META, isSelfServe } from '../entitlements/index.js';
 import { BillingEventStore } from '../billing/billing-event-store.js';
@@ -443,6 +444,36 @@ async function unconnectedConnector(spec, tenantId, deps) {
     if (!tok) return c.name;
   }
   return null;
+}
+
+// Inject THIS tenant's tokens/context into a converger draft, then run it through
+// the engine with terminal side-effects STUBBED (dryRunDeliveries) and judge the
+// result against its outcome contract. This is the service the converger's
+// self-verification loop (`verify` node, #23) calls to test its own draft on a
+// sample event — build → run → read → fix — WITHOUT any real send/write/post. The
+// injection here mirrors POST /workflows/run exactly, so llm + connector-read steps
+// behave as they will in production; only the terminal sends are intercepted. The
+// dry-run itself lives in the engine-only `runSpecDryRun` (unit-testable without the
+// server); this wrapper is the one place that knows the tenant's credentials.
+async function dryRunSpecForTenant(spine, spec, { tenantId = null, userId = null, initialContext = undefined } = {}) {
+  let s = spec;
+  if (tenantId) {
+    const deps = { oauthTokenStore: spine.auth.oauthTokenStore, cipher: spine.auth.tokenCipher, userId };
+    s = await injectTenantTokens(s, tenantId, deps);
+    if (userId) s = injectInboxContext(s, tenantId, userId);
+    s = injectFilesystemContext(s, tenantId);
+    s = injectInboxCapabilityContext(s, tenantId);
+  }
+  // The oracle judges against the spec's own `outcome`, which injection preserves
+  // (it only rewrites `nodes`). Pass the injected spec so deliveries resolve.
+  return runSpecDryRun({
+    flowTester:  spine.engine.flowTester,
+    spec:        s,
+    initialContext,
+    tenantId,
+    costTracker: spine.costTracker,
+    userId,
+  });
 }
 
 // Route a verified Slack event to the owning tenant's matching workflows. Tenant
@@ -2542,7 +2573,7 @@ export function createApp(spine) {
     }
   });
 
-  mountBuilderRoutes(app, { spine, requireActiveTenant, requireAuth, readSources, tenantGuard });
+  mountBuilderRoutes(app, { spine, requireActiveTenant, requireAuth, readSources, tenantGuard, dryRunSpecForTenant });
   mountConsoleRoutes(app, { spine, requireActiveTenant });
   mountTicketRoutes(app, { spine, requireActiveTenant });
   mountAdminRoutes(app, { spine, requireAuth, requirePlatformAdmin, optionalAuth });

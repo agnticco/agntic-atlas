@@ -13,14 +13,17 @@
  *   destinations → resolve Airtable base/table/columns from the live connector
  *   decisions    → review the induced decision table(s)
  *   gaps         → the exception review + structural auto-repair
+ *   verify       → run the completed draft through the engine (DRY-RUN) on the
+ *                  sample examples; fix + re-run on a failure (#23)
  *   ratify       → present complete draft for final HITL approval
  *
- * Routing (clarify-first → generate-whole-spec → wire → gaps → ratify):
+ * Routing (clarify-first → generate-whole-spec → wire → gaps → verify → ratify):
  *   outcome → process → examples → analyze
  *   analyze → clarify | generate | propose | destinations | ratify
  *   clarify → analyze ;  generate → analyze ;  propose → analyze
- *   destinations → decisions → gaps → (propose | ratify)
- *   ratify  → propose (if changes requested) | END (if approved)
+ *   destinations → decisions → gaps → (generate | verify)
+ *   verify  → generate (fix, bounded) | ratify (verified, or a bounded give-up)
+ *   ratify  → generate (if changes requested) | END (if approved)
  *
  * Persistence: FileCheckpointer — sessions survive restarts and are resumable
  * by threadId.
@@ -500,6 +503,16 @@ function narrateThinking(cfg, delta, streamId) {
   try { fn({ kind: 'thinking', text: delta, streamId }); } catch { /* narration is best-effort */ }
 }
 
+// Emit one whole reasoning beat (a `check`/`fix`/`thinking` step), used by the
+// self-verification loop (#23) to narrate its test run and any fix. Best-effort, by
+// construction: no narrator wired ⇒ silent, and a throwing narrator never affects
+// the build — the panel is a free side-channel, never load-bearing.
+function emitBeat(cfg, beat) {
+  const fn = cfg?.configurable?.narrate;
+  if (typeof fn !== 'function') return;
+  try { fn(beat); } catch { /* narration is best-effort */ }
+}
+
 // ── Graph builder ─────────────────────────────────────────────────────────────
 
 /**
@@ -571,6 +584,14 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
       // Whole-spec regenerations driven by a described decision-table correction
       // (#24). A LOOP BOUND, capped at one: after it, the induced table stands.
       decisionRounds:    0,
+      // Self-verification (#23). `verifyRounds` is a LOOP BOUND: the converger runs
+      // its own draft through the engine on the sample examples and, on a failure,
+      // regenerates a fix — capped at MAX_VERIFY_ROUNDS so a spec it cannot make pass
+      // ends at ratify with an honest note, never in an endless build/fix spin.
+      // `_verifyReport` carries what the self-test found ({ran,passed,total,note}) so
+      // ratify can surface it — a failed verify is a NOTE, never a hard block.
+      verifyRounds:      0,
+      _verifyReport:     null,
       // Gaps the user (or the default) sent to a human rather than answering.
       // Kept in STATE and persisted to the interaction store — never in the spec.
       // It is provenance, and it feeds the SOP: "these cases were not decided;
@@ -1830,6 +1851,175 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
     };
   });
 
+  // ── verify ─────────────────────────────────────────────────────────────────
+  // The converger becomes a CODING AGENT: before it hands the workflow off, it runs
+  // its own draft through the real execution engine on the sample examples, reads the
+  // result, and — if the workflow does not do what its outcome promised — FIXES it and
+  // re-runs. "Run test" stops being a gamble the user takes and becomes a demonstration
+  // of something the converger has already watched pass. (Increment #23.)
+  //
+  // Placement: AFTER the spec is complete (post-gaps, all resources resolved by the
+  // destinations tail) and BEFORE ratify. So the spec it tests already has its real
+  // channels/bases/columns wired in — the dry run exercises the shape the user will
+  // actually publish.
+  //
+  // NO REAL SIDE EFFECTS, EVER. The run goes through `runDryRun`, which sets
+  // `dryRunDeliveries: true` (flow-tester #21): processing/llm nodes run for real, but
+  // every terminal deliver/write is verified into a would-deliver receipt instead of
+  // fired. No email is sent, no record written, no Slack post made — no matter how many
+  // times the fix loop iterates.
+  //
+  // FAIL-SAFE. If there are no examples to run, no tester wired, no contract to judge
+  // against, or the tester throws, `verify` passes STRAIGHT THROUGH to ratify. A
+  // workflow that cannot be auto-tested still reaches the user; an infra hiccup never
+  // blocks a build. And a failed verify is a NOTE (surfaced honestly at ratify), never
+  // a hard block — `complete ⇒ publishable` is preserved: the user can always test and
+  // publish; the converger has simply told them the truth about what it saw.
+  //
+  // BOUNDED. `MAX_VERIFY_ROUNDS` hard-caps the fix loop; each round runs ≤
+  // `MAX_VERIFY_EXAMPLES` samples. A spec the converger cannot make pass ends at ratify
+  // with an honest "I couldn't get a sample to pass" note — never in an endless rebuild.
+  const MAX_VERIFY_ROUNDS   = 2;
+  const MAX_VERIFY_EXAMPLES = 2;
+
+  graph.addNode('verify', async (state, cfg) => {
+    const runDryRun  = cfg?.configurable?.runDryRun;
+    const draft      = state.draft;
+    const assertions = draft?.outcome?.assertions ?? [];
+    const examples   = (draft?.outcome?.examples ?? [])
+      .filter(e => e && e.given != null)
+      .slice(0, MAX_VERIFY_EXAMPLES);
+
+    // ── FAIL-SAFE PASS-THROUGHS ──────────────────────────────────────────────
+    // No tester wired, nothing to run, or no machine-checkable contract to judge
+    // against ⇒ there is nothing to verify. Go straight to ratify, unchanged. This
+    // is also why every existing converger test (which wires no `runDryRun`) keeps
+    // its exact behaviour — the node is inert until a tester is provided.
+    if (typeof runDryRun !== 'function' || !examples.length || !assertions.length) {
+      return { phase: 'ratifying' };
+    }
+
+    // The spec the user is about to publish — resources already resolved by the tail.
+    const spec = assembleSpec(draft);
+
+    emitBeat(cfg, {
+      kind: 'check',
+      text: examples.length > 1
+        ? `Running your workflow on ${examples.length} sample cases to check it actually works…`
+        : 'Running your workflow on a sample to check it actually works…',
+    });
+
+    // Run each sampled example through the engine (DRY-RUN). A run that PAUSED (a
+    // human gate) or produced no oracle verdict is UNJUDGEABLE — neither pass nor
+    // fail — so it is excluded from the tally rather than counted as a failure that
+    // would trigger a pointless fix.
+    const judged = [];
+    for (const ex of examples) {
+      let r;
+      try {
+        r = await runDryRun(spec, ex.given);
+      } catch (err) {
+        // The tester itself faulted. That is infra, not a workflow defect — do not
+        // block the build or claim a failure. Pass through with an honest note.
+        emitBeat(cfg, { kind: 'check', text: "I couldn't run the self-test just now — you can still run it yourself before going live." });
+        return {
+          phase: 'ratifying',
+          _verifyReport: { ran: false, passed: 0, total: 0, note: `self-test could not run (${String(err?.message ?? err)})` },
+          confirmationLog: [{ step: state.step, type: 'verify', ran: false, error: String(err?.message ?? err) }],
+          step: state.step + 1,
+        };
+      }
+      if (!r || r.paused || !r.oracleResult) continue;   // unjudgeable — skip
+      judged.push({ example: ex, passed: r.oracleResult.contractPassed === true, oracle: r.oracleResult });
+    }
+
+    // Nothing could be judged (every sample paused / had no verdict). Not a failure —
+    // proceed, untested.
+    if (!judged.length) {
+      return {
+        phase: 'ratifying',
+        _verifyReport: { ran: false, passed: 0, total: 0, note: null },
+        confirmationLog: [{ step: state.step, type: 'verify', ran: false, judged: 0 }],
+        step: state.step + 1,
+      };
+    }
+
+    const passedCount = judged.filter(j => j.passed).length;
+    const total       = judged.length;
+
+    // ── ALL SAMPLES PASS → verified. On to ratify. ───────────────────────────
+    if (passedCount === total) {
+      emitBeat(cfg, {
+        kind: 'check',
+        text: `It produced the right result — ${passedCount}/${total} sample${total > 1 ? 's' : ''} passed.`,
+      });
+      return {
+        phase: 'ratifying',
+        _verifyReport: { ran: true, passed: passedCount, total, note: null },
+        confirmationLog: [{ step: state.step, type: 'verify', ran: true, passed: passedCount, total, ok: true }],
+        step: state.step + 1,
+      };
+    }
+
+    // ── A SAMPLE FAILED — read the oracle's complaint. ───────────────────────
+    const firstFail = judged.find(j => !j.passed);
+    const runErr    = firstFail?.oracle?.error ?? null;
+    const reasons   = (firstFail?.oracle?.contract ?? [])
+      .filter(c => !c.ok)
+      .map(c => c.reason || `${c.target} not satisfied`);
+    const complaint = runErr
+      ? `it errored: ${typeof runErr === 'string' ? runErr : (runErr?.message ?? JSON.stringify(runErr))}`
+      : (reasons.length ? reasons.join('; ') : 'the outcome was not satisfied');
+    const failLabel = firstFail?.example?.label ? ` ("${firstFail.example.label}")` : '';
+
+    emitBeat(cfg, {
+      kind: 'check',
+      text: `That sample didn't pass — only ${passedCount}/${total} produced the right result.`,
+    });
+
+    // ── FIX (bounded) → regenerate the whole spec with the failure as context. ──
+    // Reuse the generate path: feed the failing sample + the oracle's complaint back
+    // as a clarification so the whole-spec pass rebuilds a corrected workflow, then
+    // re-verify. The narrate `thinking` beat explains WHY it's rebuilding; the
+    // generate node then streams its own reasoning as it does the rebuild.
+    if ((state.verifyRounds ?? 0) < MAX_VERIFY_ROUNDS) {
+      emitBeat(cfg, {
+        kind: 'thinking',
+        text: `The workflow ran, but it didn't keep its promise on a real sample${failLabel}: ${complaint}. Let me rebuild it so every promised delivery actually happens for this input.`,
+      });
+      return {
+        // Route to `generate` (verify's own edge maps 'proposing' → generate),
+        // rebuilding the whole spec from the accumulated clarifications + this fix note.
+        phase:          'proposing',
+        verifyRounds:   (state.verifyRounds ?? 0) + 1,
+        clarifications: [{
+          q: '(self-test failed — fix required)',
+          a: `I ran this workflow on a real sample${failLabel} and it did NOT satisfy the outcome: ${complaint}. `
+           + 'Rebuild the workflow so every promised delivery/record actually happens for this kind of input — '
+           + 'do not drop or mis-wire any step the outcome depends on.',
+        }],
+        _verifyReport:  { ran: true, passed: passedCount, total, note: complaint },
+        confirmationLog: [{ step: state.step, type: 'verify', ran: true, passed: passedCount, total, ok: false, complaint, fixing: true }],
+        step: state.step + 1,
+      };
+    }
+
+    // ── OUT OF FIX ROUNDS — do NOT loop, do NOT claim success. ────────────────
+    // Route to ratify carrying an honest note. `complete ⇒ publishable` holds: the
+    // spec is still valid and publishable; the converger simply tells the user it
+    // could not get a sample to pass, so they can review before going live.
+    emitBeat(cfg, {
+      kind: 'check',
+      text: `I couldn't get a sample to fully pass after ${state.verifyRounds} attempt${state.verifyRounds > 1 ? 's' : ''} — the workflow is built, but you may want to review it before going live.`,
+    });
+    return {
+      phase: 'ratifying',
+      _verifyReport: { ran: true, passed: passedCount, total, note: complaint, gaveUp: true },
+      confirmationLog: [{ step: state.step, type: 'verify', ran: true, passed: passedCount, total, ok: false, gaveUp: true, complaint }],
+      step: state.step + 1,
+    };
+  });
+
   // ── ratify ─────────────────────────────────────────────────────────────────
   // Present the completed draft for final HITL approval before publish.
   graph.addNode('ratify', async (state, cfg) => {
@@ -1874,6 +2064,11 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
       // "escalated" degrades into a word that means nothing (§7.6.2).
       escalations: materialised,
       unmaterialisedEscalations: unmaterialised,
+      // What the self-test saw (#23). Shown honestly, never as a gate: on a pass it
+      // reassures ("I ran it on a sample and it worked"); on a give-up it warns
+      // ("I couldn't get a sample to pass — you may want to review"). Absent when the
+      // build was not auto-testable (no examples / no tester), which is not a failure.
+      verification: state._verifyReport ?? null,
     });
 
     const logEntry = { step: state.step, type: 'ratify', spec, confirmation };
@@ -1924,7 +2119,7 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
   // no user turns at all.
   //
   //   outcome → process → examples → (analyze ⇄ clarify) → generate → analyze
-  //           → destinations → decisions → gaps → ratify
+  //           → destinations → decisions → gaps → verify → ratify
   //
   // CLARIFY-FIRST, THEN GENERATE THE WHOLE SPEC (converger rearchitecture).
   // `analyze` clarifies the intent to completion, then routes the build to `generate`
@@ -2005,6 +2200,17 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
   graph.addConditionalEdges('gaps', (state) => {
     if (state.phase === 'resource_setup') return 'resourceSetup';  // "Create #<name>" (#25)
     if (state.phase === 'gapping')        return 'gaps';           // resource picked/latched → re-score
+    // A blocking gap regenerates; a complete draft goes to VERIFY (#23) — the
+    // converger runs its own workflow on the samples before ratify, and only then
+    // presents it. `gaps → verify → ratify`.
+    return state.phase === 'proposing' ? 'generate' : 'verify';
+  });
+
+  // verify → ratify on a pass (or a bounded give-up); verify → generate on a fix
+  // (it regenerates the whole spec with the failing sample as context, then the tail
+  // brings it back through gaps → verify to re-test). The fix loop is bounded by
+  // `verifyRounds`, so this can never spin.
+  graph.addConditionalEdges('verify', (state) => {
     return state.phase === 'proposing' ? 'generate' : 'ratify';
   });
 
