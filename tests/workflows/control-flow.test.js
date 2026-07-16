@@ -2353,3 +2353,45 @@ test('foreach: `over` given as a literal array is iterated directly', async () =
     assert.equal(sent[0], 'V=[]');
   });
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// stop — a branch's "do nothing" case ends the path with NO side effect.
+// The generic fix for ignore lanes that used to invent a delivery (V1).
+// ─────────────────────────────────────────────────────────────────────────────
+test('a branch case → stop ends the path silently — no delivery, no side effect', async () => {
+  const flow = {
+    nodes: [
+      { id: 'cls',   type: 'llm',     config: { mode: 'classify', categories: 'alert\nignore' } },
+      { id: 'route', type: 'branch',  config: { on: 'cls.output', cases: [
+        { when: 'alert',  to: 'notify' },
+        { when: 'ignore', to: 'done' },
+        { when: '*',      to: 'done' },
+      ] } },
+      { id: 'notify', type: 'deliver', config: { channel: 'slack', target: '#ops' } },
+      { id: 'done',   type: 'stop',    config: {} },
+    ],
+    edges: [ { from: 'cls', to: 'route' }, { from: 'route', to: 'notify' }, { from: 'route', to: 'done' } ],
+  };
+  let delivered = 0;
+  const tester = new FlowTester({
+    nodeTypes, llm: stubLlm('ignore'),
+    channelRegistry: stubChannels(() => { delivered++; return { delivered: true, ts: '1' }; }),
+  });
+  const events = await runAll(tester, flow, { initialContext: { subject: 'hi', body: 'a real message' } });
+  assert.ok(ids(events, 'step_completed').includes('done'), 'the stop node ran');
+  assert.ok(ids(events, 'step_skipped').includes('notify'), 'the alert delivery was skipped, not run');
+  assert.equal(delivered, 0, 'a stop path must produce NO delivery / side effect');
+  assert.ok(one(events, 'run_completed'), 'the run completes cleanly on a stop path');
+});
+
+test('a branch → stop spec validates (stop is a legitimate terminal)', () => {
+  const spec = { name: 't', kind: 'flow', triggers: [{ type: 'email', filter: 'is:unread' }],
+    nodes: [
+      { id: 'cls',   type: 'llm',     label: 'C',    config: { mode: 'classify', categories: 'alert\nignore', instructions: 'x' } },
+      { id: 'route', type: 'branch',  label: 'R',    config: { on: 'cls.output', cases: [{ when: 'alert', to: 'notify' }, { when: 'ignore', to: 'done' }, { when: '*', to: 'done' }] } },
+      { id: 'notify', type: 'deliver', label: 'N',   config: { channel: 'inbox_deliver' } },
+      { id: 'done',  type: 'stop',    label: 'Stop', config: {} } ],
+    edges: [{ from: 'cls', to: 'route' }, { from: 'route', to: 'notify' }, { from: 'route', to: 'done' }] };
+  const r = new WorkflowValidator().validate(spec);
+  assert.ok(r.ok, 'a branch→stop spec must validate: ' + JSON.stringify((r.issues || []).filter(i => i.severity === 'error')));
+});

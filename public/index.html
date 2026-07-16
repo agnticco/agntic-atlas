@@ -390,6 +390,7 @@
                                 <sc-if value="{{ nd.icoSend }}" hint-placeholder-val="{{ false }}"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M22 2 11 13"></path><path d="M22 2 15 22l-4-9-9-4z"></path></svg></sc-if>
                                 <sc-if value="{{ nd.icoLoop }}" hint-placeholder-val="{{ false }}"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M17 2l4 4-4 4"></path><path d="M3 11V9a4 4 0 0 1 4-4h14"></path><path d="M7 22l-4-4 4-4"></path><path d="M21 13v2a4 4 0 0 1-4 4H3"></path></svg></sc-if>
                                 <sc-if value="{{ nd.icoGrid }}" hint-placeholder-val="{{ false }}"><svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"></rect><path d="M3 9h18M3 15h18M12 3v18"></path></svg></sc-if>
+                                <sc-if value="{{ nd.icoStop }}" hint-placeholder-val="{{ false }}"><svg viewBox="0 0 24 24" width="15" height="15" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="2.5"></rect></svg></sc-if>
                               </span></div>
                               <span style="position:absolute;right:-4px;top:50%;transform:translateY(-50%);width:7px;height:7px;border-radius:50%;background:{{ nd.portColor }}"></span>
                               <sc-if value="{{ nd.showCheck }}" hint-placeholder-val="{{ false }}"><span style="position:absolute;right:-6px;bottom:-6px;width:17px;height:17px;border-radius:50%;background:#5fc78a;border:2px solid #0A0A0A;display:flex;align-items:center;justify-content:center"><svg viewBox="0 0 24 24" width="9" height="9" fill="none" stroke="#06210d" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4 4 9-10"></path></svg></span></sc-if>
@@ -5865,6 +5866,7 @@ class Component extends DCLogic {
       shape = 'capsuleR'; typeLabel = 'DELIVER';
       set((M === 'in_app' || M === 'inbox_deliver' || M === 'inbox') ? 'icoInbox' : 'icoSend');
     }
+    else if (T === 'stop') { shape = 'circle'; set('icoStop'); typeLabel = 'STOP'; }
     else if (T === 'setup_action') { set('icoGear'); typeLabel = 'SETUP'; }
     else if (T === 'name') { set('icoSpark'); typeLabel = 'NAME'; }
     else { set('icoGear'); }
@@ -5875,6 +5877,7 @@ class Component extends DCLogic {
     const { shape, typeLabel, icons } = this._nodeShape(step.nodeType, step.mode);
     const isDeliver = String(step.nodeType || '').toLowerCase() === 'deliver';
     const isHuman = String(step.nodeType || '').toLowerCase() === 'human';
+    const isStop = String(step.nodeType || '').toLowerCase() === 'stop';
     const state = step.isConfirmed ? 'approved' : (step.isActive ? 'proposed' : 'upcoming');
 
     // shape geometry
@@ -5909,8 +5912,8 @@ class Component extends DCLogic {
     // a human node in a proposed/awaiting state holds the run — red pulse badge
     const holdBadge = isHuman && state === 'proposed';
     const showCheck = state === 'approved' && !holdBadge;
-    // deliver is terminal: no out-port, no trailing arrow
-    const showArrow = i < n - 1 && !isDeliver;
+    // deliver and stop are terminal: no out-port, no trailing arrow
+    const showArrow = i < n - 1 && !isDeliver && !isStop;
 
     return {
       nodeW: g.w, nodeH: g.h, nodeRadius: g.r, rot: g.rot, unrot: g.unrot,
@@ -5925,7 +5928,7 @@ class Component extends DCLogic {
       icoSpark: !!icons.icoSpark, icoSplit: !!icons.icoSplit, icoPerson: !!icons.icoPerson,
       icoBolt: !!icons.icoBolt, icoLayers: !!icons.icoLayers, icoPlug: !!icons.icoPlug,
       icoGlobe: !!icons.icoGlobe, icoSend: !!icons.icoSend, icoLoop: !!icons.icoLoop,
-      icoGrid: !!icons.icoGrid,
+      icoGrid: !!icons.icoGrid, icoStop: !!icons.icoStop,
       onSelect: () => this._selectNode(msgId, step.id),
     };
   }
@@ -6422,6 +6425,7 @@ class Component extends DCLogic {
     if (ty === "rewrite") return this._clip(c.instructions, 130) || ("Rewrites the content" + (c.tone ? (" in a " + c.tone + " tone.") : "."));
     if (ty === "classify") { const k = String(c.categories || "").split(/[\n,]/).map(x => x.trim()).filter(Boolean).join(", "); return k ? ("Sorts into one of: " + this._clip(k, 110)) : "Sorts the content into one of a fixed set of categories."; }
     if (ty === "assemble") return "Stitches the upstream sections into one document. No AI call.";
+    if (ty === "stop") return "Ends this path with no action — nothing is sent, written, or delivered.";
     if (ty === "deliver") return this._deliveryDetail(c);
     if (ty === "connector-action") {
       const a = this._connectorAction(n);

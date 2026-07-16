@@ -213,7 +213,7 @@ AVAILABLE NODE TYPES (only these — every one is runnable by the engine today):
   - mode:"summarize" — condense the input. config: instructions, format, length ("short"|"medium"|"long"), style ("neutral"|"editorial"|"bullets"|"plain"), focus
   - mode:"extract"   — pull structured fields out as JSON. config: fields (one "name: description" per line), format
   - mode:"rewrite"   — restate the input in another shape/voice. config: instructions, format, tone
-  - mode:"classify"  — sort the input into exactly ONE of a closed list. config: categories (one per line — the list MUST be exhaustive), instructions
+  - mode:"classify"  — sort the input into exactly ONE of a closed list. config: categories (one per line — the list MUST be exhaustive and hold AT LEAST TWO values, INCLUDING a "none"/"other" outcome for input that fits no active category; a single-category classify is meaningless — it always returns that one value), instructions. When a classify drives a branch, it must read the ORIGINAL input the judgement needs — not a summary another AI step produced.
   - mode:"freeform"  — your own prompt, when no other mode fits. config: prompt
   CONFIG KEYS ARE A CLOSED SET. The allowed keys are: mode, prompt, instructions, fields, categories, format, length, style, tone, focus, input, system, maxTokens, timeoutMs. Any other key is REJECTED at publish time (UNKNOWN_CONFIG_KEY) — the workflow will not save. In particular there is NO "model" key: the engine picks the model tier. Never emit one.
   IMPORTANT: when an llm node consumes connector-action output (Drive files, Airtable records, etc.), its instructions/prompt MUST begin with a guard clause, e.g.: "If the provided data is empty or missing (e.g. files:[], records:[]), output EXACTLY: ERROR: required data not found — do not compose content." This prevents silent hallucination when a connector returns no results.
@@ -250,6 +250,8 @@ ${stepSummary(capabilities)}
   • Every case's \`when\` must be a value the routed-on step can actually produce (BRANCH_CASE_NOT_IN_ENUM) — a case for a value nothing emits can never match.
   • Every case needs a real edge: { "from": "<branchId>", "to": "<case target>" }.
   • A case's target must be reachable ONLY through the branch — nothing else may have an edge to it, or it runs whichever way the branch went and the branch decides nothing. To use another step's data there, reference it as {{stepId.output}} — a template needs no edge.
+  • A case that means "DO NOTHING / ignore this input / no action" routes to a "stop" node (see below) — NEVER to a deliver, connector-action, or any node with a side effect. Sending the "ignore" path to a delivery gives the user a notification they explicitly did not want.
+- stop: END this path with NO action — nothing sent, written, or delivered. config: {} (none). It is the destination for a branch's "do nothing" / "none" / catch-all case: the run simply ends there. Use it whenever a case means the workflow should stay silent; it is the ONLY correct way to express "ignore".
 - human: STOP AND ASK A PERSON. The run pauses (costing nothing while it waits), the question goes to their Approvals list / Slack / email, and it continues when they answer. config: { prompt, preview: "{{<stepId>.output}}" (what they SEE — usually the draft being approved), decisions: ["approve","reject"], channels: [{ "type": "inbox" }] (also "slack" with a target, or "email" with a to), timeout: { "after": "48h", "then": "reject" } }.
   Propose one WITHOUT BEING ASKED when a step does something outward-facing and irreversible — sends a customer an email, posts publicly, creates a record, spends money. Say what it is: "This sends a real email to a customer. Want to approve each one before it goes out?"
   HARD RULES, all enforced at publish time:
@@ -319,6 +321,19 @@ HOW DATA PASSES BETWEEN STEPS (hard engine limits — violating these makes the 
     • {{<nodeId>.<field>}} — ONE named top-level field of a step's output (e.g. {{extract.email}},
       {{extract.budget}}). The field name must be a single word — letters, digits, _ or - . This is the
       ONLY way to write individual record columns (see below); use it, don't fear the dot.
+- POSITION DOES NOT LIMIT WHAT A STEP CAN SEE. A step is NOT restricted to the PREVIOUS step's output —
+  the auto-injected previous output is only a convenience DEFAULT. Any step can read ANY EARLIER step's
+  output with {{<nodeId>.output}}, or one of its declared fields with {{<nodeId>.<field>}}, no matter how
+  far upstream that step sits or what runs in between. So to make a step judge or reuse content an
+  earlier step produced, REFERENCE it ({{thatStep.field}}) — never reorder the graph or try to make that
+  step run first to "reach" the data. Reordering does not change access; a template reference does.
+- THE ONE THING THAT IS POSITION-BOUND IS THE RAW TRIGGER EVENT. It is NOT an addressable step: there is
+  no {{trigger.output}}, and "trigger" is never a valid node id (see the edge rule). The raw event is
+  handed to the FIRST step only, as that step's input. So when SEVERAL later steps each need the raw
+  trigger content, you do NOT make each of them run first — you make the FIRST step an llm mode:"extract"
+  that captures the raw content into named fields, and EVERY later step reads {{<extractId>.<field>}}.
+  That is exactly how a downstream classify / summarize / branch judges the real email without being the
+  entry node.
 - What is STILL unsupported (these ship LITERALLY and break the step): a SECOND dot / deeper nesting
   ({{extract.output.email}} — WRONG, that is two levels; write {{extract.email}}), array indexing
   ({{node.results[0].id}}), and wildcards ({{node.items[*].x}}). So the rule is: at most ONE dot, and
@@ -574,10 +589,22 @@ function outcomeBlock(outcome) {
   // self-test proves each conditional promise only on the lane it names.
   const whenVals = [...new Set(outcome.assertions.map(a => a.when).filter(Boolean))];
   const conditionalNote = whenVals.length
-    ? `\nThe [only when: …] lines are CONDITIONAL — each delivery happens on just its own case. Build a\n`
-    + `classify step (llm mode:"classify") over EXACTLY these categories: ${whenVals.join(', ')}, then a\n`
-    + `branch that routes each category to its destination (with the mandatory "*" catch-all). Every case's\n`
-    + `\`when\` MUST be one of those categories — the assertion's [only when: X] and the branch case X must match.`
+    ? `\nThe [only when: …] lines are CONDITIONAL — each delivery happens on just its own case. Build ONE\n`
+    + `classify step (llm mode:"classify") whose input is wired to the REAL content it must judge — set its\n`
+    + `config.input to that content ({{<extractId>.<field>}} when an extract step precedes it, holding the raw\n`
+    + `body; or {{prev}} when the classify IS the first step after the trigger). It does NOT need to be the\n`
+    + `first node and is NOT limited to the previous step's output. Have it sort that content into a\n`
+    + `CLOSED, EXHAUSTIVE list of categories: ${whenVals.join(', ')} — PLUS one extra category "none" for input\n`
+    + `that matches NONE of those lanes. A classify needs AT LEAST TWO categories (the active ones AND "none");\n`
+    + `${whenVals.length === 1 ? `here that means EXACTLY: ${whenVals[0]}, none.\n` : ''}`
+    + `Then a branch routes each active category to its destination, and routes "none" AND the mandatory "*"\n`
+    + `catch-all to a "stop" node (type:"stop", no config) — so input matching no lane ENDS THE RUN WITH NO\n`
+    + `ACTION. NEVER route a "do nothing / ignore" case to a deliver or any node with a side effect: that would\n`
+    + `send a notification the user explicitly did NOT ask for. The classify must judge the REAL content — the\n`
+    + `raw trigger body (via an extract's field, or {{prev}} when it runs first), NEVER a SUMMARY another llm\n`
+    + `step produced (judging a paraphrase silently misroutes), and it is the ONLY node that\n`
+    + `makes this routing judgement — do not also have an upstream step decide the same thing. Every active\n`
+    + `case's \`when\` MUST equal one of the categories.`
     : '';
   return `
 THE OUTCOME THIS WORKFLOW MUST DELIVER (the contract — every line needs a step that does it,
@@ -696,8 +723,12 @@ function approvedPlanBlock(plan) {
   const steps    = plan.steps.map((s, i) => `  ${i + 1}. ${s.text}`).join('\n');
   const branches = (plan.branches ?? []).map(b => `  - when ${b.when} → ${b.then}`).join('\n');
   const fail     = plan.error_handling?.text ? `\n  On failure: ${plan.error_handling.text}` : '';
-  return `\nAPPROVED PLAN — the user approved this SHAPE: the trigger, the SEQUENCE of steps, and the
-routing. Honor the shape — same steps, same order, same routes; do not add steps it does not call for,
+  return `\nAPPROVED PLAN — the user approved this WORK: the trigger, the SET of steps to perform, and the
+routing between outcomes. Honor the work — cover every step it lists and no extra ones, and keep the
+routes it describes; but you are FREE to choose the cleanest node structure, ORDER, and {{...}} data
+wiring that accomplishes it. The plan is a list of WHAT to do, not a node sequence to hard-code: if
+reading the data cleanly means an extract runs first and a later step references its fields, build it
+that way even if the plan lists those steps in a different order. Do not add steps it does not call for,
 and do not drop any it lists:
   Trigger: ${plan.trigger?.text ?? ''}
   Steps:\n${steps}${branches ? `\n  Routes:\n${branches}` : ''}${fail}

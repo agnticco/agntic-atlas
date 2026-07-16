@@ -94,7 +94,7 @@ const UNRESOLVED_TEMPLATE = /\{\{\s*[\w.\-]+\s*\}\}/;
  * never ingests a receipt); it was simply never added to the set that governs
  * `lastOutput`. Same class as branch/human/decision, fourth member.
  */
-const CONTROL_TYPES = new Set(['branch', 'human', 'decision', 'deliver']);
+const CONTROL_TYPES = new Set(['branch', 'human', 'decision', 'deliver', 'stop']);
 
 /**
  * One named field of a step's output. The output of an `llm` in `extract` mode is a

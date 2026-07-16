@@ -41,7 +41,7 @@
  * answer plus the row that produced it. An `llm` step downstream of a decision
  * must summarise the EMAIL, not the audit record of how the email was classified.
  */
-const NON_CONTENT_TYPES = new Set(['trigger', 'deliver', 'branch', 'human', 'decision']);
+const NON_CONTENT_TYPES = new Set(['trigger', 'deliver', 'branch', 'human', 'decision', 'stop']);
 
 /**
  * Stringify a node output for use as text input / delivered body.

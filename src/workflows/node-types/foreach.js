@@ -47,7 +47,7 @@ export const DEFAULT_MAX_ITEMS = 100;
  * product must be applied to BOTH, and a new control type is not done until it is
  * in both sets. (Found by the independent verifier + the test-adversary.)
  */
-const CONTROL_SUBSTEP_TYPES = new Set(['branch', 'human', 'decision']);
+const CONTROL_SUBSTEP_TYPES = new Set(['branch', 'human', 'decision', 'stop']);
 
 export const foreachNodeType = {
   type: 'foreach',

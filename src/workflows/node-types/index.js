@@ -25,6 +25,7 @@ import { branchNodeType }          from './branch.js';
 import { foreachNodeType }         from './foreach.js';
 import { humanNodeType }           from './human.js';
 import { decisionNodeType }        from './decision.js';
+import { stopNodeType }            from './stop.js';
 
 export function registerBuiltInNodeTypes(registry) {
   // Triggers + transport
@@ -44,6 +45,9 @@ export function registerBuiltInNodeTypes(registry) {
   registry.register(foreachNodeType);
   registry.register(humanNodeType);
   registry.register(decisionNodeType);
+  // A generic terminal: a branch case that means "do nothing" ends here, rather
+  // than the converger inventing a delivery for an ignore path (see stop.js).
+  registry.register(stopNodeType);
 
   return registry;
 }
@@ -51,5 +55,5 @@ export function registerBuiltInNodeTypes(registry) {
 export {
   triggerNodeType, llmNodeType, assembleNodeType,
   deliverNodeType, connectorActionNodeType, searchWebNodeType,
-  branchNodeType, foreachNodeType, humanNodeType, decisionNodeType,
+  branchNodeType, foreachNodeType, humanNodeType, decisionNodeType, stopNodeType,
 };
