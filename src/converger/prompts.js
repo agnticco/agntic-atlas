@@ -670,10 +670,16 @@ function approvedPlanBlock(plan) {
   const steps    = plan.steps.map((s, i) => `  ${i + 1}. ${s.text}`).join('\n');
   const branches = (plan.branches ?? []).map(b => `  - when ${b.when} → ${b.then}`).join('\n');
   const fail     = plan.error_handling?.text ? `\n  On failure: ${plan.error_handling.text}` : '';
-  return `\nAPPROVED PLAN — the user approved this exact shape; BUILD IT. Do not add steps it does not
-call for, and do not drop any it lists:
+  return `\nAPPROVED PLAN — the user approved this SHAPE: the trigger, the SEQUENCE of steps, and the
+routing. Honor the shape — same steps, same order, same routes; do not add steps it does not call for,
+and do not drop any it lists:
   Trigger: ${plan.trigger?.text ?? ''}
-  Steps:\n${steps}${branches ? `\n  Routes:\n${branches}` : ''}${fail}\n`;
+  Steps:\n${steps}${branches ? `\n  Routes:\n${branches}` : ''}${fail}
+This plan is PLAIN LANGUAGE, not node config — it fixes the STRUCTURE, not the node types. Build each
+step with the node type + config your STRUCTURE RULES demand, NOT by matching the plan's wording: a
+"summarize"/"write a summary" step is an "llm" node with mode:"summarize" that reads the upstream
+extract via {{<extractId>.output}} — never a freeform node, and never one that reads the classifier's
+category instead of the email. The plan says WHAT each step does; your grammar says HOW to build it.\n`;
 }
 
 /**
