@@ -258,7 +258,10 @@ const reasoningHubs = new Map();          // threadId → { emitter, buffer, seq
 const REASONING_BUFFER_CAP = 2000;
 // 'thinking' carries the model's RAW reasoning tokens (streamed live during
 // `generate`); the rest are discrete human-legible status beats.
-const BEAT_KINDS = new Set(['read', 'wire', 'fix', 'check', 'prose', 'thinking']);
+// 'node' carries a STRUCTURED node (id/type/label/mode) as the converger WRITES the
+// spec, for the live in-chat graph build — it has no `text`, so narrate() handles it
+// on its own path below rather than through the text normaliser.
+const BEAT_KINDS = new Set(['read', 'wire', 'fix', 'check', 'prose', 'thinking', 'node']);
 
 function openReasoningHub(threadId, { tenantId = null, userId = null } = {}) {
   const emitter = new EventEmitter();
@@ -275,6 +278,19 @@ function narrate(threadId, beat) {
   const hub = reasoningHubs.get(threadId);
   if (!hub || !beat) return;
   const kind = BEAT_KINDS.has(beat.kind) ? beat.kind : 'read';
+
+  // A 'node' beat is structured (the live build), not text. Buffer + emit it directly.
+  if (kind === 'node') {
+    if (!beat.node || !beat.node.id) return;
+    const b = { kind, node: beat.node };
+    if (beat.streamId != null) b.streamId = String(beat.streamId);
+    b._seq = ++hub.seq;
+    hub.buffer.push(b);
+    if (hub.buffer.length > REASONING_BUFFER_CAP) hub.buffer.splice(0, hub.buffer.length - REASONING_BUFFER_CAP);
+    try { hub.emitter.emit('beat', b); } catch { /* no subscriber */ }
+    return;
+  }
+
   const raw  = typeof beat.text === 'string' ? beat.text : '';
   // A 'thinking' delta is a RAW model token — whitespace between words is meaningful,
   // so we must NOT trim it, and drop only a truly empty string. Discrete status beats
@@ -299,7 +315,9 @@ function narrate(threadId, beat) {
 // carried only when present (thinking beats).
 function beatPayload(b) {
   return {
-    kind: b.kind, text: b.text,
+    kind: b.kind,
+    ...(b.text != null ? { text: b.text } : {}),
+    ...(b.node ? { node: b.node } : {}),
     ...(b.detail ? { detail: b.detail } : {}),
     ...(b.streamId ? { streamId: b.streamId } : {}),
   };

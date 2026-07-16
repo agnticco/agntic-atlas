@@ -103,6 +103,7 @@
   .atlas-md p{margin:0 0 .5em}.atlas-md p:last-child{margin-bottom:0}.atlas-md ul,.atlas-md ol{margin:.25em 0 .5em 1.4em;padding:0}.atlas-md li{margin:.1em 0}.atlas-md strong{color:rgba(255,255,255,.95);font-weight:600}.atlas-md em{font-style:italic}.atlas-md code{font-family:'SFMono-Regular',Consolas,monospace;font-size:12.5px;background:rgba(255,255,255,.1);padding:1px 5px;border-radius:4px}.atlas-md pre{background:rgba(255,255,255,.06);border-radius:8px;padding:12px;overflow-x:auto;margin:.4em 0}.atlas-md pre code{background:none;padding:0;font-size:13px}.atlas-md h1,.atlas-md h2,.atlas-md h3{font-size:15px;font-weight:600;color:rgba(255,255,255,.9);margin:.6em 0 .2em}.atlas-md a{color:rgba(120,180,255,.9);text-decoration:none}.atlas-md a:hover{text-decoration:underline}
   @keyframes msgIn{from{transform:translateY(10px);opacity:.4}to{transform:none;opacity:1}}
   @keyframes flowPulse{0%,100%{opacity:.5}50%{opacity:1}}
+  @keyframes nodePop{0%{transform:scale(.5);opacity:0}60%{transform:scale(1.08)}100%{transform:scale(1);opacity:1}}
   @keyframes liveRing{0%,100%{box-shadow:0 0 0 rgba(127,194,138,0)}50%{box-shadow:0 0 30px rgba(127,194,138,.22)}}
   .wf-item-inactive:hover { color: rgba(255,255,255,.8) !important; }
   @keyframes modalExpand { from { opacity:0; transform:scale(.2); } to { opacity:1; transform:none; } }
@@ -637,6 +638,47 @@
                 </div>
               </sc-if>
 
+              <!-- LIVE BUILD STRIP (isLiveGraph) — the workflow assembles IN THE CHAT as
+                   the converger writes it: each finished node pops in (operator 2026-07-16).
+                   A progress view; the full graph + approval arrives on completion. -->
+              <sc-if value="{{ item.isLiveGraph }}" hint-placeholder-val="{{ false }}">
+                <div style="display:flex;gap:13px;align-items:flex-start;animation:msgIn .4s ease both">
+                  <div style="flex:none;width:32px;height:32px"></div>
+                  <div style="min-width:0;flex:1">
+                    <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px">
+                      <span style="flex:none;width:7px;height:7px;border-radius:50%;background:#e7b25e;box-shadow:0 0 8px rgba(231,178,94,.55);animation:flowPulse 2.4s ease-in-out infinite"></span>
+                      <span style="font-size:11px;font-weight:600;letter-spacing:.16em;text-transform:uppercase;color:rgba(231,178,94,.75)">Building your workflow</span>
+                    </div>
+                    <div style="display:flex;flex-wrap:wrap;align-items:flex-start;gap:14px 6px">
+                      <sc-for list="{{ item.liveCards }}" as="lc" hint-placeholder-count="3">
+                        <div style="display:flex;flex-direction:column;align-items:center;gap:6px;width:80px;animation:nodePop .32s cubic-bezier(.34,1.56,.64,1) both">
+                          <div style="width:48px;height:48px;border-radius:14px;border:1.5px solid rgba(231,178,94,.42);background:rgba(231,178,94,.07);display:flex;align-items:center;justify-content:center;color:#efc892">
+                            <sc-if value="{{ lc.icoMail }}" hint-placeholder-val="{{ false }}"><svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="2"></rect><path d="M3 7l9 6 9-6"></path></svg></sc-if>
+                            <sc-if value="{{ lc.icoFork }}" hint-placeholder-val="{{ false }}"><svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12h7"></path><path d="M10 12c4.5 0 4.5-5.5 9-5.5"></path><path d="M10 12c4.5 0 4.5 5.5 9 5.5"></path><circle cx="20.5" cy="6.5" r="1.4"></circle><circle cx="20.5" cy="17.5" r="1.4"></circle></svg></sc-if>
+                            <sc-if value="{{ lc.icoDoc }}" hint-placeholder-val="{{ false }}"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="8" y1="13" x2="16" y2="13"></line><line x1="8" y1="17" x2="13" y2="17"></line></svg></sc-if>
+                            <sc-if value="{{ lc.icoDb }}" hint-placeholder-val="{{ false }}"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5" rx="8" ry="3"></ellipse><path d="M4 5v14c0 1.7 3.6 3 8 3s8-1.3 8-3V5"></path><path d="M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3"></path></svg></sc-if>
+                            <sc-if value="{{ lc.icoInbox }}" hint-placeholder-val="{{ false }}"><svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M22 12h-6l-2 3h-4l-2-3H2"></path><path d="M5.5 5h13L22 12v6a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2v-6z"></path></svg></sc-if>
+                            <sc-if value="{{ lc.icoGear }}" hint-placeholder-val="{{ false }}"><svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><circle cx="12" cy="12" r="3.2"></circle><path d="M12 2.5v3M12 18.5v3M2.5 12h3M18.5 12h3M5.2 5.2l2.1 2.1M16.7 16.7l2.1 2.1M18.8 5.2l-2.1 2.1M7.3 16.7l-2.1 2.1"></path></svg></sc-if>
+                            <sc-if value="{{ lc.icoSpark }}" hint-placeholder-val="{{ false }}"><svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"><path d="M12 3l2.1 6.4L20.5 11.5l-6.4 2.1L12 20l-2.1-6.4L3.5 11.5l6.4-2.1z"></path></svg></sc-if>
+                            <sc-if value="{{ lc.icoSplit }}" hint-placeholder-val="{{ false }}"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M5 12h6M11 12l5-5M11 12l5 5"></path></svg></sc-if>
+                            <sc-if value="{{ lc.icoPerson }}" hint-placeholder-val="{{ false }}"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><circle cx="12" cy="8" r="4"></circle><path d="M4 21c0-4 3.6-6.5 8-6.5s8 2.5 8 6.5"></path></svg></sc-if>
+                            <sc-if value="{{ lc.icoBolt }}" hint-placeholder-val="{{ false }}"><svg viewBox="0 0 24 24" width="19" height="19" fill="currentColor"><path d="M13 2 4.5 13.5H11L9.5 22 19 10h-6.5z"></path></svg></sc-if>
+                            <sc-if value="{{ lc.icoLayers }}" hint-placeholder-val="{{ false }}"><svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2 2 7.5 12 13l10-5.5z"></path><path d="M2 12.5 12 18l10-5.5"></path><path d="M2 17.5 12 23l10-5.5"></path></svg></sc-if>
+                            <sc-if value="{{ lc.icoPlug }}" hint-placeholder-val="{{ false }}"><svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M9 7V3M15 7V3"></path><path d="M6 7h12v4a6 6 0 0 1-12 0z"></path><path d="M12 17v4"></path></svg></sc-if>
+                            <sc-if value="{{ lc.icoGlobe }}" hint-placeholder-val="{{ false }}"><svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"></circle><path d="M3 12h18M12 3c2.7 2.6 4 5.7 4 9s-1.3 6.4-4 9c-2.7-2.6-4-5.7-4-9s1.3-6.4 4-9z"></path></svg></sc-if>
+                            <sc-if value="{{ lc.icoSend }}" hint-placeholder-val="{{ false }}"><svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M22 2 11 13"></path><path d="M22 2 15 22l-4-9-9-4z"></path></svg></sc-if>
+                            <sc-if value="{{ lc.icoLoop }}" hint-placeholder-val="{{ false }}"><svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M17 2l4 4-4 4"></path><path d="M3 11V9a4 4 0 0 1 4-4h14"></path><path d="M7 22l-4-4 4-4"></path><path d="M21 13v2a4 4 0 0 1-4 4H3"></path></svg></sc-if>
+                            <sc-if value="{{ lc.icoGrid }}" hint-placeholder-val="{{ false }}"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"></rect><path d="M3 9h18M3 15h18M12 3v18"></path></svg></sc-if>
+                            <sc-if value="{{ lc.icoStop }}" hint-placeholder-val="{{ false }}"><svg viewBox="0 0 24 24" width="15" height="15" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="2.5"></rect></svg></sc-if>
+                          </div>
+                          <div style="font-size:10px;font-weight:600;line-height:1.2;color:rgba(255,255,255,.72);text-align:center;letter-spacing:-0.01em">{{ lc.label }}</div>
+                        </div>
+                      </sc-for>
+                    </div>
+                  </div>
+                </div>
+              </sc-if>
+
               <!-- GAP LIST / DECISION TABLE cards retired (#24): gaps and decision-
                    table confirmations now use the conversational `clarification`
                    surface (chips + composer) instead of bespoke cards. -->
@@ -850,20 +892,24 @@
                     </sc-if>
                     <sc-if value="{{ rsn.transcript }}" hint-placeholder-val="{{ false }}">
                       <div>
-                        <!-- Live pulse while actively building… -->
+                        <!-- Live pulse while actively building… The header stays put; the
+                             chevron collapses the CoT body for people who'd rather not watch. -->
                         <sc-if value="{{ rsn.streaming }}" hint-placeholder-val="{{ true }}">
-                          <div style="display:flex;align-items:center;gap:8px;margin-bottom:11px">
+                          <div onClick="{{ rsn.onToggleBody }}" style="display:flex;align-items:center;gap:8px;margin-bottom:11px;cursor:pointer" style-hover="opacity:.85">
                             <span style="flex:none;width:7px;height:7px;border-radius:50%;background:#e7b25e;box-shadow:0 0 8px rgba(231,178,94,.55);animation:flowPulse 2.4s ease-in-out infinite"></span>
-                            <span style="font-size:11px;font-weight:600;letter-spacing:.18em;text-transform:uppercase;color:rgba(231,178,94,.75);animation:flowPulse 2.4s ease-in-out infinite">Thinking through your build</span>
+                            <span style="flex:1;font-size:11px;font-weight:600;letter-spacing:.18em;text-transform:uppercase;color:rgba(231,178,94,.75);animation:flowPulse 2.4s ease-in-out infinite">Thinking through your build</span>
+                            <span style="flex:none;color:rgba(231,178,94,.6);font-size:10px;display:inline-block;transform:{{ rsn.bodyChev }};transition:transform .15s">▾</span>
                           </div>
                         </sc-if>
                         <!-- …a static header once proposed, so the transcript stays VISIBLE through the review (#24). -->
                         <sc-if value="{{ rsn.reviewing }}" hint-placeholder-val="{{ false }}">
-                          <div style="display:flex;align-items:center;gap:8px;margin-bottom:11px">
+                          <div onClick="{{ rsn.onToggleBody }}" style="display:flex;align-items:center;gap:8px;margin-bottom:11px;cursor:pointer" style-hover="opacity:.85">
                             <span style="flex:none;width:6px;height:6px;border-radius:50%;background:rgba(255,255,255,.3)"></span>
-                            <span style="font-size:11px;font-weight:600;letter-spacing:.18em;text-transform:uppercase;color:rgba(255,255,255,.42)">How Atlas thought through this build</span>
+                            <span style="flex:1;font-size:11px;font-weight:600;letter-spacing:.18em;text-transform:uppercase;color:rgba(255,255,255,.42)">How Atlas thought through this build</span>
+                            <span style="flex:none;color:rgba(255,255,255,.35);font-size:10px;display:inline-block;transform:{{ rsn.bodyChev }};transition:transform .15s">▾</span>
                           </div>
                         </sc-if>
+                        <sc-if value="{{ !rsn.bodyHidden }}" hint-placeholder-val="{{ true }}">
                         <div ref="{{ rsn.bodyRef }}" class="ab-scroll" style="padding:2px 0 2px 13px;border-left:2px solid rgba(231,178,94,.22);max-height:{{ rsn.bodyMaxH }};overflow-y:auto;-webkit-mask-image:{{ rsn.bodyMask }};mask-image:{{ rsn.bodyMask }}">
                           <sc-for list="{{ rsn.segs }}" as="g" hint-placeholder-count="2">
                             <div>
@@ -884,6 +930,7 @@
                             </div>
                           </sc-for>
                         </div>
+                        </sc-if>
                       </div>
                     </sc-if>
                     <sc-if value="{{ rsn.collapsed }}" hint-placeholder-val="{{ false }}">
@@ -4885,6 +4932,9 @@ class Component extends DCLogic {
         awaitingGraphApproval: true,
         graphApproved: [], graphSelNode: null, graphReviseOpen: false, graphReviseText: "",
         thinking: false, inputMode: "locked", phase: "building",
+        // The live build strip has done its job — the authoritative graph (edges, layout,
+        // approval) takes over. Drop the strip so the two don't linger side by side.
+        msgs: this.state.msgs.filter(m => !m.isLiveGraph),
       };
       // Surface the outcome contract in the pinned card if the spec carries one
       // (same shape the outcome_check handler sets), so "what this must deliver"
@@ -5918,7 +5968,7 @@ class Component extends DCLogic {
     return {
       nodeW: g.w, nodeH: g.h, nodeRadius: g.r, rot: g.rot, unrot: g.unrot,
       nodeBorder, nodeBg, nodeShadow: 'none', nodeAnim, iconColor,
-      portColor: isDeliver ? 'transparent' : portColor,
+      portColor: (isDeliver || isStop) ? 'transparent' : portColor,
       showCheck, holdBadge,
       shortTitle: this._clip(step.title || this._titleCase(step.nodeType || 'Step'), 22),
       typeLabel, titleColor, typeColor,
@@ -6273,6 +6323,41 @@ class Component extends DCLogic {
     this.setState({ reasoningSegs: segs });
   }
 
+  // THE LIVE IN-CHAT GRAPH (agent-contracts, operator 2026-07-16). As the converger
+  // WRITES the spec, each finished node arrives as a `node` beat and pops into a graph
+  // that builds up right in the conversation — so a long build reads as watching it
+  // assemble, not staring at a spinner. This is a PROGRESS view; the authoritative graph
+  // (edges, layout, approval) still arrives on the `generated_workflow` interrupt. Nodes
+  // stream in generation order; we render them as a left-to-right strip that pops in.
+  _liveCardFor(node) {
+    const et = node.type === 'llm' ? (node.mode || 'freeform') : node.type;
+    const { typeLabel, icons } = this._nodeShape(et, node.mode);
+    return {
+      id: node.id,
+      label: this._clip(node.label || this._titleCase(et), 20),
+      typeLabel,
+      icoMail: !!icons.icoMail, icoFork: !!icons.icoFork, icoDoc: !!icons.icoDoc, icoDb: !!icons.icoDb,
+      icoInbox: !!icons.icoInbox, icoGear: !!icons.icoGear, icoSpark: !!icons.icoSpark, icoSplit: !!icons.icoSplit,
+      icoPerson: !!icons.icoPerson, icoBolt: !!icons.icoBolt, icoLayers: !!icons.icoLayers, icoPlug: !!icons.icoPlug,
+      icoGlobe: !!icons.icoGlobe, icoSend: !!icons.icoSend, icoLoop: !!icons.icoLoop, icoGrid: !!icons.icoGrid,
+      icoStop: !!icons.icoStop,
+    };
+  }
+  _onLiveNode(node, streamId) {
+    if (!node || !node.id) return;
+    const sid = streamId == null ? '' : String(streamId);
+    const msgs = this.state.msgs.slice();
+    let idx = -1;
+    for (let i = msgs.length - 1; i >= 0; i--) { if (msgs[i].isLiveGraph && msgs[i]._streamId === sid) { idx = i; break; } }
+    if (idx < 0) {
+      msgs.push({ isLiveGraph: true, _streamId: sid, _id: 'lg_' + (this._pc = (this._pc || 0) + 1), liveCards: [this._liveCardFor(node)] });
+    } else {
+      if ((msgs[idx].liveCards || []).some(c => c.id === node.id)) return; // dedupe re-sends
+      msgs[idx] = { ...msgs[idx], liveCards: [...msgs[idx].liveCards, this._liveCardFor(node)] };
+    }
+    this.setState({ msgs });
+  }
+
   // Open the SSE reasoning stream for a build. Additive: if EventSource is missing,
   // the endpoint errors, or nothing streams, the build proceeds exactly as before —
   // the panel just stays on its RESTING placeholder. Reconnects are handled natively
@@ -6293,6 +6378,9 @@ class Component extends DCLogic {
       // Raw model thinking accumulates into one growing block; everything else is a
       // discrete seg appended to the feed.
       if (b && b.kind === 'thinking') { self._appendThinking(String(b.text == null ? '' : b.text), b.streamId); return; }
+      // A live node beat (agent-contracts: the in-chat graph builds as the converger
+      // writes it). Route it to the building graph, NOT the reasoning transcript.
+      if (b && b.kind === 'node' && b.node) { self._onLiveNode(b.node, b.streamId); return; }
       const seg = self._beatToSeg(b);
       if (seg) self.setState({ reasoningSegs: [...(self.state.reasoningSegs || []), seg] });
     };
@@ -6859,6 +6947,11 @@ class Component extends DCLogic {
       open: rsnOpen,
       toggleLabel: rsnOpen ? "Hide" : "Show reasoning",
       chev: rsnOpen ? "rotate(180deg)" : "rotate(0deg)",
+      // The "Thinking through your build" HEADER stays visible; a chevron hides the
+      // CoT body for people who don't want to watch it (operator, 2026-07-16).
+      bodyHidden: !!S.rsnBodyHidden,
+      onToggleBody: () => this.setState({ rsnBodyHidden: !this.state.rsnBodyHidden }),
+      bodyChev: S.rsnBodyHidden ? "rotate(-90deg)" : "rotate(0deg)",
     };
     const pipeline = this._pipeline();
     const last = pipeline.length - 1;

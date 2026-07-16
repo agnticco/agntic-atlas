@@ -131,7 +131,7 @@ const DEFAULT_THINKING_BUDGET = 3072;
 // or transport failure NEVER stops the build from completing. A completed stream
 // whose text isn't valid JSON returns null (same contract as `llmJson`), rather than
 // paying for a second blocking call to reach the identical null.
-export async function llmJsonStreaming(llm, messages, config = {}, { onThinking } = {}) {
+export async function llmJsonStreaming(llm, messages, config = {}, { onThinking, onAnswer } = {}) {
   let text = null;
   if (typeof llm.stream === 'function') {
     try {
@@ -140,7 +140,14 @@ export async function llmJsonStreaming(llm, messages, config = {}, { onThinking 
       if (typeof onThinking === 'function') streamCfg.onThinking = onThinking;
       for await (const chunk of llm.stream(messages, streamCfg)) {
         const c = typeof chunk === 'string' ? chunk : (chunk?.content ?? '');
-        if (c) acc += c;
+        if (c) {
+          acc += c;
+          // The ANSWER content (the spec JSON) streams here, AFTER the thinking.
+          // `onAnswer` gets each delta + the running accumulation so a caller can
+          // incrementally parse it and surface the spec AS IT IS WRITTEN (the live
+          // in-chat graph build). Purely additive — absent, behaviour is unchanged.
+          if (typeof onAnswer === 'function') { try { onAnswer(c, acc); } catch { /* never let the UI feed break the build */ } }
+        }
       }
       if (acc.trim()) text = acc;
     } catch {
@@ -150,6 +157,59 @@ export async function llmJsonStreaming(llm, messages, config = {}, { onThinking 
   if (text == null) return llmJson(llm, messages, config); // no-stream-support OR stream failed
   try { return JSON.parse(extractJson(text)); }
   catch { return null; }
+}
+
+/**
+ * Incrementally scan an accumulating JSON string for COMPLETE node objects inside the
+ * top-level `"nodes": [ … ]` array, so the client can pop each node into the live graph
+ * the instant the model finishes writing it. Stateful: call it repeatedly with the
+ * growing `acc`; it returns only nodes it has not returned before (tracked via `state`).
+ *
+ * It is brace-depth aware and string-aware (a `{` inside a JSON string never opens an
+ * object), so it will not mis-slice a config value that contains braces. It is
+ * deliberately FORGIVING — a node it cannot yet parse is simply skipped until more text
+ * arrives, and the authoritative parse still happens once (JSON.parse of the whole
+ * answer) in llmJsonStreaming. This is a progress feed, never the source of truth.
+ */
+export function streamNodesFrom(acc, state) {
+  const out = [];
+  if (state.done) return out;
+  // Locate the nodes array once.
+  if (state.arrStart == null) {
+    const m = acc.match(/"nodes"\s*:\s*\[/);
+    if (!m) return out;
+    state.arrStart = m.index + m[0].length;
+    state.i = state.arrStart;
+    state.depth = 0;        // object-brace depth within the array
+    state.objStart = -1;    // start index of the current node object
+    state.inStr = false;
+    state.esc = false;
+  }
+  for (; state.i < acc.length; state.i++) {
+    const ch = acc[state.i];
+    if (state.inStr) {
+      if (state.esc) { state.esc = false; }
+      else if (ch === '\\') { state.esc = true; }
+      else if (ch === '"') { state.inStr = false; }
+      continue;
+    }
+    if (ch === '"') { state.inStr = true; continue; }
+    if (ch === '{') { if (state.depth === 0) state.objStart = state.i; state.depth++; continue; }
+    if (ch === '}') {
+      state.depth--;
+      if (state.depth === 0 && state.objStart >= 0) {
+        const slice = acc.slice(state.objStart, state.i + 1);
+        try {
+          const node = JSON.parse(slice);
+          if (node && typeof node === 'object' && node.id) out.push(node);
+        } catch { /* not yet valid — will be caught by the authoritative parse */ }
+        state.objStart = -1;
+      }
+      continue;
+    }
+    if (ch === ']' && state.depth === 0) { state.done = true; break; }  // end of the nodes array
+  }
+  return out;
 }
 
 export const DRAFT_DEFAULT = {
@@ -1402,6 +1462,23 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
     if (firstPass) streamedThinking.add(streamKey);
     const onThinking = firstPass ? (delta) => narrateThinking(cfg, delta, streamKey) : null;
 
+    // LIVE NODE STREAM (the in-chat graph build). As the spec JSON is WRITTEN — after
+    // the thinking — pop each completed node into the client's live graph the instant
+    // the model finishes it. firstPass-gated like the thinking, and best-effort: the
+    // authoritative parse (mergeGeneratedSpec below) is still the source of truth; these
+    // beats are a progress feed the client renders, never the spec itself.
+    const nodeStreamState = {};
+    const onAnswer = firstPass
+      ? (_delta, acc) => {
+          for (const node of streamNodesFrom(acc, nodeStreamState)) {
+            emitBeat(cfg, { kind: 'node', streamId: streamKey, node: {
+              id: node.id, type: node.type, label: node.label ?? null,
+              mode: node.config?.mode ?? null, description: node.description ?? null,
+            } });
+          }
+        }
+      : null;
+
     const generated = await llmJsonStreaming(llm, [
       new SystemMessage(buildSystemPrompt(state.capabilities)),
       new HumanMessage(buildGeneratePrompt({
@@ -1427,7 +1504,7 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
       // blocking one did, so an un-attributed call that drops out of per-tenant/per-build
       // aggregates cannot happen here. If streaming/thinking fails, it falls back to the
       // blocking call, so the build still completes.
-    ], tierCfg('architect', sessionId), { onThinking });
+    ], tierCfg('architect', sessionId), { onThinking, onAnswer });
 
     // DEFENSIVE: the model returned nothing usable (no nodes). Do NOT crash and do
     // NOT ship an empty spec — fall back to a clarification interrupt, the same honest
