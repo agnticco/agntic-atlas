@@ -538,8 +538,8 @@
                     <div style="font-size:15px;line-height:1.5;color:#fff;font-weight:500">{{ item.q }}</div>
                     <div style="font-size:13px;line-height:1.55;color:rgba(255,255,255,.5);margin-top:6px;max-width:52ch">{{ item.sub }}</div>
                     <div style="display:flex;flex-direction:column;gap:10px;margin-top:14px">
-                      <button onClick="{{ item.primaryCard.onPick }}" style="{{ item.primaryCard.style }}" style-hover="border-color:rgba(240,191,107,.55)">
-                        <div style="font-size:9.5px;letter-spacing:.16em;text-transform:uppercase;font-weight:600;color:{{ item.primaryCard.tagColor }};margin-bottom:7px">{{ item.primaryCard.tag }}</div>
+                      <button onClick="{{ item.primaryCard.onPick }}" style="{{ item.primaryCard.style }}" style-hover="border-color:rgba(255,255,255,.28)">
+                        <sc-if value="{{ item.primaryCard.tag }}" hint-placeholder-val="{{ false }}"><div style="font-size:9.5px;letter-spacing:.16em;text-transform:uppercase;font-weight:600;color:{{ item.primaryCard.tagColor }};margin-bottom:7px">{{ item.primaryCard.tag }}</div></sc-if>
                         <div style="font-size:14px;line-height:1.5;color:#fff;font-weight:500;margin-bottom:6px">{{ item.primaryCard.statement }}</div>
                         <div style="font-size:12.5px;line-height:1.5;color:rgba(255,255,255,.55)">{{ item.primaryCard.deliversText }}</div>
                       </button>
@@ -560,36 +560,9 @@
                 </div>
               </sc-if>
 
-              <!-- GAP LIST (gap_review) — P12 Increment C.
-                   "Here are the cases you haven't told me about." Every row is
-                   pre-resolved to ESCALATE — a person deals with it — so the user can
-                   publish a provably-complete workflow having answered nothing. That is
-                   what lets v2 demand more rigour WITHOUT demanding more typing. -->
-              <sc-if value="{{ item.isGaps }}" hint-placeholder-val="{{ false }}">
-                <div style="display:flex;gap:13px;align-items:flex-start;animation:msgIn .45s ease both">
-                  <div style="flex:none;width:32px;height:32px"></div>
-                  <div style="min-width:0;flex:1">
-                    <div style="font-size:15px;line-height:1.5;color:#fff;font-weight:500">{{ item.q }}</div>
-                    <div style="font-size:13px;line-height:1.55;color:rgba(255,255,255,.5);margin-top:6px;max-width:52ch">{{ item.sub }}</div>
-                    <div style="display:flex;flex-direction:column;gap:8px;margin-top:14px">
-                      <sc-for list="{{ item.rows }}" as="row" hint-placeholder-count="2">
-                        <div style="border:1px solid rgba(255,255,255,.09);border-radius:12px;padding:13px 15px;background:rgba(255,255,255,.02)">
-                          <div style="font-size:13.5px;line-height:1.5;color:rgba(255,255,255,.86)">{{ row.message }}</div>
-                          <div style="display:flex;flex-wrap:wrap;gap:8px;margin-top:10px;align-items:center">
-                            <div style="font-size:12px;color:rgba(255,255,255,.4)">{{ row.resolutionLabel }}</div>
-                            <sc-for list="{{ row.options }}" as="opt" hint-placeholder-count="2">
-                              <button onClick="{{ opt.onPick }}" style="{{ opt.style }}">{{ opt.label }}</button>
-                            </sc-for>
-                          </div>
-                        </div>
-                      </sc-for>
-                    </div>
-                    <div style="display:flex;gap:10px;margin-top:14px">
-                      <button onClick="{{ item.onAcceptAll }}" style="border:1px solid rgba(240,191,107,.45);background:rgba(240,191,107,.14);color:#f3cd86;font-family:inherit;font-size:14px;font-weight:600;padding:10px 20px;border-radius:999px;cursor:pointer" style-hover="background:rgba(240,191,107,.22)">{{ item.acceptLabel }}</button>
-                    </div>
-                  </div>
-                </div>
-              </sc-if>
+              <!-- GAP LIST / DECISION TABLE cards retired (#24): gaps and decision-
+                   table confirmations now use the conversational `clarification`
+                   surface (chips + composer) instead of bespoke cards. -->
 
               <!-- ACTION CONFIRMATION (isActionConfirm) — an outward-facing action the
                    chat proposed (send email, post, write). NOTHING has run: it is held
@@ -615,92 +588,8 @@
                 </div>
               </sc-if>
 
-              <!-- DECISION TABLE (decision_review) — P12 Increment E, §6.4.
-                   A TABLE, not prose. Collapsed to one sentence by default (§6.2.5:
-                   depth is opt-in), expanding to a grid whose cells are DROPDOWNS
-                   over the declared enum values. Those dropdowns are only possible
-                   because LLM_INPUT_NOT_ENUM forced the domain closed — the
-                   completeness proof is what makes the multiple-choice UI
-                   renderable, and the multiple-choice UI is what makes the proof
-                   affordable to the user. Same asset (§13). -->
-              <sc-if value="{{ item.isDecision }}" hint-placeholder-val="{{ false }}">
-                <div style="display:flex;gap:13px;align-items:flex-start;animation:msgIn .45s ease both">
-                  <div style="flex:none;width:32px;height:32px"></div>
-                  <div style="min-width:0;flex:1">
-                    <div style="font-size:15px;line-height:1.5;color:#fff;font-weight:500">{{ item.q }}</div>
-                    <div style="display:flex;flex-direction:column;gap:10px;margin-top:14px">
-                      <sc-for list="{{ item.tables }}" as="tbl" hint-placeholder-count="1">
-                        <div style="border:1px solid rgba(255,255,255,.09);border-radius:12px;padding:13px 15px;background:rgba(255,255,255,.02)">
-                          <div style="font-size:13.5px;line-height:1.5;color:rgba(255,255,255,.86);font-weight:500">{{ tbl.label }}</div>
-                          <div style="font-size:12.5px;line-height:1.5;color:rgba(255,255,255,.45);margin-top:3px">{{ tbl.summary }}</div>
-
-                          <!-- >4 inputs: the limit is COGNITIVE. A table nobody can
-                               hold in their head is one nobody reviews, and an
-                               unreviewed table is not auditable. -->
-                          <sc-if value="{{ tbl.decompose }}" hint-placeholder-val="{{ false }}">
-                            <div style="margin-top:9px;padding:9px 11px;border-radius:9px;border:1px solid rgba(240,191,107,.28);background:rgba(240,191,107,.06);font-size:12.5px;line-height:1.5;color:#e9c489">{{ tbl.decompose }}</div>
-                          </sc-if>
-
-                          <!-- One WRAPPING ROW PER RULE, not a fixed-column <table>.
-                               A table was the first attempt and it was unusable: the
-                               chat column is ~200px, so a 4-column grid overflowed to
-                               324px and every dropdown — including the `→ priority`
-                               column, the entire point — sat outside a scroll
-                               container the user has no reason to know is there. It
-                               rendered, and it could not be used. Rows that wrap stay
-                               readable at any width and still carry what §6.4 asks
-                               for: a cell per input, each a dropdown over the DECLARED
-                               values (a number gets a text box — its conditions are
-                               ranges, which no dropdown can enumerate). -->
-                          <sc-if value="{{ tbl.open }}" hint-placeholder-val="{{ false }}">
-                            <div style="display:flex;flex-direction:column;gap:7px;margin-top:12px">
-                              <sc-for list="{{ tbl.rows }}" as="row" hint-placeholder-count="3">
-                                <div style="display:flex;flex-wrap:wrap;align-items:center;gap:6px;padding:8px 10px;border-radius:9px;background:rgba(255,255,255,.03);border:1px solid rgba(255,255,255,.06)">
-                                  <span style="font-size:11px;color:rgba(255,255,255,.3);min-width:12px">{{ row.n }}</span>
-                                  <sc-for list="{{ row.cells }}" as="cell" hint-placeholder-count="2">
-                                    <span style="display:inline-flex;align-items:center;gap:5px">
-                                      <span style="font-size:11.5px;color:rgba(255,255,255,.42);font-family:ui-monospace,monospace">{{ cell.key }}</span>
-                                      <sc-if value="{{ cell.isSelect }}" hint-placeholder-val="{{ true }}">
-                                        <select onChange="{{ cell.onChange }}" value="{{ cell.value }}" style="background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.12);color:rgba(255,255,255,.85);font-family:inherit;font-size:12px;padding:3px 6px;border-radius:6px;cursor:pointer;max-width:100px">
-                                          <sc-for list="{{ cell.options }}" as="opt" hint-placeholder-count="3">
-                                            <option value="{{ opt.value }}" selected="{{ opt.selected }}">{{ opt.label }}</option>
-                                          </sc-for>
-                                        </select>
-                                      </sc-if>
-                                      <sc-if value="{{ cell.isText }}" hint-placeholder-val="{{ false }}">
-                                        <input value="{{ cell.value }}" onInput="{{ cell.onChange }}" placeholder="-" style="width:88px;background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.12);color:rgba(255,255,255,.85);font-family:ui-monospace,monospace;font-size:12px;padding:3px 6px;border-radius:6px" />
-                                      </sc-if>
-                                    </span>
-                                  </sc-for>
-                                  <span style="display:inline-flex;align-items:center;gap:5px">
-                                    <span style="font-size:12px;color:#e9c489">→</span>
-                                    <span style="font-size:11.5px;color:rgba(255,255,255,.42);font-family:ui-monospace,monospace">{{ tbl.outputKey }}</span>
-                                    <select onChange="{{ row.onThen }}" value="{{ row.then }}" style="background:rgba(240,191,107,.08);border:1px solid rgba(240,191,107,.3);color:#f3cd86;font-family:inherit;font-size:12px;padding:3px 6px;border-radius:6px;cursor:pointer">
-                                      <sc-for list="{{ row.thenOptions }}" as="topt" hint-placeholder-count="3">
-                                        <option value="{{ topt.value }}" selected="{{ topt.selected }}">{{ topt.label }}</option>
-                                      </sc-for>
-                                    </select>
-                                  </span>
-                                </div>
-                              </sc-for>
-                              <div style="display:flex;flex-wrap:wrap;gap:8px;margin-top:6px;align-items:center">
-                                <div style="font-size:12px;color:rgba(255,255,255,.4)">When more than one rule fits:</div>
-                                <sc-for list="{{ tbl.policies }}" as="pol" hint-placeholder-count="3">
-                                  <button onClick="{{ pol.onPick }}" style="{{ pol.style }}">{{ pol.label }}</button>
-                                </sc-for>
-                              </div>
-                            </div>
-                          </sc-if>
-                        </div>
-                      </sc-for>
-                    </div>
-                    <div style="display:flex;gap:10px;margin-top:14px">
-                      <button onClick="{{ item.onAccept }}" style="border:1px solid rgba(240,191,107,.45);background:rgba(240,191,107,.14);color:#f3cd86;font-family:inherit;font-size:14px;font-weight:600;padding:10px 20px;border-radius:999px;cursor:pointer" style-hover="background:rgba(240,191,107,.22)">{{ item.acceptLabel }}</button>
-                      <button onClick="{{ item.onToggle }}" style="border:1px solid rgba(255,255,255,.14);background:transparent;color:rgba(255,255,255,.6);font-family:inherit;font-size:14px;padding:10px 20px;border-radius:999px;cursor:pointer" style-hover="border-color:rgba(255,255,255,.3)">{{ item.reviewLabel }}</button>
-                    </div>
-                  </div>
-                </div>
-              </sc-if>
+              <!-- decision_review card retired (#24): decision-table confirmation now
+                   uses the conversational clarification surface. -->
 
               <!-- SIGNAL LINE (legacy per-node drip) — RETIRED as the primary surface
                    (converger v2 rearch, increment 4): the initial build no longer drips
@@ -863,12 +752,22 @@
                         <div style="font-size:12.5px;line-height:1.55;color:rgba(255,255,255,.35);margin-top:6px">While Atlas builds, its thinking shows up here — the why behind every step. Watchable, ignorable.</div>
                       </div>
                     </sc-if>
-                    <sc-if value="{{ rsn.streaming }}" hint-placeholder-val="{{ false }}">
+                    <sc-if value="{{ rsn.transcript }}" hint-placeholder-val="{{ false }}">
                       <div>
-                        <div style="display:flex;align-items:center;gap:8px;margin-bottom:11px">
-                          <span style="flex:none;width:7px;height:7px;border-radius:50%;background:#e7b25e;box-shadow:0 0 8px rgba(231,178,94,.55);animation:flowPulse 2.4s ease-in-out infinite"></span>
-                          <span style="font-size:11px;font-weight:600;letter-spacing:.18em;text-transform:uppercase;color:rgba(231,178,94,.75);animation:flowPulse 2.4s ease-in-out infinite">Thinking through your build</span>
-                        </div>
+                        <!-- Live pulse while actively building… -->
+                        <sc-if value="{{ rsn.streaming }}" hint-placeholder-val="{{ true }}">
+                          <div style="display:flex;align-items:center;gap:8px;margin-bottom:11px">
+                            <span style="flex:none;width:7px;height:7px;border-radius:50%;background:#e7b25e;box-shadow:0 0 8px rgba(231,178,94,.55);animation:flowPulse 2.4s ease-in-out infinite"></span>
+                            <span style="font-size:11px;font-weight:600;letter-spacing:.18em;text-transform:uppercase;color:rgba(231,178,94,.75);animation:flowPulse 2.4s ease-in-out infinite">Thinking through your build</span>
+                          </div>
+                        </sc-if>
+                        <!-- …a static header once proposed, so the transcript stays VISIBLE through the review (#24). -->
+                        <sc-if value="{{ rsn.reviewing }}" hint-placeholder-val="{{ false }}">
+                          <div style="display:flex;align-items:center;gap:8px;margin-bottom:11px">
+                            <span style="flex:none;width:6px;height:6px;border-radius:50%;background:rgba(255,255,255,.3)"></span>
+                            <span style="font-size:11px;font-weight:600;letter-spacing:.18em;text-transform:uppercase;color:rgba(255,255,255,.42)">How Atlas thought through this build</span>
+                          </div>
+                        </sc-if>
                         <div ref="{{ rsn.bodyRef }}" style="padding:2px 0 2px 13px;border-left:2px solid rgba(231,178,94,.22)">
                           <sc-for list="{{ rsn.segs }}" as="g" hint-placeholder-count="2">
                             <div>
@@ -4935,13 +4834,16 @@ class Component extends DCLogic {
       const notice = iv.notice ? [{ isAtlas: true, text: iv.notice, hasReason: false }] : [];
       const mkCard = (c, i) => ({
         statement: c.statement,
-        // Plain-language promise, not the schema shape.
+        // Plain-language restatement of what they want, not the schema shape.
         deliversText: this._deliversText(c.assertions),
-        tag: i === 0 ? "What I'll build" : "Or did you mean",
-        tagColor: i === 0 ? "rgba(240,191,107,.9)" : "rgba(255,255,255,.4)",
+        // DE-CEREMONIED (#24): the outcome is just the inferred rewrite of the
+        // user's ask, not a formal contract to sign. The primary reading carries
+        // no uppercase banner and a plain border; only the alternatives are tagged.
+        tag: i === 0 ? "" : "Or did you mean",
+        tagColor: "rgba(255,255,255,.4)",
         style: "text-align:left;width:100%;font-family:inherit;cursor:pointer;padding:14px 16px;border-radius:12px;"
              + (i === 0
-                ? "border:1px solid rgba(240,191,107,.5);background:rgba(240,191,107,.09)"
+                ? "border:1px solid rgba(255,255,255,.14);background:rgba(255,255,255,.035)"
                 : "border:1px solid rgba(255,255,255,.08);background:rgba(255,255,255,.015)"),
         onPick: () => pick(c),
       });
@@ -4955,8 +4857,8 @@ class Component extends DCLogic {
       this.setState({
         msgs: [...this.state.msgs, ...lead, ...notice,
                { isOutcome: true, _id: oid,
-                 q: "Here's what I'll build — does this capture it?",
-                 sub: "This is the promise your workflow has to keep — I'll test the finished build against it before it can go live.",
+                 q: "Here's what I understood you want — look right?",
+                 sub: "Confirm this, or see another way I could read it.",
                  primaryCard, altCards, altsOpen: false, hasAlts: nAlt > 0,
                  altCount: nAlt + " other reading" + (nAlt === 1 ? "" : "s"),
                  onToggleAlts: () => self.setState({ msgs: self.state.msgs.map(m => (m._id === oid ? { ...m, altsOpen: !m.altsOpen } : m)) }) }],
@@ -4965,262 +4867,14 @@ class Component extends DCLogic {
       return;
     }
 
-    // ── example_request — THE PICKER (P12 Increment F, §6.4) ──────────────
-    // The cases that become the workflow's acceptance suite. When the trigger is
-    // email and Gmail is connected, `iv.source === 'gmail'` and these are the
-    // user's OWN three messages, fetched with the trigger's own filter — so they
-    // are drawn from exactly the population the workflow will run on.
-    //
-    // Each item is INDIVIDUALLY selectable, because the useful click is the one
-    // that DESELECTS: "that third one isn't really a lead". A negative example is
-    // the one that finds the bug, and it can only be given if the rows can be
-    // turned off one at a time.
-    //
-    // Provenance is stated out loud. A modelled example presented as if it came
-    // from the user's inbox would be a lie the user has no way to detect — so a
-    // real one says so, and a proposed one says that instead.
-    if (iv.type === "example_request") {
-      const self = this;
-      const items = iv.items || [];
-      const eid = "ex" + (this._pc = (this._pc || 0) + 1);
-      const isReal = iv.source === "gmail";
-
-      // Everything starts selected: the default is a real answer, and a user who
-      // does not care should still end up with a test suite.
-      const picked = {};
-      items.forEach(it => { picked[it.id] = true; });
-
-      const send = (type) => {
-        const ids = items.map(it => it.id).filter(id => picked[id]);
-        self.setState({
-          msgs: self.state.msgs.map(m => (m._id === eid ? { ...m, rows: [], options: [] } : m)),
-          thinking: true, inputMode: "locked",
-        });
-        self._send(type === "skip" ? { type: "skip" } : { type: "accept", ids });
-      };
-
-      const buildRows = () => items.map(it => ({
-        message: it.preview,
-        resolutionLabel: picked[it.id] ? "✓ using this one" : "not using this one",
-        options: [{
-          label: picked[it.id] ? "Don't use" : "Use",
-          style: "border:1px solid rgba(255,255,255,.14);background:transparent;color:rgba(255,255,255,.6);font-family:inherit;font-size:12px;padding:5px 12px;border-radius:999px;cursor:pointer",
-          onPick: () => {
-            picked[it.id] = !picked[it.id];
-            self.setState({ msgs: self.state.msgs.map(m => (m._id === eid ? { ...m, rows: buildRows() } : m)) });
-          },
-        }],
-      }));
-
-      this.setState({
-        msgs: [...this.state.msgs, {
-          // Reuses the gap-list row renderer (isGaps): one row per item, a label and
-          // a toggle. The shape is identical, so it needs no new template.
-          isGaps: true, _id: eid,
-          q: isReal
-            ? (items.length === 1
-                ? "I pulled a real email from your inbox to test this workflow on. Keep it as a test case?"
-                : "I pulled " + items.length + " real emails from your inbox to test this workflow on. Deselect any that shouldn't be a test case.")
-            : "I'll use these as test cases to check the workflow before it goes live — tell me if any looks wrong.",
-          sub: "For testing only — these run in the test panel so you can see the workflow work before publishing. They're never part of the published workflow, and it never touches these emails once it's live.",
-          rows: buildRows(),
-          acceptLabel: "Use as test cases",
-          onAcceptAll: () => send("accept"),
-        },
-        { isClarify: true, q: "", chips: [
-          { label: "Skip examples", onPick: () => {
-            self.setState({ msgs: [...self.state.msgs, { isOperator: true, text: "Skip" }] });
-            send("skip");
-          } },
-        ] }],
-        thinking: false, inputMode: "clarify", phase: "building",
-      });
-      return;
-    }
-
-    // ── decision_review — the table, not prose (P12 Increment E, §6.4) ────
-    // COLLAPSED BY DEFAULT: one sentence, with "Review the table" next to it.
-    // Depth is opt-in (§6.2.5) — a user who trusts the induced table clicks
-    // "Looks right" and never sees a grid; a user who does not can open it and
-    // fix a cell. Cells are DROPDOWNS because the enum values are known, and the
-    // enum values are known because LLM_INPUT_NOT_ENUM forced them to be. The
-    // moat is what makes this screen renderable at all.
-    if (iv.type === "decision_review") {
-      const self = this;
-      const tables = iv.decisions || [];
-      const did = "dec" + (this._pc = (this._pc || 0) + 1);
-
-      // The edit buffer: decisionId -> { rules, hitPolicy }. Starts as the induced
-      // table, unmodified — which is also what gets sent if the user just hits
-      // "Looks right". The default is a real answer, not an empty one.
-      const buf = {};
-      tables.forEach(t => { buf[t.decisionId] = { rules: JSON.parse(JSON.stringify(t.rules || [])), hitPolicy: t.hitPolicy }; });
-
-      const send = () => {
-        self.setState({
-          msgs: self.state.msgs.map(m => (m._id === did ? { ...m, tables: [], open: false } : m)),
-          thinking: true, inputMode: "locked",
-        });
-        self._send({ type: "accept", tables: buf });
-      };
-
-      // The condition a cell shows. Enum/boolean inputs get a <select> over the
-      // declared values plus "any" ("-"); a number gets a text box, because its
-      // conditions are ranges (">50000", "[10..50]") and no dropdown can enumerate
-      // those.
-      const redraw = (open) => self.setState({
-        msgs: self.state.msgs.map(m => (m._id === did
-          ? { ...m, open, tables: buildTables(open), reviewLabel: open ? "Hide the table" : "Review the table" }
-          : m)),
-      });
-
-      const cellsFor = (t, rule, ri, open) => (t.inputs || []).map(inp => {
-        const cur = rule.when && rule.when[inp.key] != null ? String(rule.when[inp.key]) : "-";
-        const vals = Array.isArray(inp.values) ? inp.values.map(String)
-                   : (String(inp.type).toLowerCase() === "boolean" ? ["true", "false"] : null);
-        const set = (v) => {
-          buf[t.decisionId].rules[ri].when = { ...(buf[t.decisionId].rules[ri].when || {}), [inp.key]: v };
-          redraw(open);
-        };
-        return {
-          key: inp.key,
-          // A number's conditions are RANGES (">50000", "[10..50]"). No dropdown
-          // can enumerate those, so it gets a text box — and only an enum or a
-          // boolean, whose values are declared, gets the select.
-          isSelect: !!vals,
-          isText: !vals,
-          value: cur,
-          options: vals ? ["-"].concat(vals).map(v => ({ value: v, label: v === "-" ? "any" : v, selected: v === cur })) : [],
-          onChange: (e) => set(e.target.value),
-        };
-      });
-
-      const buildTables = (open) => tables.map(t => {
-        const b = buf[t.decisionId];
-        return {
-          decisionId: t.decisionId,
-          label: t.label,
-          open: !!open,
-          summary: "Decides " + (t.output && t.output.key ? t.output.key : "a value")
-                 + " from " + (t.inputs || []).map(i => i.key).join(" and ")
-                 + " — " + (b.rules || []).length + " rule" + ((b.rules || []).length === 1 ? "" : "s")
-                 + (t.uncovered ? " · " + t.uncovered + " case" + (t.uncovered === 1 ? "" : "s") + " not covered yet" : ""),
-          decompose: t.decompose || "",
-          outputKey: (t.output && t.output.key) || "result",
-          rows: (b.rules || []).map((rule, ri) => ({
-            n: ri + 1,
-            cells: cellsFor(t, rule, ri, open),
-            then: String(rule.then == null ? "" : rule.then),
-            thenOptions: ((t.output && t.output.values) || []).map(v => ({
-              value: v, label: v, selected: String(rule.then) === String(v),
-            })),
-            onThen: (e) => {
-              buf[t.decisionId].rules[ri].then = e.target.value;
-              redraw(open);
-            },
-          })),
-          // The hit policy in PLAIN LANGUAGE — never the DMN letter. "U" means
-          // nothing to the person whose process this is.
-          policies: (t.hitPolicyOptions || []).map(p => ({
-            id: p.id, label: p.label,
-            style: "border:1px solid " + (p.id === b.hitPolicy ? "rgba(240,191,107,.5)" : "rgba(255,255,255,.14)")
-                 + ";background:" + (p.id === b.hitPolicy ? "rgba(240,191,107,.12)" : "transparent")
-                 + ";color:" + (p.id === b.hitPolicy ? "#f3cd86" : "rgba(255,255,255,.6)")
-                 + ";font-family:inherit;font-size:12px;padding:5px 12px;border-radius:999px;cursor:pointer",
-            onPick: () => {
-              buf[t.decisionId].hitPolicy = p.id;
-              redraw(open);
-            },
-          })),
-        };
-      });
-
-      this.setState({
-        msgs: [...this.state.msgs, {
-          isDecision: true, _id: did, open: false,
-          q: tables.length === 1
-            ? "Here's the rule I'd use. Does it match how you actually decide?"
-            : "Here are the " + tables.length + " rules I'd use. Do they match how you actually decide?",
-          tables: buildTables(false),
-          reviewLabel: "Review the table",
-          acceptLabel: "Looks right",
-          onToggle: () => {
-            const m = self.state.msgs.find(x => x._id === did);
-            redraw(!(m && m.open));
-          },
-          onAccept: send,
-        }],
-        thinking: false, inputMode: "clarify", phase: "building",
-      });
-      return;
-    }
-
-    // ── gap_review — "the cases you haven't told me about" ────────────────
-    // THE surface (converger-v2 §6.4). Every row arrives pre-resolved, and
-    // "Accept all defaults" is one click: a user can publish a provably-complete
-    // workflow having answered NOTHING, because the default for every unknown is
-    // "a person deals with it" — which is safe, correct, and honest.
-    if (iv.type === "gap_review") {
-      const self = this;
-      const gaps = iv.gaps || [];
-      const gid = "gaps" + (this._pc = (this._pc || 0) + 1);
-
-      const defaults = {};
-      gaps.forEach(g => { defaults[g.id] = g.defaultResolution || (g.blocking ? "answer" : "escalate"); });
-
-      const send = (resolutions) => {
-        const answers = {};
-        gaps.forEach(g => {
-          if (resolutions[g.id] === "answer" && g.suggestedAnswer) answers[g.id] = g.suggestedAnswer;
-        });
-        self.setState({
-          msgs: self.state.msgs.map(m => (m._id === gid ? { ...m, rows: (m.rows || []).map(r => ({ ...r, options: [] })) } : m)),
-          thinking: true, inputMode: "locked",
-        });
-        self._send({ type: "accept_defaults", resolutions, answers });
-      };
-
-      const buildRows = (resolutions) => gaps.map(g => {
-        const cur = resolutions[g.id];
-        const label = cur === "escalate" ? "→ a person decides"
-                    : cur === "ignore"   ? "→ ignored"
-                    : ("→ " + (g.suggestedAnswer || "answer it"));
-        // A BLOCKING gap gets no "escalate" button, because escalating it would be
-        // a lie: escalation promises a person handles it AT RUN TIME, and a spec
-        // that cannot publish never has a run time.
-        const choices = g.blocking ? [] : ["escalate", "answer", "ignore"];
-        return {
-          message: this._deJargon(g.message),
-          resolutionLabel: label,
-          options: choices.filter(c => c !== cur).map(c => ({
-            label: c === "escalate" ? "Send to a person" : c === "answer" ? "Use the suggestion" : "Ignore",
-            style: "border:1px solid rgba(255,255,255,.14);background:transparent;color:rgba(255,255,255,.6);font-family:inherit;font-size:12px;padding:5px 12px;border-radius:999px;cursor:pointer",
-            onPick: () => {
-              const next = { ...resolutions, [g.id]: c };
-              self.setState({ msgs: self.state.msgs.map(m => (m._id === gid ? { ...m, rows: buildRows(next), _res: next } : m)) });
-            },
-          })),
-        };
-      });
-
-      this.setState({
-        msgs: [...this.state.msgs, {
-          isGaps: true, _id: gid, _res: defaults,
-          q: gaps.length === 1
-            ? "Your workflow's ready. One optional edge case you can weigh in on:"
-            : "Your workflow's ready. " + gaps.length + " optional edge cases you can weigh in on:",
-          sub: "These aren't blocking anything — I've already picked a safe default for each (a person gets notified). Leave them as-is, or change any you have an opinion on.",
-          rows: buildRows(defaults),
-          acceptLabel: "Keep the safe defaults",
-          onAcceptAll: () => {
-            const m = self.state.msgs.find(x => x._id === gid);
-            send((m && m._res) || defaults);
-          },
-        }],
-        thinking: false, inputMode: "clarify", phase: "building",
-      });
-      return;
-    }
+    // examples, gaps and decisions now flow through the ordinary clarification
+    // surface (#24). example_request was retired (examples are gathered SILENTLY
+    // server-side — build-quality, not the user's decision — so there is no
+    // interrupt to render). gap_review and decision_review cards were retired too:
+    // gaps and decision-table confirmations arrive as clarification interrupts
+    // (handled above), which always show a composer, so an empty or awkward payload
+    // can no longer freeze the walkthrough on a card with nothing to click. The
+    // REASONING (scoreGap / analyzeTable) is unchanged server-side.
 
     if (iv.type === "proposal") {
       const p = iv.proposal || {};
@@ -6878,6 +6532,12 @@ class Component extends DCLogic {
     // in plain English for the pinned "what this must deliver" card).
     const deal = (S.outcome && S.outcome.statement) || (S.spec && S.spec.outcome && S.spec.outcome.statement) || "";
 
+    // TWO-MODE PANEL (#24): reasoning owns the right panel until a test run STARTS.
+    // At "idle" — including the whole `proposed` review — the CoT transcript shows
+    // and the testing UI stays hidden; it appears only once the user clicks Run
+    // test (running / passed / failed). The Run-test CTA then comes from the plain
+    // `footRunTest` button (gated on `!contract.show`), not the contract footer.
+    if (TS === "idle") return { show: false, building: false };
     // Not yet proposed (still building in chat / incomplete) — no contract to show.
     if (!testUnlocked && TS !== "passed" && TS !== "failed") return { show: false, building: TS === "running" };
 
@@ -6981,20 +6641,33 @@ class Component extends DCLogic {
     // proposed). Two feeds: a DEMO mock (window.__ATLAS_DEMO__), and — for a real
     // build — the LIVE converger reasoning streamed over SSE into S.reasoningSegs
     // (Increment #22). A real build with no beats yet shows the RESTING placeholder
-    // (never fabricated narration next to a different build); once beats arrive it
-    // streams, and after the draft is proposed/published it collapses to "Show reasoning".
+    // (never fabricated narration next to a different build).
+    //
+    // TWO-MODE RIGHT PANEL (#24). Reasoning OWNS the panel through building AND the
+    // proposed review — the transcript stays VISIBLE, it no longer collapses at
+    // `proposed`. It is replaced by the testing UI only once a test run STARTS
+    // (testState leaves "idle"). So: `streaming` (live pulse) while actively
+    // building; `reviewing` (static header, persistent transcript) once proposed
+    // but before any run; and the whole CoT is HIDDEN once testing owns the panel.
     const rsnDemo = !!(typeof window !== "undefined" && window.__ATLAS_DEMO__);
     const liveSegs = Array.isArray(S.reasoningSegs) ? S.reasoningSegs : [];
     const hasLive = !rsnDemo && liveSegs.length > 0;
     const segs = rsnDemo ? this._rsnSegs() : liveSegs;
-    const rsnStreaming = rsnDemo ? (S.phase === "building") : (hasLive && S.phase === "building");
-    const rsnCollapsed = (rsnDemo || hasLive) && (S.phase === "proposed" || S.phase === "published");
+    const rsnActive = rsnDemo || hasLive;
+    const testStarted = TS === "running" || TS === "passed" || TS === "failed";
+    const rsnStreaming = rsnActive && !testStarted && S.phase === "building";
+    const rsnReviewing = rsnActive && !testStarted && S.phase !== "building";
     const rsnOpen = !!S.rsnOpen;
     const rsn = {
-      show: true,
+      // Hidden entirely once a test run starts — the testing UI takes the panel.
+      show: !testStarted,
       streaming: rsnStreaming,
-      collapsed: rsnCollapsed,
-      resting: !rsnStreaming && !rsnCollapsed,
+      reviewing: rsnReviewing,
+      // The transcript renders in BOTH building (streaming) and proposed (reviewing).
+      transcript: rsnStreaming || rsnReviewing,
+      // Retired: the CoT no longer collapses behind a toggle at proposed (#24).
+      collapsed: false,
+      resting: !rsnActive && !testStarted,
       segs: segs,
       bodyRef: (el) => { if (el) el.scrollTop = el.scrollHeight; },
       onToggle: () => this.setState({ rsnOpen: !this.state.rsnOpen }),

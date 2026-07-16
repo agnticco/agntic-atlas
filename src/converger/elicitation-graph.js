@@ -539,6 +539,9 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
       // re-asking someone to review a table they just reviewed is how a review
       // becomes a thing people click past.
       decisionsReviewed: false,
+      // Whole-spec regenerations driven by a described decision-table correction
+      // (#24). A LOOP BOUND, capped at one: after it, the induced table stands.
+      decisionRounds:    0,
       // Gaps the user (or the default) sent to a human rather than answering.
       // Kept in STATE and persisted to the interaction store — never in the spec.
       // It is provenance, and it feeds the SOP: "these cases were not decided;
@@ -727,27 +730,20 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
     }
     if (!proposed.length) return { phase: 'process' };
 
-    const confirmation = await interrupt({
-      type:        'example_request',
-      source,                          // 'gmail' when these are the user's OWN emails
-      query,                           // …and the search that found them, so it is auditable
-      items:       proposed.map((e, i) => ({ id: e.id ?? `e${i + 1}`, preview: e.label ?? JSON.stringify(e.given), raw: e })),
-      allowManual: true,
-      allowSkip:   true,
-      choices:     proposed.map((e, i) => ({ id: e.id ?? `e${i + 1}`, label: e.label ?? JSON.stringify(e.given), selected: true })),
-      step:        state.step,
-    });
-
-    // Default (skip, or Enter) keeps every proposed example: they cost nothing,
-    // they are the test suite, and a user who does not care should still get one.
-    const keepIds = Array.isArray(confirmation?.ids) ? new Set(confirmation.ids) : null;
-    const kept = confirmation?.type === 'skip' ? []
-               : keepIds ? proposed.filter((e, i) => keepIds.has(e.id ?? `e${i + 1}`))
-               : proposed;
+    // ── GATHERED SILENTLY (#24) ──────────────────────────────────────────────
+    // Examples matter for build QUALITY — they are the acceptance suite the test
+    // panel and the runtime oracle run the finished workflow against — but which
+    // rows become test cases is not the USER's decision to make, and the old
+    // "Use as test cases / Skip examples" interrupt spent a whole turn on it. The
+    // node now fetches them and proceeds: every proposed example is kept, and the
+    // user simply never sees the step. No interrupt means the client has nothing
+    // to answer, so the graph can never strand here waiting on a card it no longer
+    // renders — the fetched rows ride along in state to the oracle downstream.
+    const kept = proposed;
 
     return {
       draft: { ...state.draft, outcome: { ...(state.draft?.outcome ?? {}), examples: kept } },
-      confirmationLog: [{ step: state.step, type: 'example_request', examples: kept, confirmation }],
+      confirmationLog: [{ step: state.step, type: 'examples_gathered', examples: kept, source, query }],
       step:  state.step + 1,
       phase: 'process',
     };
@@ -1433,39 +1429,66 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
       };
     });
 
-    const confirmation = await interrupt({
-      type: 'decision_review',
-      decisions: payload,
-      // §6.2.2 — every interrupt ships with a pre-selected default, so Enter is
-      // always a valid answer. The default is the induced table, unmodified.
-      defaultAction: 'accept',
-      step: state.step,
-    });
+    // ── CONFIRM CONVERSATIONALLY, NOT ON A GRID CARD (#24) ──────────────────
+    // The decision review was a bespoke dropdown grid; it now confirms each
+    // induced table through the ordinary `clarification` surface, one table at a
+    // time. Recognition still beats recall — the plain-English rule is stated and
+    // the default ("looks right" / Enter / the zero-typing autoRespond) keeps it
+    // verbatim, so a user who trusts it answers nothing. A user who does not
+    // describes the change, and the whole spec regenerates with it as guidance
+    // (bounded to one round; after that the induced table stands and any residual
+    // hole surfaces as a gap). No LLM call here — the node re-runs cleanly on each
+    // per-table resume because the analysis is arithmetic.
+    const corrections = [];
+    for (const p of payload) {
+      const ruleText = (p.rules ?? []).map((r, i) => {
+        const when = r?.when && Object.keys(r.when).length
+          ? Object.entries(r.when).map(([k, v]) => `${k} ${v}`).join(', ')
+          : 'otherwise';
+        return `  ${i + 1}. when ${when} → ${p.output.key} = ${r?.then ?? '?'}`;
+      }).join('\n');
+      const reply = await interrupt({
+        type: 'clarification',
+        kind: 'decision_review',            // inert to client/replier; identifies the surface
+        decisionId: p.decisionId,
+        question:
+          `Here's how I'd decide ${p.output.key} for "${p.label}":\n${ruleText || '  (no rules yet)'}\n\n`
+          + `Does that match how you actually decide? Say "looks right" to keep it, or tell me what's different.`,
+        choices: [{ label: 'Looks right' }],
+        step: state.step,
+      });
+      const raw = String(reply?.answer ?? (typeof reply === 'string' ? reply : '')).trim();
+      const isDefault = !raw
+        || /^(looks right|correct|yes|yep|keep it|that's right|thats right)$/i.test(raw)
+        || /please proceed with your best inference/i.test(raw);
+      if (!isDefault) corrections.push({ decisionId: p.decisionId, label: p.label, note: raw });
+    }
 
-    // The user's edits, keyed by decision id: { rules?, hitPolicy? }. Absent (or
-    // "looks right", or Enter) ⇒ the table stands exactly as it was induced.
-    const edits = confirmation?.tables ?? {};
-    const nodes = (state.draft?.nodes ?? []).map((n) => {
-      const e = edits[n.id];
-      if (n?.type !== 'decision' || !e) return n;
+    const logEntry = {
+      step: state.step, type: 'decision_review',
+      decisions: payload.map(p => ({ decisionId: p.decisionId, rules: p.rules, hitPolicy: p.hitPolicy })),
+      corrections,
+    };
+
+    // A described correction cannot be a structured cell-edit over a chat surface,
+    // so it regenerates the whole spec with the note as guidance. Bounded: after
+    // one round the induced table stands (decisionRounds), and `decisionsReviewed`
+    // latches so the rebuilt table is not re-interrogated. No correction ⇒ straight
+    // on to `gaps` with the table exactly as induced.
+    if (corrections.length && (state.decisionRounds ?? 0) < 1) {
       return {
-        ...n,
-        config: {
-          ...(n.config ?? {}),
-          ...(Array.isArray(e.rules)  ? { rules: e.rules }          : {}),
-          ...(e.hitPolicy             ? { hitPolicy: e.hitPolicy }  : {}),
-        },
+        confirmationLog: [logEntry],
+        clarifications:  corrections.map(c => ({ q: `How to decide "${c.label}"`, a: c.note })),
+        decisionsReviewed: true,
+        decisionRounds:  (state.decisionRounds ?? 0) + 1,
+        proposeRounds:   0,
+        step:  state.step + 1,
+        phase: 'proposing',
       };
-    });
+    }
 
     return {
-      draft: { ...state.draft, nodes },
-      confirmationLog: [{
-        step: state.step, type: 'decision_review',
-        decisions: payload.map(p => ({ decisionId: p.decisionId, rules: p.rules, hitPolicy: p.hitPolicy })),
-        edited: Object.keys(edits),
-        confirmation,
-      }],
+      confirmationLog: [logEntry],
       decisionsReviewed: true,
       step:  state.step + 1,
       phase: 'gapping',
@@ -1522,7 +1545,7 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
         phase: 'ratifying' };
     }
 
-    // One cheap call so every row arrives with an answer already in it. A gap
+    // One cheap call so every gap arrives with an answer already in it. A gap
     // list with empty boxes is an interrogation; a gap list with defaults is a
     // review. The difference is the whole product.
     const suggested = await llmJson(llm, [
@@ -1532,47 +1555,80 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
     const suggestionFor = (id) =>
       (suggested?.suggestions ?? []).find(s => s.gapId === id)?.answer ?? null;
 
-    const confirmation = await interrupt({
-      type: 'gap_review',
-      gaps: [...blocking, ...soft].map(g => ({
-        id: g.id, class: g.class, message: g.message, hint: g.hint,
-        blocking: g.blocking, decidable: g.decidable,
-        suggestedAnswer: suggestionFor(g.id),
-        // A blocking gap CANNOT be escalated: escalation promises a person will
-        // handle it at run time, and a spec that cannot publish has no run time.
-        // Offering "escalate" there would be a lie told in the language of safety.
-        defaultResolution: g.blocking ? 'answer' : 'escalate',
-        resolutions: g.blocking ? ['answer'] : ['answer', 'escalate', 'ignore'],
-      })),
-      acceptAllDefaults: true,
+    // ── ASK CONVERSATIONALLY, NOT ON A CARD (#24) ───────────────────────────
+    // The gap review used to be a bespoke `gap_review` card the client rendered;
+    // an empty or awkward payload froze the walkthrough→gaps transition with
+    // nothing to click. It is now the ordinary `clarification` surface — which
+    // always shows a composer, so the build can never strand here. The REASONING
+    // is unchanged (scoreGap + auto-repair + the suggestions above); only the
+    // presentation moved.
+    //
+    // The default is still "keep the safe defaults": every blocking gap takes the
+    // model's suggested answer (fed back through regenerate), every soft gap
+    // escalates to a person. ANY unrecognised answer — an empty reply, the chip,
+    // or the zero-typing autoRespond string — resolves to those defaults, so a
+    // provably-complete workflow still publishes having answered NOTHING (§11.9).
+    const lines = [];
+    for (const g of blocking) {
+      const s = suggestionFor(g.id);
+      lines.push(`• ${g.message}${s ? ` — I'd go with: ${s}` : ''}`);
+    }
+    for (const g of soft) lines.push(`• ${g.message} — otherwise a person handles it`);
+
+    const acceptLabel = blocking.length ? 'Use your suggestions' : 'Keep the safe defaults';
+    const question =
+      (blocking.length
+        ? `Before I finalize, ${blocking.length === 1 ? 'one thing I want' : 'a few things I want'} to lock down:`
+        : `Your workflow's ready. ${soft.length === 1 ? 'One optional edge case' : `${soft.length} optional edge cases`} you can weigh in on:`)
+      + `\n${lines.join('\n')}\n\n`
+      + `${acceptLabel}, or tell me how you'd rather handle any of these.`;
+
+    const reply = await interrupt({
+      type: 'clarification',
+      // `kind` is inert to the client and the headless replier (both key on `type`)
+      // but lets provenance and tests tell a gap clarification from an ordinary one.
+      kind: 'gap_review',
+      question,
+      choices: [{ label: acceptLabel }],
       step: state.step,
     });
 
-    const answers     = confirmation?.answers ?? {};
-    const resolutions = confirmation?.resolutions ?? {};
+    const raw = String(reply?.answer ?? (typeof reply === 'string' ? reply : '')).trim();
+    const isDefault = !raw
+      || raw.toLowerCase() === acceptLabel.toLowerCase()
+      || /please proceed with your best inference/i.test(raw);
 
-    // Accept-all-defaults (or Enter) takes the model's suggestion for anything
-    // blocking, and escalates everything else.
+    // Blocking gaps always resolve — to the suggestion by default — so the spec
+    // can regenerate and clear them. Only a BLOCKING gap regenerates the spec (as
+    // before): a soft-only review escalates and proceeds, never triggering a
+    // rebuild, so a resolved destination cannot be clobbered by a spurious pass.
+    const answers = {};
     const clarifications = [];
     for (const g of blocking) {
-      const a = answers[g.id] ?? suggestionFor(g.id);
-      if (a) clarifications.push({ q: g.message, a: String(a) });
+      const s = suggestionFor(g.id);
+      if (s) { answers[g.id] = String(s); clarifications.push({ q: g.message, a: String(s) }); }
+    }
+    // Free-text guidance rides along on the regenerate ONLY when there is a
+    // blocking gap to regenerate for — matching the old card, where a soft-gap
+    // answer changed nothing (soft gaps escalate; they do not rebuild the spec).
+    if (!isDefault && clarifications.length) {
+      clarifications.push({ q: 'How I should handle the remaining questions', a: raw });
     }
 
-    const escalated = soft
-      .filter(g => (resolutions[g.id] ?? 'escalate') === 'escalate')
-      // `nodeId` is load-bearing, not decoration: materialiseEscalations() has to
-      // find the step the gap is ABOUT in order to put a real escalation path on
-      // it (P12 Increment E — a DECISION_TABLE_GAP escalates by routing the
-      // uncovered case to a person). Dropped here, the gap arrives at the
-      // materialiser as an anonymous sentence and can only be reported
-      // unmaterialised — "escalated" would go back to meaning nothing.
-      .map(g => ({ id: g.id, class: g.class, code: g.code, message: g.message, nodeId: g.nodeId ?? null, resolution: 'escalated' }));
+    // Soft gaps escalate — a person handles the case at run time. `nodeId` is
+    // load-bearing, not decoration: materialiseEscalations() has to find the step
+    // the gap is ABOUT to put a real escalation path on it (P12 Increment E — a
+    // DECISION_TABLE_GAP escalates by routing the uncovered case to a person).
+    // Dropped here, the gap arrives at the materialiser as an anonymous sentence
+    // and can only be reported unmaterialised — "escalated" would mean nothing.
+    const escalated = soft.map(g => ({
+      id: g.id, class: g.class, code: g.code, message: g.message, nodeId: g.nodeId ?? null, resolution: 'escalated',
+    }));
 
     const logEntry = {
       step: state.step, type: 'gap_review',
       gaps: [...blocking, ...soft].map(g => ({ id: g.id, code: g.code, class: g.class, blocking: g.blocking })),
-      escalated, answers, confirmation,
+      escalated, answers, confirmation: reply,
     };
 
     // Answers to BLOCKING gaps go back through the propose loop, which is the
@@ -1759,7 +1815,13 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
   // the table under review must be the one whose columns were just resolved, and
   // the gap list must be about the draft AS CORRECTED by both.
   graph.addEdge('destinations', 'decisions');
-  graph.addEdge('decisions', 'gaps');
+  // decisions → gaps, UNLESS the user described a correction to an induced table
+  // (#24): then it routes to `generate`, which rebuilds the whole spec with the
+  // note as guidance (bounded by decisionRounds; `decisionsReviewed` latches so
+  // the rebuilt table is not re-interrogated on the way back through here).
+  graph.addConditionalEdges('decisions', (state) => {
+    return state.phase === 'proposing' ? 'generate' : 'gaps';
+  });
 
   // A blocking gap that has an answer sets phase:'proposing' with the answer in
   // `clarifications`; REGENERATE the whole spec so the fix is incorporated (the

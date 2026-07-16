@@ -186,6 +186,9 @@ async function converge({ baseId = 'appPLACEHOLDER', mapping = { Name: 'Name', B
     calls:  calls.map(c => c.id),
     save:   spec?.nodes?.find(n => n.config?.action === 'airtable_create_record'),
     ratify: seen.ratify,
+    // Examples are gathered SILENTLY now (#24) — their provenance lives in the
+    // confirmation log, not an interrupt.
+    exLog:  (iv?.confirmationLog ?? []).find(e => e.type === 'examples_gathered'),
   };
 }
 
@@ -350,10 +353,17 @@ describe('the example picker shows the user their OWN mail, or says it did not',
 
     assert.ok(r.calls.includes('gmail_search'),
       `the picker never asked Gmail for anything (calls: ${JSON.stringify(r.calls)})`);
-    assert.equal(r.seen.example_request?.source, 'gmail',
+    // Examples are now gathered SILENTLY (#24) — no interrupt — but the provenance
+    // is unchanged: the log says they came from the inbox, with the trigger's own
+    // filter as the query, and they ride along on the spec's outcome.
+    assert.equal(r.exLog?.source, 'gmail',
       '`source` is a provenance claim: it says these came from the user\'s inbox');
-    assert.equal(r.seen.example_request?.query, 'to:leads@acme.com',
+    assert.equal(r.exLog?.query, 'to:leads@acme.com',
       "…and the trigger's own filter is the query, so an example that could not fire the workflow cannot appear");
+    assert.ok((r.spec?.outcome?.examples ?? []).length > 0,
+      'and the gathered examples are kept on the spec — they are the acceptance suite');
+    assert.equal(r.seen.example_request, undefined,
+      'the examples step is SILENT (#24): it emits no interrupt for the user to answer');
   });
 
   test('POSITIVE: a MODELLED example is never dressed up as a real one', async () => {
@@ -361,7 +371,7 @@ describe('the example picker shows the user their OWN mail, or says it did not',
     // the fallback examples carry `source: null`. Inventing a plausible "real" email would
     // be worse than proposing an obviously-modelled one, because the user would believe it.
     const r = await converge({ withInvoker: false });
-    assert.equal(r.seen.example_request?.source, null);
+    assert.equal(r.exLog?.source, null);
   });
 });
 
@@ -446,14 +456,15 @@ describe('a blocking gap arrives at the user with an answer in the box', () => {
                     proposal: () => ({ type: 'accept' }), clarification: () => ({ answer: 'yes' }),
                     gap_review: () => ({ acceptDefaults: true }), ratify: () => ({ type: 'approve' }) };
     for (let i = 0; i < 60 && iv?.type !== 'done'; i++) {
-      if (iv.type === 'gap_review' && !review) review = iv;
+      // #24: gaps now surface as a `clarification` (kind:'gap_review'); the model's
+      // suggested answer is embedded in the question rather than a `suggestedAnswer`
+      // field, but it must be THERE — an empty box is an interrogation, not a review.
+      if (iv.type === 'clarification' && iv.kind === 'gap_review' && !review) review = iv;
       iv = await conv.resume('t2', (reply[iv.type] ?? (() => ({ type: 'accept' })))(iv));
     }
 
     assert.ok(review, 'precondition: the draft has at least one gap to review');
-    const blocking = review.gaps.filter(g => g.blocking);
-    assert.ok(blocking.length, 'precondition: at least one BLOCKING gap');
-    assert.notEqual(blocking[0].suggestedAnswer, null,
-      `every blocking gap arrived with an empty box: ${JSON.stringify(review.gaps.map(g => [g.code, g.suggestedAnswer]))}`);
+    assert.match(review.question, /I'd go with: Set it on that step/,
+      `the blocking gap arrived with an empty box — no suggestion in the question: ${JSON.stringify(review.question)}`);
   });
 });

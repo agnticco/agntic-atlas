@@ -259,7 +259,8 @@ describe('the destination resolution touches only what it should', () => {
     const r = await drive({ blockingGap: true });
     assert.equal(r.calls.filter(c => c === 'airtable_list_bases').length, 1,
       `the base was looked up ${r.calls.filter(c => c === 'airtable_list_bases').length} times across the gap round`);
-    assert.ok(r.seen.some(iv => iv.type === 'gap_review'), 'precondition: the gap loop actually ran');
+    assert.ok(r.seen.some(iv => iv.type === 'clarification' && iv.kind === 'gap_review'),
+      'precondition: the gap loop actually ran (#24: gaps now surface as a clarification)');
   });
 });
 
