@@ -324,24 +324,10 @@
       <!-- ░ CONVERSATION (center) ░ · the build dialogue: submitIntent → POST /plan, advance → POST /plan/step, proposal actions = planner turns -->
       <section style="flex:1;min-width:0;background:#0A0A0A;display:flex;flex-direction:column">
 
-        <!-- PINNED OUTCOME CARD — P12 Increment C.
-             The contract, held above the conversation for the rest of the session.
-             It is what every later turn is measured against, and what the workflow
-             will be refused publication for not delivering — so it must never
-             scroll away (converger-v2 §6.4). -->
-        <sc-if value="{{ outcomePin }}" hint-placeholder-val="{{ false }}">
-          <div style="flex:none;margin:14px 28px 0;padding:12px 16px;border:1px solid rgba(240,191,107,.24);background:rgba(240,191,107,.05);border-radius:12px">
-            <div style="display:flex;align-items:center;gap:8px;margin-bottom:5px">
-              <div style="font-size:10.5px;letter-spacing:.09em;text-transform:uppercase;color:rgba(240,191,107,.75);font-weight:600">What this must deliver</div>
-            </div>
-            <div style="font-size:13.5px;line-height:1.5;color:rgba(255,255,255,.88)">{{ outcomePin.statement }}</div>
-            <div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:8px">
-              <sc-for list="{{ outcomePin.assertions }}" as="a" hint-placeholder-count="2">
-                <div style="font-size:11.5px;color:rgba(255,255,255,.6);border:1px solid rgba(255,255,255,.12);border-radius:999px;padding:3px 11px">{{ a.label }}</div>
-              </sc-for>
-            </div>
-          </div>
-        </sc-if>
+        <!-- PINNED OUTCOME CARD — P12 Increment C — MOVED (#28) into the RIGHT
+             panel, above the reasoning stream, so the build reads outcome →
+             thinking → Run test. It is no longer pinned in the chat (was a
+             duplicate of the same contract). See `outcomePin` in the right aside. -->
 
 
         <!-- DEDICATED GENERATED-WORKFLOW CANVAS — the COMPLETE graph the converger
@@ -353,12 +339,12 @@
              pin/drip is retired). Approval is now WHOLE-GRAPH: Approve / Revise below
              the canvas; selecting a node shows read-only detail. -->
         <sc-if value="{{ graphCanvas }}" hint-placeholder-val="{{ false }}">
-          <div style="flex:none;margin:14px 28px 0;border:1px solid rgba(231,178,94,.16);background:rgba(231,178,94,.03);border-radius:16px;padding:16px 18px 8px">
+          <div style="flex:none;margin:12px 28px 0;border:1px solid rgba(231,178,94,.13);background:rgba(231,178,94,.025);border-radius:13px;padding:11px 14px 6px">
                     <sc-if value="{{ graphCanvas.awaitingApproval }}" hint-placeholder-val="{{ false }}">
-                      <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:14px;margin:0 2px 11px">
+                      <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:14px;margin:0 2px 9px">
                         <div style="min-width:0">
-                          <div style="font-size:10.5px;letter-spacing:.09em;text-transform:uppercase;color:rgba(240,191,107,.75);font-weight:600;margin-bottom:3px">Your workflow</div>
-                          <div style="font-size:14px;line-height:1.45;color:rgba(255,255,255,.72)">Here's the workflow I built — approve each step and it takes shape below, or tell me what to change.</div>
+                          <div style="font-size:10px;letter-spacing:.09em;text-transform:uppercase;color:rgba(240,191,107,.7);font-weight:600;margin-bottom:2px">Your workflow</div>
+                          <div style="font-size:12.5px;line-height:1.4;color:rgba(255,255,255,.66)">Here's the workflow I built — approve each step, or tell me what to change.</div>
                         </div>
                         <div style="flex:none;text-align:right;padding-top:2px">
                           <div style="font-family:ui-monospace,SFMono-Regular,monospace;font-size:10px;font-weight:600;letter-spacing:.1em;color:rgba(239,200,146,.8)">{{ graphCanvas.progressLabel }}</div>
@@ -371,7 +357,7 @@
                          with an arrowhead; node cards are absolutely positioned at dagre's coordinates.
                          Approved nodes are solid + green check; the current step breathes amber; not-yet-
                          reached nodes are dim — so the graph BUILDS UP as approval proceeds. -->
-                    <div style="overflow:auto;border:1px solid rgba(255,255,255,.06);border-radius:12px;background:rgba(255,255,255,.015);max-height:58vh">
+                    <div style="overflow:auto;border:1px solid rgba(255,255,255,.06);border-radius:10px;background:rgba(255,255,255,.015);max-height:32vh">
                       <div style="position:relative;width:{{ graphCanvas.canvasW }}px;height:{{ graphCanvas.canvasH }}px;margin:0 auto">
                         <sc-for list="{{ graphCanvas.edges }}" as="ed" hint-placeholder-count="2">
                           <div style="position:absolute;left:0;top:0;pointer-events:none">
@@ -427,12 +413,12 @@
                          walkthrough is in progress and this IS the current step, it carries Approve /
                          Change; any other node is read-only. -->
                     <sc-if value="{{ graphCanvas.review }}" hint-placeholder-val="{{ false }}">
-                      <div style="padding:14px 2px 6px">
+                      <div style="padding:11px 2px 4px">
                         <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px">
                           <div style="min-width:0;flex:1">
-                            <div style="font-family:ui-monospace,SFMono-Regular,monospace;font-size:9.5px;font-weight:600;letter-spacing:.16em;text-transform:uppercase;color:{{ graphCanvas.review.detailTypeColor }};margin-bottom:6px;font-variant-numeric:tabular-nums">{{ graphCanvas.review.num }} · {{ graphCanvas.review.typeLabel }}</div>
-                            <div style="font-size:15px;font-weight:500;line-height:1.3;color:#efc892">{{ graphCanvas.review.title }}</div>
-                            <div style="font-size:13.5px;line-height:1.5;color:rgba(255,255,255,.5);margin-top:3px">{{ graphCanvas.review.desc }}</div>
+                            <div style="font-family:ui-monospace,SFMono-Regular,monospace;font-size:9px;font-weight:600;letter-spacing:.16em;text-transform:uppercase;color:{{ graphCanvas.review.detailTypeColor }};margin-bottom:5px;font-variant-numeric:tabular-nums">{{ graphCanvas.review.num }} · {{ graphCanvas.review.typeLabel }}</div>
+                            <div style="font-size:14px;font-weight:500;line-height:1.3;color:#efc892">{{ graphCanvas.review.title }}</div>
+                            <div style="font-size:12.5px;line-height:1.45;color:rgba(255,255,255,.5);margin-top:3px">{{ graphCanvas.review.desc }}</div>
                             <sc-if value="{{ graphCanvas.review.prompt }}" hint-placeholder-val="{{ false }}">
                               <div style="margin-top:10px;padding:9px 12px;border-radius:8px;background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.08)">
                                 <div style="font-size:10px;font-weight:500;letter-spacing:.14em;text-transform:uppercase;color:rgba(255,255,255,.28);margin-bottom:5px">Prompt</div>
@@ -447,12 +433,12 @@
 
                         <!-- current-step actions: approve builds the graph up a node; change regenerates -->
                         <sc-if value="{{ graphCanvas.review.isCurrent }}" hint-placeholder-val="{{ false }}">
-                          <div style="margin-top:14px">
+                          <div style="margin-top:11px">
                             <sc-if value="{{ !graphCanvas.changeOpen }}" hint-placeholder-val="{{ true }}">
-                              <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
-                                <button onClick="{{ graphCanvas.onApprove }}" style="font-family:inherit;font-size:14px;font-weight:600;padding:10px 20px;border-radius:999px;color:#06140c;background:#5fc78a;border:none;cursor:pointer">Approve this step</button>
-                                <button onClick="{{ graphCanvas.onChange }}" style="font-family:inherit;font-size:13.5px;padding:10px 16px;border-radius:999px;color:rgba(255,255,255,.8);background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.13);cursor:pointer">Change</button>
-                                <button onClick="{{ graphCanvas.onApproveAll }}" style="font-family:inherit;font-size:13px;padding:10px 6px;color:rgba(255,255,255,.34);background:none;border:none;cursor:pointer">Approve all remaining</button>
+                              <div style="display:flex;align-items:center;gap:9px;flex-wrap:wrap">
+                                <button onClick="{{ graphCanvas.onApprove }}" style="font-family:inherit;font-size:13.5px;font-weight:600;padding:8px 17px;border-radius:999px;color:#06140c;background:#5fc78a;border:none;cursor:pointer">Approve this step</button>
+                                <button onClick="{{ graphCanvas.onChange }}" style="font-family:inherit;font-size:13px;padding:8px 14px;border-radius:999px;color:rgba(255,255,255,.8);background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.13);cursor:pointer">Change</button>
+                                <button onClick="{{ graphCanvas.onApproveAll }}" style="font-family:inherit;font-size:12.5px;padding:8px 6px;color:rgba(255,255,255,.34);background:none;border:none;cursor:pointer">Approve all remaining</button>
                               </div>
                             </sc-if>
                             <sc-if value="{{ graphCanvas.changeOpen }}" hint-placeholder-val="{{ false }}">
@@ -737,6 +723,25 @@
               </div>
               <div style="position:relative;font-size:12.5px;color:rgba(255,255,255,.5);margin-top:9px;line-height:1.5">{{ testCaption }}</div>
 
+              <!-- OUTCOME CONTRACT (right panel · #28) — the decided rewrite of the
+                   user's request, held ABOVE the reasoning so the build reads
+                   outcome → thinking → Run test. FIXED (flex:none, never scrolls);
+                   appears once the outcome is set, persists through build + review,
+                   and gives way to the testing UI once a run starts (mirrors the CoT
+                   swap — `outcomePin` is null once testStarted). Compact by design:
+                   a left-accented labeled statement, not a bordered card. -->
+              <sc-if value="{{ outcomePin }}" hint-placeholder-val="{{ false }}">
+                <div style="position:relative;flex:none;margin-top:16px;padding-left:11px;border-left:2px solid rgba(240,191,107,.4)">
+                  <div style="font-size:10px;font-weight:600;letter-spacing:.16em;text-transform:uppercase;color:rgba(240,191,107,.7)">What this must deliver</div>
+                  <div style="font-size:12.5px;line-height:1.5;color:rgba(255,255,255,.82);margin-top:5px">{{ outcomePin.statement }}</div>
+                  <div style="display:flex;flex-wrap:wrap;gap:5px;margin-top:7px">
+                    <sc-for list="{{ outcomePin.assertions }}" as="a" hint-placeholder-count="2">
+                      <div style="font-size:10.5px;color:rgba(255,255,255,.55);border:1px solid rgba(255,255,255,.1);border-radius:999px;padding:2px 9px">{{ a.label }}</div>
+                    </sc-for>
+                  </div>
+                </div>
+              </sc-if>
+
               <div class="ab-scroll" style="position:relative;flex:1;overflow-y:auto;margin-top:18px;min-height:0">
 
                 <!-- THINKING STREAM (read-only) — the build's why/how. Chat cards say WHAT
@@ -768,7 +773,7 @@
                             <span style="font-size:11px;font-weight:600;letter-spacing:.18em;text-transform:uppercase;color:rgba(255,255,255,.42)">How Atlas thought through this build</span>
                           </div>
                         </sc-if>
-                        <div ref="{{ rsn.bodyRef }}" style="padding:2px 0 2px 13px;border-left:2px solid rgba(231,178,94,.22)">
+                        <div ref="{{ rsn.bodyRef }}" class="ab-scroll" style="padding:2px 0 2px 13px;border-left:2px solid rgba(231,178,94,.22);max-height:{{ rsn.bodyMaxH }};overflow-y:auto;-webkit-mask-image:{{ rsn.bodyMask }};mask-image:{{ rsn.bodyMask }}">
                           <sc-for list="{{ rsn.segs }}" as="g" hint-placeholder-count="2">
                             <div>
                               <sc-if value="{{ g.isThinking }}" hint-placeholder-val="{{ true }}">
@@ -6658,6 +6663,8 @@ class Component extends DCLogic {
     const rsnStreaming = rsnActive && !testStarted && S.phase === "building";
     const rsnReviewing = rsnActive && !testStarted && S.phase !== "building";
     const rsnOpen = !!S.rsnOpen;
+    const rsnReduceMotion = typeof window !== "undefined" && window.matchMedia
+      && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
     const rsn = {
       // Hidden entirely once a test run starts — the testing UI takes the panel.
       show: !testStarted,
@@ -6669,7 +6676,24 @@ class Component extends DCLogic {
       collapsed: false,
       resting: !rsnActive && !testStarted,
       segs: segs,
-      bodyRef: (el) => { if (el) el.scrollTop = el.scrollHeight; },
+      // #29 — the thinking transcript is a BOUNDED, auto-scrolling region so a
+      // long stream never pushes the outcome (above) or Run test (below) off
+      // screen, and never scrolls the whole page. Cap adapts to the viewport,
+      // clamped so short screens still show a usable window; the outer panel
+      // scrolls as the fallback. A subtle top fade hints older thoughts scrolled
+      // up (only while streaming, so the review transcript reads cleanly).
+      bodyMaxH: "max(150px, calc(100vh - 430px))",
+      bodyMask: rsnStreaming ? "linear-gradient(to bottom, transparent 0, #000 22px)" : "none",
+      // While streaming, pin to the newest thought so the latest reasoning is
+      // always visible; once settled we leave scroll alone so the user can read
+      // back through it. Respect prefers-reduced-motion for the scroll animation.
+      bodyRef: (el) => {
+        if (!el) return;
+        if (rsnStreaming) {
+          try { el.scrollTo({ top: el.scrollHeight, behavior: rsnReduceMotion ? "auto" : "smooth" }); }
+          catch (e) { el.scrollTop = el.scrollHeight; }
+        }
+      },
       onToggle: () => this.setState({ rsnOpen: !this.state.rsnOpen }),
       open: rsnOpen,
       toggleLabel: rsnOpen ? "Hide" : "Show reasoning",
@@ -6874,10 +6898,12 @@ class Component extends DCLogic {
         return vm;
       })(),
 
-      // The outcome contract, pinned above the thread (P12 Increment C). It is
-      // the thing the workflow will be REFUSED PUBLICATION for not delivering,
-      // so it stays on screen rather than scrolling away into history.
-      outcomePin: S.outcome && S.outcome.statement ? {
+      // The outcome contract (P12 Increment C) — the thing the workflow will be
+      // REFUSED PUBLICATION for not delivering. MOVED (#28) into the RIGHT panel,
+      // above the reasoning stream. Shown during build + review; nulled once a
+      // test run starts (!testStarted) so the testing UI takes the panel, the
+      // same swap the CoT does.
+      outcomePin: (S.outcome && S.outcome.statement && !testStarted) ? {
         statement: S.outcome.statement,
         assertions: (S.outcome.assertions || []).map((a) => ({
           label: this._deliverySentence(a),
