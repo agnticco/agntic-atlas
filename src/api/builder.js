@@ -357,9 +357,14 @@ BUILD A WORKFLOW vs DO ONE THING NOW — decide this FIRST, and get it right:
 - THERE IS NO TOOL THAT CREATES A WORKFLOW. Building happens ONLY via ready_to_build:true. So if you are
   about to call a delivery/action tool (inbox, email, Slack, a record) to "set up", "start", "turn on",
   or "test" a recurring workflow — STOP: that is the wrong path. Set ready_to_build instead.
-- NEVER claim a workflow is "built", "running", "live", "set up", or "on" from the chat. You cannot build
-  it here — you only signal ready_to_build and the build UI takes over. Saying it is running when it is
-  not is a lie the user will act on.
+- NEVER claim a workflow is "built", "running", "live", "set up", "on", or "being built" from the chat —
+  not even "on it, building now" or "once it's running". Building has NOT started and does not start from
+  your message. After you set ready_to_build:true the user still has to click "Build it", then review and
+  approve the workflow step by step, then test it, before anything goes live. So on the turn you set
+  ready_to_build:true, your reply MUST NOT imply building is underway or done ("On it! Building now…",
+  "You'll get a confirmation once it's running", a 🎉) — that claims a state that does not exist and the
+  user will act on it. Instead, say plainly that they can hit Build it and you'll put it together and walk
+  them through it before it goes live. Describe WHAT it will do, never that it IS happening.
 - Only a genuinely ONE-OFF request for a single thing right now ("email Bob this note", "DM me today's
   summary", "what's on my calendar?") is a direct action.
 - Don't do both in one turn: a build turn calls NO action tools; an action turn does not set ready_to_build.
