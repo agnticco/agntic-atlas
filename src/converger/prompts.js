@@ -609,7 +609,26 @@ ${outcome.statement ? `  "${outcome.statement}"\n` : ''}${lines.join('\n')}${con
  * @param {{ intent, outcome, triggers, clarifications }} args
  * @returns {string} the user-message prompt
  */
-export function buildPlanPrompt({ intent, outcome, triggers, clarifications } = {}) {
+/**
+ * The GROUNDING block — facts verified live against the connected tools, so the plan's
+ * confidence tags reflect reality instead of the model's guess. A Slack destination the
+ * tenant ACTUALLY has is "found" (grounded); one they named but don't have yet is still
+ * "you said", with the plan telling them Atlas will create it. This is the grounding pass
+ * (agent-contracts increment 2) surfacing what elicitation learned from the tools.
+ */
+function groundingBlock(grounding) {
+  const s = grounding?.slack;
+  if (!s?.checked) return '';
+  const lines = [];
+  if (s.known?.length)
+    lines.push(`- These Slack channels EXIST in the connected workspace: ${s.known.join(', ')}. A delivery to one of these is GROUNDED — tag it confidence "found" and say it posts to the EXISTING channel.`);
+  if (s.absent?.length)
+    lines.push(`- These Slack channels were named but do NOT exist in the workspace yet: ${s.absent.join(', ')}. Keep confidence "you said", and say in the text that Atlas will CREATE the channel before the workflow runs.`);
+  if (!lines.length) return '';
+  return `\nGROUNDING — verified live against the connected tools. Reflect this in the confidence tags and the wording; do NOT contradict it:\n${lines.join('\n')}\n`;
+}
+
+export function buildPlanPrompt({ intent, outcome, triggers, clarifications, grounding } = {}) {
   const prior = (clarifications ?? []).map(({ q, a }) => `  Q: ${q}\n  A: ${a}`).join('\n');
   const assertions = (outcome?.assertions ?? []).map(a => {
     const fields = a.fields ? ` [fields: ${(Array.isArray(a.fields) ? a.fields : [a.fields]).join(', ')}]` : '';
@@ -629,7 +648,7 @@ CONTRACT (what the finished workflow must deliver):
 ${assertions || '  (none)'}
 TRIGGER (already derived):
 ${trig || '  (none derived yet)'}
-${prior ? `\nWHAT THE USER HAS CLARIFIED / CHANGED (reflect this — it overrides your first read):\n${prior}\n` : ''}
+${groundingBlock(grounding)}${prior ? `\nWHAT THE USER HAS CLARIFIED / CHANGED (reflect this — it overrides your first read):\n${prior}\n` : ''}
 Tag EVERY item with a confidence:
   "stated"   — the user said this outright in the intent above.
   "found"    — grounded in a tool: a connector resource listed in your system prompt, or the

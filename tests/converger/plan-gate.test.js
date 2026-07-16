@@ -18,6 +18,7 @@ import { tmpdir }                from 'node:os';
 import { join }                  from 'node:path';
 
 import { createConverger } from '../../src/converger/index.js';
+import { buildPlanPrompt } from '../../src/converger/prompts.js';
 import { realCatalog }     from '../helpers/catalog.js';
 
 const tmpDirs = [];
@@ -122,6 +123,27 @@ describe('the plan gate fires once, before the build, and does not block it', ()
   test('the approved plan reaches the build (spec is produced)', async () => {
     const { spec } = await drive({ llm: makeLLM() });
     assert.ok(spec && Array.isArray(spec.nodes) && spec.nodes.length, 'a built spec is returned');
+  });
+});
+
+describe('the grounding pass surfaces live connector facts in the plan (increment 2)', () => {
+  const outcome = { statement: 's', assertions: [
+    { kind: 'message_sent', target: 'slack:#support' },
+    { kind: 'message_sent', target: 'slack:#sales' },
+  ] };
+
+  test('a channel that EXISTS is marked grounded; one that does NOT is flagged for creation', () => {
+    const p = buildPlanPrompt({ intent: 'x', outcome, triggers: [],
+      grounding: { slack: { checked: true, known: ['#support'], absent: ['#sales'] } } });
+    assert.match(p, /EXIST in the connected workspace: #support/);
+    assert.match(p, /tag it confidence "found"/);
+    assert.match(p, /do NOT exist in the workspace yet: #sales/);
+    assert.match(p, /Atlas will CREATE the channel/);
+  });
+
+  test('no grounding block is emitted when nothing could be verified (no live list)', () => {
+    const p = buildPlanPrompt({ intent: 'x', outcome, triggers: [] });
+    assert.doesNotMatch(p, /GROUNDING — verified live/);
   });
 });
 

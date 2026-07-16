@@ -1207,6 +1207,31 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
   //
   // Skippable: the plan is pre-accepted (§11.9), so the client's default answer builds it.
   const MAX_PLAN_ROUNDS = 2;
+
+  // THE GROUNDING PASS (agent-contracts increment 2). Verify the plan's DELIVERY
+  // destinations against the LIVE connectors, so the plan tells the user which resources
+  // already exist vs. which Atlas will create — grounded fact, not a guess. Slack channels
+  // are checked against `capabilities.slackChannels` (the tenant's real channel list, read
+  // from conversations.list at session start). Returns null when there is no live list to
+  // check against — we never claim to have verified something we could not.
+  function groundPlan(outcome, capabilities) {
+    const chans = Array.isArray(capabilities?.slackChannels)
+      ? new Set(capabilities.slackChannels.map(c => String(c).replace(/^#/, '').toLowerCase()))
+      : null;
+    if (!chans) return null;
+    const known = new Set(), absent = new Set();
+    for (const a of (outcome?.assertions ?? [])) {
+      const { connector, locator } = splitTarget(a?.target);
+      if (connector !== 'slack' || !locator) continue;
+      const bare = locator.replace(/^#/, '').toLowerCase();
+      if (!bare) continue;
+      const label = locator.startsWith('#') ? locator : `#${locator}`;
+      (chans.has(bare) ? known : absent).add(label);
+    }
+    if (!known.size && !absent.size) return null;
+    return { slack: { checked: true, known: [...known], absent: [...absent] } };
+  }
+
   graph.addNode('plan', async (state, cfg) => {
     const sessionId = cfg?.configurable?.threadId;
     const draft = state.draft ?? { ...DRAFT_DEFAULT };
@@ -1224,6 +1249,7 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
           outcome:        draft.outcome,
           triggers:       draft.triggers,
           clarifications: state.clarifications,
+          grounding:      groundPlan(draft.outcome, state.capabilities),
         })),
       ], tierCfg('balanced', sessionId));
     } catch { plan = null; }

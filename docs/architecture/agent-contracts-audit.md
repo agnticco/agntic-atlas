@@ -148,12 +148,23 @@ It does four things and emits the result into BOTH the Plan card and the generat
 
 ## Increments (revised sequence)
 
-1. **Grounding pass + Plan gate + confidence marking** (design-first; mockup done — to be updated
-   with the roster/`I found` section). New `ground` + `plan` graph nodes + approval interrupt
-   before `generate`; roster prune + knowledge RAG + inbox; `public/index.html` Plan card with the
-   `you said / I found / I inferred` sections. Skippable.
-2. **Fold connector schema-resolution (`destinations`) into `ground`** so resources resolve before
-   `generate`, not after.
+1. **Plan gate + confidence marking + upload nudge** — ✅ BUILT & verified headed (commits
+   `cfd6129`, `bc0a347`). `plan` graph node projects the contract into a plain-language,
+   confidence-tagged plan (`you said / I found / I inferred`) shown once before `generate`;
+   approved plan threads into the generate prompt as a STRUCTURE skeleton (not literal node
+   instructions — `bc0a347` fixed a freeform-node degradation). Upload nudge fires for an
+   ungrounded judgment. Skippable; fail-safe; fires exactly once. Knowledge RAG (already fed to
+   the build) now also surfaces in the plan as `I found` with source.
+2. **Grounding pass** — the plan grounds its DELIVERY destinations against live connectors.
+   - ✅ BUILT & verified headed: **Slack channel existence** (`groundPlan` in `elicitation-graph.js`
+     → `groundingBlock` in `prompts.js`). A named channel the tenant HAS → tagged `I found` (green,
+     "existing #x"); one they don't → stays `you said` and the plan says Atlas will create it.
+     Returns null (no claim) when there's no live list. Verified: `#agntic-x-slack` (exists) → `I
+     found`; `#support`/`#sales` (absent) → `you said` (no false "found").
+   - ⏳ REMAINING: **Airtable/Sheets schema resolution before `generate`** (base/table/columns from
+     the live connector, so the build uses real ids and the plan shows them). The post-generate
+     `destinations` node still does this today as a safety net; moving it earlier needs an
+     Airtable-connected tenant + write workflow to verify headed. Next increment.
 3. **Node `description`/`inputs`/`outputs` enrichment.** Improves the walkthrough review; P13
    prerequisite (output schemas).
 4. **Hardcoded per-connector seam cleanup** — into **P13-0**, where it already lives.
