@@ -23,6 +23,41 @@ import { numEnv } from '../utils/env.js';
 import { liftV1Node } from './node-types/compat-v1.js';
 import { buildAsk } from './node-types/human.js';
 import { ON_REF } from './node-types/branch.js';
+import { isWriteNode } from './workflow-validator.js';
+import { deliveryTarget } from './outcome-oracle.js';
+
+/**
+ * A TERMINAL side-effect node: one whose run() reaches OUT of Atlas — a `deliver`
+ * to any channel, or a `connector-action` whose capability writes or sends. In
+ * DRY-RUN mode (increment #21) these are VERIFIED into a "would-deliver" receipt
+ * rather than fired, so the converger's self-verification loop can iterate a draft
+ * through the real engine without spamming real emails / records / Slack posts on
+ * every fix-retry.
+ *
+ * Read-only connector-actions (web_search, gmail_get_message, airtable_list_*,
+ * sheets_describe, filesystem_read, …) are NOT terminal — they have no external
+ * effect and their output is needed to verify the chain, so they run for real.
+ *
+ * Classification REUSES the validator's `isWriteNode` — the same predicate that
+ * decides idempotency/approval strength — rather than a hardcoded list, so a new
+ * write capability is covered the day it lands (`isWritingAction` is pattern-based:
+ * create|append|send|post|add|insert). Note `isWriteNode(gmail_get_message)` is
+ * correctly false (a read), where the oracle's `isDeliveryNode` over-matches it via
+ * the `_message` suffix — this is the RIGHT discriminator for "does it write".
+ *
+ * A `foreach` is deliberately EXCLUDED even though `isWriteNode(foreach)` is true
+ * for a loop containing a write: the loop itself has no external effect, and it must
+ * run for real so its per-item write SUB-steps are each intercepted (they dispatch
+ * back through _executeNode, which carries the dry-run flag in ctx). Stubbing the
+ * loop wholesale would skip the iteration logic under test.
+ */
+export function isTerminalSideEffect(node) {
+  if (!node || typeof node !== 'object' || node.type === 'foreach') return false;
+  return isWriteNode(node);
+}
+
+/** Unresolved template tokens left in a delivered body ({{…}} that _substitute couldn't bind). */
+const UNRESOLVED_TEMPLATE = /\{\{\s*[\w.\-]+\s*\}\}/;
 
 /**
  * Control nodes. Their output is routing/audit metadata, not the work product,
@@ -91,7 +126,7 @@ export class FlowTester {
    * @param {import('./channel-registry.js').ChannelRegistry}  [options.channelRegistry]
    * @param {import('./node-type-registry.js').NodeTypeRegistry} [options.nodeTypes] — required for execution
    */
-  constructor({ sourceRegistry, scheduler, tools, llm, channelRegistry, nodeTypes, idempotencyStore = null } = {}) {
+  constructor({ sourceRegistry, scheduler, tools, llm, channelRegistry, nodeTypes, idempotencyStore = null, dryRunDeliveries = false } = {}) {
     // Optional: only needed by specs that declare an `idempotency` attribute. A
     // node that declares one with no store wired throws rather than silently
     // failing to deduplicate (see _executeNode).
@@ -102,6 +137,10 @@ export class FlowTester {
     this.llm             = llm;
     this.channelRegistry = channelRegistry;
     this.nodeTypes       = nodeTypes;
+    // Build-time dry-run default (increment #21). OFF unless a caller opts in —
+    // existing real-delivery runs are byte-for-byte unchanged. A per-run option
+    // (run(flow, { dryRunDeliveries })) overrides this per invocation.
+    this.dryRunDeliveries = dryRunDeliveries === true;
   }
 
   /**
@@ -137,6 +176,11 @@ export class FlowTester {
     const edges = flow.edges ?? [];
     const order = this._topoSort(nodes, edges);
     const outputs = new Map();
+    // Per-run override of the constructor default. When ON, terminal side-effect
+    // nodes (deliver + writing connector-actions) are verified into a receipt, not
+    // fired — see isTerminalSideEffect / _dryRunDeliver. Irreversible sends are
+    // ALWAYS stubbed in this mode; there is no per-node opt-out.
+    const dryRun = options.dryRunDeliveries ?? this.dryRunDeliveries;
 
     // ── Resume (§7.4) ────────────────────────────────────────────────────────
     // A paused run holds no compute. To continue it, we rehydrate from a
@@ -467,6 +511,10 @@ export class FlowTester {
           // from "a real step that didn't run on this leg" (it was skipped —
           // take the catch-all, which is exactly what a catch-all is for).
           nodeIds: new Set(nodes.map(n => n.id)),
+          // Dry-run flag rides in ctx (not an instance field) so concurrent runs
+          // on one shared FlowTester can't race, and so a `foreach`'s sub-steps
+          // inherit it automatically (runSubNode spreads ctx into the sub-context).
+          dryRunDeliveries: dryRun,
         };
 
         // ── on_error: retry ───────────────────────────────────────────────
@@ -591,6 +639,16 @@ export class FlowTester {
    * silent no-op — pretending to deduplicate is worse than not claiming to.
    */
   async _executeNode(node, ctx, { tenantId, workflowId, parentId = null, inLoop = false } = {}) {
+    // ── DRY RUN (increment #21) ───────────────────────────────────────────────
+    // A terminal side-effect node is VERIFIED, not fired. Bypassing here — before
+    // the idempotency wrapper — means a dry write never consults OR records dedupe
+    // state (there was no real write to dedupe), and a foreach sub-step write is
+    // caught on its first entry (runSubNode → _executeNode with ctx.dryRunDeliveries
+    // set). The capture itself happens in _runNode, so the real body-resolution
+    // logic still runs; only the send is stubbed.
+    if (ctx.dryRunDeliveries && isTerminalSideEffect(node)) {
+      return await this._runNode(node, ctx);
+    }
     // Inside a `foreach` there is no event stream to yield `step_retry` into and
     // no edges for `route_to` to light, so the run() loop's retry wrapper can't
     // serve loop sub-steps. Honour `retry` here instead — silently ignoring a
@@ -751,7 +809,80 @@ export class FlowTester {
     // (template) vs left a static description that must NOT shadow real
     // upstream output. Per-node shallow copy — never mutate shared ctx.
     const nodeCtx = { ...ctx, rawConfig: node.config ?? {} };
+
+    // ── DRY RUN interception (increment #21) ──────────────────────────────────
+    // A terminal side-effect node returns a "would-deliver" receipt instead of
+    // firing. This sits AFTER lift + template substitution + service assembly, so
+    // the receipt is computed against exactly the config a real send would use.
+    if (ctx.dryRunDeliveries && isTerminalSideEffect(node)) {
+      return await this._dryRunDeliver(node, type, cfg, nodeCtx, def, services);
+    }
+
     return await def.run(cfg, nodeCtx, services);
+  }
+
+  /**
+   * Verify a terminal side-effect node WITHOUT firing it (dry-run, increment #21).
+   *
+   * The node's OWN run() is executed against a channel registry whose handler is a
+   * capturing stub, so every bit of real body-resolution logic runs — deliver.js's
+   * upstream-content-vs-template rules, connector-action's `stringifyOutput` — and
+   * the exact body a real send would post is captured, but nothing leaves Atlas.
+   * Irreversible sends (email/SMS/gmail_send) are ALWAYS stubbed here; there is no
+   * per-node opt-out in this mode.
+   *
+   * Returns a receipt the outcome oracle can read in a "would-satisfy" sense
+   * (normalizeDelivery maps `wouldDeliver` → `delivered`):
+   *   { dryRun, wouldDeliver, channel, target, contentPreview,
+   *     checks: { hasBody, bodyWellFormed, targetPresent, capabilityConnected } }
+   */
+  async _dryRunDeliver(node, type, cfg, nodeCtx, def, services) {
+    const channelId = type === 'deliver'
+      ? String(cfg.channel ?? 'in_app')
+      : String(cfg.action ?? '');
+
+    // capabilityConnected: read the REAL registry (not the stub). The capability
+    // must resolve AND be connected/ready for the send to have happened.
+    const realCh = services?.channelRegistry?.get?.(channelId);
+    const capabilityConnected = !!realCh?.available;
+
+    // Run the node's real run() with a handler-capturing stub. `get` forces
+    // `available:true` so deliver's own readiness guard doesn't short-circuit
+    // before it resolves the body (the REAL availability is already captured
+    // above). The stub handler records its args and returns without sending.
+    let captured = null;
+    const stubRegistry = {
+      get: (id) => {
+        const c = services?.channelRegistry?.get?.(id);
+        return c ? { ...c, available: true } : c;
+      },
+      getHandler: () => (args) => { captured = args; return { dryRun: true }; },
+    };
+    try {
+      await def.run(cfg, nodeCtx, { ...services, channelRegistry: stubRegistry });
+    } catch {
+      // deliver.js throws when there is no content to send, or the channel isn't
+      // wired. A dry run VERIFIES rather than fails: the checks below record
+      // hasBody:false / capabilityConnected:false and the receipt says
+      // wouldDeliver:false with the reason named — the workflow is not killed.
+    }
+
+    const body           = typeof captured?.body === 'string' ? captured.body : '';
+    const hasBody        = body.trim().length > 0;
+    const bodyWellFormed = hasBody && !UNRESOLVED_TEMPLATE.test(body);
+    const { present: targetPresent, target } = deliveryTarget(node);
+
+    const checks = { hasBody, bodyWellFormed, targetPresent, capabilityConnected };
+    const wouldDeliver = hasBody && bodyWellFormed && targetPresent && capabilityConnected;
+
+    return {
+      dryRun: true,
+      wouldDeliver,
+      channel: channelId,
+      target: target ?? null,
+      contentPreview: body.slice(0, 200),
+      checks,
+    };
   }
 
   // ── Helpers ───────────────────────────────────────────────────────────────

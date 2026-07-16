@@ -2126,6 +2126,13 @@ export function createApp(spine) {
         ...(dbRun ? { runId: dbRun.id } : {}),
         ...(req.tenant ? { tenantId: req.tenant.id } : {}),
         ...(spec.id ? { workflowId: spec.id } : {}),
+        // DRY RUN (increment #21). When set, terminal side-effect nodes (deliver +
+        // writing connector-actions) are VERIFIED into a would-deliver receipt
+        // instead of fired — no real emails/records/Slack posts. This is what lets
+        // the converger's self-verification loop iterate a draft through the real
+        // engine without spamming real deliveries on every fix-retry. Default OFF:
+        // absent the flag, deliveries fire for real, exactly as before.
+        ...(req.body?.dryRunDeliveries === true ? { dryRunDeliveries: true } : {}),
       };
       for await (const ev of spine.engine.flowTester.run(spec, flowOpts)) {
         if (ev.type === 'run_started') {

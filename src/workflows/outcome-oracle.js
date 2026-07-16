@@ -560,7 +560,18 @@ export function normalizeDelivery(node, output) {
   // connector-action's own destination keys), so a write's target is never lost.
   for (const l of collectLocators(node?.config)) push(l);
   const target = locators[0] ?? null;
-  return { ...o, delivered: true, channel, ...(target != null ? { target } : {}), locators };
+  // WOULD-SATISFY (dry-run, increment #21). A build-time dry run stubs terminal
+  // side-effect nodes into a receipt `{ dryRun:true, wouldDeliver, … }` instead of
+  // firing them, so the converger's self-verification loop can iterate without
+  // sending real emails or writing real records. Such a receipt satisfies an
+  // assertion only if it WOULD have delivered — a wouldDeliver:false receipt
+  // (empty body, unresolved template, unconnected channel) is NOT a delivery.
+  //
+  // Additive and inert for real runs: a genuine handler return has no `dryRun`
+  // flag, so `delivered` stays `true` exactly as before — the real runtime check
+  // is untouched.
+  const delivered = o.dryRun === true ? o.wouldDeliver === true : true;
+  return { ...o, delivered, channel, ...(target != null ? { target } : {}), locators };
 }
 
 /** Is this node a delivery — a `deliver` node, or a `connector-action` that WRITES? */
@@ -569,6 +580,30 @@ export function isDeliveryNode(node) {
   if (node.type === 'deliver') return true;
   if (node.type === 'connector-action') return nodeEffect(node) != null;
   return false;
+}
+
+/**
+ * Where a delivery node is headed, and whether that destination is PRESENT in
+ * config — used by the dry-run oracle (increment #21) to compute `targetPresent`
+ * without a real send. It does NOT check the destination EXISTS in the tenant's
+ * live account (that is a later increment); presence only.
+ *
+ * The inbox (`in_app`) is locator-free — its "address" is a label, not an
+ * external id — so it counts as present with no explicit target, mirroring how
+ * `checkAssertionAtRuntime` treats a locator-free connector. Channel knowledge
+ * stays here in the oracle, the one place that knows locator keys per channel.
+ *
+ * @returns {{ present: boolean, locatorFree: boolean, target: string|null }}
+ */
+export function deliveryTarget(node) {
+  const eff = nodeEffect(node);
+  if (!eff) return { present: false, locatorFree: false, target: null };
+  const locatorFree = [...eff.connectors].some(c => LOCATOR_FREE_CONNECTORS.has(c));
+  return {
+    present: locatorFree || eff.locators.length > 0,
+    locatorFree,
+    target: eff.locators[0] ?? null,
+  };
 }
 
 /** Did this run produce the effect this assertion promises? */
