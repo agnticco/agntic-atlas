@@ -114,6 +114,18 @@ describe('PICK an existing channel (via the chip LABEL, as the client sends it)'
     assert.ok(spec, 'converged');
     assert.equal(postNode(spec).config.target, '#ops', 'the target was repointed at the picked channel');
   });
+
+  // #31 — picking a DIFFERENT channel than the one typed must also re-sync the outcome
+  // CONTRACT. The candidate asserts `slack:#does-not-exist`; after picking `#ops` the
+  // assertion must follow, or the oracle raises a phantom UNSATISFIED_ASSERTION and the
+  // build stalls on a gap that re-suggests the very channel we just replaced.
+  test('the outcome assertion follows the deliver to the picked channel', async () => {
+    const { spec } = await drive({ onResourceFix: () => ({ answer: '#ops' }) });
+    const a = (spec?.outcome?.assertions ?? []).find(x => /^slack:/.test(x.target || ''));
+    assert.ok(a, 'a slack message_sent assertion should still be present');
+    assert.equal(a.target, 'slack:#ops',
+      'the outcome assertion must be repointed to #ops, not left stale on #does-not-exist');
+  });
 });
 
 describe('CREATE the channel via the chip LABEL (reuses the setup_action path)', () => {

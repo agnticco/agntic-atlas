@@ -625,6 +625,14 @@ a nameless workflow cannot be saved.
 
 STRUCTURE RULES — these are what make the graph actually RUN. The single most common failure is a node
 with no inbound edge, or a branch with no feed:
+- MINIMAL NODE SET — use the FEWEST steps that satisfy the outcome. Most "do X to the incoming thing and
+  send it to Y" intents are ONE processing node feeding ONE delivery: "summarize the email and save it to
+  the inbox" is a single llm(mode:"summarize") → deliver — NOT extract → assemble → deliver. An llm node
+  already outputs finished, channel-ready text, so do NOT add a separate "extract" then an "assemble"/
+  format node to reshape text the delivering step could produce itself. Split into extract + assemble ONLY
+  when the outcome needs DISTINCT fields written to DISTINCT places (e.g. named columns in a record). Extra
+  reshaping nodes make the workflow slower and more fragile, drop content, and a spec that over-builds will
+  fail its own self-test.
 - EVERY node except the ENTRY node has at least one INBOUND edge. The entry node — the first step, fed
   by the trigger — has NONE. The trigger is NOT a node: never write an edge whose "from" is "trigger".
 - A ROUTER is exactly this shape: an "llm" node with mode:"classify" and a CLOSED list of categories

@@ -217,12 +217,16 @@ export function mergeGeneratedSpec(draft, generated) {
  *   airtable_table → config.tableId
  */
 function applyResourcePick(draft, nodeId, kind, value) {
+  let oldTarget = null;                                              // captured for the outcome-sync below
+  const newTarget = kind === 'slack_channel'
+    ? `#${String(value).replace(/^#/, '')}`
+    : value;
   const patch = (n) => {
     if (!n || n.id !== nodeId) return n;
     const config = { ...n.config };
-    if      (kind === 'slack_channel') config.target  = `#${String(value).replace(/^#/, '')}`;
-    else if (kind === 'airtable_base') config.baseId  = value;
-    else if (kind === 'airtable_table') config.tableId = value;
+    if      (kind === 'slack_channel') { oldTarget = config.target;  config.target  = newTarget; }
+    else if (kind === 'airtable_base') { oldTarget = config.baseId;  config.baseId  = value; }
+    else if (kind === 'airtable_table') { oldTarget = config.tableId; config.tableId = value; }
     return { ...n, config };
   };
   const nodes = (draft?.nodes ?? []).map((n) => {
@@ -231,7 +235,27 @@ function applyResourcePick(draft, nodeId, kind, value) {
     }
     return patch(n);
   });
-  return { ...draft, nodes };
+
+  // #31 — keep the outcome CONTRACT in sync with the repointed resource. An assertion
+  // target like "slack:#zznope-test" (see outcome-oracle.js: "<connector>:<locator>")
+  // must follow the deliver node to the picked channel. Left stale, the oracle sees the
+  // outcome promise a delivery no step makes (UNSATISFIED_ASSERTION) and raises a
+  // confusing follow-on gap that re-suggests the very resource we just replaced. Only
+  // slack channels carry a channel-in-the-locator target; airtable/base assertions key
+  // on kind, not the id, so they need no rewrite here.
+  let outcome = draft?.outcome;
+  if (kind === 'slack_channel' && oldTarget != null && oldTarget !== newTarget
+      && outcome && Array.isArray(outcome.assertions)) {
+    const oldLoc = `slack:${oldTarget}`, newLoc = `slack:${newTarget}`;
+    const assertions = outcome.assertions.map(a => {
+      if (!a || typeof a.target !== 'string') return a;
+      if (a.target === oldLoc)    return { ...a, target: newLoc };   // "slack:#old" → "slack:#new"
+      if (a.target === oldTarget) return { ...a, target: newTarget }; // bare "#old" spelling
+      return a;
+    });
+    outcome = { ...outcome, assertions };
+  }
+  return { ...draft, nodes, outcome };
 }
 
 /** Does this node reach into the named connector? */
