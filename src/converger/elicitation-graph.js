@@ -207,6 +207,30 @@ export function mergeGeneratedSpec(draft, generated) {
 
 // ── Schema-aware destinations (P12 Increment F) ───────────────────────────────
 
+/**
+ * Repoint a resource reference on one node (found by id, at the top level OR inside a
+ * foreach's steps) at a user-picked existing resource. (Increment #25.)
+ *   slack_channel → config.target ("#name")   airtable_base → config.baseId
+ *   airtable_table → config.tableId
+ */
+function applyResourcePick(draft, nodeId, kind, value) {
+  const patch = (n) => {
+    if (!n || n.id !== nodeId) return n;
+    const config = { ...n.config };
+    if      (kind === 'slack_channel') config.target  = `#${String(value).replace(/^#/, '')}`;
+    else if (kind === 'airtable_base') config.baseId  = value;
+    else if (kind === 'airtable_table') config.tableId = value;
+    return { ...n, config };
+  };
+  const nodes = (draft?.nodes ?? []).map((n) => {
+    if (n?.type === 'foreach' && Array.isArray(n.config?.steps)) {
+      return { ...n, config: { ...n.config, steps: n.config.steps.map(patch) } };
+    }
+    return patch(n);
+  });
+  return { ...draft, nodes };
+}
+
 /** Does this node reach into the named connector? */
 function usesConnector(node, connector) {
   const id = node?.type === 'connector-action' ? node.config?.action
@@ -502,6 +526,11 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
       phase:        'outcome',
       spec:         null,
       _pendingQuestion: null,
+      // Resource create-or-pick (#25). `_resourceCreate` carries a pending
+      // "Create #<name>" hand-off from `gaps` to `resourceSetup`; `_resourceAsked`
+      // latches resources already surfaced but unresolved so the loop can't spin.
+      _resourceCreate: null,
+      _resourceAsked:  [],
 
       // P12 Increment C. Both are LOOP BOUNDS, not bookkeeping: a gap the model
       // cannot close would otherwise spin to the recursion limit and die with a
@@ -870,6 +899,18 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
           _missingNote:      String(verdict.missing),
         };
       }
+      return { phase: 'gapping' };
+    }
+
+    // A RESOURCE gap is not something REGENERATING can fix (#25): the model cannot
+    // invent a Slack channel / Airtable base that exists in the tenant's account —
+    // only create-or-pick can. So when the ONLY thing blocking the spec is a missing
+    // resource, skip the (bounded, but wasteful) regenerate loop and go straight to
+    // `gaps`, where it is resolved conversationally. If there are OTHER blockers too,
+    // regenerate as usual — those may close, leaving the resource gap to be handled
+    // on the next pass.
+    const blockers = unansweredGaps(gap);
+    if (blockers.length && blockers.every(g => g.code === 'RESOURCE_NOT_FOUND' || g.code === 'RESOURCE_UNVERIFIED')) {
       return { phase: 'gapping' };
     }
 
@@ -1536,6 +1577,87 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
       ? [{ step: state.step, type: 'auto_repair', repairs }]
       : [];
 
+    // ── RESOURCE_NOT_FOUND: create-or-pick, before any other gap (#25) ──────────
+    //
+    // A wire to a channel/base/table the tenant doesn't have. The general gap handler
+    // below would feed this to the model as "add a delivery to #foo" and regenerate —
+    // re-hallucinating the same non-existent target. So it is resolved HERE instead,
+    // conversationally: offer to CREATE it (Slack, via the existing setup_action path)
+    // or PICK an existing one. A created/picked resource clears the gap on re-score.
+    //
+    // Each node execution round-trips exactly ONE interrupt (resume() carries a single
+    // value — compiled-graph.js), so the CREATE path returns to a dedicated
+    // `resourceSetup` node for its own setup_action interrupt; the PICK path rewrites
+    // the draft in place and re-enters `gaps`. `_resourceAsked` latches a resource we
+    // already surfaced but could not resolve (create skipped, or pick-only with nothing
+    // to pick), so the loop can never spin on an unanswerable one.
+    const asked   = new Set(state._resourceAsked ?? []);
+    const askKey  = (g) => `${g.nodeId ?? 'node'}:${g.resource?.kind}:${g.resource?.name}`.toLowerCase();
+    const resGaps = result.gaps.filter(g => g.code === 'RESOURCE_NOT_FOUND' && !asked.has(askKey(g)));
+    if (resGaps.length) {
+      const g = resGaps[0];
+      const r = g.resource ?? { options: [] };
+      const opts = Array.isArray(r.options) ? r.options : [];
+
+      const choices = [];
+      if (r.canCreate) choices.push({ id: '__create__', label: `Create #${r.name}`, selected: true });
+      for (const o of opts.slice(0, 12)) choices.push({ id: `use:${o.value}`, label: o.label, selected: !r.canCreate && choices.length === 0 });
+
+      const question = r.canCreate
+        ? `${g.message}\nWant me to create it, or point this at one you already have?`
+        : opts.length
+          ? `${g.message}\nWhich of your existing ones should I use?`
+          : `${g.message}\n${g.hint}`;
+
+      const reply    = await interrupt({ type: 'clarification', kind: 'resource_fix', question, choices, resource: r, step: state.step });
+      const chosenId = reply?.id ?? null;
+      const raw      = String(reply?.answer ?? (typeof reply === 'string' ? reply : '')).trim();
+      const logBase  = { step: state.step, type: 'resource_fix', gap: { code: g.code, nodeId: g.nodeId, kind: r.kind, name: r.name }, reply };
+
+      // A recognised pick — the chip (`use:<value>`), or free text that exactly names
+      // an existing option (by value or label, with/without a leading #).
+      const norm = (s) => String(s ?? '').replace(/^#/, '').trim().toLowerCase();
+      const pickedOpt =
+        (chosenId?.startsWith('use:') ? opts.find(o => `use:${o.value}` === chosenId) : null)
+        ?? (raw ? opts.find(o => norm(o.value) === norm(raw) || norm(o.label) === norm(raw)) : null)
+        ?? null;
+
+      // Explicit create, or the zero-typing / default answer when creation is possible.
+      const wantsCreate = r.canCreate && !pickedOpt && (
+        chosenId === '__create__' || /\bcreate\b/i.test(raw) || raw === '' ||
+        raw.toLowerCase() === `create #${r.name}`.toLowerCase());
+
+      if (wantsCreate && r.createCapabilityId) {
+        return {
+          ...carry,
+          confirmationLog: [...repairLog, { ...logBase, choice: 'create' }],
+          _resourceCreate: { capabilityId: r.createCapabilityId, kind: r.kind, name: r.name, nodeId: g.nodeId, askKey: askKey(g) },
+          step:  state.step + 1,
+          phase: 'resource_setup',
+        };
+      }
+
+      if (pickedOpt) {
+        return {
+          ...carry,
+          draft: applyResourcePick(draft, g.nodeId, r.kind, pickedOpt.value),
+          confirmationLog: [...repairLog, { ...logBase, choice: 'pick', picked: pickedOpt.value }],
+          step:  state.step + 1,
+          phase: 'gapping',                              // re-enter gaps → gap clears on re-score
+        };
+      }
+
+      // Nothing to create and nothing recognised to pick: latch it (so we don't re-ask)
+      // and let it fall through as a blocker the ratify screen names honestly.
+      return {
+        ...carry,
+        confirmationLog: [...repairLog, { ...logBase, choice: 'unresolved' }],
+        _resourceAsked:  [...(state._resourceAsked ?? []), askKey(g)],
+        step:  state.step + 1,
+        phase: 'gapping',
+      };
+    }
+
     const blocking = unansweredGaps(result);                       // must be ANSWERED
     const soft     = result.gaps.filter(g => !g.blocking);         // may be ESCALATED
 
@@ -1653,6 +1775,58 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
       escalatedGaps:   escalated,
       step:            state.step + 1,
       phase:           'ratifying',
+    };
+  });
+
+  // ── resourceSetup ────────────────────────────────────────────────────────────
+  // Create a missing resource the user asked for (#25). Reached from `gaps` when the
+  // user chose "Create #<name>" for a RESOURCE_NOT_FOUND gap. It reuses the EXISTING
+  // setup_action confirm/execute path — the same interrupt the `propose` node emits, so
+  // the client needs no new surface: it shows a "Create it" button, POSTs to
+  // /sessions/:id/setup, and resumes with { type: 'setup_executed', result }.
+  //
+  // On success the created resource is OPTIMISTICALLY added to `capabilities` (Slack:
+  // appended to slackChannels) so the immediate re-score in `gaps` sees it and the gap
+  // clears without waiting for a fresh session fetch. On skip/reject the resource is
+  // latched (`_resourceAsked`) so `gaps` won't ask again — it becomes a named blocker.
+  graph.addNode('resourceSetup', async (state) => {
+    const rc = state._resourceCreate;
+    if (!rc?.capabilityId) return { _resourceCreate: null, phase: 'gapping' };
+
+    const proposal = {
+      component:    'setup_action',
+      capabilityId: rc.capabilityId,
+      params:       rc.kind === 'slack_channel' ? { name: rc.name } : {},
+      stores_as:    'created_resource',
+      rationale:    `Create ${rc.kind === 'slack_channel' ? '#' + rc.name : rc.name} so the workflow has a real destination.`,
+    };
+    const confirmation = await interrupt({ type: 'proposal', proposal, step: state.step });
+    const logEntry = { step: state.step, type: 'proposal', proposal, confirmation };
+
+    if (confirmation?.type === 'setup_executed') {
+      const result  = confirmation.result ?? {};
+      const created = rc.kind === 'slack_channel' ? (result.name ?? rc.name) : rc.name;
+      // Optimistically register the created resource so the re-score sees it exists.
+      const capabilities = rc.kind === 'slack_channel'
+        ? { ...state.capabilities, slackChannels: [...(state.capabilities?.slackChannels ?? []), created] }
+        : state.capabilities;
+      return {
+        capabilities,
+        setup_results:   { created_resource: result },
+        confirmationLog: [logEntry],
+        _resourceCreate: null,
+        step:  state.step + 1,
+        phase: 'gapping',
+      };
+    }
+
+    // Skipped or rejected: don't loop on it — latch and let it surface as a blocker.
+    return {
+      confirmationLog: [logEntry],
+      _resourceCreate: null,
+      _resourceAsked:  [...(state._resourceAsked ?? []), rc.askKey],
+      step:  state.step + 1,
+      phase: 'gapping',
     };
   });
 
@@ -1829,8 +2003,14 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
   // Bounded by MAX_GAP_ROUNDS: gaps flips to 'ratifying' once the cap is hit, so
   // an unclosable gap surfaces at `ratify` as a blocker instead of looping.
   graph.addConditionalEdges('gaps', (state) => {
+    if (state.phase === 'resource_setup') return 'resourceSetup';  // "Create #<name>" (#25)
+    if (state.phase === 'gapping')        return 'gaps';           // resource picked/latched → re-score
     return state.phase === 'proposing' ? 'generate' : 'ratify';
   });
+
+  // resourceSetup always returns to `gaps` (phase:'gapping') so the created/latched
+  // resource is re-scored — the gap clears (created/picked) or surfaces as a blocker.
+  graph.addEdge('resourceSetup', 'gaps');
 
   // request_changes (or a rejected ratify) sets phase:'proposing' and resets the
   // loop bounds, so the user's feedback REGENERATES the whole spec (again, never the

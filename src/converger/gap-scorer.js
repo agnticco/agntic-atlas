@@ -154,6 +154,186 @@ function validatorFor(capabilities) {
   });
 }
 
+// ── RESOURCE_NOT_FOUND — a wire to a resource that does not exist (Increment #25) ──
+//
+// The validator proves a delivery's channel is a REAL capability (`slack`, `gmail_send`)
+// and that its config KEYS are legal. It does NOT prove the destination that channel
+// points AT actually exists in the tenant's account: a `deliver → #does-not-exist` or a
+// write to an Airtable base the tenant never connected passes every publish check and
+// then 404s at run time — silently, on the customer's first real event.
+//
+// So this file checks each resource REFERENCE against the LIVE lists builder.js already
+// fetched onto `capabilities` (slackChannels, airtableSchema). It is a converger-only
+// gap (publish has no live-account view), which only ever makes the converger STRICTER —
+// it can never make `complete ⇒ publishable` false, because a spec the converger calls
+// complete passes strictly more checks than publish runs.
+//
+// VERIFICATION IS OPT-IN, on purpose. It runs only when `capabilities.connectors` is
+// present — the signal that this is a real builder session (builder.js:1274), not a bare
+// unit-test catalog. The 200+ specs in the suite hand a `channels` catalog but no
+// `connectors`/`slackChannels`, and must keep behaving exactly as before. Inside an
+// active session it is FAIL-CLOSED: a connected connector whose live list is missing (the
+// fetch failed) yields RESOURCE_UNVERIFIED (blocking), never a silent pass — the same
+// discipline as CHANNELS_UNVERIFIED above.
+
+/** Slack delivery channels that post to a NAMED channel (slack_dm targets a user). */
+const SLACK_DM_CHANNELS = new Set(['slack_dm']);
+
+/**
+ * The Slack channel NAME a node posts to, or null if this node makes no such reference
+ * (not Slack, a DM, a template resolved at run time, or a raw channel ID we can't name).
+ */
+function slackChannelRef(node) {
+  const id = node?.type === 'deliver'          ? node.config?.channel
+           : node?.type === 'connector-action' ? node.config?.action
+           : null;
+  if (typeof id !== 'string' || !id.startsWith('slack') || SLACK_DM_CHANNELS.has(id)) return null;
+  const target = node.config?.target;
+  if (typeof target !== 'string') return null;
+  const name = target.replace(/^#/, '').trim();
+  if (!name || name.includes('{{')) return null;      // template — resolved at run time
+  if (/^C[A-Z0-9]{6,}$/.test(name)) return null;       // a raw Slack channel ID, not a name
+  return name;
+}
+
+/**
+ * The { baseId, tableId } an Airtable node references, or null. Airtable writes appear
+ * BOTH as a `connector-action` (config.action) and as a `deliver` (config.channel =
+ * 'airtable_create_record') — same capability, two node shapes — so we read the id the
+ * way `usesConnector` does, off whichever field this node type carries it in.
+ */
+function airtableRef(node) {
+  const id = node?.type === 'connector-action' ? node.config?.action
+           : node?.type === 'deliver'          ? node.config?.channel
+           : null;
+  if (typeof id !== 'string' || !id.startsWith('airtable_')) return null;
+  const baseId = node.config?.baseId;
+  if (typeof baseId !== 'string' || !baseId.trim() || baseId.includes('{{')) return null;
+  const tRaw   = node.config?.tableId;
+  const tableId = (typeof tRaw === 'string' && tRaw.trim() && !tRaw.includes('{{')) ? tRaw.trim() : null;
+  return { baseId: baseId.trim(), tableId };
+}
+
+/** Every node in the spec, INCLUDING the steps inside a foreach (they write too). */
+function* walkNodes(nodes) {
+  for (const n of (nodes ?? [])) {
+    yield n;
+    if (n?.type === 'foreach' && Array.isArray(n.config?.steps)) {
+      for (const s of n.config.steps) yield s;
+    }
+  }
+}
+
+/** A blocking RESOURCE_NOT_FOUND gap carrying everything the resolver UI needs. */
+function resourceNotFoundGap({ node, kind, name, options, canCreate, baseId }) {
+  const hash = String(name).replace(/[^a-z0-9]+/gi, '_');
+  const label =
+    kind === 'slack_channel' ? `Slack channel #${name}`
+    : kind === 'airtable_base' ? `Airtable base "${name}"`
+    : `Airtable table "${name}"`;
+  const optLabels = options.map(o => o.label);
+  const hint = optLabels.length
+    ? `Pick one you already have: ${optLabels.slice(0, 12).join(', ')}${canCreate ? ` — or create #${name}.` : '.'}`
+    : (canCreate
+        ? `I can create #${name} for you.`
+        : `Nothing connected has it — create it in the connector, then come back.`);
+  return {
+    id:       `gap_resource_not_found_${(node.id ?? 'node')}_${hash}`.toLowerCase(),
+    class:    'contract',
+    nodeId:   node.id ?? null,
+    code:     'RESOURCE_NOT_FOUND',
+    severity: 'error',
+    message:  `${label} doesn't exist in your connected account yet.`,
+    hint,
+    // Blocking ⇒ must be ANSWERED (create or pick); cannot be silently escalated.
+    resolution: 'unanswered',
+    decidable:  canCreate || options.length > 0,
+    blocking:   true,
+    // Load-bearing for the conversational resolver (elicitation-graph.js `gaps` node):
+    // the KIND, the missing NAME, whether it can be created, and the existing options.
+    resource: {
+      kind, name, canCreate,
+      baseId: baseId ?? null,
+      options,                                     // [{ value, label }]
+      createCapabilityId: kind === 'slack_channel' ? 'slack_create_channel' : null,
+    },
+  };
+}
+
+/** Fail-closed: a connected connector whose live resource list could not be read. */
+function resourceUnverifiedGap(what, nodeId) {
+  return {
+    id: `gap_resource_unverified_${what.toLowerCase().replace(/[^a-z0-9]+/g, '_')}`,
+    class: 'contract', nodeId: nodeId ?? null,
+    code: 'RESOURCE_UNVERIFIED', severity: 'error',
+    message: `I can't confirm the ${what} this workflow uses actually exist — that list didn't load, so I won't claim the workflow is finished.`,
+    hint: 'Reconnect the connector (or reload the page) and try again.',
+    resolution: 'unanswered', decidable: false, blocking: true,
+  };
+}
+
+/**
+ * Walk the spec's resource references and return RESOURCE_NOT_FOUND / RESOURCE_UNVERIFIED
+ * gaps. See the block comment above for the opt-in + fail-closed contract.
+ */
+function resourceGaps(spec, capabilities) {
+  const connectors = capabilities?.connectors;
+  if (!connectors) return [];                       // not a live session — opt out (non-breaking)
+
+  const gaps = [];
+  const slackConnected    = !!connectors.slack?.connected;
+  const airtableConnected = !!connectors.airtable?.connected;
+  const slackList     = capabilities.slackChannels;      // string[] of names, or undefined
+  const airtableSchema = capabilities.airtableSchema;    // [{id,name,tables:[…]}], or undefined
+
+  let sawSlack = false, sawAirtable = false;
+  let slackNode = null, airtableNode = null;
+
+  for (const n of walkNodes(spec?.nodes)) {
+    const chan = slackChannelRef(n);
+    if (chan && slackConnected) {
+      sawSlack = true; slackNode = slackNode ?? (n.id ?? null);
+      if (Array.isArray(slackList)) {
+        const exists = slackList.some(c => String(c).toLowerCase() === chan.toLowerCase());
+        if (!exists) {
+          gaps.push(resourceNotFoundGap({
+            node: n, kind: 'slack_channel', name: chan, canCreate: true,
+            options: slackList.map(c => ({ value: c, label: `#${c}` })),
+          }));
+        }
+      }
+    }
+
+    const at = airtableRef(n);
+    if (at && airtableConnected) {
+      sawAirtable = true; airtableNode = airtableNode ?? (n.id ?? null);
+      if (Array.isArray(airtableSchema)) {
+        const base = airtableSchema.find(b => b.id === at.baseId || b.name === at.baseId);
+        if (!base) {
+          gaps.push(resourceNotFoundGap({
+            node: n, kind: 'airtable_base', name: at.baseId, canCreate: false,
+            options: airtableSchema.map(b => ({ value: b.id, label: b.name })),
+          }));
+        } else if (at.tableId) {
+          const t = (base.tables ?? []).find(tb => tb.id === at.tableId || tb.name === at.tableId);
+          if (!t) {
+            gaps.push(resourceNotFoundGap({
+              node: n, kind: 'airtable_table', name: at.tableId, canCreate: false, baseId: base.id,
+              options: (base.tables ?? []).map(tb => ({ value: tb.name, label: tb.name })),
+            }));
+          }
+        }
+      }
+    }
+  }
+
+  // FAIL CLOSED — connected + referenced, but the list itself never loaded.
+  if (sawSlack    && !Array.isArray(slackList))     gaps.push(resourceUnverifiedGap('Slack channels', slackNode));
+  if (sawAirtable && !Array.isArray(airtableSchema)) gaps.push(resourceUnverifiedGap('Airtable bases', airtableNode));
+
+  return gaps;
+}
+
 function classOf(code) {
   if (OUTCOME_CODES.has(code))  return 'outcome';
   if (COVERAGE_CODES.has(code)) return 'coverage';
@@ -273,6 +453,14 @@ export function scoreGap(spec = {}, { capabilities = {}, validator = null } = {}
       resolution: 'unanswered', decidable: false, blocking: true,
     });
   }
+
+  // ── 2c. RESOURCE_NOT_FOUND — the destination must actually EXIST ─────────────
+  //
+  // A wire to a Slack channel / Airtable base / table the tenant's connected account
+  // does not contain. Blocking, so `complete` is false until it is created or repointed
+  // — resolved conversationally (create-or-pick) in the `gaps` node. Opt-in + fail-closed;
+  // see the block comment on `resourceGaps` above. (Increment #25.)
+  for (const g of resourceGaps(spec, capabilities)) gaps.push(g);
 
   // ── 2b. The exception questions (defect #5: the converger asked ZERO, ever) ──
 

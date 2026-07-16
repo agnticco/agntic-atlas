@@ -156,16 +156,24 @@ function airtableSchemaSummary(capabilities) {
   return '\n' + lines.join('\n');
 }
 
-// The tenant's EXISTING Slack channels, so the converger can proactively create a
-// named channel that doesn't exist yet instead of building a workflow that 404s (S8-3).
+// The tenant's EXISTING Slack channels, given to the model as CONTEXT only.
 // Returns '' when the channel list is unknown (never assert existence we can't verify).
+//
+// It deliberately does NOT tell the model to ask about, or propose a setup action for, a
+// channel that isn't in the list (Increment #25). Channel existence is now verified
+// DETERMINISTICALLY after the spec is built (gap-scorer.js `RESOURCE_NOT_FOUND`): a
+// deliver to a missing channel surfaces a create-or-pick question WITH BUTTONS — the
+// existing channels as chips plus a "Create #<name>" chip. If the model preempts that
+// with its own free-text clarification, the user gets a blank text box and no list of
+// real channels to choose from — which is exactly the half-a-feature the buttons fix.
+// So here the model is told to just BUILD the deliver and let the builder verify.
 function slackChannelsBlock(capabilities) {
   const chans = capabilities?.slackChannels;
   if (!Array.isArray(chans)) return '';
   if (!chans.length) {
-    return `\nEXISTING SLACK CHANNELS: none found. Any Slack channel the user names must be created FIRST via a "slack_create_channel" setup action (params: { name:"<name without #>" }) before the deliver node.`;
+    return `\nEXISTING SLACK CHANNELS: none connected yet. Build the deliver to the channel the user names — do NOT add a "slack_create_channel" setup action and do NOT ask about it. After the spec is built, the builder checks the channel against the live account and offers, with buttons, to create it or pick an existing one.`;
   }
-  return `\nEXISTING SLACK CHANNELS (the bot can already post to these): ${chans.map(c => '#' + c).join(', ')}.\nIf the user names a Slack channel that is NOT in this list, you MUST propose a "slack_create_channel" setup action (params: { name:"<name without #>" }) BEFORE the deliver node — never build a deliver to a channel that doesn't exist yet.`;
+  return `\nEXISTING SLACK CHANNELS (the bot can already post to these): ${chans.map(c => '#' + c).join(', ')}.\nBuild the deliver to the channel the user names. If they name one that is NOT in this list, still build the deliver to it — do NOT ask, and do NOT add a "slack_create_channel" setup action. After the spec is built, the builder verifies every Slack channel against the live account and offers, with buttons, to create the missing one or pick an existing one. Only pick a channel from the list above yourself when the user's intent is genuinely ambiguous about which channel to use.`;
 }
 
 // ── System prompt (shared across all converger LLM calls) ────────────────────
