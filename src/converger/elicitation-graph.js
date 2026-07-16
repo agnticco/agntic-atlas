@@ -1939,6 +1939,30 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
         phase: 'ratifying' };
     }
 
+    // SOFT-ONLY, AND THE PLAN ALREADY SHOWED IT → no redundant interrupt (operator,
+    // 2026-07-16). The Plan gate now surfaces the escalation policy upfront ("If something
+    // breaks → …", tagged inferred and changeable there), so stopping the build to re-ask
+    // the SAME soft edge cases — the error-handling default appeared on every build — is
+    // friction, not a decision. When there are NO blocking gaps (nothing that needs a real
+    // answer) and a plan was actually presented and approved (`_approvedPlan` — not the
+    // fail-safe skip, where the user saw no plan), auto-apply the escalate defaults SILENTLY:
+    // the exact same resolution the user's "Keep the safe defaults" click produced, and the
+    // exact same paths `materialiseEscalations` writes at ratify. A BLOCKING gap still
+    // interrupts — this only removes the redundant soft-only ask.
+    if (!blocking.length && state._approvedPlan) {
+      const escalated = soft.map(g => ({
+        id: g.id, class: g.class, code: g.code, message: g.message, nodeId: g.nodeId ?? null, resolution: 'escalated',
+      }));
+      return {
+        ...carry,
+        confirmationLog: [...repairLog, { step: state.step, type: 'gap_review', auto: true,
+          gaps: soft.map(g => ({ id: g.id, code: g.code, class: g.class, blocking: false })), escalated }],
+        escalatedGaps:   escalated,
+        step:            state.step + 1,
+        phase:           'ratifying',
+      };
+    }
+
     // One cheap call so every gap arrives with an answer already in it. A gap
     // list with empty boxes is an interrogation; a gap list with defaults is a
     // review. The difference is the whole product.
