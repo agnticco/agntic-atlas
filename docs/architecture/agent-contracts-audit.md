@@ -177,6 +177,25 @@ It does four things and emits the result into BOTH the Plan card and the generat
    fields nothing reads).
 4. **Hardcoded per-connector seam cleanup** — into **P13-0**, where it already lives.
 
+## The self-test looping fix (operator, 2026-07-16) — the big consistency win
+The operator: "nearly every build ends with the converger saying it rebuilt it a few times."
+**Ground truth (Run test on the exact spec): the workflows PASS 3/3 — they are correct.** The
+give-up was fully spurious: a dry-run summarize is non-deterministic and, on a wordy/boilerplate
+email, sometimes misjudges its (present) input and emits the "required data not found" sentinel.
+The oracle reported that as a failure, and the verify loop **regenerated the whole spec** to "fix"
+it — futile (the new spec has the same guard and flakes the same way) and expensive (an Opus
+rebuild each round). That is the loop.
+
+Fix — distinguish a CONTENT FLAKE from a STRUCTURAL failure and only rebuild on the latter:
+- `outcome-oracle.js` exposes `contentError` (the run's only defect is the sentinel — the delivery
+  STRUCTURALLY happened).
+- `verify` retries a failed sample up to 3 attempts (cheap dry-runs absorb flakes). A failure that
+  is content-flake-only → the workflow is built and wired correctly (the validator guaranteed the
+  wiring, the real Run test passes it), so it is **presented plainly** ("built and every step is
+  wired correctly — give it a test run"), **never rebuilt, never a give-up**. Only a STRUCTURAL
+  failure (a promised delivery genuinely didn't happen, or the run errored) regenerates, bounded as
+  before. Pinned by `verify-loop.test.js` (a content flake must not regenerate or give up).
+
 ## Redundant-gap suppression (operator, 2026-07-16)
 The error-handling gap-review ("what if a step fails? Keep the safe defaults") surfaced mid-build on
 EVERY build, always the same, always defaulting to escalate — and the **Plan gate now already shows

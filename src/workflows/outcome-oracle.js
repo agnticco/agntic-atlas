@@ -904,6 +904,12 @@ export function evaluateExampleRun(spec, example, runResult) {
     ran,
     error:     runResult?.error ?? null,
     contractPassed,
+    // TRUE when the ONLY reason this failed is a content node emitting the error
+    // sentinel — i.e. the delivery STRUCTURALLY happened but an llm step judged its
+    // (present) input unusable on this run. This is a per-run CONTENT flake, not a
+    // wiring defect: rebuilding the spec produces the same guard and flakes the same
+    // way. The self-test uses it to retry/accept rather than regenerate a working spec.
+    contentError: !!broken,
     contract,                                   // GATED — the machine-checkable promise
     expect:    example?.expect ?? null,         // SHOWN, not gated — the SME's own words
     produced:  summariseRun(runResult),         // …next to what actually happened

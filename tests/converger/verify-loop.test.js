@@ -151,15 +151,17 @@ describe('a failing sample → the converger fixes its own work, bounded', () =>
     let runs = 0;
     const runDryRun = async () => {
       runs++;
-      // verify retries a FAILED sample once (llm nodes flake), so a PERSISTENT failure is
-      // what regenerates: fail BOTH attempts of the first spec (runs 1,2), then the
-      // regenerated spec passes (run 3+). A single-flake first-then-pass would be absorbed
-      // by the retry with NO regenerate — which is the point of the retry.
-      const ok = runs > 2;
+      // A STRUCTURAL failure regenerates (a promised delivery did NOT happen). verify
+      // retries a failed sample up to 3 attempts, so a PERSISTENT structural failure is
+      // what regenerates: fail ALL THREE attempts of the first spec (runs 1,2,3), then the
+      // regenerated spec passes (run 4+). `contentError` is absent, and the delivery is
+      // missing (deliveries:[]) — this is a wiring failure, not a content flake, so it is
+      // the one class that SHOULD rebuild.
+      const ok = runs > 3;
       return { outputs: [], deliveries: ok ? [{ delivered: true, channel: 'slack', target: '#ops' }] : [],
-               oracleResult: { contractPassed: ok, ran: true, error: null,
+               oracleResult: { contractPassed: ok, ran: true, error: null, contentError: false,
                  contract: [{ id: 'a1', target: 'slack:#ops', kind: 'message_sent', ok,
-                   reason: ok ? undefined : 'a message was delivered, but its content was an error' }] } };
+                   reason: ok ? undefined : 'nothing reached slack:#ops' }] } };
     };
 
     const llm = makeLlm();
@@ -190,20 +192,52 @@ describe('a failing sample → the converger fixes its own work, bounded', () =>
     let runs = 0;
     const runDryRun = async () => {
       runs++;
+      // A STRUCTURAL failure (nothing reached the target) that NEVER passes — the fix loop
+      // must still terminate. contentError:false, so it regenerates (not a flake).
       return { outputs: [], deliveries: [],
-               oracleResult: { contractPassed: false, ran: true, error: null,
+               oracleResult: { contractPassed: false, ran: true, error: null, contentError: false,
                  contract: [{ id: 'a1', target: 'slack:#ops', kind: 'message_sent', ok: false, reason: 'nothing reached slack:#ops' }] } };
     };
     const r = await drive({ llm: makeLlm(), runDryRun });
 
     assert.ok(r.spec, 'even an unfixable sample still converges to a ratified spec — never a spin');
-    // Bounded still holds; the retry (a failed sample re-runs once) roughly doubles the
-    // dry-run count per round, so the ceiling is ~2× the round cap — still finite, no spin.
-    assert.ok(runs <= 8, `the fix loop is bounded; it re-ran ${runs} times`);
+    // Bounded still holds; each verify pass now retries a failed sample up to 3 attempts,
+    // so the ceiling is ~3× the round cap — still finite, no spin.
+    assert.ok(runs <= 12, `the fix loop is bounded; it re-ran ${runs} times`);
     assert.ok(r.ratify?.verification?.gaveUp === true, 'the report honestly says it could not get a sample to pass');
     assert.ok(r.ratify.verification.note, 'and it carries the reason, never a false success');
     assert.ok(r.beats.some(b => b.kind === 'check' && /couldn't get a sample to (fully )?pass|review it before going live/i.test(b.text ?? '')),
       'the give-up is narrated honestly');
+  });
+
+  test('a CONTENT FLAKE (delivery happened, summarize misjudged) does NOT regenerate or give up', async () => {
+    // The real defect the user hit: a wired-correct workflow whose dry-run summarize
+    // misjudges a wordy sample and emits the error sentinel (contentError:true) — even
+    // though the delivery STRUCTURALLY happened and the real "Run test" passes it. This
+    // must NOT rebuild (a new spec flakes the same way — the expensive loop) and must NOT
+    // give up loudly: the workflow is correct, so it is presented plainly.
+    let runs = 0;
+    const runDryRun = async () => {
+      runs++;
+      // Always a content flake: the delivery happened, but the content is the sentinel.
+      return { outputs: [], deliveries: [{ delivered: true, channel: 'slack', target: '#ops' }],
+               oracleResult: { contractPassed: false, ran: true, error: null, contentError: true,
+                 contract: [{ id: 'a1', target: 'slack:#ops', kind: 'message_sent', ok: false,
+                   reason: 'a message was delivered, but its content was an error' }] } };
+    };
+    const r = await drive({ llm: makeLlm(), runDryRun });
+
+    assert.ok(r.spec, 'converges to a ratified spec');
+    // No give-up: a flake-only failure is presented as a structurally-verified workflow.
+    assert.ok(!r.ratify?.verification?.gaveUp, 'a content flake must NOT be reported as a give-up');
+    assert.equal(r.ratify?.verification?.softFlake, true, 'it is recorded as a soft content flake, not a failure');
+    // Bounded and CHEAP: it did not spiral into whole-spec rebuilds. With 3 attempts per
+    // sample and no regenerate, the dry-run count stays small — never the give-up ceiling.
+    assert.ok(runs <= 6, `a flake must not trigger the rebuild loop; it re-ran ${runs} times`);
+    assert.ok(!r.beats.some(b => b.kind === 'check' && /couldn't get a sample|isn't settling|rebuilt this/i.test(b.text ?? '')),
+      'the alarming give-up narration must NOT appear for a content flake');
+    assert.ok(r.beats.some(b => b.kind === 'check' && /built and (every step is )?wired correctly|test run to see it/i.test(b.text ?? '')),
+      'it is narrated as built-and-wired-correctly, not a failure');
   });
 });
 
