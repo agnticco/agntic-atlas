@@ -151,7 +151,11 @@ describe('a failing sample → the converger fixes its own work, bounded', () =>
     let runs = 0;
     const runDryRun = async () => {
       runs++;
-      const ok = runs > 1;                       // first run fails, the "fixed" one passes
+      // verify retries a FAILED sample once (llm nodes flake), so a PERSISTENT failure is
+      // what regenerates: fail BOTH attempts of the first spec (runs 1,2), then the
+      // regenerated spec passes (run 3+). A single-flake first-then-pass would be absorbed
+      // by the retry with NO regenerate — which is the point of the retry.
+      const ok = runs > 2;
       return { outputs: [], deliveries: ok ? [{ delivered: true, channel: 'slack', target: '#ops' }] : [],
                oracleResult: { contractPassed: ok, ran: true, error: null,
                  contract: [{ id: 'a1', target: 'slack:#ops', kind: 'message_sent', ok,
@@ -193,7 +197,9 @@ describe('a failing sample → the converger fixes its own work, bounded', () =>
     const r = await drive({ llm: makeLlm(), runDryRun });
 
     assert.ok(r.spec, 'even an unfixable sample still converges to a ratified spec — never a spin');
-    assert.ok(runs <= 4, `the fix loop is bounded; it re-ran ${runs} times`);
+    // Bounded still holds; the retry (a failed sample re-runs once) roughly doubles the
+    // dry-run count per round, so the ceiling is ~2× the round cap — still finite, no spin.
+    assert.ok(runs <= 8, `the fix loop is bounded; it re-ran ${runs} times`);
     assert.ok(r.ratify?.verification?.gaveUp === true, 'the report honestly says it could not get a sample to pass');
     assert.ok(r.ratify.verification.note, 'and it carries the reason, never a false success');
     assert.ok(r.beats.some(b => b.kind === 'check' && /couldn't get a sample to (fully )?pass|review it before going live/i.test(b.text ?? '')),

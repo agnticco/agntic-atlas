@@ -2022,22 +2022,35 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
     // would trigger a pointless fix.
     const judged = [];
     for (const ex of examples) {
-      let r;
-      try {
-        r = await runDryRun(spec, ex.given);
-      } catch (err) {
-        // The tester itself faulted. That is infra, not a workflow defect — do not
-        // block the build or claim a failure. Pass through with an honest note.
-        emitBeat(cfg, { kind: 'check', text: "I couldn't run the self-test just now — you can still run it yourself before going live." });
-        return {
-          phase: 'ratifying',
-          _verifyReport: { ran: false, passed: 0, total: 0, note: `self-test could not run (${String(err?.message ?? err)})` },
-          confirmationLog: [{ step: state.step, type: 'verify', ran: false, error: String(err?.message ?? err) }],
-          step: state.step + 1,
-        };
+      // A sample that RAN but FAILED gets ONE retry. The workflow's own llm nodes are
+      // non-deterministic: a summarize can misfire its "missing data" guard or produce
+      // off-output on a single run even when the SPEC is correct. A single flaky run must
+      // not condemn a working workflow — only a CONSISTENT failure (fails twice) is a real
+      // defect. (A pass on the first try never retries; an infra fault still bails.)
+      let oracle = null, passed = false;
+      for (let attempt = 0; attempt < 2; attempt++) {
+        let r;
+        try {
+          r = await runDryRun(spec, ex.given);
+        } catch (err) {
+          // The tester itself faulted. That is infra, not a workflow defect — do not
+          // block the build or claim a failure. Pass through with an honest note.
+          emitBeat(cfg, { kind: 'check', text: "I couldn't run the self-test just now — you can still run it yourself before going live." });
+          return {
+            phase: 'ratifying',
+            _verifyReport: { ran: false, passed: 0, total: 0, note: `self-test could not run (${String(err?.message ?? err)})` },
+            confirmationLog: [{ step: state.step, type: 'verify', ran: false, error: String(err?.message ?? err) }],
+            step: state.step + 1,
+          };
+        }
+        if (!r || r.paused || !r.oracleResult) { oracle = null; break; }   // unjudgeable — skip
+        oracle = r.oracleResult;
+        passed = oracle.contractPassed === true;
+        if (passed) break;                                                  // passed — no retry
+        // failed — the loop retries once before believing it
       }
-      if (!r || r.paused || !r.oracleResult) continue;   // unjudgeable — skip
-      judged.push({ example: ex, passed: r.oracleResult.contractPassed === true, oracle: r.oracleResult });
+      if (!oracle) continue;   // unjudgeable — skip
+      judged.push({ example: ex, passed, oracle });
     }
 
     // Nothing could be judged (every sample paused / had no verdict). Not a failure —

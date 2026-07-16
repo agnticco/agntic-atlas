@@ -1149,6 +1149,27 @@ spec is actually executable, not just structurally similar to the frozen file.
   should convert to mrkdwn; SMS/webhooks should strip all markup. Fix belongs in each
   capability's `handle` in `src/connectors/*/index.js`, not in the LLM prompt.
 
+- **Email bodies reach a workflow as READABLE TEXT, not raw HTML — the INPUT mirror of the
+  gotcha above (fixed 2026-07-16).** `extractBody` in `src/connectors/google/index.js` prefers a
+  `text/plain` part, but an HTML-ONLY email (most marketing/notification mail) has none, so it
+  used to fall back to the raw `text/html` part — handing the workflow a wall of MJML/CSS. An llm
+  `extract`/`summarize` node reads that as "no usable body" and, per the guard clause the converger
+  writes into every content node ("if empty/missing → output EXACTLY `ERROR: required data not
+  found`"), emits the sentinel — which `outcome-oracle.js` (`CONTENT_ERROR_SENTINEL`) correctly
+  flags as `broken → contractPassed:false`. This failed a CORRECTLY-WIRED workflow both in the build
+  self-test AND at run time (same parser, `parseMessage`), and the failure was NON-deterministic
+  (the model choked on the markup only some runs), so the converger's bounded regenerate loop
+  spiralled to its aggregate cap and presented the finished spec with the alarming "I rebuilt this a
+  few times and it still isn't settling" — a spurious give-up on a spec that actually works. Fix:
+  `extractBody` now runs the HTML fallback through `stripHtml` (strengthened to drop
+  `<style>`/`<script>`/`<head>`/comments — incl. `<!--[if mso]>` — WHOLE before removing tags), so
+  BOTH production and the self-test receive clean prose. **This is not "make the test lenient" — the
+  self-test was surfacing a real production fragility; the fix changes production and test together,
+  so the test can never pass on input the real run won't see.** The converger's `verify` node also
+  now retries a FAILED sample once (`elicitation-graph.js`) — an llm node can flake a single run even
+  on a correct spec; only a CONSISTENT (2×) failure regenerates. Verified headed: the 3-way
+  support-triage branch now self-tests **2/2 samples passed** on the first generate, no regeneration.
+
 - **The node library is `trigger · llm · assemble · connector-action · search_web · deliver`, plus
   the control-flow types `branch · foreach · human · decision` (P12 increments A + B + E,
   2026-07-13/14).** `tool` / `mcp_tool` / `fetch` **no longer exist** — they were

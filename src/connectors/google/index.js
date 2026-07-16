@@ -17,6 +17,13 @@ import { googleProviderConfig } from '../../auth/oauth-client.js';
 function stripHtml(str) {
   if (!str || typeof str !== 'string') return str;
   return str
+    // Drop non-content blocks WHOLE (contents included) before touching tags — otherwise
+    // a marketing email's <style> rules and MSO conditional comments survive as pseudo-text
+    // and drown the real prose (which is what makes an llm `extract` node read "no body").
+    .replace(/<!--[\s\S]*?-->/g, ' ')                          // HTML comments (incl. <!--[if mso]>)
+    .replace(/<style[\s\S]*?<\/style>/gi, ' ')                 // CSS blocks
+    .replace(/<script[\s\S]*?<\/script>/gi, ' ')              // scripts
+    .replace(/<head[\s\S]*?<\/head>/gi, ' ')                  // <head> (title/meta/link)
     .replace(/<br\s*\/?>/gi, '\n')
     .replace(/<\/p>/gi, '\n\n')
     .replace(/<\/li>/gi, '\n')
@@ -261,7 +268,18 @@ function extractBody(payload) {
       if (text) return text;
     }
   }
-  if (payload.body?.data) return b64decode(payload.body.data);
+  // No text/plain part anywhere — fall back to the HTML body, but STRIP it to readable
+  // prose. An HTML-only email (common for marketing/notification mail) otherwise hands
+  // the workflow raw MJML/CSS, which an llm `extract`/`summarize` node reads as "no
+  // usable body" and — per the guard clause the converger writes into every content
+  // node — emits the `ERROR: required data not found` sentinel, failing a correctly
+  // wired workflow both in the build self-test AND at run time. Stripping here fixes
+  // BOTH (same parser), so the test can never pass on text the real run won't see.
+  if (payload.mimeType === 'text/html' && payload.body?.data) return stripHtml(b64decode(payload.body.data));
+  if (payload.body?.data) {
+    const raw = b64decode(payload.body.data);
+    return /<[a-z][\s\S]*?>/i.test(raw) ? stripHtml(raw) : raw;
+  }
   return '';
 }
 
