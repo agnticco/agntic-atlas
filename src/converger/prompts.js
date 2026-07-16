@@ -617,13 +617,19 @@ ${outcome.statement ? `  "${outcome.statement}"\n` : ''}${lines.join('\n')}${con
  * (agent-contracts increment 2) surfacing what elicitation learned from the tools.
  */
 function groundingBlock(grounding) {
-  const s = grounding?.slack;
-  if (!s?.checked) return '';
   const lines = [];
-  if (s.known?.length)
-    lines.push(`- These Slack channels EXIST in the connected workspace: ${s.known.join(', ')}. A delivery to one of these is GROUNDED — tag it confidence "found" and say it posts to the EXISTING channel.`);
-  if (s.absent?.length)
-    lines.push(`- These Slack channels were named but do NOT exist in the workspace yet: ${s.absent.join(', ')}. Keep confidence "you said", and say in the text that Atlas will CREATE the channel before the workflow runs.`);
+  const s = grounding?.slack;
+  if (s?.checked) {
+    if (s.known?.length)
+      lines.push(`- These Slack channels EXIST in the connected workspace: ${s.known.join(', ')}. A delivery to one of these is GROUNDED — tag it confidence "found" and say it posts to the EXISTING channel.`);
+    if (s.absent?.length)
+      lines.push(`- These Slack channels were named but do NOT exist in the workspace yet: ${s.absent.join(', ')}. Keep confidence "you said", and say in the text that Atlas will CREATE the channel before the workflow runs.`);
+  }
+  const at = grounding?.airtable;
+  if (at?.table) {
+    const cols = at.columns?.length ? ` with columns: ${at.columns.join(', ')}` : '';
+    lines.push(`- Airtable: the base "${at.base}" has a table "${at.table}"${cols} — verified in the connected workspace. A write to it is GROUNDED — tag confidence "found" and name the REAL table${at.columns?.length ? ' and its columns' : ''} in the step text.`);
+  }
   if (!lines.length) return '';
   return `\nGROUNDING — verified live against the connected tools. Reflect this in the confidence tags and the wording; do NOT contradict it:\n${lines.join('\n')}\n`;
 }

@@ -145,6 +145,16 @@ describe('the grounding pass surfaces live connector facts in the plan (incremen
     const p = buildPlanPrompt({ intent: 'x', outcome, triggers: [] });
     assert.doesNotMatch(p, /GROUNDING — verified live/);
   });
+
+  test('an Airtable write is grounded with the REAL table + columns from the live schema', () => {
+    const p = buildPlanPrompt({ intent: 'x',
+      outcome: { statement: 's', assertions: [{ kind: 'record_exists', target: 'airtable:Leads' }] },
+      triggers: [],
+      grounding: { airtable: { base: 'CRM', table: 'Leads', columns: ['Name', 'Email', 'Budget'] } } });
+    assert.match(p, /base "CRM" has a table "Leads"/);
+    assert.match(p, /columns: Name, Email, Budget/);
+    assert.match(p, /tag confidence "found"/);
+  });
 });
 
 describe('FAIL-SAFE: an unusable projection skips the gate, never blocks the build', () => {

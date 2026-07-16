@@ -1210,26 +1210,54 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
 
   // THE GROUNDING PASS (agent-contracts increment 2). Verify the plan's DELIVERY
   // destinations against the LIVE connectors, so the plan tells the user which resources
-  // already exist vs. which Atlas will create — grounded fact, not a guess. Slack channels
-  // are checked against `capabilities.slackChannels` (the tenant's real channel list, read
-  // from conversations.list at session start). Returns null when there is no live list to
-  // check against — we never claim to have verified something we could not.
+  // already exist vs. which Atlas will create — grounded fact, not a guess. Both checks
+  // read data the session already fetched (no new connector round-trips), and each is
+  // independently null-safe: a connector with no live view contributes nothing rather than
+  // a false claim. Returns null overall when nothing could be verified.
+  //   · Slack   — named channels vs `capabilities.slackChannels` (live conversations.list).
+  //   · Airtable — a `record_exists → airtable:<Table>` assertion resolved against
+  //                `capabilities.airtableSchema` (live base/table/field metadata), so the
+  //                plan can name the REAL table and its REAL columns.
   function groundPlan(outcome, capabilities) {
+    const assertions = outcome?.assertions ?? [];
+    const grounding = {};
+
     const chans = Array.isArray(capabilities?.slackChannels)
       ? new Set(capabilities.slackChannels.map(c => String(c).replace(/^#/, '').toLowerCase()))
       : null;
-    if (!chans) return null;
-    const known = new Set(), absent = new Set();
-    for (const a of (outcome?.assertions ?? [])) {
-      const { connector, locator } = splitTarget(a?.target);
-      if (connector !== 'slack' || !locator) continue;
-      const bare = locator.replace(/^#/, '').toLowerCase();
-      if (!bare) continue;
-      const label = locator.startsWith('#') ? locator : `#${locator}`;
-      (chans.has(bare) ? known : absent).add(label);
+    if (chans) {
+      const known = new Set(), absent = new Set();
+      for (const a of assertions) {
+        const { connector, locator } = splitTarget(a?.target);
+        if (connector !== 'slack' || !locator) continue;
+        const bare = locator.replace(/^#/, '').toLowerCase();
+        if (!bare) continue;
+        (chans.has(bare) ? known : absent).add(locator.startsWith('#') ? locator : `#${locator}`);
+      }
+      if (known.size || absent.size) grounding.slack = { checked: true, known: [...known], absent: [...absent] };
     }
-    if (!known.size && !absent.size) return null;
-    return { slack: { checked: true, known: [...known], absent: [...absent] } };
+
+    const schema = Array.isArray(capabilities?.airtableSchema) ? capabilities.airtableSchema : null;
+    if (schema?.length) {
+      for (const a of assertions) {
+        const { connector, locator } = splitTarget(a?.target);
+        if (connector !== 'airtable' || !locator) continue;
+        const want = String(locator).toLowerCase();
+        let match = null;
+        for (const base of schema) {
+          for (const t of (base.tables ?? [])) {
+            if (String(t.name).toLowerCase() === want) {
+              match = { base: base.name, table: t.name, columns: (t.fields ?? []).map(f => f.name) };
+              break;
+            }
+          }
+          if (match) break;
+        }
+        if (match) { grounding.airtable = match; break; }
+      }
+    }
+
+    return (grounding.slack || grounding.airtable) ? grounding : null;
   }
 
   graph.addNode('plan', async (state, cfg) => {

@@ -161,10 +161,13 @@ It does four things and emits the result into BOTH the Plan card and the generat
      "existing #x"); one they don't → stays `you said` and the plan says Atlas will create it.
      Returns null (no claim) when there's no live list. Verified: `#agntic-x-slack` (exists) → `I
      found`; `#support`/`#sales` (absent) → `you said` (no false "found").
-   - ⏳ REMAINING: **Airtable/Sheets schema resolution before `generate`** (base/table/columns from
-     the live connector, so the build uses real ids and the plan shows them). The post-generate
-     `destinations` node still does this today as a safety net; moving it earlier needs an
-     Airtable-connected tenant + write workflow to verify headed. Next increment.
+   - ✅ BUILT & verified headed: **Airtable schema grounding** (`groundPlan` extended). A
+     `record_exists → airtable:<Table>` assertion is resolved against `capabilities.airtableSchema`
+     (live base/table/field metadata fetched at session start), so the plan names the REAL base +
+     table + columns as `I found` BEFORE the build — the build then writes real field names, not
+     hallucinated ones. Verified: "Agntic CRM / Sheet1" resolved with its real columns (Name,
+     Email, …) and the writes mapped to them. Null-safe (no schema → no claim). The post-generate
+     `destinations` node remains as the authoritative field-mapping safety net.
 3. **Node `description`/`inputs`/`outputs` enrichment.** Improves the walkthrough review; P13
    prerequisite (output schemas).
 4. **Hardcoded per-connector seam cleanup** — into **P13-0**, where it already lives.
