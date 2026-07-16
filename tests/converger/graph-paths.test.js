@@ -168,31 +168,74 @@ describe('choosing the base', () => {
   });
 });
 
-// ── The propose loop — now the GAP-FIX path, not the main builder ────────────
-// After the rearchitecture (Increment 3) `generate` builds the whole spec in one
-// pass; `propose` survives only for gap-driven single fixes. So these tests drive it
-// through a BLOCKING gap (`blockingGap` — the outcome promises Slack, which `generate`
-// deliberately never builds), which is the production route back into `propose`.
+// ── Every "the spec must change" route REGENERATES — `propose` is retired ─────
+// The client retired `propose`'s per-node `{type:'proposal'}` UI surface. Any route
+// that reaches `propose` after `generate` emits an interrupt no client can render, so
+// the build HANGS at phase:'building' (Run test disabled, never reaching ratify). The
+// fix routes the FIRST build AND every later change (a blocking gap, a ratify
+// request-changes) to `generate`, which rebuilds the whole, updated, still-validated
+// spec from the accumulated clarifications. These tests pin that: no `proposal`
+// interrupt is EVER emitted, the change is instead absorbed by a REGENERATE, and the
+// loop stays bounded (MAX_REGEN_ROUNDS) so an unsatisfiable intent ends at `ratify`
+// with its blockers shown rather than spinning.
 
-describe('a proposal that changes nothing is not a proposal', () => {
-  test('the loop does not spin on a re-proposed edge', async () => {
-    // applyProposal DEDUPES, so a duplicate edge leaves the draft identical and the
-    // model proposes it again — forever. Against the live model this produced
-    // FOURTEEN consecutive identical "add this connection" cards. The gap-fix propose
-    // path (reached here via the unsatisfied Slack assertion) must still not spin.
+describe('a blocking gap the builder cannot close does not spin — it regenerates, bounded', () => {
+  test('no `proposal` interrupt is ever emitted, and it still converges to a spec', async () => {
+    // The retired `propose` drip is the surface with no client UI. `blockingGap` leaves
+    // the promised Slack delivery unbuilt — the production route that USED to re-enter
+    // `propose`. It must now route back to `generate` (a REGENERATE), never to the
+    // UI-less proposal card, and it must stay bounded rather than rebuild forever.
     const r = await drive({ proposeSameEdgeForever: true, blockingGap: true });
-    const proposals = r.seen.filter(iv => iv.type === 'proposal');
-    assert.ok(proposals.length <= 4,
-      `the propose loop spun ${proposals.length} times on a proposal that changed nothing`);
-    assert.ok(r.spec, 'and it still converges to a spec');
+    const proposals  = r.seen.filter(iv => iv.type === 'proposal');
+    const regens     = r.seen.filter(iv => iv.type === 'generated_workflow');
+    assert.equal(proposals.length, 0,
+      'a blocking gap must NEVER route to the retired, UI-less `propose` — that hangs the build');
+    assert.ok(regens.length >= 2,
+      'the blocking gap must be absorbed by at least one REGENERATE (a second whole-spec pass)');
+    assert.ok(regens.length <= 5,
+      `the regenerate loop must be bounded; it ran ${regens.length} times on an unsatisfiable gap`);
+    assert.ok(r.spec, 'and it still converges to a ratified spec (with the blocker surfaced), never a spin');
   });
 
   test('POSITIVE: the generate pass builds the node and names the workflow', async () => {
-    // The main build now goes through `generate` (one whole-spec pass), not the propose
-    // drip: the write node and the workflow name both come from that single call.
+    // The main build goes through `generate` (one whole-spec pass): the write node and
+    // the workflow name both come from that single call, with NO propose card shown.
     const r = await drive();
     assert.ok(r.save, 'the node the whole-spec generate pass emitted is in the spec');
     assert.equal(r.spec.name, 'Leads', 'and so is the name it carried');
+    assert.equal(r.seen.filter(iv => iv.type === 'proposal').length, 0,
+      'the happy build shows NO proposal card — the whole spec is one generate + one review');
+  });
+
+  test('a CLEAN spec reaches ratify → END with exactly one build and no propose', async () => {
+    // The invariant the brief calls load-bearing: a provably-complete spec walks straight
+    // generate → walkthrough(accept) → analyze → gapping → gaps(no blocking) → ratify → done,
+    // with NO regenerate and NO propose — a straight path to the test-unlock.
+    const r = await drive();
+    assert.ok(r.spec, 'the clean spec reaches a ratified spec');
+    assert.equal(r.seen.filter(iv => iv.type === 'proposal').length, 0, 'no propose card is ever shown');
+    assert.equal(r.seen.filter(iv => iv.type === 'generated_workflow').length, 1,
+      'a clean spec is built ONCE — no regenerate round');
+    assert.ok(r.seen.some(iv => iv.type === 'ratify'), 'and it reaches the ratify review');
+  });
+
+  test('a ratify request-changes REGENERATES the whole spec, it does not route to propose', async () => {
+    // The third post-generate route into the retired `propose`: ratify's "request
+    // changes". It must regenerate (phase:'proposing' → the ratify edge routes to
+    // `generate`), not emit a UI-less proposal card. Mutation: route the ratify edge to
+    // `propose` ⇒ a `proposal` interrupt appears and this fails.
+    let ratified = false;
+    const r = await drive({
+      reply: {
+        // First ratify → ask for a change; the regenerated spec is then approved.
+        ratify: () => (ratified ? { type: 'approve' } : (ratified = true, { type: 'request_changes', feedback: 'tweak the wording' })),
+      },
+    });
+    assert.equal(r.seen.filter(iv => iv.type === 'proposal').length, 0,
+      'a ratify request-changes must NEVER route to the retired, UI-less `propose`');
+    assert.ok(r.seen.filter(iv => iv.type === 'generated_workflow').length >= 2,
+      'the requested change must be absorbed by a REGENERATE (a second whole-spec pass)');
+    assert.ok(r.spec, 'and the run reaches a ratified spec after the change');
   });
 });
 
@@ -210,9 +253,9 @@ describe('the destination resolution touches only what it should', () => {
   });
 
   test('the connector is not re-asked when the gap loop comes back round', async () => {
-    // `destinationsResolved` is a latch. Without it, a blocking gap that routes back
-    // through `propose` re-enters `destinations` and the user is asked "which base?"
-    // a second time — and a question asked twice is one people learn to click past.
+    // `destinationsResolved` is a latch. Without it, a blocking gap that REGENERATES
+    // re-enters `destinations` on the way back to ratify and the user is asked "which
+    // base?" a second time — and a question asked twice is one people learn to click past.
     const r = await drive({ blockingGap: true });
     assert.equal(r.calls.filter(c => c === 'airtable_list_bases').length, 1,
       `the base was looked up ${r.calls.filter(c => c === 'airtable_list_bases').length} times across the gap round`);
@@ -221,20 +264,20 @@ describe('the destination resolution touches only what it should', () => {
 });
 
 describe('unparseable model output becomes a QUESTION, not a tight loop', () => {
-  test('a proposal with no component asks the user for more detail', async () => {
-    // The graph's own note: this "guarantees we always interrupt so the graph never
-    // tight-loops through analyze→propose without pausing". Without the interrupt the
-    // model's garbage is treated as a proposal and the loop spins with nothing on
-    // screen — the user watches a spinner forever, which is the worst failure a
-    // conversational builder has: it looks like it is working.
+  test('a generate pass with no usable nodes asks the user to describe the steps', async () => {
+    // `generate` is now the builder, and it carries the same guard the propose drip
+    // did: garbage from the model (no nodes) must reach the user as a QUESTION, never a
+    // silent spin — the worst failure a conversational builder has is one that looks
+    // like it is working. The generate node's defensive branch interrupts with a
+    // clarification ("describe, step by step, what it should do") instead of shipping an
+    // empty spec. (The invariant is unchanged from the propose era; only the node that
+    // owns it moved, because the builder moved.)
     let asked = null;
     await drive({
-      // Reach the gap-fix `propose` path (blockingGap), then feed it garbage.
-      blockingGap: true,
-      answers: { 'Build the next component': {} },   // the model returns nothing usable
-      onInterrupt: (iv) => { if (!asked && iv.type === 'clarification' && /more detail/i.test(iv.question ?? '')) asked = iv; },
+      answers: { 'Build the COMPLETE workflow': {} },   // the model returns nothing usable
+      onInterrupt: (iv) => { if (!asked && iv.type === 'clarification' && /describe.*step by step|couldn't assemble/i.test(iv.question ?? '')) asked = iv; },
     });
-    assert.ok(asked, 'unparseable output must reach the user as a question, not spin silently');
+    assert.ok(asked, 'unparseable generate output must reach the user as a question, not spin silently');
   });
 });
 
@@ -261,17 +304,16 @@ describe('the paths nothing was driving', () => {
     assert.ok(asked, 'when the model says it is not ready and asks a question, the user must SEE the question');
   });
 
-  test('a MODIFIED proposal is merged, not discarded', async () => {
-    // `propose`'s modify path is now the GAP-FIX path: `generate` builds the Airtable
-    // write and leaves the promised Slack delivery unbuilt (a BLOCKING gap), so `propose`
-    // is asked to add it — and the user MODIFIES that proposal (renames the delivery
-    // step). The invariant is unchanged from before the rearchitecture: a user's
-    // correction is MERGED, never silently dropped. A dedicated inline harness so the
-    // proposed component is a NODE we can rename and the run then converges (the added
-    // delivery satisfies the gap). Mutation: discard the modification ⇒ the label stays
+  test('a MODIFIED generated workflow is regenerated with the correction, not discarded', async () => {
+    // The modify path is now on `generate`, not `propose`: the whole-spec review
+    // interrupt (`generated_workflow`) accepts `{ type: 'modify', modification }`, which
+    // is fed back as a clarification and the WHOLE spec is regenerated to honour it. The
+    // invariant is unchanged from the propose era: a user's correction is applied, never
+    // silently dropped. Here the user renames the delivery step; the second generate pass
+    // (whose prompt now carries the modification) emits the renamed label.
+    // Mutation: drop the modification from the regenerate prompt ⇒ the label stays
     // 'Tell #ops' and the assertion fails.
     const J = (o) => ({ content: JSON.stringify(o) });
-    const draftIn = (p) => { const m = /CURRENT DRAFT:\n(\{[\s\S]*?\n\})\n/.exec(p); try { return JSON.parse(m[1]); } catch { return {}; } };
     const invokeCapability = async (id) => {
       if (id === 'airtable_list_bases')    return { bases: [{ id: 'appAAAAAAAAAAAAA1', name: 'Sales CRM' }] };
       if (id === 'airtable_describe_base') return { tables: [{ id: 't1', name: 'Leads', fields: [{ id: 'f1', name: 'Name', type: 'singleLineText', choices: [] }] }] };
@@ -280,7 +322,6 @@ describe('the paths nothing was driving', () => {
     };
     const llm = { invoke: async (msgs) => {
       const p = String(msgs[msgs.length - 1].content);
-      if (p.includes("USER'S MODIFICATION REQUEST")) return J({ component: 'node', spec: { id: 'notify', type: 'deliver', label: 'RENAMED', config: { channel: 'slack', target: '#ops' } } });
       if (p.includes('OUTCOME CONTRACT')) return J({ candidates: [{ id: 'c1', statement: 'Leads are saved and #ops is told.',
         assertions: [{ id: 'a1', kind: 'record_exists', target: 'airtable:Leads', fields: ['Name'] },
                      { id: 'a2', kind: 'message_sent', target: 'slack:#ops' }] }] });
@@ -290,24 +331,26 @@ describe('the paths nothing was driving', () => {
       if (p.includes('Is this workflow FINISHED'))      return J({ complete: true });
       if (p.includes('cases nobody has decided about')) return J({ suggestions: [] });
       if (p.includes('REAL columns are'))               return J({ map: { Name: 'Name' } });
-      // generate builds the Airtable write ONLY — the Slack delivery stays unbuilt.
-      if (p.includes('Build the COMPLETE workflow')) return J({ triggers: [{ type: 'email', filter: 'to:leads@acme.com' }],
-        nodes: [{ id: 'save', type: 'connector-action', label: 'Save', config: { action: 'airtable_create_record', baseId: 'appPLACEHOLDER', tableId: 'Leads', fields: { Name: 'x' } } }], edges: [] });
-      // the gap-fix propose round proposes the missing Slack delivery (which the user then renames)
-      if (p.includes('Build the next component')) {
-        const d = draftIn(p);
-        if (!(d.nodes ?? []).some(n => n.id === 'notify')) return J({ component: 'node', spec: { id: 'notify', type: 'deliver', label: 'Tell #ops', config: { channel: 'slack', target: '#ops' } } });
-        if (!(d.edges ?? []).some(e => e.from === 'save' && e.to === 'notify')) return J({ component: 'edge', spec: { from: 'save', to: 'notify' } });
-        return J({ component: 'name', spec: 'Leads' });
+      // The whole spec, complete, in one call. The delivery label is 'Tell #ops' on the
+      // first pass and 'RENAMED' once the regenerate prompt carries the user's correction.
+      if (p.includes('Build the COMPLETE workflow')) {
+        const renamed = p.includes('RENAMED');
+        return J({ name: 'Leads', triggers: [{ type: 'email', filter: 'to:leads@acme.com' }],
+          nodes: [
+            { id: 'save',   type: 'connector-action', label: 'Save', config: { action: 'airtable_create_record', baseId: 'appPLACEHOLDER', tableId: 'Leads', fields: { Name: 'x' } } },
+            { id: 'notify', type: 'deliver', label: renamed ? 'RENAMED' : 'Tell #ops', config: { channel: 'slack', target: '#ops' } },
+          ],
+          edges: [{ from: 'save', to: 'notify' }] });
       }
       return J({});
     } };
 
     const conv = createConverger({ llm, capabilities: CAPS, invokeCapability, checkpointerDir: scratch() });
+    let reviewed = false;
     const reply = { outcome_check: () => ({ id: 'c1' }), example_request: () => ({ type: 'skip' }),
-                    proposal: (iv) => (iv.proposal?.component === 'node' && iv.proposal?.spec?.id === 'notify'
-                      ? { type: 'modify', modification: 'call the delivery step RENAMED' }
-                      : { type: 'accept' }),
+                    // The FIRST whole-graph review is modified (rename the delivery); the
+                    // regenerated one is accepted.
+                    generated_workflow: () => (reviewed ? { type: 'accept' } : (reviewed = true, { type: 'modify', modification: 'call the delivery step RENAMED' })),
                     clarification: () => ({ answer: 'yes' }), gap_review: () => ({ acceptDefaults: true }), ratify: () => ({ type: 'approve' }) };
     let iv;
     try { await conv.run('mod1', 'save leads to airtable and tell ops'); iv = { type: 'done' }; }
@@ -315,9 +358,9 @@ describe('the paths nothing was driving', () => {
     for (let i = 0; i < 60 && iv?.type !== 'done'; i++) iv = await conv.resume('mod1', (reply[iv.type] ?? (() => ({ type: 'accept' })))(iv));
 
     const notify = iv?.spec?.nodes?.find(n => n.id === 'notify');
-    assert.ok(notify, 'the gap-fix proposal added the Slack delivery node');
+    assert.ok(notify, 'the regenerated spec still carries the Slack delivery node');
     assert.equal(notify.label, 'RENAMED',
-      'a user who corrects a proposal must get their correction — silently dropping it is worse than not offering it');
+      'a user who corrects the generated workflow must get their correction — silently dropping it is worse than not offering it');
   });
 
   test('the trigger is DERIVED, and an existing one is not overwritten', async () => {

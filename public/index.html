@@ -62,6 +62,10 @@
      before it is injected as innerHTML, so untrusted content flowing through
      workflows into the inbox/chat cannot execute script. -->
 <script src="./vendor/purify.min.js"></script>
+<!-- dagre: DAG auto-layout for the workflow canvas — computes clean node positions
+     for any branch/lane/join shape so we don't hand-roll fan-out geometry. UMD,
+     exposes window.dagre (incl. dagre.graphlib). -->
+<script src="./vendor/dagre.min.js"></script>
 <script src="./support.js"></script>
 <!-- Vendored (not a CDN dependency) — DOM-snapshot for the feedback/bug widget. -->
 <script defer src="./html2canvas.min.js"></script>
@@ -339,6 +343,135 @@
           </div>
         </sc-if>
 
+
+        <!-- DEDICATED GENERATED-WORKFLOW CANVAS — the COMPLETE graph the converger
+             generated in one pass (state.spec.{nodes,edges}), laid out by _specCanvas
+             (trigger → … → branch → labeled lanes, with the 2-lane fan-out). Held
+             ABOVE the scrolling conversation as the PROMINENT center surface: this is
+             where the branch actually forks, so it gets real 2D room. Bindings are
+             graphCanvas.* (fed from state.spec, NOT a drip signal-line — the per-node
+             pin/drip is retired). Approval is now WHOLE-GRAPH: Approve / Revise below
+             the canvas; selecting a node shows read-only detail. -->
+        <sc-if value="{{ graphCanvas }}" hint-placeholder-val="{{ false }}">
+          <div style="flex:none;margin:14px 28px 0;border:1px solid rgba(231,178,94,.16);background:rgba(231,178,94,.03);border-radius:16px;padding:16px 18px 8px">
+                    <sc-if value="{{ graphCanvas.awaitingApproval }}" hint-placeholder-val="{{ false }}">
+                      <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:14px;margin:0 2px 11px">
+                        <div style="min-width:0">
+                          <div style="font-size:10.5px;letter-spacing:.09em;text-transform:uppercase;color:rgba(240,191,107,.75);font-weight:600;margin-bottom:3px">Your workflow</div>
+                          <div style="font-size:14px;line-height:1.45;color:rgba(255,255,255,.72)">Here's the workflow I built — approve each step and it takes shape below, or tell me what to change.</div>
+                        </div>
+                        <div style="flex:none;text-align:right;padding-top:2px">
+                          <div style="font-family:ui-monospace,SFMono-Regular,monospace;font-size:10px;font-weight:600;letter-spacing:.1em;color:rgba(239,200,146,.8)">{{ graphCanvas.progressLabel }}</div>
+                          <div style="margin-top:6px;width:124px;height:4px;border-radius:3px;background:rgba(255,255,255,.08);overflow:hidden"><div style="height:100%;width:{{ graphCanvas.progressPct }};background:linear-gradient(90deg,#efc892,#e7b25e);border-radius:3px;transition:width .4s"></div></div>
+                        </div>
+                      </div>
+                    </sc-if>
+                    <!-- CANVAS — dagre-laid-out graph (rankdir LR). An SVG overlay (one transparent
+                         full-canvas <svg> per edge, behind the nodes) draws each edge as a smooth path
+                         with an arrowhead; node cards are absolutely positioned at dagre's coordinates.
+                         Approved nodes are solid + green check; the current step breathes amber; not-yet-
+                         reached nodes are dim — so the graph BUILDS UP as approval proceeds. -->
+                    <div style="overflow:auto;border:1px solid rgba(255,255,255,.06);border-radius:12px;background:rgba(255,255,255,.015);max-height:58vh">
+                      <div style="position:relative;width:{{ graphCanvas.canvasW }}px;height:{{ graphCanvas.canvasH }}px;margin:0 auto">
+                        <sc-for list="{{ graphCanvas.edges }}" as="ed" hint-placeholder-count="2">
+                          <div style="position:absolute;left:0;top:0;pointer-events:none">
+                            <svg width="{{ graphCanvas.canvasW }}" height="{{ graphCanvas.canvasH }}" style="display:block;overflow:visible">
+                              <path d="{{ ed.d }}" fill="none" stroke="{{ ed.color }}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></path>
+                              <polygon points="{{ ed.arrowPoints }}" fill="{{ ed.color }}"></polygon>
+                            </svg>
+                          </div>
+                        </sc-for>
+                        <sc-for list="{{ graphCanvas.edgeLabels }}" as="el" hint-placeholder-count="0">
+                          <div style="position:absolute;left:{{ el.left }};top:{{ el.top }};transform:translateX(-50%);font-family:'Instrument Serif',serif;font-style:italic;font-size:12px;color:{{ el.color }};white-space:nowrap;pointer-events:none">{{ el.text }}</div>
+                        </sc-for>
+                        <sc-for list="{{ graphCanvas.nodes }}" as="nd" hint-placeholder-count="2">
+                          <div onClick="{{ nd.onSelect }}" style="position:absolute;left:{{ nd.left }};top:{{ nd.top }};width:108px;height:92px;display:flex;align-items:center;justify-content:center;cursor:pointer;opacity:{{ nd.cardOpacity }};transition:opacity .35s">
+                            <div style="flex:none;position:relative">
+                              <div style="width:{{ nd.nodeW }};height:{{ nd.nodeH }};border-radius:{{ nd.nodeRadius }};border:1.5px solid {{ nd.nodeBorder }};background:{{ nd.nodeBg }};box-shadow:{{ nd.nodeShadow }};animation:{{ nd.nodeAnim }};transform:{{ nd.rot }};display:flex;align-items:center;justify-content:center;color:{{ nd.iconColor }};transition:border .2s,box-shadow .2s,color .2s"><span style="transform:{{ nd.unrot }};display:flex">
+                                <sc-if value="{{ nd.icoMail }}" hint-placeholder-val="{{ false }}"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="2"></rect><path d="M3 7l9 6 9-6"></path></svg></sc-if>
+                                <sc-if value="{{ nd.icoFork }}" hint-placeholder-val="{{ false }}"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12h7"></path><path d="M10 12c4.5 0 4.5-5.5 9-5.5"></path><path d="M10 12c4.5 0 4.5 5.5 9 5.5"></path><circle cx="20.5" cy="6.5" r="1.4"></circle><circle cx="20.5" cy="17.5" r="1.4"></circle></svg></sc-if>
+                                <sc-if value="{{ nd.icoDoc }}" hint-placeholder-val="{{ false }}"><svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="8" y1="13" x2="16" y2="13"></line><line x1="8" y1="17" x2="13" y2="17"></line></svg></sc-if>
+                                <sc-if value="{{ nd.icoDb }}" hint-placeholder-val="{{ false }}"><svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5" rx="8" ry="3"></ellipse><path d="M4 5v14c0 1.7 3.6 3 8 3s8-1.3 8-3V5"></path><path d="M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3"></path></svg></sc-if>
+                                <sc-if value="{{ nd.icoInbox }}" hint-placeholder-val="{{ false }}"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M22 12h-6l-2 3h-4l-2-3H2"></path><path d="M5.5 5h13L22 12v6a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2v-6z"></path></svg></sc-if>
+                                <sc-if value="{{ nd.icoGear }}" hint-placeholder-val="{{ false }}"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><circle cx="12" cy="12" r="3.2"></circle><path d="M12 2.5v3M12 18.5v3M2.5 12h3M18.5 12h3M5.2 5.2l2.1 2.1M16.7 16.7l2.1 2.1M18.8 5.2l-2.1 2.1M7.3 16.7l-2.1 2.1"></path></svg></sc-if>
+                                <sc-if value="{{ nd.icoSpark }}" hint-placeholder-val="{{ false }}"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"><path d="M12 3l2.1 6.4L20.5 11.5l-6.4 2.1L12 20l-2.1-6.4L3.5 11.5l6.4-2.1z"></path></svg></sc-if>
+                                <sc-if value="{{ nd.icoSplit }}" hint-placeholder-val="{{ false }}"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M5 12h6M11 12l5-5M11 12l5 5"></path></svg></sc-if>
+                                <sc-if value="{{ nd.icoPerson }}" hint-placeholder-val="{{ false }}"><svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><circle cx="12" cy="8" r="4"></circle><path d="M4 21c0-4 3.6-6.5 8-6.5s8 2.5 8 6.5"></path></svg></sc-if>
+                                <sc-if value="{{ nd.icoBolt }}" hint-placeholder-val="{{ false }}"><svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor"><path d="M13 2 4.5 13.5H11L9.5 22 19 10h-6.5z"></path></svg></sc-if>
+                                <sc-if value="{{ nd.icoLayers }}" hint-placeholder-val="{{ false }}"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2 2 7.5 12 13l10-5.5z"></path><path d="M2 12.5 12 18l10-5.5"></path><path d="M2 17.5 12 23l10-5.5"></path></svg></sc-if>
+                                <sc-if value="{{ nd.icoPlug }}" hint-placeholder-val="{{ false }}"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M9 7V3M15 7V3"></path><path d="M6 7h12v4a6 6 0 0 1-12 0z"></path><path d="M12 17v4"></path></svg></sc-if>
+                                <sc-if value="{{ nd.icoGlobe }}" hint-placeholder-val="{{ false }}"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"></circle><path d="M3 12h18M12 3c2.7 2.6 4 5.7 4 9s-1.3 6.4-4 9c-2.7-2.6-4-5.7-4-9s1.3-6.4 4-9z"></path></svg></sc-if>
+                                <sc-if value="{{ nd.icoSend }}" hint-placeholder-val="{{ false }}"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M22 2 11 13"></path><path d="M22 2 15 22l-4-9-9-4z"></path></svg></sc-if>
+                                <sc-if value="{{ nd.icoLoop }}" hint-placeholder-val="{{ false }}"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M17 2l4 4-4 4"></path><path d="M3 11V9a4 4 0 0 1 4-4h14"></path><path d="M7 22l-4-4 4-4"></path><path d="M21 13v2a4 4 0 0 1-4 4H3"></path></svg></sc-if>
+                                <sc-if value="{{ nd.icoGrid }}" hint-placeholder-val="{{ false }}"><svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"></rect><path d="M3 9h18M3 15h18M12 3v18"></path></svg></sc-if>
+                              </span></div>
+                              <span style="position:absolute;right:-4px;top:50%;transform:translateY(-50%);width:7px;height:7px;border-radius:50%;background:{{ nd.portColor }}"></span>
+                              <sc-if value="{{ nd.showCheck }}" hint-placeholder-val="{{ false }}"><span style="position:absolute;right:-6px;bottom:-6px;width:17px;height:17px;border-radius:50%;background:#5fc78a;border:2px solid #0A0A0A;display:flex;align-items:center;justify-content:center"><svg viewBox="0 0 24 24" width="9" height="9" fill="none" stroke="#06210d" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4 4 9-10"></path></svg></span></sc-if>
+                              <sc-if value="{{ nd.holdBadge }}" hint-placeholder-val="{{ false }}"><span style="position:absolute;right:-6px;bottom:-6px;width:17px;height:17px;border-radius:50%;background:#e87878;border:2px solid #0A0A0A;display:flex;align-items:center;justify-content:center;animation:holdPulse 1.8s ease-in-out infinite"><span style="display:flex;gap:2px"><span style="width:2px;height:7px;border-radius:1px;background:#2b0a08"></span><span style="width:2px;height:7px;border-radius:1px;background:#2b0a08"></span></span></span></sc-if>
+                              <span style="position:absolute;top:calc(100% + 7px);left:50%;transform:translateX(-50%);width:104px;display:flex;flex-direction:column;gap:2px;text-align:center;pointer-events:none">
+                                <span style="font-size:10.5px;font-weight:600;line-height:1.25;color:{{ nd.titleColor }};letter-spacing:-0.01em">{{ nd.shortTitle }}</span>
+                                <span style="font-family:ui-monospace,SFMono-Regular,monospace;font-size:7.5px;font-weight:600;letter-spacing:.12em;color:{{ nd.typeColor }};white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ nd.typeLabel }}</span>
+                              </span>
+                            </div>
+                          </div>
+                        </sc-for>
+                        <!-- fan-out output ports: one dot per outgoing lane on a branch/decision node,
+                             at the exact canvas point each of its edges now starts from -->
+                        <sc-for list="{{ graphCanvas.ports }}" as="pt" hint-placeholder-count="0">
+                          <div style="position:absolute;left:{{ pt.left }};top:{{ pt.top }};transform:translate(-50%,-50%);width:8px;height:8px;border-radius:50%;background:{{ pt.color }};box-shadow:0 0 0 2px rgba(10,10,10,.9);pointer-events:none"></div>
+                        </sc-for>
+                      </div>
+                    </div>
+
+                    <!-- REVIEW / DETAIL — the selected node (default: the current step). While the
+                         walkthrough is in progress and this IS the current step, it carries Approve /
+                         Change; any other node is read-only. -->
+                    <sc-if value="{{ graphCanvas.review }}" hint-placeholder-val="{{ false }}">
+                      <div style="padding:14px 2px 6px">
+                        <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px">
+                          <div style="min-width:0;flex:1">
+                            <div style="font-family:ui-monospace,SFMono-Regular,monospace;font-size:9.5px;font-weight:600;letter-spacing:.16em;text-transform:uppercase;color:{{ graphCanvas.review.detailTypeColor }};margin-bottom:6px;font-variant-numeric:tabular-nums">{{ graphCanvas.review.num }} · {{ graphCanvas.review.typeLabel }}</div>
+                            <div style="font-size:15px;font-weight:500;line-height:1.3;color:#efc892">{{ graphCanvas.review.title }}</div>
+                            <div style="font-size:13.5px;line-height:1.5;color:rgba(255,255,255,.5);margin-top:3px">{{ graphCanvas.review.desc }}</div>
+                            <sc-if value="{{ graphCanvas.review.prompt }}" hint-placeholder-val="{{ false }}">
+                              <div style="margin-top:10px;padding:9px 12px;border-radius:8px;background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.08)">
+                                <div style="font-size:10px;font-weight:500;letter-spacing:.14em;text-transform:uppercase;color:rgba(255,255,255,.28);margin-bottom:5px">Prompt</div>
+                                <div style="font-size:12.5px;line-height:1.55;color:rgba(255,255,255,.5);font-family:ui-monospace,SFMono-Regular,monospace;white-space:pre-wrap;word-break:break-word">{{ graphCanvas.review.prompt }}</div>
+                              </div>
+                            </sc-if>
+                          </div>
+                          <sc-if value="{{ graphCanvas.review.showState }}" hint-placeholder-val="{{ false }}">
+                            <div style="flex:none;font-size:11px;font-weight:600;letter-spacing:.04em;color:{{ graphCanvas.review.stateColor }};padding-top:2px;white-space:nowrap">{{ graphCanvas.review.stateLabel }}</div>
+                          </sc-if>
+                        </div>
+
+                        <!-- current-step actions: approve builds the graph up a node; change regenerates -->
+                        <sc-if value="{{ graphCanvas.review.isCurrent }}" hint-placeholder-val="{{ false }}">
+                          <div style="margin-top:14px">
+                            <sc-if value="{{ !graphCanvas.changeOpen }}" hint-placeholder-val="{{ true }}">
+                              <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+                                <button onClick="{{ graphCanvas.onApprove }}" style="font-family:inherit;font-size:14px;font-weight:600;padding:10px 20px;border-radius:999px;color:#06140c;background:#5fc78a;border:none;cursor:pointer">Approve this step</button>
+                                <button onClick="{{ graphCanvas.onChange }}" style="font-family:inherit;font-size:13.5px;padding:10px 16px;border-radius:999px;color:rgba(255,255,255,.8);background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.13);cursor:pointer">Change</button>
+                                <button onClick="{{ graphCanvas.onApproveAll }}" style="font-family:inherit;font-size:13px;padding:10px 6px;color:rgba(255,255,255,.34);background:none;border:none;cursor:pointer">Approve all remaining</button>
+                              </div>
+                            </sc-if>
+                            <sc-if value="{{ graphCanvas.changeOpen }}" hint-placeholder-val="{{ false }}">
+                              <div>
+                                <div style="font-size:11px;font-weight:500;letter-spacing:.16em;text-transform:uppercase;color:rgba(255,255,255,.35);margin-bottom:10px">What should change?</div>
+                                <div style="display:flex;gap:9px;align-items:center">
+                                  <input value="{{ graphCanvas.changeValue }}" onInput="{{ graphCanvas.onChangeInput }}" onKeyDown="{{ graphCanvas.onChangeKey }}" placeholder="e.g. also post to #sales, or drop the summary step…" style="flex:1;background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.12);border-radius:10px;padding:11px 14px;color:#fff;font-family:inherit;font-size:14px;outline:none"/>
+                                  <button onClick="{{ graphCanvas.onSubmitChange }}" style="flex:none;font-family:inherit;font-size:13.5px;font-weight:600;padding:11px 17px;border-radius:999px;color:#06140c;background:#5fc78a;border:none;cursor:pointer">Rebuild</button>
+                                  <button onClick="{{ graphCanvas.onCancelChange }}" style="flex:none;font-family:inherit;font-size:13.5px;padding:11px 6px;color:rgba(255,255,255,.3);background:none;border:none;cursor:pointer">Cancel</button>
+                                </div>
+                              </div>
+                            </sc-if>
+                          </div>
+                        </sc-if>
+                      </div>
+                    </sc-if>
+          </div>
+        </sc-if>
+
         <div class="ab-scroll" ref="{{ scrollRef }}" style="flex:1;overflow-y:auto;padding:0 28px 34px;-webkit-mask-image:linear-gradient(to bottom,transparent 0%,#000 18%);mask-image:linear-gradient(to bottom,transparent 0%,#000 18%)">
           <div style="max-width:1100px;margin:0 auto;min-height:100%;display:flex;flex-direction:column;justify-content:flex-end;gap:26px;padding-top:80px">
 
@@ -569,161 +702,18 @@
                 </div>
               </sc-if>
 
-              <!-- SIGNAL LINE (building phase) — the workflow assembles as nodes on a
-                   horizontal rail; approval actions sit in the detail card below. LINEAR
-                   RAIL only for now (item.mainNodes); branch fan-out is gated off until
-                   edges are surfaced client-side (item.hasBranches / item.fan2 = false). -->
+              <!-- SIGNAL LINE (legacy per-node drip) — RETIRED as the primary surface
+                   (converger v2 rearch, increment 4): the initial build no longer drips
+                   node-by-node; the backend generates the whole spec at once and it is
+                   reviewed on the dedicated graphCanvas above. This inline block only
+                   carries the chronological "draft ready" note; the graph itself is not
+                   drawn here. The proposal handler that produces these messages is kept
+                   for occasional targeted gap-fixes only. -->
               <sc-if value="{{ item.isSignalLine }}" hint-placeholder-val="{{ false }}">
                 <div style="animation:msgIn .45s ease both;max-width:540px">
-                    <!-- CANVAS — node rail: leading bolt → icon nodes with ports + check/hold
-                         badges, name/type below, arrows between. Click a node to inspect it. -->
-                    <div class="rail-scroll" style="display:flex;align-items:center;gap:10px;overflow-x:auto;padding:10px 2px 58px">
-                      <svg viewBox="0 0 24 24" width="17" height="17" fill="#e7b25e" style="flex:none;filter:drop-shadow(0 0 5px rgba(231,178,94,.5))"><path d="M13 2 4.5 13.5H11L9.5 22 19 10h-6.5z"></path></svg>
-                      <sc-for list="{{ item.mainNodes }}" as="nd" hint-placeholder-count="2">
-                        <div style="flex:none;display:flex;align-items:center;gap:10px">
-                            <div onClick="{{ nd.onSelect }}" style="flex:none;position:relative;cursor:pointer">
-                              <div style="width:{{ nd.nodeW }};height:{{ nd.nodeH }};border-radius:{{ nd.nodeRadius }};border:1.5px solid {{ nd.nodeBorder }};background:{{ nd.nodeBg }};box-shadow:{{ nd.nodeShadow }};animation:{{ nd.nodeAnim }};transform:{{ nd.rot }};display:flex;align-items:center;justify-content:center;color:{{ nd.iconColor }};transition:border .2s,box-shadow .2s,color .2s"><span style="transform:{{ nd.unrot }};display:flex">
-                                <sc-if value="{{ nd.icoMail }}" hint-placeholder-val="{{ false }}"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="2"></rect><path d="M3 7l9 6 9-6"></path></svg></sc-if>
-                                <sc-if value="{{ nd.icoFork }}" hint-placeholder-val="{{ false }}"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12h7"></path><path d="M10 12c4.5 0 4.5-5.5 9-5.5"></path><path d="M10 12c4.5 0 4.5 5.5 9 5.5"></path><circle cx="20.5" cy="6.5" r="1.4"></circle><circle cx="20.5" cy="17.5" r="1.4"></circle></svg></sc-if>
-                                <sc-if value="{{ nd.icoDoc }}" hint-placeholder-val="{{ false }}"><svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="8" y1="13" x2="16" y2="13"></line><line x1="8" y1="17" x2="13" y2="17"></line></svg></sc-if>
-                                <sc-if value="{{ nd.icoDb }}" hint-placeholder-val="{{ false }}"><svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5" rx="8" ry="3"></ellipse><path d="M4 5v14c0 1.7 3.6 3 8 3s8-1.3 8-3V5"></path><path d="M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3"></path></svg></sc-if>
-                                <sc-if value="{{ nd.icoInbox }}" hint-placeholder-val="{{ false }}"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M22 12h-6l-2 3h-4l-2-3H2"></path><path d="M5.5 5h13L22 12v6a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2v-6z"></path></svg></sc-if>
-                                <sc-if value="{{ nd.icoGear }}" hint-placeholder-val="{{ false }}"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><circle cx="12" cy="12" r="3.2"></circle><path d="M12 2.5v3M12 18.5v3M2.5 12h3M18.5 12h3M5.2 5.2l2.1 2.1M16.7 16.7l2.1 2.1M18.8 5.2l-2.1 2.1M7.3 16.7l-2.1 2.1"></path></svg></sc-if>
-                                <sc-if value="{{ nd.icoSpark }}" hint-placeholder-val="{{ false }}"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"><path d="M12 3l2.1 6.4L20.5 11.5l-6.4 2.1L12 20l-2.1-6.4L3.5 11.5l6.4-2.1z"></path></svg></sc-if>
-                                <sc-if value="{{ nd.icoSplit }}" hint-placeholder-val="{{ false }}"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M5 12h6M11 12l5-5M11 12l5 5"></path></svg></sc-if>
-                                <sc-if value="{{ nd.icoPerson }}" hint-placeholder-val="{{ false }}"><svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><circle cx="12" cy="8" r="4"></circle><path d="M4 21c0-4 3.6-6.5 8-6.5s8 2.5 8 6.5"></path></svg></sc-if>
-                                <sc-if value="{{ nd.icoBolt }}" hint-placeholder-val="{{ false }}"><svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor"><path d="M13 2 4.5 13.5H11L9.5 22 19 10h-6.5z"></path></svg></sc-if>
-                                <sc-if value="{{ nd.icoLayers }}" hint-placeholder-val="{{ false }}"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2 2 7.5 12 13l10-5.5z"></path><path d="M2 12.5 12 18l10-5.5"></path><path d="M2 17.5 12 23l10-5.5"></path></svg></sc-if>
-                                <sc-if value="{{ nd.icoPlug }}" hint-placeholder-val="{{ false }}"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M9 7V3M15 7V3"></path><path d="M6 7h12v4a6 6 0 0 1-12 0z"></path><path d="M12 17v4"></path></svg></sc-if>
-                                <sc-if value="{{ nd.icoGlobe }}" hint-placeholder-val="{{ false }}"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"></circle><path d="M3 12h18M12 3c2.7 2.6 4 5.7 4 9s-1.3 6.4-4 9c-2.7-2.6-4-5.7-4-9s1.3-6.4 4-9z"></path></svg></sc-if>
-                                <sc-if value="{{ nd.icoSend }}" hint-placeholder-val="{{ false }}"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M22 2 11 13"></path><path d="M22 2 15 22l-4-9-9-4z"></path></svg></sc-if>
-                                <sc-if value="{{ nd.icoLoop }}" hint-placeholder-val="{{ false }}"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M17 2l4 4-4 4"></path><path d="M3 11V9a4 4 0 0 1 4-4h14"></path><path d="M7 22l-4-4 4-4"></path><path d="M21 13v2a4 4 0 0 1-4 4H3"></path></svg></sc-if>
-                                <sc-if value="{{ nd.icoGrid }}" hint-placeholder-val="{{ false }}"><svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"></rect><path d="M3 9h18M3 15h18M12 3v18"></path></svg></sc-if>
-                              </span></div>
-                              <!-- output port -->
-                              <span style="position:absolute;right:-4px;top:50%;transform:translateY(-50%);width:7px;height:7px;border-radius:50%;background:{{ nd.portColor }}"></span>
-                              <!-- confirm badge -->
-                              <sc-if value="{{ nd.showCheck }}" hint-placeholder-val="{{ false }}"><span style="position:absolute;right:-6px;bottom:-6px;width:17px;height:17px;border-radius:50%;background:#5fc78a;border:2px solid #0A0A0A;display:flex;align-items:center;justify-content:center"><svg viewBox="0 0 24 24" width="9" height="9" fill="none" stroke="#06210d" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4 4 9-10"></path></svg></span></sc-if>
-                              <!-- HITL hold — the run STOPS on a human node until it is cleared -->
-                              <sc-if value="{{ nd.holdBadge }}" hint-placeholder-val="{{ false }}"><span style="position:absolute;right:-6px;bottom:-6px;width:17px;height:17px;border-radius:50%;background:#e87878;border:2px solid #0A0A0A;display:flex;align-items:center;justify-content:center;animation:holdPulse 1.8s ease-in-out infinite"><span style="display:flex;gap:2px"><span style="width:2px;height:7px;border-radius:1px;background:#2b0a08"></span><span style="width:2px;height:7px;border-radius:1px;background:#2b0a08"></span></span></span></sc-if>
-                              <!-- name + type below the node -->
-                              <span style="position:absolute;top:calc(100% + 7px);left:50%;transform:translateX(-50%);width:96px;display:flex;flex-direction:column;gap:2px;text-align:center;pointer-events:none">
-                                <span style="font-size:10.5px;font-weight:600;line-height:1.25;color:{{ nd.titleColor }};letter-spacing:-0.01em">{{ nd.shortTitle }}</span>
-                                <span style="font-family:ui-monospace,SFMono-Regular,monospace;font-size:7.5px;font-weight:600;letter-spacing:.12em;color:{{ nd.typeColor }};white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ nd.typeLabel }}</span>
-                              </span>
-                            </div>
-                            <sc-if value="{{ nd.showArrow }}" hint-placeholder-val="{{ true }}">
-                              <div style="flex:none;width:24px;height:2px;border-radius:2px;background:{{ nd.arrowColor }};position:relative"><span style="position:absolute;right:-2px;top:-3px;width:0;height:0;border-left:5px solid {{ nd.arrowColor }};border-top:4px solid transparent;border-bottom:4px solid transparent"></span></div>
-                            </sc-if>
-                        </div>
-                      </sc-for>
-                      <!-- BRANCH FAN-OUT — gated off until edges are surfaced client-side (Stage F) -->
-                      <sc-if value="{{ item.fan2 }}" hint-placeholder-val="{{ false }}">
-                        <div style="flex:none;position:relative;width:44px;height:222px;margin:0 -2px">
-                          <span style="position:absolute;left:0;top:0;width:44px;height:222px;display:block;color:{{ item.fanA }};transition:color .45s"><svg viewBox="0 0 44 222" width="44" height="222" fill="none" style="display:block;overflow:visible"><path d="M4 106 C 20 106, 22 56, 38 56" stroke="currentColor" stroke-width="2" stroke-linecap="round"></path><polygon points="38,51 45,56 38,61" fill="currentColor"></polygon></svg></span>
-                          <span style="position:absolute;left:0;top:0;width:44px;height:222px;display:block;color:{{ item.fanB }};transition:color .45s"><svg viewBox="0 0 44 222" width="44" height="222" fill="none" style="display:block;overflow:visible"><path d="M4 116 C 20 116, 22 193, 38 193" stroke="currentColor" stroke-width="2" stroke-linecap="round"></path><polygon points="38,188 45,193 38,198" fill="currentColor"></polygon></svg></span>
-                          <span style="position:absolute;left:-1px;top:102px;width:7px;height:7px;border-radius:50%;background:{{ item.fanA }};transition:background .45s"></span>
-                          <span style="position:absolute;left:-1px;top:112px;width:7px;height:7px;border-radius:50%;background:{{ item.fanB }};transition:background .45s"></span>
-                        </div>
-                      </sc-if>
-                      <sc-if value="{{ item.hasBranches }}" hint-placeholder-val="{{ false }}">
-                        <div style="flex:none;display:flex;flex-direction:column;gap:52px">
-                          <sc-for list="{{ item.branches }}" as="br" hint-placeholder-count="2">
-                            <div>
-                              <div style="font-family:'Instrument Serif',serif;font-style:italic;font-size:13px;color:rgba(239,200,146,.75);margin:0 0 7px 2px">{{ br.label }}</div>
-                              <div style="display:flex;align-items:center;gap:10px">
-                                <sc-for list="{{ br.nodes }}" as="nd" hint-placeholder-count="1">
-                                  <div style="flex:none;display:flex;align-items:center;gap:10px">
-                                    <div onClick="{{ nd.onSelect }}" style="flex:none;position:relative;cursor:pointer">
-                                      <div style="width:{{ nd.nodeW }};height:{{ nd.nodeH }};border-radius:{{ nd.nodeRadius }};border:1.5px solid {{ nd.nodeBorder }};background:{{ nd.nodeBg }};box-shadow:{{ nd.nodeShadow }};animation:{{ nd.nodeAnim }};transform:{{ nd.rot }};display:flex;align-items:center;justify-content:center;color:{{ nd.iconColor }}"><span style="transform:{{ nd.unrot }};display:flex">
-                                        <sc-if value="{{ nd.icoMail }}" hint-placeholder-val="{{ false }}"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="2"></rect><path d="M3 7l9 6 9-6"></path></svg></sc-if>
-                                        <sc-if value="{{ nd.icoFork }}" hint-placeholder-val="{{ false }}"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12h7"></path><path d="M10 12c4.5 0 4.5-5.5 9-5.5"></path><path d="M10 12c4.5 0 4.5 5.5 9 5.5"></path><circle cx="20.5" cy="6.5" r="1.4"></circle><circle cx="20.5" cy="17.5" r="1.4"></circle></svg></sc-if>
-                                        <sc-if value="{{ nd.icoDoc }}" hint-placeholder-val="{{ false }}"><svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="8" y1="13" x2="16" y2="13"></line><line x1="8" y1="17" x2="13" y2="17"></line></svg></sc-if>
-                                        <sc-if value="{{ nd.icoDb }}" hint-placeholder-val="{{ false }}"><svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5" rx="8" ry="3"></ellipse><path d="M4 5v14c0 1.7 3.6 3 8 3s8-1.3 8-3V5"></path><path d="M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3"></path></svg></sc-if>
-                                        <sc-if value="{{ nd.icoInbox }}" hint-placeholder-val="{{ false }}"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M22 12h-6l-2 3h-4l-2-3H2"></path><path d="M5.5 5h13L22 12v6a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2v-6z"></path></svg></sc-if>
-                                        <sc-if value="{{ nd.icoGear }}" hint-placeholder-val="{{ false }}"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><circle cx="12" cy="12" r="3.2"></circle><path d="M12 2.5v3M12 18.5v3M2.5 12h3M18.5 12h3M5.2 5.2l2.1 2.1M16.7 16.7l2.1 2.1M18.8 5.2l-2.1 2.1M7.3 16.7l-2.1 2.1"></path></svg></sc-if>
-                                        <sc-if value="{{ nd.icoSpark }}" hint-placeholder-val="{{ false }}"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"><path d="M12 3l2.1 6.4L20.5 11.5l-6.4 2.1L12 20l-2.1-6.4L3.5 11.5l6.4-2.1z"></path></svg></sc-if>
-                                        <sc-if value="{{ nd.icoSplit }}" hint-placeholder-val="{{ false }}"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M5 12h6M11 12l5-5M11 12l5 5"></path></svg></sc-if>
-                                        <sc-if value="{{ nd.icoPerson }}" hint-placeholder-val="{{ false }}"><svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><circle cx="12" cy="8" r="4"></circle><path d="M4 21c0-4 3.6-6.5 8-6.5s8 2.5 8 6.5"></path></svg></sc-if>
-                                        <sc-if value="{{ nd.icoBolt }}" hint-placeholder-val="{{ false }}"><svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor"><path d="M13 2 4.5 13.5H11L9.5 22 19 10h-6.5z"></path></svg></sc-if>
-                                        <sc-if value="{{ nd.icoLayers }}" hint-placeholder-val="{{ false }}"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2 2 7.5 12 13l10-5.5z"></path><path d="M2 12.5 12 18l10-5.5"></path><path d="M2 17.5 12 23l10-5.5"></path></svg></sc-if>
-                                        <sc-if value="{{ nd.icoPlug }}" hint-placeholder-val="{{ false }}"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M9 7V3M15 7V3"></path><path d="M6 7h12v4a6 6 0 0 1-12 0z"></path><path d="M12 17v4"></path></svg></sc-if>
-                                        <sc-if value="{{ nd.icoGlobe }}" hint-placeholder-val="{{ false }}"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"></circle><path d="M3 12h18M12 3c2.7 2.6 4 5.7 4 9s-1.3 6.4-4 9c-2.7-2.6-4-5.7-4-9s1.3-6.4 4-9z"></path></svg></sc-if>
-                                        <sc-if value="{{ nd.icoSend }}" hint-placeholder-val="{{ false }}"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M22 2 11 13"></path><path d="M22 2 15 22l-4-9-9-4z"></path></svg></sc-if>
-                                        <sc-if value="{{ nd.icoLoop }}" hint-placeholder-val="{{ false }}"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M17 2l4 4-4 4"></path><path d="M3 11V9a4 4 0 0 1 4-4h14"></path><path d="M7 22l-4-4 4-4"></path><path d="M21 13v2a4 4 0 0 1-4 4H3"></path></svg></sc-if>
-                                        <sc-if value="{{ nd.icoGrid }}" hint-placeholder-val="{{ false }}"><svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"></rect><path d="M3 9h18M3 15h18M12 3v18"></path></svg></sc-if>
-                                      </span></div>
-                                      <span style="position:absolute;top:calc(100% + 7px);left:50%;transform:translateX(-50%);width:96px;display:flex;flex-direction:column;gap:2px;text-align:center;pointer-events:none">
-                                        <span style="font-size:10.5px;font-weight:600;line-height:1.25;color:{{ nd.titleColor }};letter-spacing:-0.01em">{{ nd.shortTitle }}</span>
-                                        <span style="font-family:ui-monospace,SFMono-Regular,monospace;font-size:7.5px;font-weight:600;letter-spacing:.12em;color:{{ nd.typeColor }};white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ nd.typeLabel }}</span>
-                                      </span>
-                                    </div>
-                                    <sc-if value="{{ nd.showArrow }}" hint-placeholder-val="{{ false }}">
-                                      <div style="flex:none;width:24px;height:2px;border-radius:2px;background:{{ nd.arrowColor }};position:relative"><span style="position:absolute;right:-2px;top:-3px;width:0;height:0;border-left:5px solid {{ nd.arrowColor }};border-top:4px solid transparent;border-bottom:4px solid transparent"></span></div>
-                                    </sc-if>
-                                  </div>
-                                </sc-for>
-                              </div>
-                            </div>
-                          </sc-for>
-                        </div>
-                      </sc-if>
-                    </div>
-
-                    <!-- DETAIL — the selected node's full card; the approval actions live here.
-                         Reuses the live step handlers verbatim via item.sel. -->
-                    <sc-if value="{{ item.sel }}" hint-placeholder-val="{{ false }}">
-                      <div style="padding:4px 0 0">
-                        <div style="display:flex;align-items:flex-start;gap:12px">
-                          <div style="min-width:0;flex:1">
-                            <div style="font-family:ui-monospace,SFMono-Regular,monospace;font-size:9.5px;font-weight:600;letter-spacing:.16em;text-transform:uppercase;color:{{ item.sel.detailTypeColor }};margin-bottom:6px;font-variant-numeric:tabular-nums">{{ item.sel.num }} · {{ item.sel.typeLabel }}</div>
-                            <div style="font-size:15px;font-weight:500;line-height:1.3;color:#efc892">{{ item.sel.title }}</div>
-                            <div style="font-size:13.5px;line-height:1.5;color:rgba(255,255,255,.5);margin-top:3px">{{ item.sel.desc }}</div>
-                            <sc-if value="{{ item.sel.prompt }}" hint-placeholder-val="{{ false }}">
-                              <div style="margin-top:10px;padding:9px 12px;border-radius:8px;background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.08)">
-                                <div style="font-size:10px;font-weight:500;letter-spacing:.14em;text-transform:uppercase;color:rgba(255,255,255,.28);margin-bottom:5px">Prompt</div>
-                                <div style="font-size:12.5px;line-height:1.55;color:rgba(255,255,255,.5);font-family:ui-monospace,SFMono-Regular,monospace;white-space:pre-wrap;word-break:break-word">{{ item.sel.prompt }}</div>
-                              </div>
-                            </sc-if>
-                          </div>
-                          <sc-if value="{{ item.sel.isConfirmed }}" hint-placeholder-val="{{ false }}">
-                            <button onClick="{{ item.sel.onUndo }}" style="flex:none;font-family:inherit;font-size:12.5px;color:rgba(255,255,255,.28);background:none;border:none;cursor:pointer;padding:0;white-space:nowrap">Undo</button>
-                          </sc-if>
-                        </div>
-                        <sc-if value="{{ item.sel.isActive }}" hint-placeholder-val="{{ false }}">
-                          <div style="margin-top:14px">
-                            <sc-if value="{{ item.sel.actionsVisible }}" hint-placeholder-val="{{ true }}">
-                              <sc-if value="{{ item.sel.isSetup }}" hint-placeholder-val="{{ false }}">
-                                <div style="display:flex;align-items:center;gap:9px">
-                                  <button onClick="{{ item.sel.onConfirm }}" style="font-family:inherit;font-size:13.5px;font-weight:600;padding:9px 17px;border-radius:999px;color:#06140c;background:#5fc78a;border:none;cursor:pointer">Create it now</button>
-                                  <button onClick="{{ item.sel.onReject }}" style="font-family:inherit;font-size:13.5px;padding:9px 5px;color:rgba(255,255,255,.3);background:none;border:none;cursor:pointer">Skip</button>
-                                </div>
-                              </sc-if>
-                              <sc-if value="{{ !item.sel.isSetup }}" hint-placeholder-val="{{ true }}">
-                                <div style="display:flex;align-items:center;gap:9px">
-                                  <button onClick="{{ item.sel.onConfirm }}" style="font-family:inherit;font-size:13.5px;font-weight:600;padding:9px 17px;border-radius:999px;color:#06140c;background:#5fc78a;border:none;cursor:pointer">Confirm</button>
-                                  <button onClick="{{ item.sel.onChange }}" style="font-family:inherit;font-size:13.5px;padding:9px 14px;border-radius:999px;color:rgba(255,255,255,.78);background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.11);cursor:pointer">Change</button>
-                                  <button onClick="{{ item.sel.onReject }}" style="font-family:inherit;font-size:13.5px;padding:9px 5px;color:rgba(255,255,255,.3);background:none;border:none;cursor:pointer">Not this</button>
-                                </div>
-                              </sc-if>
-                            </sc-if>
-                            <sc-if value="{{ item.sel.setupPending }}" hint-placeholder-val="{{ false }}">
-                              <div style="font-size:13px;color:rgba(255,255,255,.45);padding:4px 0">Creating…</div>
-                            </sc-if>
-                            <sc-if value="{{ item.sel.changeOpen }}" hint-placeholder-val="{{ false }}">
-                              <div style="margin-top:14px">
-                                <div style="font-size:11px;font-weight:500;letter-spacing:.16em;text-transform:uppercase;color:rgba(255,255,255,.35);margin-bottom:10px">What should change?</div>
-                                <div style="display:flex;gap:9px;align-items:center">
-                                  <input value="{{ item.sel.changeValue }}" onInput="{{ item.sel.onChangeInput }}" onKeyDown="{{ item.sel.onChangeKey }}" placeholder="Describe it in plain language…" style="flex:1;background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.12);border-radius:10px;padding:10px 13px;color:#fff;font-family:inherit;font-size:14px;outline:none"/>
-                                  <button onClick="{{ item.sel.onSubmitChange }}" style="flex:none;font-family:inherit;font-size:13.5px;font-weight:600;padding:10px 16px;border-radius:999px;color:#06140c;background:#5fc78a;border:none;cursor:pointer">Update</button>
-                                </div>
-                              </div>
-                            </sc-if>
-                          </div>
-                        </sc-if>
-                      </div>
-                    </sc-if>
-
+                    <!-- The graph is drawn on the dedicated graphCanvas (fed from
+                         state.spec) above the conversation. Only the chronological
+                         "draft ready" note stays inline here. -->
                     <!-- draft complete note -->
                     <sc-if value="{{ item.complete }}" hint-placeholder-val="{{ false }}">
                       <div style="padding:14px 0 0">
@@ -3000,6 +2990,8 @@ class Component extends DCLogic {
       intent: null, threadId: null,
       msgs: [], inputMode: "chat", inputValue: "", thinking: false, thinkingLabel: null,
       spec: null,
+      // Dedicated generated-workflow canvas (converger v2, increment 4):
+      awaitingGraphApproval: false, graphApproved: [], graphSelNode: null, graphReviseOpen: false, graphReviseText: "",
       testState: "idle",       // idle | running | passed | failed
       runStepIndex: 0,         // which step is currently firing (during running)
       runSteps: [], failIndex: -1, deliveries: [], runOutput: null, runError: "", outcomeResults: [],
@@ -3049,6 +3041,7 @@ class Component extends DCLogic {
     this.setState({
       phase: "chat", intent: null, threadId: null, msgs: [], inputMode: "chat",
       inputValue: "", thinking: false, spec: null, outcome: null, testState: "idle", runSteps: [], contractOpenRow: null,
+      awaitingGraphApproval: false, graphApproved: [], graphSelNode: null, graphReviseOpen: false, graphReviseText: "",
       runStepIndex: 0, failIndex: -1, deliveries: [], runOutput: null, runError: "", outcomeResults: [], workflowId: null, isEditing: false, isDraftBuild: false, editingIntro: null,
       renamingWfId: null, renamingValue: "", draftName: null,
       connectionsOpen: false, accountOpen: false, profileOpen: false, connectionsClosing: false, accountClosing: false,
@@ -4841,12 +4834,13 @@ class Component extends DCLogic {
     const self = this;
     this.setState({
       phase: "building", intent, inputValue: "", thinking: true, inputMode: "locked",
-      msgs: [...this.state.msgs, { isNote: true, text: "Great — let's build it. I'll propose each piece; confirm or tweak as we go." }],
+      msgs: [...this.state.msgs, { isNote: true, text: "Great — let's build it. I'll ask a couple of quick questions, then show you the complete workflow to review." }],
       // The pinned outcome belongs to ONE build. Carrying it into the next one
       // would show the user a contract they never agreed to for this workflow —
       // and stale run results (outcomeResults/deliveries) would show "Contract
       // kept ✓" before this workflow has been tested at all.
       spec: null, threadId: null, testState: "idle", outcome: null,
+      awaitingGraphApproval: false, graphApproved: [], graphSelNode: null, graphReviseOpen: false, graphReviseText: "",
       outcomeResults: [], deliveries: [], runOutput: null, runError: ""
     });
     fetch("/api/builder/sessions", { method: "POST", headers: this._H(), body: JSON.stringify({ intent }) })
@@ -4878,6 +4872,31 @@ class Component extends DCLogic {
     // so a fast double-click never spawns a stray message or a raw graph error.
     if (iv.type === "noop") { this.setState({ thinking: false }); return; }
     if (iv.type === "done") { this.setState({ spec: iv.spec }); this._saveWorkflow(iv.spec, iv.confirmationLog); return; }
+
+    // ── generated_workflow — the WHOLE spec, in one pass (converger v2 rearch,
+    // increment 4). The backend clarifies first, then emits ONE complete,
+    // connected, branch-fed graph { name, triggers, nodes, edges, outcome }.
+    // We render it on the dedicated center canvas (graphCanvas, fed from
+    // state.spec via _specCanvas) and let the user approve or revise the whole
+    // graph — no per-node drip. Approve → {type:'accept'}; Revise →
+    // {type:'modify', modification:<free text>} (backend regenerates the spec).
+    if (iv.type === "generated_workflow") {
+      const sp = iv.spec || {};
+      const patch = {
+        spec: sp,
+        awaitingGraphApproval: true,
+        graphApproved: [], graphSelNode: null, graphReviseOpen: false, graphReviseText: "",
+        thinking: false, inputMode: "locked", phase: "building",
+      };
+      // Surface the outcome contract in the pinned card if the spec carries one
+      // (same shape the outcome_check handler sets), so "what this must deliver"
+      // stays on screen alongside the graph.
+      if (sp.outcome && sp.outcome.statement) {
+        patch.outcome = { statement: sp.outcome.statement, assertions: sp.outcome.assertions || [] };
+      }
+      this.setState(patch);
+      return;
+    }
 
     if (iv.type === "clarification") {
       const lead = iv.intro ? [{ isAtlas: true, text: iv.intro, hasReason: false }] : [];
@@ -5176,7 +5195,7 @@ class Component extends DCLogic {
         // that cannot publish never has a run time.
         const choices = g.blocking ? [] : ["escalate", "answer", "ignore"];
         return {
-          message: g.message,
+          message: this._deJargon(g.message),
           resolutionLabel: label,
           options: choices.filter(c => c !== cur).map(c => ({
             label: c === "escalate" ? "Send to a person" : c === "answer" ? "Use the suggestion" : "Ignore",
@@ -5330,6 +5349,9 @@ class Component extends DCLogic {
       this._slId = null;
       this.setState({
         spec: iv.spec, phase: "proposed", thinking: false, inputMode: "change",
+        // The graph is fully ratified — the walkthrough is over; the canvas now
+        // renders all-approved and the test panel is free to unlock.
+        awaitingGraphApproval: false, graphReviseOpen: false,
         testState: "idle", runStepIndex: 0, runSteps: [], failIndex: -1, msgs,
       });
       return;
@@ -5947,7 +5969,58 @@ class Component extends DCLogic {
   // off (`hasBranches`/`fan2` = false). Handlers on `item.sel` are the live
   // step closures, passed through verbatim; nothing is reattached here.
   _selectNode(msgId, stepId) {
+    // The dedicated generated-workflow canvas has no backing message — its
+    // selection lives on state (graphSelNode), keyed by the synthetic '__graph' id.
+    if (msgId === "__graph") { this.setState({ graphSelNode: stepId }); return; }
     this.setState({ msgs: this.state.msgs.map(m => m._id === msgId ? { ...m, _selNode: stepId } : m) });
+  }
+
+  // ── Step-by-step graph approval (generated_workflow) ──────────────────────
+  // The converger emits the WHOLE spec at once, but the user approves it one node
+  // at a time and the canvas BUILDS UP as each is approved. `graphApproved` is the
+  // set of approved node ids; the "current step" is the first id in topological
+  // order not yet approved. Approving the LAST node resumes the backend (accept),
+  // which proceeds to gaps/decisions/ratify.
+  _graphOrder(spec) {
+    // The same topological walk the canvas lays out — reuse _layoutGraph so the
+    // approval order and the drawn order can never disagree.
+    return this._layoutGraph(spec, { approveAll: true, msgId: "__graph" }).order;
+  }
+  _approveCurrentStep() {
+    const sp = this.state.spec; if (!sp) return;
+    const order = this._graphOrder(sp);
+    const approved = new Set(this.state.graphApproved || []);
+    const cur = order.find((id) => !approved.has(id));
+    if (!cur) return;
+    approved.add(cur);
+    const next = order.find((id) => !approved.has(id));
+    const arr = order.filter((id) => approved.has(id)); // stable topological order
+    if (!next) { this._finishGraphApproval(arr); return; }
+    this.setState({ graphApproved: arr, graphSelNode: next, graphReviseOpen: false, graphReviseText: "" });
+  }
+  _approveAllSteps() {
+    const sp = this.state.spec; if (!sp) return;
+    this._finishGraphApproval(this._graphOrder(sp).slice());
+  }
+  _finishGraphApproval(approvedArr) {
+    this.setState({
+      graphApproved: approvedArr, awaitingGraphApproval: false,
+      graphReviseOpen: false, graphReviseText: "", graphSelNode: null,
+      thinking: true, inputMode: "locked",
+    });
+    this._send({ type: "accept" });
+  }
+  _openGraphRevise() { this.setState({ graphReviseOpen: true }); }
+  _graphReviseInput(e) { this.setState({ graphReviseText: e.target.value }); }
+  _submitGraphRevise() {
+    const note = (this.state.graphReviseText || "").trim();
+    if (!note) return;
+    this.setState({
+      msgs: [...this.state.msgs, { isOperator: true, text: note }],
+      awaitingGraphApproval: false, graphReviseOpen: false, graphReviseText: "",
+      thinking: true, inputMode: "locked",
+    });
+    this._send({ type: "modify", modification: note });
   }
 
   // Resolve a step's node type → { shape, icon-flags, typeLabel }. `mode` is the
@@ -6075,7 +6148,7 @@ class Component extends DCLogic {
       const meta = this._nodeShape(selStep.nodeType, selStep.mode);
       const detailTypeColor = selStep.isConfirmed ? 'rgba(255,255,255,.5)'
         : (selStep.isActive ? 'rgba(231,178,94,.8)' : 'rgba(255,255,255,.4)');
-      sel = Object.assign({}, selStep, { num: selIdx + 1, typeLabel: meta.typeLabel, detailTypeColor });
+      sel = Object.assign({}, selStep, { num: selIdx + 1, typeLabel: meta.typeLabel, detailTypeColor, desc: this._deJargon(selStep.desc) });
     }
 
     return Object.assign({}, item, {
@@ -6100,140 +6173,238 @@ class Component extends DCLogic {
     const s = String(w == null ? '' : w).trim();
     return (s === '*' || s === '') ? 'otherwise' : ('if ' + s);
   }
-  _specCanvas(item, spec) {
-    const msgId = item._id;
-    const specNodes = Array.isArray(spec.nodes) ? spec.nodes : [];
-    const edges = Array.isArray(spec.edges) ? spec.edges : [];
+  // ── dagre graph layout ────────────────────────────────────────────────────
+  // Lay the WHOLE spec out with dagre (rankdir LR) instead of hand-rolled rail
+  // geometry — the fork is positioned automatically for ANY shape. Returns
+  // absolutely-positioned node view-models, edge paths + arrowheads, canvas
+  // dimensions, the topological order, and the current step (first unapproved).
+  //   approved   — Set of already-approved node ids (drives per-node state).
+  //   approveAll — a completed / reopened draft: every node reads as approved.
+  _edgePath(pts) {
+    if (!pts || !pts.length) return '';
+    const r = (v) => Math.round(v * 10) / 10;
+    let d = 'M ' + r(pts[0].x) + ' ' + r(pts[0].y);
+    for (let i = 1; i < pts.length; i++) {
+      const a = pts[i - 1], b = pts[i], mx = (a.x + b.x) / 2;
+      d += ' C ' + r(mx) + ' ' + r(a.y) + ' ' + r(mx) + ' ' + r(b.y) + ' ' + r(b.x) + ' ' + r(b.y);
+    }
+    return d;
+  }
+  _edgeArrow(pts) {
+    const n = pts ? pts.length : 0; if (n < 2) return '';
+    const r = (v) => Math.round(v * 10) / 10;
+    const a = pts[n - 2], b = pts[n - 1];
+    const ang = Math.atan2(b.y - a.y, b.x - a.x), L = 8, W = 4.2;
+    const lx = b.x - L * Math.cos(ang) + W * Math.sin(ang), ly = b.y - L * Math.sin(ang) - W * Math.cos(ang);
+    const rx = b.x - L * Math.cos(ang) - W * Math.sin(ang), ry = b.y - L * Math.sin(ang) + W * Math.cos(ang);
+    return r(b.x) + ',' + r(b.y) + ' ' + r(lx) + ',' + r(ly) + ' ' + r(rx) + ',' + r(ry);
+  }
+  _layoutGraph(spec, opts) {
+    opts = opts || {};
+    const msgId = opts.msgId || "__graph";
+    const approveAll = !!opts.approveAll;
+    const approved = opts.approved instanceof Set ? opts.approved : new Set(opts.approved || []);
+    const NW = 108, NH = 92;
 
-    // step-like object from a spec node — every node renders in the approved
-    // (green-check) state; a completed draft has no proposed/amber nodes.
-    const toStep = (node) => ({
-      id: node.id,
-      title: node.label || this._titleCase(effNodeType(node) || 'Step'),
-      nodeType: effNodeType(node),
-      mode: (node.config && node.config.mode) || null,
-      isConfirmed: true, isActive: false,
-      _specNode: node,
-    });
-
-    // synthetic trigger — the FIRST node (not part of spec.nodes).
+    // Canvas node set = synthesized trigger entry + the REAL graph nodes only. The
+    // workflow NAME is metadata; the old per-node drip pseudo-types (`name` /
+    // `setup_action` / `clarification`) are not part of the runnable graph — drop
+    // them so a stray pseudo-node can never render (their dangling edges are
+    // ignored: the edge loop skips edges to/from unknown ids).
+    const CANVAS_DROP = { name: 1, setup_action: 1, "setup-action": 1, clarification: 1 };
+    const specNodes = (Array.isArray(spec.nodes) ? spec.nodes : [])
+      .filter(nd => nd && !CANVAS_DROP[String(effNodeType(nd) || nd.type || "").toLowerCase()]);
+    const rawEdges = Array.isArray(spec.edges) ? spec.edges : [];
     const trg = (spec.triggers && spec.triggers[0]) || null;
-    const trigStep = trg ? {
-      id: '__trigger', title: this._specTriggerTitle(trg),
-      nodeType: 'trigger', mode: trg.type || null,
-      isConfirmed: true, isActive: false, _trigger: trg,
-    } : null;
 
-    // adjacency + in-degree over spec nodes; ignore edges to/from unknown ids.
-    const byId = new Map(); specNodes.forEach(n => byId.set(n.id, n));
-    const idx = new Map(); specNodes.forEach((n, i) => idx.set(n.id, i));
-    const outMap = new Map(); specNodes.forEach(n => outMap.set(n.id, []));
-    const indeg = new Map(); specNodes.forEach(n => indeg.set(n.id, 0));
-    const touched = new Set(); // ids that appear in at least one valid edge
-    edges.forEach(e => {
-      if (!e || e.from == null || e.to == null) return;
-      if (!byId.has(e.from) || !byId.has(e.to)) return;
-      outMap.get(e.from).push(e.to);
-      indeg.set(e.to, indeg.get(e.to) + 1);
-      touched.add(e.from); touched.add(e.to);
+    const stepsById = new Map();
+    const toStep = (node) => ({
+      id: node.id, title: node.label || this._titleCase(effNodeType(node) || 'Step'),
+      nodeType: effNodeType(node), mode: (node.config && node.config.mode) || null, _specNode: node,
+    });
+    const allSteps = [];
+    if (trg) allSteps.push({ id: '__trigger', title: this._specTriggerTitle(trg), nodeType: 'trigger', mode: trg.type || null, _trigger: trg });
+    specNodes.forEach(n => allSteps.push(toStep(n)));
+    allSteps.forEach(s => stepsById.set(s.id, s));
+
+    // build + lay out the dagre graph (guarded — never crash if the vendor is missing)
+    const haveDagre = typeof window !== "undefined" && window.dagre && window.dagre.graphlib;
+    const g = haveDagre ? new window.dagre.graphlib.Graph() : null;
+    if (g) {
+      g.setGraph({ rankdir: 'LR', ranksep: 70, nodesep: 34, marginx: 18, marginy: 20 });
+      g.setDefaultEdgeLabel(() => ({}));
+      allSteps.forEach(s => g.setNode(s.id, { width: NW, height: NH }));
+    }
+    const has = (id) => !!(g && g.hasNode(id));
+    const seenEdge = new Set(); const edgeList = [];
+    const addEdge = (from, to) => {
+      if (from == null || to == null || from === to) return;
+      if (!has(from) || !has(to)) return;
+      const k = from + '' + to;
+      if (seenEdge.has(k)) return;
+      seenEdge.add(k); g.setEdge(from, to); edgeList.push({ from, to });
+    };
+    rawEdges.forEach(e => { if (e) addEdge(e.from, e.to); });
+    // trigger → entry node(s): the real nodes with no valid inbound spec edge.
+    if (trg && g) {
+      const indeg = new Map(); specNodes.forEach(n => indeg.set(n.id, 0));
+      rawEdges.forEach(e => { if (e && stepsById.has(e.from) && stepsById.has(e.to) && e.to !== e.from) indeg.set(e.to, (indeg.get(e.to) || 0) + 1); });
+      let entries = specNodes.filter(n => (indeg.get(n.id) || 0) === 0);
+      if (!entries.length && specNodes.length) entries = [specNodes[0]];
+      entries.forEach(n => addEdge('__trigger', n.id));
+    }
+
+    let order;
+    if (g) {
+      window.dagre.layout(g);
+      try { order = window.dagre.graphlib.alg.topsort(g); }
+      catch (e) { order = allSteps.map(s => s.id); }
+    } else { order = allSteps.map(s => s.id); }
+    // topsort omits cycle-trapped nodes; append any missing in array order.
+    const inOrder = new Set(order);
+    allSteps.forEach(s => { if (!inOrder.has(s.id)) { order.push(s.id); inOrder.add(s.id); } });
+
+    const current = approveAll ? null : (order.find(id => !approved.has(id)) || null);
+    const stateOf = (id) => approveAll ? 'approved' : (approved.has(id) ? 'approved' : (id === current ? 'proposed' : 'upcoming'));
+
+    // ── fan-out ports ─────────────────────────────────────────────────────────
+    // A branch / decision node with >1 outgoing edge renders ONE output-port dot
+    // per lane, spaced down its right side, and each lane's edge ORIGINATES from
+    // its own dot (not the node center). Ports live in canvas coords — the same
+    // space as the edge SVG and the node cards — so a dot and its edge start
+    // coincide exactly. `portOf` (edge key → {x,y}) overrides the edge's pts[0];
+    // `nodePorts` (node id → [{x,y}]) drives the rendered dots and blanks that
+    // node's single inline port so a fan-out node shows N dots, not N+1.
+    const outByFrom = new Map();
+    edgeList.forEach(e => { if (!outByFrom.has(e.from)) outByFrom.set(e.from, []); outByFrom.get(e.from).push(e); });
+    const portOf = new Map(); const nodePorts = new Map();
+    if (g) allSteps.forEach(s => {
+      const nt = String(s.nodeType || '').toLowerCase();
+      const outs = (outByFrom.get(s.id) || []).slice();
+      if (!(nt === 'branch' || nt === 'decision') || outs.length < 2) return;
+      const pos = g.node(s.id); if (!pos) return;
+      // top-to-bottom by each target's laid-out y, so the fan never crosses itself.
+      outs.sort((a, b) => ((g.node(a.to) || {}).y || 0) - ((g.node(b.to) || {}).y || 0));
+      const nOut = outs.length;
+      const span = Math.min(52, 16 * nOut);           // vertical spread of the dots
+      const px = pos.x + 24;                            // right side of the diamond (canvas coords)
+      const ports = [];
+      outs.forEach((e, i) => {
+        const py = pos.y + span * ((i + 1) / (nOut + 1) - 0.5);
+        const pt = { x: px, y: py };
+        portOf.set(e.from + '' + e.to, pt);
+        ports.push(pt);
+      });
+      nodePorts.set(s.id, ports);
     });
 
-    // Kahn topological sort, stable by array order. Seed only CONNECTED
-    // indegree-0 nodes; fully-disconnected orphans and any cycle-trapped nodes
-    // are appended at the end in array order (truthful, never crashes).
-    const remain = new Map(indeg);
-    const ready = specNodes.filter(n => touched.has(n.id) && remain.get(n.id) === 0).map(n => n.id);
-    const seen = new Set(); const topo = [];
-    while (ready.length) {
-      ready.sort((a, b) => idx.get(a) - idx.get(b));
-      const id = ready.shift();
-      if (seen.has(id)) continue;
-      seen.add(id); topo.push(id);
-      outMap.get(id).forEach(to => {
-        remain.set(to, remain.get(to) - 1);
-        if (remain.get(to) <= 0 && !seen.has(to)) ready.push(to);
-      });
-    }
-    specNodes.forEach(n => { if (!seen.has(n.id)) { seen.add(n.id); topo.push(n.id); } });
+    // node VMs (shape/icon/color from _nodeVM) + absolute position from dagre.
+    const nodes = allSteps.map((s, i) => {
+      const st = stateOf(s.id);
+      const step = Object.assign({}, s, { isConfirmed: st === 'approved', isActive: st === 'proposed' });
+      const vm = this._nodeVM(step, i, allSteps.length, msgId);
+      const pos = g ? (g.node(s.id) || { x: NW / 2, y: NH / 2 }) : { x: NW / 2 + i * (NW + 44), y: NH / 2 };
+      vm.showArrow = false; // edges are drawn by the SVG overlay, not inline
+      if (nodePorts.has(s.id)) vm.portColor = 'transparent'; // fan-out node uses per-lane dots, not the single inline port
+      vm.id = s.id;
+      vm.left = Math.round(pos.x - NW / 2) + 'px';
+      vm.top = Math.round(pos.y - NH / 2) + 'px';
+      vm.cardOpacity = st === 'upcoming' ? '.42' : '1';
+      return vm;
+    });
 
-    // Branch fan-out — ONLY when the shape is unambiguous: exactly one branch
-    // node with exactly two cases, whose lanes (walk single successors) are
-    // disjoint from each other and the trunk, and every node is accounted for.
-    let branched = false, mainObjs = null, laneObjsList = [];
-    const branchNodes = specNodes.filter(n =>
-      n.type === 'branch' && n.config && Array.isArray(n.config.cases) && n.config.cases.length === 2);
-    if (branchNodes.length === 1) {
-      const br = branchNodes[0];
-      const brPos = topo.indexOf(br.id);
-      const walk = (start) => {
-        const chain = []; let cur = start; const guard = new Set();
-        while (cur != null && byId.has(cur) && !guard.has(cur)) {
-          guard.add(cur); chain.push(cur);
-          const succ = outMap.get(cur) || [];
-          if (succ.length === 1) cur = succ[0]; else break;
-        }
-        return chain;
-      };
-      const cases = br.config.cases;
-      const laneA = walk(cases[0] && cases[0].to), laneB = walk(cases[1] && cases[1].to);
-      const setB = new Set(laneB);
-      const trunk = brPos >= 0 ? topo.slice(0, brPos + 1) : [];
-      const trunkSet = new Set(trunk);
-      const overlap = laneA.some(id => setB.has(id) || trunkSet.has(id))
-                   || laneB.some(id => trunkSet.has(id));
-      const accounted = new Set(); trunk.forEach(id => accounted.add(id));
-      laneA.forEach(id => accounted.add(id)); laneB.forEach(id => accounted.add(id));
-      const complete = brPos >= 0 && laneA.length > 0 && laneB.length > 0
-                     && accounted.size === specNodes.length
-                     && topo.every(id => accounted.has(id));
-      if (!overlap && complete) {
-        branched = true;
-        const trunkObjs = trunk.map(id => toStep(byId.get(id)));
-        mainObjs = trigStep ? [trigStep].concat(trunkObjs) : trunkObjs;
-        laneObjsList = [
-          { label: this._laneLabel(cases[0].when), objs: laneA.map(id => toStep(byId.get(id))) },
-          { label: this._laneLabel(cases[1].when), objs: laneB.map(id => toStep(byId.get(id))) },
-        ];
+    // edges: smooth path + arrowhead, coloured by whether both ends are reached.
+    // branch/decision case edges carry a humanized lane label at their midpoint.
+    const AMBER = 'rgba(231,178,94,.55)', DIM = 'rgba(255,255,255,.16)';
+    const caseLabel = new Map();
+    specNodes.forEach(n => {
+      if (n.type === 'branch' && n.config && Array.isArray(n.config.cases)) {
+        n.config.cases.forEach(c => { if (c && c.to != null) { const k = n.id + '' + c.to; if (!caseLabel.has(k)) caseLabel.set(k, this._laneLabel(c.when)); } });
       }
-    }
-    if (!branched) {
-      const list = topo.map(id => toStep(byId.get(id)));
-      mainObjs = trigStep ? [trigStep].concat(list) : list;
-    }
+    });
+    const edges = []; const edgeLabels = [];
+    edgeList.forEach(e => {
+      const ge = g && g.edge(e.from, e.to);
+      let pts = (ge && ge.points) ? ge.points : [];
+      if (pts.length < 2) return;
+      // fan-out: start the path at this lane's own port dot, not the shared node center.
+      const port = portOf.get(e.from + '' + e.to);
+      if (port) pts = [{ x: port.x, y: port.y }].concat(pts.slice(1));
+      const live = stateOf(e.from) !== 'upcoming' && stateOf(e.to) !== 'upcoming';
+      const color = live ? AMBER : DIM;
+      edges.push({ d: this._edgePath(pts), arrowPoints: this._edgeArrow(pts), color });
+      const lbl = caseLabel.get(e.from + '' + e.to);
+      if (lbl) {
+        const mid = pts[Math.floor(pts.length / 2)] || pts[0];
+        edgeLabels.push({ text: lbl, color: live ? 'rgba(239,200,146,.85)' : 'rgba(255,255,255,.32)',
+          left: Math.round(mid.x) + 'px', top: (Math.round(mid.y) - 22) + 'px' });
+      }
+    });
 
-    const mainNodes = mainObjs.map((st, i) => this._nodeVM(st, i, mainObjs.length, msgId));
-    const branches = laneObjsList.map(l => ({
-      label: l.label,
-      nodes: l.objs.map((st, j) => this._nodeVM(st, j, l.objs.length, msgId)),
-    }));
+    // rendered port dots (canvas coords). Amber when the source node is reached,
+    // dim otherwise — matching the live/upcoming edge colouring.
+    const ports = [];
+    nodePorts.forEach((arr, nodeId) => {
+      const col = stateOf(nodeId) !== 'upcoming' ? 'rgba(231,178,94,.9)' : 'rgba(255,255,255,.22)';
+      arr.forEach(p => ports.push({ left: Math.round(p.x) + 'px', top: Math.round(p.y) + 'px', color: col }));
+    });
 
-    // selection — informational only (a completed draft has no approval actions).
-    const allObjs = mainObjs.slice();
-    laneObjsList.forEach(l => l.objs.forEach(o => allObjs.push(o)));
-    let selId = item._selNode;
-    if (!selId || !allObjs.some(s => s.id === selId)) selId = allObjs.length ? allObjs[0].id : null;
-    const selStep = allObjs.find(s => s.id === selId) || null;
-    let sel = null;
+    const gg = g ? g.graph() : { width: 0, height: 0 };
+    return {
+      nodes, edges, edgeLabels, ports,
+      width: Math.max(1, Math.ceil(gg.width || 0)),
+      height: Math.max(1, Math.ceil(gg.height || 0)),
+      order, current, stepsById,
+    };
+  }
+
+  // Build the canvas view-model from the spec's real graph, laid out by dagre.
+  // opts.walkthrough = step-by-step approval is in progress (build up as approved);
+  // opts.approved = Set of approved ids; opts.selId = the node whose detail shows.
+  _specCanvas(item, spec, opts) {
+    opts = opts || {};
+    const msgId = item._id || "__graph";
+    const walkthrough = !!opts.walkthrough;
+    const approvedSet = opts.approved instanceof Set ? opts.approved : new Set(opts.approved || []);
+    const layout = this._layoutGraph(spec, { approved: approvedSet, approveAll: !walkthrough, msgId });
+    const order = layout.order, total = order.length, current = layout.current;
+    const approvedCount = walkthrough ? order.filter(id => approvedSet.has(id)).length : total;
+
+    // selection → the review / detail panel below the canvas. Default = the current
+    // step (walkthrough) so the focus is always what needs approving; the user may
+    // click any node to inspect it read-only.
+    let selId = opts.selId;
+    const idSet = new Set(order);
+    if (!selId || !idSet.has(selId)) selId = current || order[0] || null;
+    const selStep = selId ? layout.stepsById.get(selId) : null;
+    let review = null;
     if (selStep) {
       const isTrig = selStep.id === '__trigger';
-      const et = isTrig ? 'trigger' : effNodeType(selStep._specNode);
+      const et = isTrig ? 'trigger' : (selStep.nodeType || 'step');
       const meta = this._nodeShape(et, selStep.mode);
-      const desc = isTrig ? this._triggerDetail(selStep._trigger) : this._nodeDetail(selStep._specNode);
-      sel = {
-        num: allObjs.indexOf(selStep) + 1, typeLabel: meta.typeLabel,
-        detailTypeColor: 'rgba(255,255,255,.5)', title: selStep.title,
-        // Completed/reopened draft: the detail card is read-only info — no
-        // approval actions (gated on isActive) and no dead "Undo" (gated on
-        // isConfirmed). Both false ⇒ a clean info-only card.
-        desc, isConfirmed: false, isActive: false,
+      const desc = this._deJargon(isTrig ? this._triggerDetail(selStep._trigger) : this._nodeDetail(selStep._specNode));
+      const cfg = (selStep._specNode && selStep._specNode.config) || {};
+      const prompt = (!isTrig && (cfg.prompt || cfg.instructions)) ? String(cfg.prompt || cfg.instructions) : null;
+      const st = (!walkthrough || approvedSet.has(selId)) ? 'approved' : (selId === current ? 'proposed' : 'upcoming');
+      review = {
+        title: selStep.title, typeLabel: meta.typeLabel, desc, prompt,
+        num: order.indexOf(selId) + 1,
+        detailTypeColor: st === 'approved' ? 'rgba(255,255,255,.5)' : (st === 'proposed' ? 'rgba(231,178,94,.8)' : 'rgba(255,255,255,.4)'),
+        isCurrent: walkthrough && selId === current,
+        stateLabel: st === 'approved' ? 'Approved' : (st === 'proposed' ? 'Reviewing now' : 'Upcoming'),
+        stateColor: st === 'approved' ? '#7fc28a' : (st === 'proposed' ? '#efc892' : 'rgba(255,255,255,.4)'),
+        showState: walkthrough && !(walkthrough && selId === current),
       };
     }
 
-    const amber = 'rgba(231,178,94,.5)', dim = 'rgba(255,255,255,.14)';
     return Object.assign({}, item, {
-      mainNodes, sel,
-      hasBranches: branched, fan2: branched, branches,
-      fanA: branched ? amber : dim, fanB: branched ? amber : dim,
+      nodes: layout.nodes, edges: layout.edges, edgeLabels: layout.edgeLabels, ports: layout.ports,
+      canvasW: layout.width, canvasH: layout.height,
+      hasEdges: layout.edges.length > 0, hasEdgeLabels: layout.edgeLabels.length > 0,
+      review, walkthrough,
+      progressLabel: total ? ('Step ' + Math.min(approvedCount + 1, total) + ' of ' + total) : '',
+      progressPct: (total ? Math.round((approvedCount / total) * 100) : 0) + '%',
+      approvedCount, totalSteps: total,
     });
   }
 
@@ -6312,6 +6483,32 @@ class Component extends DCLogic {
   // Plain-language description of what a node does — never raw key:value spec,
   // never a model name (which is internal + often wrong).
   _clip(s, len) { s = String(s == null ? "" : s).replace(/\s+/g, " ").trim(); return s.length > len ? s.slice(0, len - 1) + "…" : s; }
+  // Conservative DISPLAY-TIME sanitizer — strips the unambiguous engineering
+  // leaks the backend still surfaces in rationale / gap text (Airtable base &
+  // table ids, assertion-kind codes, "the edge from X to Y" wiring phrasing).
+  // NOT a full plain-language rewrite (that needs the backend) — it only removes
+  // what is safe to remove. Never mutates the underlying data.
+  _deJargon(s) {
+    let t = String(s == null ? "" : s);
+    // Airtable ids: appXXXXXXXXXXXXXX / tblXXXXXXXXXXXXXX (14 trailing chars).
+    t = t.replace(/\b(?:app|tbl)[A-Za-z0-9]{14}\b/g, "");
+    // Parenthetical assertion tags, e.g. " (record_exists)".
+    t = t.replace(/\s*\((?:record_exists|message_sent|document_exists)\)/g, "");
+    // Bare assertion-kind tokens → plain language.
+    t = t.replace(/\brecord_exists\b/g, "the record is created")
+         .replace(/\bmessage_sent\b/g, "the message is sent")
+         .replace(/\bdocument_exists\b/g, "the document is created");
+    // Edge / wiring phrasing, e.g. "the edge from classify_email to route_lead".
+    t = t.replace(/\b(?:the edge from|wir(?:e|ing)) [a-z0-9_]+ (?:to|into) [a-z0-9_]+/gi, "");
+    // Tidy artifacts a cut can leave behind: dangling em-dashes, double spaces,
+    // a stray space before punctuation, and a lowercased first letter.
+    t = t.replace(/\s*—\s*(?=[,.;)]|$)/g, "")
+         .replace(/\s+([,.;])/g, "$1")
+         .replace(/\s{2,}/g, " ")
+         .trim();
+    t = t.replace(/^([a-z])/, (m, c) => c.toUpperCase());
+    return t;
+  }
   _triggerDetail(t) {
     const ty = t.type || (t.cron ? "schedule" : "manual");
     if (ty === "schedule") return "Runs automatically on this schedule — nothing needs to arrive to start it.";
@@ -6368,7 +6565,7 @@ class Component extends DCLogic {
     if (ch === "sheets_append") return "Appends the result to a Google Sheet.";
     if (ch === "calendar_create_event") return "Creates a Google Calendar event.";
     if (ch === "tasks_create") return "Creates a Google Task.";
-    if (ch === "slack" || ch.charAt(0) === "#" || /^slack:/.test(ch) || c.target) return "Posts the result to " + this._slackChannel() + " in Slack.";
+    if (ch === "slack" || ch.charAt(0) === "#" || /^slack:/.test(ch) || c.target) return "Posts the result to " + (c.target || this._slackChannel()) + " in Slack.";
     return "Delivers the result to " + (ch || "the configured destination") + ".";
   }
   // Classify the delivery for the "what your team sees" preview (glyph + header),
@@ -6384,7 +6581,7 @@ class Component extends DCLogic {
     if (ch === "docs_create")          return { glyph: "▤", header: "Google Doc" };
     if (ch === "sheets_append")        return { glyph: "▦", header: "Google Sheet" };
     if (ch === "calendar_create_event")return { glyph: "◷", header: "Calendar" };
-    if (ch === "slack" || ch.charAt(0) === "#" || /^slack:/.test(ch) || c.target) return { glyph: "#", header: this._slackChannel().replace(/^#/, "") };
+    if (ch === "slack" || ch.charAt(0) === "#" || /^slack:/.test(ch) || c.target) return { glyph: "#", header: (c.target || this._slackChannel()).replace(/^#/, "") };
     return { glyph: "→", header: (ch || "Destination") };
   }
   // Method-aware glyph for a deliver node in a DAG (S7-3) — never a Slack "#" on email etc.
@@ -6583,7 +6780,11 @@ class Component extends DCLogic {
   _contractPanel() {
     const S = this.state;
     const TS = S.testState;
-    const testUnlocked = S.phase === "proposed";
+    // Testing unlocks ONLY once the whole spec is built and approved: a real spec
+    // exists, the step-by-step approval walkthrough is finished (not mid-approval),
+    // and the converger has ratified the draft (phase === proposed). Any of these
+    // false ⇒ the panel stays locked ("Confirm every step to start testing").
+    const testUnlocked = !!S.spec && !S.awaitingGraphApproval && S.phase === "proposed";
     const SAGE = "#9fd6a8", CLAY = "#f0a896", SLATE = "#fff", DIM = "rgba(255,255,255,.35)";
     const openIdx = (S.contractOpenRow == null) ? null : S.contractOpenRow;
     const rowFrom = (i, mark, chipColor, simpleLine, simpleDetail) => {
@@ -6690,7 +6891,11 @@ class Component extends DCLogic {
     const published = S.phase === "published";
     const SVG_PLAY  = `url('data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 10 12%27%3E%3Cpolygon points=%271,0.5 9.5,6 1,11.5%27 fill=%27%237fc28a%27/%3E%3C/svg%3E') no-repeat center/contain`;
     const SVG_PAUSE = `url('data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 10 12%27%3E%3Crect x=%271%27 y=%271%27 width=%273.5%27 height=%2710%27 rx=%271%27 fill=%27%23e87461%27/%3E%3Crect x=%275.5%27 y=%271%27 width=%273.5%27 height=%2710%27 rx=%271%27 fill=%27%23e87461%27/%3E%3C/svg%3E') no-repeat center/contain`;
-    const testUnlocked = S.phase === "proposed";
+    // Testing unlocks ONLY once the whole spec is built and approved: a real spec
+    // exists, the step-by-step approval walkthrough is finished (not mid-approval),
+    // and the converger has ratified the draft (phase === proposed). Any of these
+    // false ⇒ the panel stays locked ("Confirm every step to start testing").
+    const testUnlocked = !!S.spec && !S.awaitingGraphApproval && S.phase === "proposed";
     const TS = S.testState;
     const contract = this._contractPanel();
     // Thinking stream (right panel). Lives inside modeBuild (phase chat/building/
@@ -6884,6 +7089,35 @@ class Component extends DCLogic {
 
       // conversation
       thread: this.buildThread(), thinking: S.thinking, scrollRef: (el) => { this.el = el; },
+
+      // The DEDICATED GENERATED-WORKFLOW CANVAS — the complete graph the converger
+      // generated in one pass, laid out from state.spec.{nodes,edges} by _specCanvas
+      // (trigger → … → branch → labeled lanes). This is the PROMINENT center surface
+      // above the conversation; the per-node drip/pin is retired. Selection lives on
+      // state (graphSelNode) via the synthetic '__graph' id, so clicking a node still
+      // routes through _selectNode. Whole-graph approval affordances (onApprove /
+      // onRevise / inline revise input) are attached while awaiting approval. Null
+      // (band hidden) until a spec exists — during clarify the center is just chat.
+      graphCanvas: (() => {
+        const sp = S.spec;
+        if (!sp || !Array.isArray(sp.nodes) || !sp.nodes.length) return null;
+        const walkthrough = !!S.awaitingGraphApproval;
+        const approved = new Set(S.graphApproved || []);
+        const item = { _id: "__graph" };
+        const vm = this._specCanvas(item, sp, { walkthrough, approved, selId: S.graphSelNode });
+        vm.awaitingApproval = walkthrough;
+        // step-by-step approval affordances (the review panel below the canvas)
+        vm.changeOpen = !!S.graphReviseOpen;
+        vm.changeValue = S.graphReviseText || "";
+        vm.onApprove = () => this._approveCurrentStep();
+        vm.onApproveAll = () => this._approveAllSteps();
+        vm.onChange = () => this._openGraphRevise();
+        vm.onChangeInput = (e) => this._graphReviseInput(e);
+        vm.onChangeKey = (e) => { if (e.key === "Enter") { e.preventDefault(); this._submitGraphRevise(); } };
+        vm.onSubmitChange = () => this._submitGraphRevise();
+        vm.onCancelChange = () => this.setState({ graphReviseOpen: false, graphReviseText: "" });
+        return vm;
+      })(),
 
       // The outcome contract, pinned above the thread (P12 Increment C). It is
       // the thing the workflow will be REFUSED PUBLICATION for not delivering,

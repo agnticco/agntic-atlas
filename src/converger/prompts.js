@@ -605,10 +605,14 @@ all at once instead of one component per turn.
 
 RETURN THIS SHAPE (JSON only):
 {
+  "name":     "<short descriptive workflow title, e.g. 'Inbound lead triage'>",
   "triggers": [ { …one trigger spec… } ],
   "nodes":    [ { "id": "<snake_case>", "type": "<nodeType>", "label": "<human label>", "config": { … } }, … ],
   "edges":    [ { "from": "<nodeId>", "to": "<nodeId>" }, … ]
 }
+
+ALWAYS include "name": a short, human title for the whole workflow (a few words). It is required —
+a nameless workflow cannot be saved.
 
 STRUCTURE RULES — these are what make the graph actually RUN. The single most common failure is a node
 with no inbound edge, or a branch with no feed:

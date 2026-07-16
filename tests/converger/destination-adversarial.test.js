@@ -121,6 +121,7 @@ async function converge({ baseId = 'appPLACEHOLDER', mapping = { Name: 'Name', B
     // generate, resolves both against the live connector (base lookup, table, columns).
     if (p.includes('Build the COMPLETE workflow')) {
       return J({
+        name: 'Inbound lead triage',
         triggers: [{ type: 'email', filter: 'to:leads@acme.com' }],
         nodes: [
           { id: 'extract', type: 'llm', label: 'Extract the lead',

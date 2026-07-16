@@ -448,15 +448,20 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
       proposeRounds:     0,
       gapRounds:         0,
       sufficiencyChecks: 0,
+      // Whole-spec regenerations after the first build. A LOOP BOUND: post-generate,
+      // any "the spec must change" route (a blocking gap, a sufficiency-named missing
+      // component, a ratify request-changes) rebuilds via `generate`, not the retired
+      // `propose` drip — one Opus pass each. Capped so an intent the model cannot
+      // satisfy ends at `ratify` with its blockers shown, not in an endless rebuild.
+      regenRounds:       0,
       _missingNote:      null,
       // The last accepted proposal was a NO-OP (see `propose`). Read by `analyze`.
       _noProgress:       false,
-      // The whole-spec `generate` pass has run once (converger rearchitecture,
-      // Increment 3). Tracked (replacement semantics, so it MUST be declared to
-      // persist across steps) and read by `analyze`'s router: the FIRST build routes
-      // to `generate` (one Opus whole-spec pass); later targeted gap-driven single
-      // fixes route to `propose`. Without it, `analyze` would re-enter `generate`
-      // every round and rebuild the entire spec on each gap fix.
+      // The whole-spec `generate` pass has run at least once (converger
+      // rearchitecture). Latched on the first accepted generation and read by the
+      // `analyze`/generate re-entry guard so the regenerate counter only counts
+      // TRUE rebuilds (not the first build). `propose` is no longer routed to from
+      // any post-generate path — every "the spec must change" route regenerates.
       _generated:        false,
       // The destination (Airtable base + table + columns) has been resolved from the
       // live connector once (P12 Increment F). Without this the gap loop would
@@ -771,6 +776,16 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
   // something to add if you let it.
   const MAX_SUFFICIENCY_CHECKS = 4;
 
+  // How many WHOLE-SPEC rebuilds `generate` may run after the first build before
+  // the converger stops rebuilding and hands the draft to `gaps` → `ratify`. The
+  // old `propose` drip was cheap (one sonnet call per component, capped at 14);
+  // `generate` is one Opus pass over the entire spec, so its regenerate loop is
+  // capped far tighter. Termination is already guaranteed by the other caps
+  // (MAX_PROPOSE_ROUNDS / MAX_SUFFICIENCY_CHECKS / MAX_GAP_ROUNDS) and by the fact
+  // that `generate` always interrupts for review; this simply keeps the worst-case
+  // Opus cost — and the number of near-identical workflows shown to the user — low.
+  const MAX_REGEN_ROUNDS = 3;
+
   graph.addNode('analyze', async (state, cfg) => {
     const sessionId = cfg?.configurable?.threadId;
     const gap = scoreGap(state.draft, { capabilities: state.capabilities });
@@ -798,6 +813,18 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
           _missingNote:      String(verdict.missing),
         };
       }
+      return { phase: 'gapping' };
+    }
+
+    // BOUND THE WHOLE-SPEC REGENERATE LOOP (converger rearchitecture).
+    // Once `generate` has run, a still-incomplete draft routes back to `generate`
+    // (one Opus pass), not to the retired `propose` drip. That is correct but
+    // expensive, so it is capped: after MAX_REGEN_ROUNDS rebuilds that still don't
+    // clear the floor, stop rebuilding and hand the draft to `gaps` (which
+    // auto-repairs the structural defects the model keeps re-introducing) and then
+    // to `ratify`, which SHOWS the remaining blockers to the user rather than
+    // rebuilding a near-identical spec forever.
+    if (state._generated && (state.regenRounds ?? 0) >= MAX_REGEN_ROUNDS) {
       return { phase: 'gapping' };
     }
 
@@ -986,11 +1013,21 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
     const sessionId = cfg?.configurable?.threadId;
     const draft = state.draft ?? { ...DRAFT_DEFAULT };
 
+    // A regenerate driven by the sufficiency check names a concrete MISSING
+    // component (`_missingNote`, set by `analyze`). Fold it into the clarifications
+    // so the rebuild actually adds it — otherwise generate re-runs on identical
+    // input, produces the same still-incomplete spec, and the sufficiency "name the
+    // missing piece" step (P12 Increment C) becomes a no-op that just burns Opus
+    // calls. The blocking-gap route already arrives via `clarifications`.
+    const clarifications = state._missingNote
+      ? [...(state.clarifications ?? []), { q: '(still missing)', a: String(state._missingNote) }]
+      : state.clarifications;
+
     const generated = await llmJson(llm, [
       new SystemMessage(buildSystemPrompt(state.capabilities)),
       new HumanMessage(buildGeneratePrompt({
         intent:         state.intent,
-        clarifications: state.clarifications,
+        clarifications,
         outcome:        draft.outcome,
         draft,
         capabilities:   state.capabilities,
@@ -1025,13 +1062,41 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
 
     const merged = mergeGeneratedSpec(draft, generated);
 
+    // WHOLE-GRAPH HITL (Increment 4): the workflow is built as ONE unit, so the user
+    // approves it as one — the client renders `spec` on the canvas (its edges lay out
+    // the real branch + lanes) and the person accepts it or asks for a revision. This
+    // replaces the per-node drip: there is one review of the finished graph, not a
+    // confirmation per step.
+    const review = await interrupt({
+      type: 'generated_workflow',
+      spec: { name: merged.name, triggers: merged.triggers, nodes: merged.nodes, edges: merged.edges, outcome: merged.outcome },
+      step: state.step,
+    });
+
+    // Revise: feed the change back as a clarification and regenerate the whole spec
+    // (do NOT latch `_generated`, so `analyze` routes to `generate` again). The draft is
+    // left at its pre-generate state so the regeneration is clean, informed by the note.
+    if (review?.type === 'modify' && String(review.modification ?? '').trim()) {
+      return {
+        clarifications:  [{ q: '(revise the built workflow)', a: review.modification }],
+        confirmationLog: [{ step: state.step, type: 'generate_revise', modification: review.modification }],
+        step:            state.step + 1,
+        phase:           'analyzing',
+      };
+    }
+
+    // Accept: latch and route onward.
     return {
       draft: merged,
       // The whole-spec pass has run: `analyze` re-scores this now-complete draft and
-      // routes it onward (gapping → destinations → …). `_generated` latches so any
-      // later gap-driven round takes the single-fix `propose` path, not another full
-      // rebuild. No per-node interrupt — whole-graph HITL approval is Increment 4.
+      // routes it onward (gapping → destinations → …). `_generated` latches so the
+      // regenerate counter (below) counts only TRUE rebuilds, not this first build.
       _generated: true,
+      // Count a REGENERATION only when a prior build already latched — the first
+      // build must not consume the MAX_REGEN_ROUNDS budget. `_missingNote` is cleared
+      // now that this pass has consumed it, so it can't leak into an unrelated rebuild.
+      regenRounds:  state._generated ? (state.regenRounds ?? 0) + 1 : (state.regenRounds ?? 0),
+      _missingNote: null,
       confirmationLog: [{
         step: state.step, type: 'generate',
         nodes: merged.nodes.map(n => ({ id: n.id, type: n.type })),
@@ -1513,18 +1578,20 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
       };
     }
 
-    // request_changes: go back to proposing with user's feedback noted.
+    // request_changes: REGENERATE the whole spec with the user's feedback noted
+    // (phase:'proposing' → the ratify edge routes to `generate`).
     //
-    // The loop bounds MUST be reset here. `proposeRounds` is at or near its cap
-    // by the time we reach ratify, so leaving it would send analyze straight back
-    // to `gaps` without ever proposing the change the user just asked for — the
-    // build would appear to ignore them.
+    // The loop bounds MUST be reset here. `proposeRounds`/`regenRounds` are at or
+    // near their caps by the time we reach ratify, so leaving them would send analyze
+    // straight to `gaps` without ever rebuilding the change the user just asked for —
+    // the build would appear to ignore them.
     if (confirmation?.feedback) {
       return {
         clarifications:  [{ q: '(ratify feedback)', a: confirmation.feedback }],
         phase:           'proposing',
         proposeRounds:   0,
         gapRounds:       0,
+        regenRounds:     0,
         confirmationLog: [logEntry],
         step:            state.step + 1,
       };
@@ -1534,6 +1601,7 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
       phase:           'proposing',
       proposeRounds:   0,
       gapRounds:       0,
+      regenRounds:     0,
       confirmationLog: [logEntry],
       step:            state.step + 1,
     };
@@ -1549,15 +1617,22 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
   //   outcome → process → examples → (analyze ⇄ clarify) → generate → analyze
   //           → destinations → decisions → gaps → ratify
   //
-  // CLARIFY-FIRST, THEN GENERATE THE WHOLE SPEC (converger rearchitecture, Increment 3).
-  // `analyze` clarifies the intent to completion, then routes the FIRST build to
-  // `generate` — one whole-spec pass that emits every node, edge and branch case at once
+  // CLARIFY-FIRST, THEN GENERATE THE WHOLE SPEC (converger rearchitecture).
+  // `analyze` clarifies the intent to completion, then routes the build to `generate`
+  // — one whole-spec pass that emits every node, edge and branch case at once
   // (mergeGeneratedSpec + wireEdges guarantee a connected, branch-fed graph) — and back
   // to `analyze`, which re-scores the now-complete draft and sends it on to the tail.
-  // `propose` is no longer the primary builder: it survives only for gap-driven single
-  // fixes (a blocking gap or a named-missing component routes `proposing` → `propose`
-  // once `_generated` has latched). analyze/clarify/propose are v1's loop, kept intact
-  // and now driven by the new gap oracle rather than the old five-item checklist.
+  //
+  // EVERY "the spec must change" route REGENERATES; `propose` is retired from the flow.
+  // The client retired `propose`'s per-node `{type:'proposal'}` UI surface, so any route
+  // that reaches `propose` post-generate emits an interrupt no client can render and the
+  // build HANGS at phase:'building'. So a blocking gap with an answer, a sufficiency-named
+  // missing component, and a ratify request-changes all route back to `generate`, which
+  // reads the accumulated `clarifications` (+ `_missingNote`) and rebuilds the whole,
+  // updated, still-validated spec. `propose` and its guards remain in the source but are
+  // no longer routed to from anywhere — it is deliberately unreachable in production.
+  // The regenerate loop is bounded (MAX_REGEN_ROUNDS + MAX_GAP_ROUNDS + the sufficiency
+  // cap), so a spec the model cannot complete ends at `ratify` with its blockers shown.
   //
   // `decisions` (Increment E) sits immediately BEFORE `gaps`, and that order is
   // load-bearing: the gap list must be about the table AS CORRECTED. Review the
@@ -1587,11 +1662,11 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
     if (state.phase === 'gapping')    return 'destinations'; // …→ decisions → gaps,
     if (state.phase === 'ratifying')  return 'ratify';       //   each a pass-through
     if (state.phase === 'clarifying') return 'clarify';      //   when it has nothing
-    // proposing: the FIRST build routes to the whole-spec `generate` (one Opus pass
-    // that emits every node, edge and branch case at once); later targeted gap-driven
-    // single fixes still use `propose`. `_generated` latches after the first pass, so
-    // generate runs exactly once and the drip becomes the exception, not the builder.
-    return state._generated ? 'propose' : 'generate';
+    // proposing: build (or REBUILD) the whole spec in one `generate` pass. This is the
+    // first build AND every later "the spec must change" pass — the retired `propose`
+    // drip is never routed to (its UI surface no longer exists client-side, so a route
+    // into it would hang). The MAX_REGEN_ROUNDS guard above stops the rebuild loop.
+    return 'generate';
   });
 
   graph.addEdge('clarify', 'analyze');
@@ -1607,12 +1682,20 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
   graph.addEdge('destinations', 'decisions');
   graph.addEdge('decisions', 'gaps');
 
+  // A blocking gap that has an answer sets phase:'proposing' with the answer in
+  // `clarifications`; REGENERATE the whole spec so the fix is incorporated (the
+  // retired `propose` has no client UI — routing here would hang the build).
+  // Bounded by MAX_GAP_ROUNDS: gaps flips to 'ratifying' once the cap is hit, so
+  // an unclosable gap surfaces at `ratify` as a blocker instead of looping.
   graph.addConditionalEdges('gaps', (state) => {
-    return state.phase === 'proposing' ? 'propose' : 'ratify';
+    return state.phase === 'proposing' ? 'generate' : 'ratify';
   });
 
+  // request_changes (or a rejected ratify) sets phase:'proposing' and resets the
+  // loop bounds, so the user's feedback REGENERATES the whole spec (again, never the
+  // UI-less `propose`). approve → END.
   graph.addConditionalEdges('ratify', (state) => {
-    return state.phase === 'done' ? END : 'propose';
+    return state.phase === 'done' ? END : 'generate';
   });
 
   return graph.compile({
