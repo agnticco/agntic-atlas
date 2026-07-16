@@ -186,6 +186,71 @@ describe('a failing sample → the converger fixes its own work, bounded', () =>
 });
 
 // ═══════════════════════════════════════════════════════════════════════════════
+// THE AGGREGATE WALKTHROUGH CAP — reproduces the live deploy-blocker.
+//
+// `verifyRounds` bounds ONLY the verify fix loop. But the built-workflow walkthrough
+// (`generated_workflow` interrupt) is ALSO re-presented by the analyze sufficiency/
+// regen loop, a decision-table correction, and a ratify request-changes — each with
+// its OWN counter. In a live headed build the model kept producing a spec that failed
+// verification AND the sufficiency check kept saying "not finished", so the two loops
+// COMPOUNDED and the user was shown the walkthrough far more than any single cap
+// intends (the report said "4 walkthroughs past a cap of 2"). `verifyRounds` was NOT
+// reset — it persists correctly; there was simply no cap on the TOTAL number of
+// re-presentations. `buildPresentations` + MAX_BUILD_REGENERATIONS is that cap.
+//
+// This test drives repeated verify-fail + sufficiency-not-finished cycles, auto-
+// accepting every walkthrough, and asserts the build STOPS at ratify (with a gave-up
+// note) after at most the cap. It FAILS on the pre-fix code (the loops compound to 7+
+// walkthroughs) and PASSES after (≤ 4 = the first build + 3 capped regenerates).
+describe('the aggregate walkthrough cap — compounding regenerate loops always terminate', () => {
+  // makeLlm, but the sufficiency check ALWAYS says "not finished" — so the analyze
+  // regen loop fires on top of the verify fix loop, exactly as it did live.
+  function makeLlmNeverFinished() {
+    const llm = makeLlm();
+    const base = llm.invoke;
+    llm.invoke = async (msgs) => {
+      const p = String(msgs[msgs.length - 1].content);
+      if (p.includes('Is this workflow FINISHED')) return J({ complete: false, missing: 'another step' });
+      return base(msgs);
+    };
+    return llm;
+  }
+
+  test('verify ALWAYS fails AND sufficiency ALWAYS says not-finished → ratify, bounded, no user loop', async () => {
+    // The oracle always fails (verify wants to fix forever) and the sufficiency check
+    // always says not-finished (analyze wants to regenerate forever). With no aggregate
+    // cap these compound; the user is stuck re-approving the walkthrough. The cap must
+    // force termination at ratify.
+    let runs = 0;
+    const runDryRun = async () => {
+      runs++;
+      return { outputs: [], deliveries: [],
+               oracleResult: { contractPassed: false, ran: true, error: null,
+                 contract: [{ id: 'a1', target: 'slack:#ops', kind: 'message_sent', ok: false, reason: 'nothing reached slack:#ops' }] } };
+    };
+
+    const r = await drive({ llm: makeLlmNeverFinished(), runDryRun });
+
+    const walkthroughs = r.seen.filter(iv => iv.type === 'generated_workflow').length;
+    // THE REGRESSION: pre-fix this scenario presents the walkthrough 7 times; the cap
+    // is the first build (1) + MAX_BUILD_REGENERATIONS (3) = 4. Anything above 4 means
+    // the aggregate cap is not holding and the user is being looped.
+    assert.ok(walkthroughs <= 4,
+      `the walkthrough must be re-presented no more than the hard cap; it was shown ${walkthroughs} times`);
+    // And it did present at least the first build plus a couple of regenerates — i.e.
+    // the loops genuinely fired (this is not passing because nothing regenerated).
+    assert.ok(walkthroughs >= 3,
+      `the compounding loops must actually have fired (saw ${walkthroughs} walkthroughs)`);
+    // It TERMINATED at ratify — never spun to the recursion limit / hung the build.
+    assert.ok(r.spec, 'the build converges to a ratified spec — it never loops the user forever');
+    assert.ok(r.ratify, 'the build reached ratify');
+    // And it said so honestly — a give-up note, never a false success.
+    assert.equal(r.ratify?.verification?.gaveUp, true, 'ratify carries an honest give-up note, not a false pass');
+    assert.ok(r.ratify?.verification?.note, 'the give-up note carries a reason');
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════════
 describe('fail-safe pass-throughs — the build is NEVER blocked on the self-test', () => {
   test('no tester wired ⇒ verify is inert; the build ratifies unchanged', async () => {
     // runDryRun omitted entirely — the production default when the server wrapper is

@@ -592,6 +592,25 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
       // ratify can surface it — a failed verify is a NOTE, never a hard block.
       verifyRounds:      0,
       _verifyReport:     null,
+      // THE AGGREGATE HARD CAP on how many times the finished-workflow walkthrough
+      // (`generated_workflow` interrupt) is RE-presented to the user after the first
+      // build. `verifyRounds` bounds ONLY the verify fix loop; but the walkthrough is
+      // ALSO re-presented by the analyze sufficiency/regen loop (`regenRounds`), a
+      // decision-table correction (`decisionRounds`) and a ratify request-changes —
+      // each with its OWN counter and no single-line reset. Those loops COMPOUND: a
+      // spec the model keeps rebuilding is shown to the user once per path, so the
+      // observed "4 walkthroughs past a cap of 2" is not a reset of `verifyRounds`
+      // (which persists correctly) — it is the SUM of independent bounds with nothing
+      // capping the total. `buildPresentations` counts every re-presentation (NOT the
+      // first build, mirroring how `regenRounds` excludes it via `_generated`), lives
+      // in a channel the checkpointer persists like every other counter, and is
+      // checked in `generate` BEFORE it presents again: once the cap is hit the build
+      // is forced to `ratify` with an honest gave-up note, so it ALWAYS terminates
+      // quickly and never loops the user through re-approving the walkthrough. An
+      // explicit user request-changes at ratify resets it (a fresh budget for a fresh
+      // ask); automatic regeneration between decisions is what it bounds.
+      buildPresentations: 0,
+      _buildCapped:       false,
       // Gaps the user (or the default) sent to a human rather than answering.
       // Kept in STATE and persisted to the interaction store — never in the spec.
       // It is provenance, and it feeds the SOP: "these cases were not decided;
@@ -894,7 +913,22 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
   // Opus cost — and the number of near-identical workflows shown to the user — low.
   const MAX_REGEN_ROUNDS = 3;
 
+  // THE AGGREGATE walkthrough cap (see `buildPresentations` in the state schema). How
+  // many times the built-workflow walkthrough may be RE-presented (after the first
+  // build) across ALL regenerate paths COMBINED — verify fixes, sufficiency/regen
+  // rebuilds, decision-table corrections. Deliberately ≥ the verify path's own bound
+  // (2 fixes) so a spec that legitimately fixes-then-passes is never cut short, but low
+  // enough that a spec the model cannot settle stops looping the user fast. Beyond it,
+  // `generate` refuses to present again and the build is forced to `ratify`.
+  const MAX_BUILD_REGENERATIONS = 3;
+
   graph.addNode('analyze', async (state, cfg) => {
+    // AGGREGATE-CAP short-circuit. `generate` sets `_buildCapped` when it has hit
+    // MAX_BUILD_REGENERATIONS and refuses to present the walkthrough again; route the
+    // build straight to `ratify` (analyze's own edge maps 'ratifying' → ratify) so it
+    // terminates at the user's final decision instead of looping. The flag is consumed
+    // here; a ratify request-changes re-opens the budget.
+    if (state._buildCapped) return { phase: 'ratifying', _buildCapped: false };
     const sessionId = cfg?.configurable?.threadId;
     const gap = scoreGap(state.draft, { capabilities: state.capabilities });
 
@@ -1133,6 +1167,37 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
     const sessionId = cfg?.configurable?.threadId;
     const draft = state.draft ?? { ...DRAFT_DEFAULT };
 
+    // AGGREGATE HARD CAP (see `buildPresentations`). Every regenerate path routes here
+    // to RE-present the built workflow; independently each is bounded, but together
+    // they compound with no total cap — which is how a spec the model cannot settle
+    // shows the user the walkthrough far more than any single loop intends. Once we've
+    // re-presented MAX_BUILD_REGENERATIONS times (a regenerate is a build with
+    // `_generated` already latched), STOP: do not spend another Opus pass and do not
+    // present again. Keep the best draft we have (`state.draft`, already accepted once)
+    // and force the build to `ratify` via analyze, carrying an honest note. This fires
+    // regardless of WHICH loop drove us back, so it can never be defeated by any single
+    // counter failing to persist. (A first build — `_generated` false — is never
+    // capped: this is a bound on RE-generation, not on building.)
+    if (state._generated && (state.buildPresentations ?? 0) >= MAX_BUILD_REGENERATIONS) {
+      emitBeat(cfg, {
+        kind: 'check',
+        text: "I rebuilt this a few times and it still isn't settling — I've stopped so you're not stuck re-approving it. The workflow is built; please review it before going live.",
+      });
+      return {
+        phase:         'analyzing',   // analyze sees `_buildCapped` and routes to ratify
+        _buildCapped:  true,
+        // Only claim a give-up if verify hasn't already reported a clean pass on THIS
+        // draft — otherwise keep its honest verdict. A stale pass can't have survived a
+        // rebuild, so in practice this is a gave-up state, surfaced (never a hard block).
+        _verifyReport: (state._verifyReport && state._verifyReport.gaveUp === false)
+          ? state._verifyReport
+          : { ran: false, passed: 0, total: 0, gaveUp: true,
+              note: 'the workflow kept changing on each rebuild, so I stopped before it could loop — review it before going live' },
+        confirmationLog: [{ step: state.step, type: 'generate_capped', buildPresentations: state.buildPresentations ?? 0 }],
+        step: state.step + 1,
+      };
+    }
+
     // A regenerate driven by the sufficiency check names a concrete MISSING
     // component (`_missingNote`, set by `analyze`). Fold it into the clarifications
     // so the rebuild actually adds it — otherwise generate re-runs on identical
@@ -1234,6 +1299,12 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
       // build must not consume the MAX_REGEN_ROUNDS budget. `_missingNote` is cleared
       // now that this pass has consumed it, so it can't leak into an unrelated rebuild.
       regenRounds:  state._generated ? (state.regenRounds ?? 0) + 1 : (state.regenRounds ?? 0),
+      // AGGREGATE walkthrough counter — bumped on every RE-presentation (a build with
+      // `_generated` already latched), NOT the first build, exactly like `regenRounds`.
+      // Unlike `regenRounds` (which analyze resets on some routes and ratify zeroes),
+      // this counts EVERY path that re-shows the walkthrough, so nothing can defeat the
+      // total cap by resetting one loop's own counter.
+      buildPresentations: state._generated ? (state.buildPresentations ?? 0) + 1 : (state.buildPresentations ?? 0),
       _missingNote: null,
       confirmationLog: [{
         step: state.step, type: 'generate',
@@ -2097,6 +2168,12 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
         proposeRounds:   0,
         gapRounds:       0,
         regenRounds:     0,
+        // A fresh budget for an EXPLICIT user-requested change. The aggregate cap
+        // bounds AUTOMATIC regeneration between decisions; when the user themselves
+        // asks for a change, they get a clean walkthrough budget (and the give-up
+        // latch is cleared) so their request is actually built and re-presented.
+        buildPresentations: 0,
+        _buildCapped:       false,
         confirmationLog: [logEntry],
         step:            state.step + 1,
       };
@@ -2107,6 +2184,8 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
       proposeRounds:   0,
       gapRounds:       0,
       regenRounds:     0,
+      buildPresentations: 0,
+      _buildCapped:       false,
       confirmationLog: [logEntry],
       step:            state.step + 1,
     };
