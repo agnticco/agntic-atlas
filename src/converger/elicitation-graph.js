@@ -14,16 +14,20 @@
  *   decisions    → review the induced decision table(s)
  *   gaps         → the exception review + structural auto-repair
  *   verify       → run the completed draft through the engine (DRY-RUN) on the
- *                  sample examples; fix + re-run on a failure (#23)
- *   ratify       → present complete draft for final HITL approval
+ *                  sample examples; fix + re-run on a failure (#23) — all SILENT
+ *   walkthrough  → the ONE step-by-step approval, on the FINAL settled spec (moved
+ *                  here from `generate` 2026-07-16 so the user approves what will
+ *                  publish, not a mid-build draft that then changes under them)
+ *   ratify       → present complete draft for final HITL approval + publish
  *
- * Routing (clarify-first → generate-whole-spec → wire → gaps → verify → ratify):
+ * Routing (clarify-first → generate-whole-spec → wire → gaps → verify → walkthrough → ratify):
  *   outcome → process → examples → analyze
- *   analyze → clarify | generate | propose | destinations | ratify
- *   clarify → analyze ;  generate → analyze ;  propose → analyze
+ *   analyze → clarify | generate | destinations | walkthrough (capped) | ratify
+ *   clarify → analyze ;  generate → analyze  (generate is now SILENT — no interrupt)
  *   destinations → decisions → gaps → (generate | verify)
- *   verify  → generate (fix, bounded) | ratify (verified, or a bounded give-up)
- *   ratify  → generate (if changes requested) | END (if approved)
+ *   verify      → generate (fix, bounded, silent) | walkthrough (verified / give-up)
+ *   walkthrough → generate (user asked for a change) | ratify (approved)
+ *   ratify      → generate (if changes requested) | END (if approved)
  *
  * Persistence: FileCheckpointer — sessions survive restarts and are resumable
  * by threadId.
@@ -493,7 +497,11 @@ async function fetchRealExamples({ invokeCapability, triggers, capabilities }) {
       // The label is what the user READS before clicking. Subject + sender is what
       // they recognise an email by; a message id is not.
       label: `${m.subject ?? '(no subject)'} — ${m.from ?? 'unknown sender'}`,
-      given: { subject: m.subject ?? '', from: m.from ?? '', body: m.snippet ?? m.body ?? '' },
+      // Prefer the FULL body (gmail_search already fetches format:'full', so m.body is
+      // the extracted message text) — the ~100-char snippet was too thin for a downstream
+      // extract/summarize chain, tripping its "missing data" guard and false-failing the
+      // self-test. Snippet only as a fallback when a message has no text body. (#35)
+      given: { subject: m.subject ?? '', from: m.from ?? '', body: m.body || m.snippet || '' },
       real:  true,   // provenance: this came from their inbox, not from a model
     })).filter(e => e.given.subject || e.given.body);
     return items.length ? { items, source: 'gmail', query } : none;
@@ -616,23 +624,21 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
       // ratify can surface it — a failed verify is a NOTE, never a hard block.
       verifyRounds:      0,
       _verifyReport:     null,
-      // THE AGGREGATE HARD CAP on how many times the finished-workflow walkthrough
-      // (`generated_workflow` interrupt) is RE-presented to the user after the first
-      // build. `verifyRounds` bounds ONLY the verify fix loop; but the walkthrough is
-      // ALSO re-presented by the analyze sufficiency/regen loop (`regenRounds`), a
-      // decision-table correction (`decisionRounds`) and a ratify request-changes —
-      // each with its OWN counter and no single-line reset. Those loops COMPOUND: a
-      // spec the model keeps rebuilding is shown to the user once per path, so the
-      // observed "4 walkthroughs past a cap of 2" is not a reset of `verifyRounds`
-      // (which persists correctly) — it is the SUM of independent bounds with nothing
-      // capping the total. `buildPresentations` counts every re-presentation (NOT the
-      // first build, mirroring how `regenRounds` excludes it via `_generated`), lives
-      // in a channel the checkpointer persists like every other counter, and is
-      // checked in `generate` BEFORE it presents again: once the cap is hit the build
-      // is forced to `ratify` with an honest gave-up note, so it ALWAYS terminates
-      // quickly and never loops the user through re-approving the walkthrough. An
-      // explicit user request-changes at ratify resets it (a fresh budget for a fresh
-      // ask); automatic regeneration between decisions is what it bounds.
+      // THE AGGREGATE HARD CAP on how many times the whole spec is RE-generated after
+      // the first build. The finished-workflow walkthrough (`generated_workflow`) is now
+      // presented EXACTLY ONCE, in the `walkthrough` node on the FINAL spec (moved there
+      // 2026-07-16), so the user is never looped through re-approvals. But the INTERNAL
+      // regenerate loop still compounds: `verifyRounds` bounds only the verify fix loop,
+      // while the analyze sufficiency/regen loop (`regenRounds`), a decision-table
+      // correction (`decisionRounds`) and a gap fix (`gapRounds`) each drive their OWN
+      // regenerate with their OWN counter and no single total. `buildPresentations`
+      // counts every RE-generation (NOT the first build, mirroring how `regenRounds`
+      // excludes it via `_generated`), lives in a channel the checkpointer persists like
+      // every other counter, and is checked in `generate` BEFORE it rebuilds again: once
+      // the cap is hit the build is forced to the single walkthrough → ratify with an
+      // honest gave-up note, so it ALWAYS terminates quickly. An explicit user
+      // request-changes (at the walkthrough OR at ratify) resets it (a fresh budget for a
+      // fresh ask); automatic regeneration between decisions is what it bounds.
       buildPresentations: 0,
       _buildCapped:       false,
       // Gaps the user (or the default) sent to a human rather than answering.
@@ -937,22 +943,24 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
   // Opus cost — and the number of near-identical workflows shown to the user — low.
   const MAX_REGEN_ROUNDS = 3;
 
-  // THE AGGREGATE walkthrough cap (see `buildPresentations` in the state schema). How
-  // many times the built-workflow walkthrough may be RE-presented (after the first
-  // build) across ALL regenerate paths COMBINED — verify fixes, sufficiency/regen
-  // rebuilds, decision-table corrections. Deliberately ≥ the verify path's own bound
-  // (2 fixes) so a spec that legitimately fixes-then-passes is never cut short, but low
-  // enough that a spec the model cannot settle stops looping the user fast. Beyond it,
-  // `generate` refuses to present again and the build is forced to `ratify`.
+  // THE AGGREGATE regenerate cap (see `buildPresentations` in the state schema). How
+  // many times the whole spec may be RE-generated (after the first build) across ALL
+  // regenerate paths COMBINED — verify fixes, sufficiency/regen rebuilds, decision-table
+  // corrections, gap fixes. Deliberately ≥ the verify path's own bound (2 fixes) so a
+  // spec that legitimately fixes-then-passes is never cut short, but low enough that a
+  // spec the model cannot settle stops burning Opus passes fast. Beyond it, `generate`
+  // refuses to rebuild again and the build is forced to the single walkthrough → ratify.
   const MAX_BUILD_REGENERATIONS = 3;
 
   graph.addNode('analyze', async (state, cfg) => {
     // AGGREGATE-CAP short-circuit. `generate` sets `_buildCapped` when it has hit
-    // MAX_BUILD_REGENERATIONS and refuses to present the walkthrough again; route the
-    // build straight to `ratify` (analyze's own edge maps 'ratifying' → ratify) so it
-    // terminates at the user's final decision instead of looping. The flag is consumed
-    // here; a ratify request-changes re-opens the budget.
-    if (state._buildCapped) return { phase: 'ratifying', _buildCapped: false };
+    // MAX_BUILD_REGENERATIONS and stops rebuilding; route the build straight to the
+    // single `walkthrough` (analyze's edge maps 'finalizing' → walkthrough), BYPASSING
+    // the rest of the tail (destinations/decisions/gaps/verify) — those could route back
+    // to `generate` again and, since the cap is still tripped, spin generate↔analyze. The
+    // best draft we have is presented ONCE for approval and then ratified. The flag is
+    // consumed here; a walkthrough/ratify user-requested change re-opens the budget.
+    if (state._buildCapped) return { phase: 'finalizing', _buildCapped: false };
     const sessionId = cfg?.configurable?.threadId;
     const gap = scoreGap(state.draft, { capabilities: state.capabilities });
 
@@ -1191,24 +1199,28 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
     const sessionId = cfg?.configurable?.threadId;
     const draft = state.draft ?? { ...DRAFT_DEFAULT };
 
-    // AGGREGATE HARD CAP (see `buildPresentations`). Every regenerate path routes here
-    // to RE-present the built workflow; independently each is bounded, but together
-    // they compound with no total cap — which is how a spec the model cannot settle
-    // shows the user the walkthrough far more than any single loop intends. Once we've
-    // re-presented MAX_BUILD_REGENERATIONS times (a regenerate is a build with
-    // `_generated` already latched), STOP: do not spend another Opus pass and do not
-    // present again. Keep the best draft we have (`state.draft`, already accepted once)
-    // and force the build to `ratify` via analyze, carrying an honest note. This fires
+    // AGGREGATE HARD CAP (see `buildPresentations`). Every regenerate path routes back
+    // HERE to rebuild the whole spec; independently each is bounded (MAX_REGEN_ROUNDS /
+    // MAX_GAP_ROUNDS / MAX_VERIFY_ROUNDS / the sufficiency cap), but together they
+    // compound with no total cap — which is how a spec the model cannot settle spins
+    // through the (expensive) Opus rebuild far more than any single loop intends. Once
+    // we've RE-generated MAX_BUILD_REGENERATIONS times (a regenerate is a build with
+    // `_generated` already latched), STOP: do not spend another Opus pass. Keep the best
+    // draft we have (`state.draft`, already built once) and force the build straight to
+    // the single walkthrough → ratify via analyze, carrying an honest note. This fires
     // regardless of WHICH loop drove us back, so it can never be defeated by any single
-    // counter failing to persist. (A first build — `_generated` false — is never
-    // capped: this is a bound on RE-generation, not on building.)
+    // counter failing to persist. (A first build — `_generated` false — is never capped:
+    // this is a bound on RE-generation, not on building.) NOTE: this cap now bounds the
+    // SILENT internal regenerate loop — the walkthrough is presented exactly once, at the
+    // end, so this can never loop the USER through re-approvals; it only stops the model
+    // burning Opus passes it cannot converge.
     if (state._generated && (state.buildPresentations ?? 0) >= MAX_BUILD_REGENERATIONS) {
       emitBeat(cfg, {
         kind: 'check',
-        text: "I rebuilt this a few times and it still isn't settling — I've stopped so you're not stuck re-approving it. The workflow is built; please review it before going live.",
+        text: "I rebuilt this a few times and it still isn't settling — I've stopped so you can review it. The workflow is built; please review it before going live.",
       });
       return {
-        phase:         'analyzing',   // analyze sees `_buildCapped` and routes to ratify
+        phase:         'analyzing',   // analyze sees `_buildCapped` and routes to the walkthrough
         _buildCapped:  true,
         // Only claim a give-up if verify hasn't already reported a clean pass on THIS
         // draft — otherwise keep its honest verdict. A stale pass can't have survived a
@@ -1289,30 +1301,27 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
 
     const merged = mergeGeneratedSpec(draft, generated);
 
-    // WHOLE-GRAPH HITL (Increment 4): the workflow is built as ONE unit, so the user
-    // approves it as one — the client renders `spec` on the canvas (its edges lay out
-    // the real branch + lanes) and the person accepts it or asks for a revision. This
-    // replaces the per-node drip: there is one review of the finished graph, not a
-    // confirmation per step.
-    const review = await interrupt({
-      type: 'generated_workflow',
-      spec: { name: merged.name, triggers: merged.triggers, nodes: merged.nodes, edges: merged.edges, outcome: merged.outcome },
-      step: state.step,
-    });
-
-    // Revise: feed the change back as a clarification and regenerate the whole spec
-    // (do NOT latch `_generated`, so `analyze` routes to `generate` again). The draft is
-    // left at its pre-generate state so the regeneration is clean, informed by the note.
-    if (review?.type === 'modify' && String(review.modification ?? '').trim()) {
-      return {
-        clarifications:  [{ q: '(revise the built workflow)', a: review.modification }],
-        confirmationLog: [{ step: state.step, type: 'generate_revise', modification: review.modification }],
-        step:            state.step + 1,
-        phase:           'analyzing',
-      };
-    }
-
-    // Accept: latch and route onward.
+    // NO WALKTHROUGH HERE — moved to the `walkthrough` node, after verify (2026-07-16).
+    //
+    // The `generated_workflow` step-approval used to fire RIGHT HERE, at the end of
+    // `generate` — BEFORE the tail (analyze → destinations → decisions → gaps → verify)
+    // had run. So the user approved a draft that then CHANGED underneath them:
+    // `destinations` repointed a base, `gaps` materialised escalations, `verify`
+    // regenerated the whole spec — and a verify-driven regenerate came back HERE and
+    // RE-PRESENTED the walkthrough to be approved all over again.
+    //
+    // `generate` is now PURELY INTERNAL: it produces the spec, merges/wires it, and
+    // routes on. Every regenerate path (a blocking gap, a sufficiency-named component,
+    // a verify fix, a decision-table correction) re-runs it SILENTLY. The single
+    // step-approval fires ONCE, on the FINAL settled spec, in the `walkthrough` node
+    // between `verify` and `ratify`.
+    //
+    // The regenerate loop stays bounded exactly as before: `buildPresentations` (bumped
+    // below on every RE-generation) + MAX_BUILD_REGENERATIONS is the aggregate cap —
+    // re-pointed from "walkthrough re-presentations" to "internal generate re-runs" (the
+    // two were 1:1 when the walkthrough lived here, so the counter and cap are unchanged;
+    // only what they COUNT is). Individual loops are separately bounded (MAX_REGEN_ROUNDS
+    // / MAX_GAP_ROUNDS / MAX_VERIFY_ROUNDS / the sufficiency cap); this is the total.
     return {
       draft: merged,
       // The whole-spec pass has run: `analyze` re-scores this now-complete draft and
@@ -1323,11 +1332,13 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
       // build must not consume the MAX_REGEN_ROUNDS budget. `_missingNote` is cleared
       // now that this pass has consumed it, so it can't leak into an unrelated rebuild.
       regenRounds:  state._generated ? (state.regenRounds ?? 0) + 1 : (state.regenRounds ?? 0),
-      // AGGREGATE walkthrough counter — bumped on every RE-presentation (a build with
-      // `_generated` already latched), NOT the first build, exactly like `regenRounds`.
-      // Unlike `regenRounds` (which analyze resets on some routes and ratify zeroes),
-      // this counts EVERY path that re-shows the walkthrough, so nothing can defeat the
-      // total cap by resetting one loop's own counter.
+      // AGGREGATE internal-regenerate counter — bumped on every RE-generation (a build
+      // with `_generated` already latched), NOT the first build, exactly like
+      // `regenRounds`. Since the walkthrough moved to its own node, `generate` no longer
+      // presents anything; this now counts INTERNAL generate re-runs across ALL paths
+      // (analyze/decisions/gaps/verify), so nothing can defeat the total cap by resetting
+      // one loop's own counter. It is the belt-and-suspenders bound that forces the
+      // silent regenerate loop to terminate at the single walkthrough → ratify.
       buildPresentations: state._generated ? (state.buildPresentations ?? 0) + 1 : (state.buildPresentations ?? 0),
       _missingNote: null,
       confirmationLog: [{
@@ -2116,6 +2127,71 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
     };
   });
 
+  // ── walkthrough ──────────────────────────────────────────────────────────────
+  // The step-by-step approval of the FINAL, settled workflow. (Moved here 2026-07-16.)
+  //
+  // This is the ONE place the user approves the built graph, and it runs only AFTER the
+  // whole tail has settled it: destinations resolved every write against the live
+  // connector, decisions/gaps closed, and `verify` ran the draft (with its bounded,
+  // SILENT fix loop) and either passed or gave up. So the person approves exactly what
+  // will publish — once — never a mid-build draft that then changes under them. (It used
+  // to fire at the END of `generate`, before any of that had happened, so a verify- or
+  // gap-driven regenerate re-presented it and the user approved it repeatedly.)
+  //
+  // The presented spec is the SAME one `ratify` will assemble: escalations are
+  // materialised here too (materialiseEscalations is pure — this call is display-only and
+  // discarded; ratify does the authoritative materialisation), so the walkthrough shows
+  // the true final graph, including any human gates / on_error policies escalation added.
+  //
+  // Accept → ratify. Modify → a fresh, USER-driven regenerate: the whole spec is rebuilt
+  // with the correction and a fresh loop budget (the same semantics as a ratify
+  // request-changes), then flows back through the tail to a single fresh walkthrough. A
+  // modify is an explicit user action, not the automatic regenerate loop, so resetting
+  // the budget here cannot spin the internal loop.
+  graph.addNode('walkthrough', async (state, cfg) => {
+    const { draft: finalDraft } = materialiseEscalations(state.draft, state.escalatedGaps ?? []);
+
+    const review = await interrupt({
+      type: 'generated_workflow',
+      spec: {
+        name:     finalDraft.name,
+        triggers: finalDraft.triggers,
+        nodes:    finalDraft.nodes,
+        edges:    finalDraft.edges,
+        outcome:  finalDraft.outcome,
+      },
+      step: state.step,
+    });
+
+    // Revise: feed the change back as a clarification and regenerate the whole spec
+    // (the walkthrough edge maps 'proposing' → generate). Reset the loop bounds exactly
+    // as ratify's request-changes does — otherwise analyze would route straight past
+    // `generate` (the counters are at their caps by now) and silently ignore the ask.
+    if (review?.type === 'modify' && String(review.modification ?? '').trim()) {
+      return {
+        clarifications:  [{ q: '(revise the built workflow)', a: review.modification }],
+        confirmationLog: [{ step: state.step, type: 'walkthrough_revise', modification: review.modification }],
+        phase:              'proposing',
+        proposeRounds:      0,
+        gapRounds:          0,
+        regenRounds:        0,
+        // A fresh budget for an EXPLICIT user-requested change. The aggregate cap bounds
+        // AUTOMATIC regeneration; a user who asks for a change gets a clean budget so
+        // their request is built and re-presented (once).
+        buildPresentations: 0,
+        _buildCapped:       false,
+        step:               state.step + 1,
+      };
+    }
+
+    // Accept → ratify (the final publish gate).
+    return {
+      confirmationLog: [{ step: state.step, type: 'walkthrough_approved' }],
+      step:  state.step + 1,
+      phase: 'ratifying',
+    };
+  });
+
   // ── ratify ─────────────────────────────────────────────────────────────────
   // Present the completed draft for final HITL approval before publish.
   graph.addNode('ratify', async (state, cfg) => {
@@ -2223,7 +2299,15 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
   // no user turns at all.
   //
   //   outcome → process → examples → (analyze ⇄ clarify) → generate → analyze
-  //           → destinations → decisions → gaps → verify → ratify
+  //           → destinations → decisions → gaps → verify → walkthrough → ratify
+  //
+  // THE STEP-APPROVAL IS AT THE END (moved 2026-07-16). `generate` is now SILENT — it
+  // builds/rebuilds the whole spec with no interrupt, so every internal regenerate (a
+  // blocking gap, a sufficiency-named component, a verify fix, a decision correction)
+  // happens without the user seeing it. The single `generated_workflow` walkthrough
+  // fires ONCE, in the `walkthrough` node, on the FINAL settled spec — so the user
+  // approves exactly what will publish, never a draft the tail then changes underneath
+  // them (destinations repointing, gaps escalating, verify regenerating).
   //
   // CLARIFY-FIRST, THEN GENERATE THE WHOLE SPEC (converger rearchitecture).
   // `analyze` clarifies the intent to completion, then routes the build to `generate`
@@ -2267,6 +2351,7 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
   graph.addEdge('examples', 'analyze');
 
   graph.addConditionalEdges('analyze', (state) => {
+    if (state.phase === 'finalizing') return 'walkthrough';  // aggregate-cap short-circuit
     if (state.phase === 'gapping')    return 'destinations'; // …→ decisions → gaps,
     if (state.phase === 'ratifying')  return 'ratify';       //   each a pass-through
     if (state.phase === 'clarifying') return 'clarify';      //   when it has nothing
@@ -2310,11 +2395,20 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
     return state.phase === 'proposing' ? 'generate' : 'verify';
   });
 
-  // verify → ratify on a pass (or a bounded give-up); verify → generate on a fix
+  // verify → walkthrough on a pass (or a bounded give-up); verify → generate on a fix
   // (it regenerates the whole spec with the failing sample as context, then the tail
-  // brings it back through gaps → verify to re-test). The fix loop is bounded by
-  // `verifyRounds`, so this can never spin.
+  // brings it back through gaps → verify to re-test — all SILENTLY, no walkthrough). The
+  // fix loop is bounded by `verifyRounds`, so this can never spin. Only once verify
+  // SETTLES does the single step-approval fire, in `walkthrough`, on the final spec.
   graph.addConditionalEdges('verify', (state) => {
+    return state.phase === 'proposing' ? 'generate' : 'walkthrough';
+  });
+
+  // walkthrough → ratify on accept; walkthrough → generate on a user-requested modify
+  // (a fresh, budget-reset regenerate, which flows back through the tail to a single
+  // fresh walkthrough). This is the ONLY node that emits the `generated_workflow`
+  // step-approval, and it does so exactly once per settled build.
+  graph.addConditionalEdges('walkthrough', (state) => {
     return state.phase === 'proposing' ? 'generate' : 'ratify';
   });
 

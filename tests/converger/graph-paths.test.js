@@ -46,6 +46,9 @@ async function drive({
   intent = 'save leads to airtable',
 } = {}) {
   const calls = [];
+  let genCalls = 0;   // how many times `generate` (the whole-spec build) ran — the INTERNAL
+                      // regenerate loop. Since the walkthrough moved to the end (2026-07-16)
+                      // it is no longer 1:1 with the `generated_workflow` interrupt.
   const invokeCapability = withInvoker ? async (id, params = {}) => {
     calls.push(id);
     if (id === 'airtable_list_bases')    return { bases };
@@ -85,6 +88,7 @@ async function drive({
     // against the live connector (that tail still runs AFTER generate). `propose`
     // survives only for gap-driven single fixes (exercised below via `blockingGap`).
     if (p.includes('Build the COMPLETE workflow')) {
+      genCalls++;
       const nodes = [{ id: 'save', type: 'connector-action', label: 'Save',
         config: { action: 'airtable_create_record', baseId: 'appPLACEHOLDER', tableId: 'Leads', fields: { Name: 'x' } } }];
       if (searchToo) nodes.push({ id: 'find', type: 'connector-action', label: 'Find',
@@ -127,7 +131,7 @@ async function drive({
   }
   const spec = iv?.spec ?? null;
   const nodes = spec?.nodes ?? [];
-  return { spec, calls, seen, save: nodes.find(n => n.id === 'save'), search: nodes.find(n => n.id === 'find') };
+  return { spec, calls, seen, genCalls, save: nodes.find(n => n.id === 'save'), search: nodes.find(n => n.id === 'find') };
 }
 
 // ── The destination resolution ──────────────────────────────────────────────
@@ -186,14 +190,21 @@ describe('a blocking gap the builder cannot close does not spin — it regenerat
     // `propose`. It must now route back to `generate` (a REGENERATE), never to the
     // UI-less proposal card, and it must stay bounded rather than rebuild forever.
     const r = await drive({ proposeSameEdgeForever: true, blockingGap: true });
-    const proposals  = r.seen.filter(iv => iv.type === 'proposal');
-    const regens     = r.seen.filter(iv => iv.type === 'generated_workflow');
+    const proposals   = r.seen.filter(iv => iv.type === 'proposal');
+    const walkthroughs = r.seen.filter(iv => iv.type === 'generated_workflow');
     assert.equal(proposals.length, 0,
       'a blocking gap must NEVER route to the retired, UI-less `propose` — that hangs the build');
-    assert.ok(regens.length >= 2,
-      'the blocking gap must be absorbed by at least one REGENERATE (a second whole-spec pass)');
-    assert.ok(regens.length <= 5,
-      `the regenerate loop must be bounded; it ran ${regens.length} times on an unsatisfiable gap`);
+    // The regenerate is now SILENT — measured by generate passes, not walkthrough
+    // interrupts. The blocking gap must be absorbed by at least one REGENERATE (a second
+    // whole-spec pass), and the loop must stay bounded on an unsatisfiable gap.
+    assert.ok(r.genCalls >= 2,
+      `the blocking gap must be absorbed by at least one internal REGENERATE (generate ran ${r.genCalls} times)`);
+    assert.ok(r.genCalls <= 8,
+      `the regenerate loop must be bounded; generate ran ${r.genCalls} times on an unsatisfiable gap`);
+    // And the user is shown the step-approval EXACTLY ONCE — on the final settled spec —
+    // no matter how many silent regenerates the blocking gap drove.
+    assert.equal(walkthroughs.length, 1,
+      `the walkthrough is presented exactly once, not per regenerate (saw ${walkthroughs.length})`);
     assert.ok(r.spec, 'and it still converges to a ratified spec (with the blocker surfaced), never a spin');
   });
 
@@ -209,8 +220,9 @@ describe('a blocking gap the builder cannot close does not spin — it regenerat
 
   test('a CLEAN spec reaches ratify → END with exactly one build and no propose', async () => {
     // The invariant the brief calls load-bearing: a provably-complete spec walks straight
-    // generate → walkthrough(accept) → analyze → gapping → gaps(no blocking) → ratify → done,
-    // with NO regenerate and NO propose — a straight path to the test-unlock.
+    // generate → analyze → gapping → gaps(no blocking) → verify → walkthrough(accept) →
+    // ratify → done, with NO regenerate and NO propose — a straight path to the
+    // test-unlock, and the step-approval shown exactly once at the end.
     const r = await drive();
     assert.ok(r.spec, 'the clean spec reaches a ratified spec');
     assert.equal(r.seen.filter(iv => iv.type === 'proposal').length, 0, 'no propose card is ever shown');
@@ -306,9 +318,10 @@ describe('the paths nothing was driving', () => {
   });
 
   test('a MODIFIED generated workflow is regenerated with the correction, not discarded', async () => {
-    // The modify path is now on `generate`, not `propose`: the whole-spec review
-    // interrupt (`generated_workflow`) accepts `{ type: 'modify', modification }`, which
-    // is fed back as a clarification and the WHOLE spec is regenerated to honour it. The
+    // The modify path is now on the `walkthrough` node (moved off `generate` 2026-07-16,
+    // then off `propose` before that): the whole-spec review interrupt
+    // (`generated_workflow`) accepts `{ type: 'modify', modification }`, which is fed
+    // back as a clarification and the WHOLE spec is regenerated to honour it. The
     // invariant is unchanged from the propose era: a user's correction is applied, never
     // silently dropped. Here the user renames the delivery step; the second generate pass
     // (whose prompt now carries the modification) emits the renamed label.
