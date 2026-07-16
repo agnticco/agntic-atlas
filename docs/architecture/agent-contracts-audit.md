@@ -168,9 +168,22 @@ It does four things and emits the result into BOTH the Plan card and the generat
      hallucinated ones. Verified: "Agntic CRM / Sheet1" resolved with its real columns (Name,
      Email, …) and the writes mapped to them. Null-safe (no schema → no claim). The post-generate
      `destinations` node remains as the authoritative field-mapping safety net.
-3. **Node `description`/`inputs`/`outputs` enrichment.** Improves the walkthrough review; P13
-   prerequisite (output schemas).
+3. **Node `description` enrichment** — ✅ BUILT & verified headed. `generate` now emits a per-node
+   `description` (one plain, INSTANCE-specific sentence naming the real destination/fields), and
+   `_nodeDetail` prefers it over the generic type blurb in the walkthrough review + DAG. Validator
+   accepts the node-level key; falls back to type text for v1/older specs. Verified: a Slack summary
+   build produced "Posts the AI-generated email summary … to the #agntic-x-slack channel". **`inputs`
+   / `outputs` schemas deferred** — not consumed until P13, so not added yet (avoids declaring
+   fields nothing reads).
 4. **Hardcoded per-connector seam cleanup** — into **P13-0**, where it already lives.
+
+## Redundant-gap suppression (operator, 2026-07-16)
+The error-handling gap-review ("what if a step fails? Keep the safe defaults") surfaced mid-build on
+EVERY build, always the same, always defaulting to escalate — and the **Plan gate now already shows
+it** ("If something breaks → …", tagged inferred, changeable there). So the mid-build interrupt is
+redundant with the plan. It is suppressed: the NO_ERROR_PATH default is auto-applied silently (the
+same escalate policy `escalation.js` materializes at publish), so the build no longer stops to ask a
+question the plan already answered.
 
 ## What must NOT change
 - The outcome contract + self-test oracle stays the machine artifact and the gate.

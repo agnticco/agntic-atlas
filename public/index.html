@@ -6410,6 +6410,11 @@ class Component extends DCLogic {
     return "Starts the workflow.";
   }
   _nodeDetail(n) {
+    // Prefer the converger's per-instance description (agent-contracts increment 3): a
+    // plain sentence about what THIS configured step does ("Summarizes the urgent email
+    // for #support"), not the generic type definition. Falls back to type-derived text
+    // for older specs (and v1 nodes) that carry none.
+    if (n && typeof n.description === "string" && n.description.trim()) return this._clip(n.description.trim(), 200);
     const c = n.config || {}, ty = effNodeType(n);
     if (ty === "freeform") return this._clip(c.prompt || c.instructions, 150) || "Runs an AI prompt on the incoming content.";
     if (ty === "summarize") return this._clip(c.instructions, 130) || "Condenses the incoming content into a short summary.";

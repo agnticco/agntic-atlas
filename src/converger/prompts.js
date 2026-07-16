@@ -748,12 +748,18 @@ RETURN THIS SHAPE (JSON only):
 {
   "name":     "<short descriptive workflow title, e.g. 'Inbound lead triage'>",
   "triggers": [ { …one trigger spec… } ],
-  "nodes":    [ { "id": "<snake_case>", "type": "<nodeType>", "label": "<human label>", "config": { … } }, … ],
+  "nodes":    [ { "id": "<snake_case>", "type": "<nodeType>", "label": "<short human label>", "description": "<one plain sentence: what THIS configured step does>", "config": { … } }, … ],
   "edges":    [ { "from": "<nodeId>", "to": "<nodeId>" }, … ]
 }
 
 ALWAYS include "name": a short, human title for the whole workflow (a few words). It is required —
 a nameless workflow cannot be saved.
+
+ALWAYS include a per-node "description": ONE plain-language sentence describing what THAT specific,
+configured step does — the user reads it to approve the step. Make it INSTANCE-specific, not a
+definition of the node type: "Summarizes the urgent support email for the #support channel", NOT
+"Condenses content into a summary". Name the real destination/fields where the step has them. No
+jargon, no node types, no config syntax.
 
 STRUCTURE RULES — these are what make the graph actually RUN. The single most common failure is a node
 with no inbound edge, or a branch with no feed:
