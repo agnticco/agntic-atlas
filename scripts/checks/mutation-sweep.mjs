@@ -111,6 +111,15 @@ const SUITES = [
   // The fan-out: a delivery's return value is a RECEIPT, not the work product.
   // Without this the CONTROL_TYPES `deliver` guard is unkillable by construction.
   'tests/workflows/fan-out.test.js',
+  // #34 — the branch-aware runtime oracle (test-adversary pass). Pins the
+  // conditional-skip guards in outcome-oracle.js: the taken lane is delivery-checked
+  // (never rubber-stamped), a different lane is skipped not failed, a `when` outside
+  // the closed route domain fails closed, an unread route enforces on doubt, and a
+  // decision-/human-source branch reads its taken value correctly. Without it the
+  // routeDomainOf / runRouteInfo / assertionApplicability mutants are unkillable by
+  // construction. (The adversary's RED union-conflation finding lives in
+  // branch-oracle-adversarial.test.js and is deliberately NOT swept.)
+  'tests/workflows/branch-oracle-pinning.test.js',
   // P12 Increment F — connector params checked against the capability's own schema.
   // Without it, the `capSchema` / `capResolved` guards are unkillable by construction.
   'tests/workflows/connector-schema.test.js',

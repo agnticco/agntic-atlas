@@ -1716,7 +1716,7 @@ export function timeoutAuthorizesWrite({ nodes = [], edges = [] }, humanId, then
   return [...reach].some(id => isWriteNode(nodes.find(n => n?.id === id)));
 }
 
-function closedDomainOf(node) {
+export function closedDomainOf(node) {
   if (!node || typeof node !== 'object') return null;
 
   if (node.type === 'llm') {

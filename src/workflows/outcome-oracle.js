@@ -53,6 +53,15 @@
  */
 
 import { normalizeSteps } from './node-types/foreach.js';
+// closedDomainOf / onRefId are the SHARED definitions of "what values can this node
+// EMIT" and "which step does a branch route on" — the same two the validator's moat
+// (BRANCH_CASE_NOT_IN_ENUM, LLM_INPUT_NOT_ENUM) is built on. The runtime oracle must
+// judge an assertion's `when` against the EXACT domain the branch routes on, or the
+// two drift and a conditional promise is "checked" against a vocabulary nobody routes
+// on. This is a circular import (the validator imports checkOutcome from here), and it
+// is SAFE: every cross-module reference on both sides is inside a function body, never
+// at module-init, so the live bindings are resolved only when first called.
+import { closedDomainOf, onRefId } from './workflow-validator.js';
 
 /** The closed set. An assertion outside it is MALFORMED, never "assumed fine". */
 export const ASSERTION_KINDS = ['message_sent', 'record_exists', 'document_exists'];
@@ -675,6 +684,154 @@ function runProducedContentError(runResult) {
   return null;
 }
 
+// ── Branch awareness: a CONDITIONAL assertion applies only on the lane it names ─
+//
+// A branching workflow (classify → branch → N lanes → N deliveries) delivers to
+// exactly ONE lane per input. Its contract therefore carries CONDITIONAL assertions
+// — `{ target: 'slack:#support', when: 'urgent' }` — each promising a delivery only
+// on its own route. A single sample takes ONE lane, so the oracle must:
+//   · ENFORCE the assertion whose `when` equals the route this run took (a real miss
+//     there is still a failure — the anti-weakening guard);
+//   · SKIP the assertions for lanes this sample did not take (neither pass nor fail);
+//   · FAIL CLOSED on a `when` that names a value NO route can produce — an
+//     uncheckable promise reported as met is exactly the failure the oracle exists
+//     to prevent, so it is flagged, never silently skipped.
+// An UNCONDITIONAL assertion (`when` null) is untouched: it must ALWAYS be satisfied.
+
+/**
+ * Normalise a routing value for comparison. Route values are categories / decision
+ * outputs / human decisions — compared case-insensitively, the SAME way branch.js
+ * `matches()` compares a case's `when` against the routed-on value (so the oracle and
+ * the engine agree on what "took the urgent lane" means). An object output
+ * (`decision`/`classify`/`human` all differ in shape) is reduced to its scalar first,
+ * mirroring branch.js `matches()`.
+ */
+function normRoute(v) {
+  if (v != null && typeof v === 'object') v = v.output ?? v.decision ?? v.value ?? v.text;
+  return String(v ?? '').trim().toLowerCase();
+}
+
+/**
+ * The CLOSED set of route values this spec can produce — the union, over every
+ * `branch`, of the closed domain of the node it routes on (classify categories,
+ * decision output values, human decisions). This is the vocabulary an assertion's
+ * `when` MUST come from; a `when` outside it is unprovable. Derived from the shared
+ * `closedDomainOf`, so the oracle and the validator's moat cannot disagree about it.
+ *
+ * @returns {Set<string>} normalised route values (empty when the spec has no branch
+ *                        or none whose source declares a domain).
+ */
+export function routeDomainOf(spec) {
+  const nodes = Array.isArray(spec?.nodes) ? spec.nodes : [];
+  const byId = new Map(nodes.map(n => [n?.id, n]));
+  const domain = new Set();
+  for (const b of nodes) {
+    if (b?.type !== 'branch') continue;
+    const srcId = onRefId(b.config?.on);
+    if (!srcId) continue;
+    for (const v of (closedDomainOf(byId.get(srcId)) ?? [])) domain.add(normRoute(v));
+  }
+  return domain;
+}
+
+/**
+ * What a run needs to reason about conditional assertions: whether it branches at
+ * all, the closed domain of route values, and the routes this particular run
+ * actually took (read from the branch's SOURCE node's output in the run steps).
+ *
+ * @returns {{ hasBranch: boolean, domain: Set<string>, taken: Set<string> }}
+ */
+export function runRouteInfo(spec, runResult) {
+  const nodes = Array.isArray(spec?.nodes) ? spec.nodes : [];
+  const byId  = new Map(nodes.map(n => [n?.id, n]));
+  const branches = nodes.filter(n => n?.type === 'branch');
+
+  // The run's step outputs, keyed by node id. A classify step emits a bare string
+  // ("urgent"); a decision/human step emits an object — parse a JSON-string output
+  // but keep a non-JSON string as-is.
+  const stepOut = new Map();
+  for (const s of (runResult?.steps ?? [])) {
+    let o = s?.output;
+    if (typeof o === 'string') { try { o = JSON.parse(o); } catch { /* keep the string */ } }
+    stepOut.set(s?.nodeId, o);
+  }
+
+  const domain = new Set();
+  const taken  = new Set();
+  // Also record the route PER BRANCH. A single global `taken` conflates branches: an
+  // assertion gated on branch B2's value could be skipped just because a *different*
+  // branch B1 positively took a *different* value (adversary Finding 1). `branchRoutes`
+  // lets a promise be judged against ITS OWN branch. `taken` is kept for back-compat.
+  const branchRoutes = [];             // per-branch: { domain:Set, taken: string|null }
+  for (const b of branches) {
+    const srcId = onRefId(b.config?.on);
+    if (!srcId) continue;
+    const bDomain = new Set();
+    for (const v of (closedDomainOf(byId.get(srcId)) ?? [])) { const r = normRoute(v); bDomain.add(r); domain.add(r); }
+    let bTaken = null;
+    if (stepOut.has(srcId)) { const r = normRoute(stepOut.get(srcId)); if (r) { bTaken = r; taken.add(r); } }
+    branchRoutes.push({ domain: bDomain, taken: bTaken });
+  }
+  return { hasBranch: branches.length > 0, domain, taken, branchRoutes };
+}
+
+/**
+ * Does this assertion apply to a run that took `routeInfo.taken`?
+ *
+ *   { conditional:false, applies:true }                     — unconditional: always enforced
+ *   { conditional:true,  applies:true }                     — its lane was taken (or the route
+ *                                                             couldn't be read — enforce, never
+ *                                                             skip on doubt): enforce the delivery
+ *   { conditional:true,  applies:false, malformed:false }   — a DIFFERENT lane was taken: SKIP
+ *   { conditional:true,  applies:false, malformed:true }    — the `when` names no possible route:
+ *                                                             FAIL CLOSED (unprovable)
+ *
+ * The doubt rule is deliberately biased toward ENFORCEMENT: skipping only when we
+ * POSITIVELY read a different route means an unreadable route falls through to the
+ * strict delivery check — which can only cause a (recoverable) false failure, never
+ * a false pass.
+ */
+export function assertionApplicability(assertion, routeInfo) {
+  const when = assertion?.when;
+  if (when == null || String(when).trim() === '') return { conditional: false, applies: true };
+
+  const w = normRoute(when);
+  const info = routeInfo ?? { hasBranch: false, domain: new Set(), taken: new Set() };
+
+  // FAIL CLOSED — a conditional promise with nothing that routes, or a `when` outside
+  // the closed route domain, can never be checked. Report it; do not skip it.
+  if (!info.hasBranch) {
+    return { conditional: true, applies: false, malformed: true,
+      reason: `it happens only when "${when}", but this workflow has no branch that routes on a value — that condition can never be checked` };
+  }
+  if (info.domain.size && !info.domain.has(w)) {
+    return { conditional: true, applies: false, malformed: true,
+      reason: `it happens only when "${when}", but no step here can produce "${when}" (the routes are: ${[...info.domain].join(', ')}) — that promise can never be checked` };
+  }
+
+  // Judge against the OWNING branch's route — the branch whose closed domain can produce
+  // `w` — not the global set (Finding 1). Enforce if that branch took this lane OR its
+  // route couldn't be read (doubt → enforce); skip only if it positively took a different
+  // lane. Falls back to the global `taken` for a hand-built routeInfo with no per-branch data.
+  if (Array.isArray(info.branchRoutes)) {
+    const owning = info.branchRoutes.filter(b => b.domain.has(w));
+    if (owning.length) {
+      if (owning.some(b => b.taken === w || b.taken == null)) return { conditional: true, applies: true };
+      return { conditional: true, applies: false, malformed: false,
+        reason: `this sample routed "${owning.map(b => b.taken).filter(Boolean).join(', ')}", not "${when}", so this promise does not apply to it` };
+    }
+  }
+  // A different lane was positively taken ⇒ this promise is about a case this sample
+  // didn't hit. Skip it: not satisfied, not failed.
+  if (info.taken?.size && !info.taken.has(w)) {
+    return { conditional: true, applies: false, malformed: false,
+      reason: `this sample routed "${[...info.taken].join(', ')}", not "${when}", so this promise does not apply to it` };
+  }
+
+  // Its lane was taken, or the route couldn't be read (enforce on doubt).
+  return { conditional: true, applies: true };
+}
+
 /**
  * Evaluate one example's RUN against the outcome contract. (P12 Increment G.)
  *
@@ -696,24 +853,42 @@ export function evaluateExampleRun(spec, example, runResult) {
   const assertions = Array.isArray(spec?.outcome?.assertions) ? spec.outcome.assertions : [];
   const deliveries = Array.isArray(runResult?.deliveries) ? runResult.deliveries : [];
 
-  const contract = assertions.map(a => ({
-    id: a.id ?? null,
-    target: a.target,
-    kind: a.kind,
-    ...checkAssertionAtRuntime(a, deliveries),
-  }));
+  // Branch awareness: a CONDITIONAL assertion is judged only on the lane it names.
+  const routeInfo = runRouteInfo(spec, runResult);
+
+  const contract = assertions.map(a => {
+    const base = { id: a.id ?? null, target: a.target, kind: a.kind, when: a.when ?? null };
+    const appl = assertionApplicability(a, routeInfo);
+
+    // A different lane was taken — SKIP: neither satisfied nor failed. `ok:true` so it
+    // never blocks the example; `applicable:false` so it renders as "n/a" and the
+    // content-error guard below leaves it alone (its lane never ran).
+    if (appl.conditional && !appl.applies && !appl.malformed) {
+      return { ...base, applicable: false, skipped: true, ok: true, detail: appl.reason };
+    }
+    // FAIL CLOSED — a `when` that names no route, or a conditional with nothing that
+    // routes: report it, do not skip it. It blocks the example, exactly like a real
+    // miss, because a promise the workflow can never make good on is not "kept".
+    if (appl.conditional && !appl.applies && appl.malformed) {
+      return { ...base, applicable: true, ok: false, reason: `can't check — ${appl.reason}` };
+    }
+    // Unconditional, or its lane was taken: enforce the delivery (unchanged path —
+    // this is the anti-weakening core; a real miss here is still a real failure).
+    return { ...base, applicable: true, ...checkAssertionAtRuntime(a, deliveries) };
+  });
 
   // CONTENT-ERROR GUARD. `message_sent → inbox` is a FLOOR — any delivery satisfies
   // it, even one whose body is the converger's own "I couldn't do my job" sentinel
   // (an llm node that can't find its input outputs EXACTLY "ERROR: required data not
   // found"). A run that delivered that string kept nothing — the inbox got an error,
   // not a summary — so it must NOT read as "Contract kept / Go live". If any step
-  // produced the sentinel, the promise it fed is broken: fail every satisfied
-  // assertion with a plain reason, and fail the example.
+  // produced the sentinel, the promise it fed is broken: fail every SATISFIED,
+  // APPLICABLE assertion with a plain reason, and fail the example. A SKIPPED lane
+  // (applicable:false) never ran and is left untouched.
   const broken = runProducedContentError(runResult);
   if (broken) {
     for (const c of contract) {
-      if (c.ok) { c.ok = false; c.reason = `a message was delivered, but its content was an error — "${broken.step}" couldn't find the data it needed and produced "${broken.snippet}" instead of real content`; }
+      if (c.applicable !== false && c.ok) { c.ok = false; c.reason = `a message was delivered, but its content was an error — "${broken.step}" couldn't find the data it needed and produced "${broken.snippet}" instead of real content`; }
     }
   }
 

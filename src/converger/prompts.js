@@ -566,10 +566,22 @@ function outcomeBlock(outcome) {
   if (!outcome?.assertions?.length) return '';
   const lines = outcome.assertions.map(a =>
     `  - ${a.id}: ${a.kind} → ${a.target}${a.fields?.length ? ` (fields: ${a.fields.join(', ')})` : ''}${a.when ? `  [only when: ${a.when}]` : ''}`);
+  // Conditional assertions (`[only when: X]`) are a build instruction, not just a
+  // promise: the workflow MUST classify the input into exactly those `when` values
+  // and branch on them, routing each case to its assertion's destination. The
+  // routing categories and the `when` values must be the SAME closed set — the
+  // self-test proves each conditional promise only on the lane it names.
+  const whenVals = [...new Set(outcome.assertions.map(a => a.when).filter(Boolean))];
+  const conditionalNote = whenVals.length
+    ? `\nThe [only when: …] lines are CONDITIONAL — each delivery happens on just its own case. Build a\n`
+    + `classify step (llm mode:"classify") over EXACTLY these categories: ${whenVals.join(', ')}, then a\n`
+    + `branch that routes each category to its destination (with the mandatory "*" catch-all). Every case's\n`
+    + `\`when\` MUST be one of those categories — the assertion's [only when: X] and the branch case X must match.`
+    : '';
   return `
 THE OUTCOME THIS WORKFLOW MUST DELIVER (the contract — every line needs a step that does it,
 and a workflow that quietly does less than this WILL NOT PUBLISH):
-${outcome.statement ? `  "${outcome.statement}"\n` : ''}${lines.join('\n')}
+${outcome.statement ? `  "${outcome.statement}"\n` : ''}${lines.join('\n')}${conditionalNote}
 `;
 }
 
@@ -708,12 +720,27 @@ AN ASSERTION IS: { "id": "a1", "kind": "<kind>", "target": "<connector>:<destina
     "slack:#logistics"   "slack:someone@acme.com"   "gmail:ops@acme.com"
     "airtable:Leads"     "sheets:Q3 Pipeline"       "inbox:Daily digest"
   Optional: "fields": ["Name","Budget"] — a record_exists that must carry named fields.
+  Optional: "when": "<category>" — see CONDITIONAL DELIVERIES below. OMIT it for anything
+    that happens on EVERY run.
 
 RULES — these are what make the contract checkable, which is the whole point:
 - EVERY destination the user asked for gets its OWN assertion. If they said "post to Slack AND
   email me", that is TWO assertions. A workflow that quietly does only one of them will not
   publish (UNSATISFIED_ASSERTION) — that is the single most common way this system used to fail
   its users, and the contract is what stops it.
+- CONDITIONAL DELIVERIES — if a destination is reached only in SOME cases ("if it's urgent send
+  it to #support, if it's a billing question send it to #sales, otherwise save it to my inbox"),
+  each such assertion carries a "when" naming the CASE under which that delivery happens:
+    {"id":"a1","kind":"message_sent","target":"slack:#support","when":"urgent"}
+    {"id":"a2","kind":"message_sent","target":"slack:#sales","when":"billing_question"}
+    {"id":"a3","kind":"message_sent","target":"inbox:Triage","when":"general"}
+  A conditional delivery does NOT happen on every run, so asserting it unconditionally would make
+  the workflow fail its own contract on every input that took a different path. The "when" values
+  are a CLOSED set of routing categories — the SAME closed set the workflow will classify the
+  input into and branch on (that shared vocabulary is what lets the self-test prove each promise
+  only on the run that actually took that lane). Pick short, distinct category tokens
+  (urgent / billing_question / general), and use the SAME token in every assertion for that case.
+  A delivery that ALWAYS happens (a log, a digest that goes out every run) has NO "when".
 - ONLY assert things that are the workflow's OUTPUT. "The email is summarized" is not an
   assertion — no connector can be checked for it. The Slack message that carries the summary IS.
 - Use ONLY connectors that appear in the AVAILABLE lists in your system prompt. If the intent

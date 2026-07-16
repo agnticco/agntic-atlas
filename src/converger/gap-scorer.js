@@ -79,6 +79,7 @@ import { WorkflowValidator }       from '../workflows/workflow-validator.js';
 import { NodeTypeRegistry }        from '../workflows/node-type-registry.js';
 import { registerBuiltInNodeTypes } from '../workflows/node-types/index.js';
 import { approvalChannelView }     from '../workflows/approval-channels.js';
+import { routeDomainOf }           from '../workflows/outcome-oracle.js';
 
 /** Which class an issue belongs to. Anything unlisted is a contract gap. */
 const OUTCOME_CODES  = new Set(['UNSATISFIED_ASSERTION', 'MALFORMED_ASSERTION', 'MISSING_OUTCOME']);
@@ -479,19 +480,26 @@ export function scoreGap(spec = {}, { capabilities = {}, validator = null } = {}
     });
   }
 
-  // A CONDITIONAL promise ("…and over $50k also pings #sales-urgent") is one
-  // this increment can find a node for, but CANNOT prove is gated: proving it
-  // needs the decision table (Increment E) and the worked examples as a test
-  // suite (Increment G). So we say exactly that, and we say it out loud.
+  // A CONDITIONAL promise ("…and over $50k also pings #sales-urgent") is only a
+  // gap when nothing in the workflow actually GATES it. When a classify → branch
+  // routes on the very value the `when` names — proven now by the self-test /
+  // runtime oracle, which enforces the assertion only on the lane it names and
+  // skips the others (outcome-oracle.js `assertionApplicability`) — the condition
+  // IS checked, and raising CONDITIONAL_UNPROVEN would be a stale warning claiming
+  // "it would happen on every run" when it demonstrably does not.
   //
-  // The alternative — treating a conditional assertion as satisfied by an
-  // ungated node — would be a FALSE PROOF: the workflow would pass its own
-  // contract while pinging #sales-urgent for every lead, not just the big ones.
-  // Never imply a completeness proof you cannot make (converger-v2 §3); a claim
-  // we did not check is worse than one we never made, because the user stops
-  // looking.
+  // So we reconcile against the SAME closed route domain the runtime oracle uses
+  // (`routeDomainOf`, built from `closedDomainOf`): a `when` inside it is gated and
+  // provable → no gap; a `when` outside it (nothing routes on that value) is
+  // genuinely ungated → keep the gap, because treating an ungated conditional as
+  // satisfied would be a FALSE PROOF — the workflow would pass its own contract
+  // while pinging #sales-urgent for every lead, not just the big ones. Never imply
+  // a completeness proof you cannot make (converger-v2 §3).
+  const routeDomain = routeDomainOf(spec);
   for (const a of (Array.isArray(spec.outcome?.assertions) ? spec.outcome.assertions : [])) {
     if (!a?.when) continue;
+    const gated = routeDomain.has(String(a.when).trim().toLowerCase());
+    if (gated) continue;   // a branch routes on this value — the condition is checked
     gaps.push({
       id: `gap_conditional_${a.id ?? a.target}`.toLowerCase(),
       class: 'coverage', nodeId: null,
