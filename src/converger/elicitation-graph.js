@@ -848,7 +848,8 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
         new HumanMessage(
           `Intent: "${state.intent}"\nOutcome: ${draft.outcome?.statement ?? ''}\n\n` +
           'What starts this workflow? Return {"trigger":{"type":"email"|"schedule"|"manual"|"connector_event","filter":"<a Gmail search query, for an email trigger — e.g. to:leads@acme.com>","cron":"<for a schedule>"}}. ' +
-          'For an email trigger the filter is a REAL Gmail search query: it is used to find the actual messages this workflow will run on.',
+          'For an email trigger the filter is a REAL Gmail search query: it is used to find the actual messages this workflow will run on. ' +
+          'The trigger fires on mail ARRIVING in the inbox: for a generic "new email arrives" with no specific sender named, use "is:unread" — NEVER "from:<the operator\'s own address>", which matches mail they SENT. Use "from:<sender>" only when the user names a specific sender.',
         ),
       ], tierCfg('fast', cfg?.configurable?.threadId));
       const trig = t?.trigger;

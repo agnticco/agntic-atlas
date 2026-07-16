@@ -67,7 +67,7 @@ function connectorTriggerSummary(capabilities) {
     let spec;
     if (t.id === 'slack_message')    spec = '{"type":"event","connector":"slack","event":"message","filter":{"channel":"#channel-name"}}';
     else if (t.id === 'slack_mention') spec = '{"type":"event","connector":"slack","event":"app_mention"}';
-    else if (t.id === 'gmail_new_message') spec = '{"type":"email","filter":"from:example.com is:unread"}';
+    else if (t.id === 'gmail_new_message') spec = '{"type":"email","filter":"is:unread"}';  // incoming mail; add "from:<sender>" ONLY if the user names a sender — never "from:<their own address>", which matches mail they SENT
     else spec = `{"type":"event","connector":"${t.connector}","event":"${t.id}"}`;
     return `- ${t.name} — ${t.description} Spec: ${spec}`;
   });
@@ -171,9 +171,9 @@ function slackChannelsBlock(capabilities) {
   const chans = capabilities?.slackChannels;
   if (!Array.isArray(chans)) return '';
   if (!chans.length) {
-    return `\nEXISTING SLACK CHANNELS: none connected yet. Build the deliver to the channel the user names — do NOT add a "slack_create_channel" setup action and do NOT ask about it. After the spec is built, the builder checks the channel against the live account and offers, with buttons, to create it or pick an existing one.`;
+    return `\nEXISTING SLACK CHANNELS: none connected yet. Build the deliver to the channel the user names — do NOT add a "slack_create_channel" setup action and do NOT ask about it, and do NOT emit a {"type":"clarification"} about whether the channel exists or should be created. After the spec is built, the builder checks the channel against the live account and owns that interaction — it surfaces a create-or-pick question WITH BUTTONS (the real channels as chips plus a "Create #<name>" chip). Your free-text question would only replace those buttons with a blank box.`;
   }
-  return `\nEXISTING SLACK CHANNELS (the bot can already post to these): ${chans.map(c => '#' + c).join(', ')}.\nBuild the deliver to the channel the user names. If they name one that is NOT in this list, still build the deliver to it — do NOT ask, and do NOT add a "slack_create_channel" setup action. After the spec is built, the builder verifies every Slack channel against the live account and offers, with buttons, to create the missing one or pick an existing one. Only pick a channel from the list above yourself when the user's intent is genuinely ambiguous about which channel to use.`;
+  return `\nEXISTING SLACK CHANNELS (the bot can already post to these): ${chans.map(c => '#' + c).join(', ')}.\nBuild the deliver to the channel the user names. If they name one that is NOT in this list, still build the deliver to it — do NOT ask, do NOT add a "slack_create_channel" setup action, and do NOT emit a {"type":"clarification"} about whether the channel exists or should be created. After the spec is built, the builder verifies every Slack channel against the live account and OWNS that interaction — it offers, with buttons, to create the missing one or pick an existing one; your free-text question would only replace those buttons with a blank box. Only pick a channel from the list above yourself when the user's intent is genuinely ambiguous about which channel to use.`;
 }
 
 // ── System prompt (shared across all converger LLM calls) ────────────────────
@@ -206,6 +206,7 @@ GMAIL MAILBOX GROUNDING (do NOT claim to read a mailbox you cannot open):
   - Treat the named address as a Gmail FILTER on the CONNECTED inbox: filter "to:support@agntic.co" (or "from:…", "deliveredto:…"). Say plainly what this does: "I'll watch your connected inbox for messages addressed to support@agntic.co" — which only works if that mail actually lands in the connected inbox (an alias or a forwarded address).
   - If it is genuinely a SEPARATE mailbox that would need its own connection, say so and do NOT promise to read it: "support@agntic.co looks like a separate mailbox — the workflow reads the Gmail account you've connected. If support@ forwards into it, I can filter for that; otherwise it needs to be connected on its own."
 - Never assert you can read, access, or monitor a source that is not a connected connector. When unsure whether an address is an alias of the connected inbox or a separate mailbox, ASK rather than assume.
+- INCOMING vs SENT — the email trigger fires on mail ARRIVING in the connected inbox. For a generic "when a new email arrives / when I get an email" (no specific sender named), the filter is "is:unread" — NOT "from:<the operator's own connected address>", which matches mail the operator SENT, not mail they received. Use "from:<address>" ONLY when the user explicitly wants mail FROM a named sender (e.g. "when UPS emails me" → "from:ups.com").
 
 AVAILABLE NODE TYPES (only these — every one is runnable by the engine today):
 - llm: THE AI STEP. One node type does every AI job; \`mode\` picks which. Emit exactly one mode per node:
