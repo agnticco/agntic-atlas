@@ -53,6 +53,7 @@ import {
   buildGapPrompt,
   buildSufficiencyPrompt,
   buildGeneratePrompt,
+  buildPlanPrompt,
 } from './prompts.js';
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -641,6 +642,15 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
       // fresh ask); automatic regeneration between decisions is what it bounds.
       buildPresentations: 0,
       _buildCapped:       false,
+      // THE PRE-BUILD PLAN GATE (agent-contracts increment 1). `_planShown` latches once
+      // the plan has been presented so it fires EXACTLY ONCE, before the first `generate`
+      // — never on a silent regeneration (a verify fix, a gap rebuild, the aggregate cap).
+      // `_approvedPlan` is the approved skeleton, threaded into the generate prompt so the
+      // build fills an agreed shape instead of re-deriving structure. `planRounds` bounds
+      // the cheap pre-build iteration when the user asks to change the plan.
+      _planShown:        false,
+      _approvedPlan:     null,
+      planRounds:        0,
       // Gaps the user (or the default) sent to a human rather than answering.
       // Kept in STATE and persisted to the interaction store — never in the spec.
       // It is provenance, and it feeds the SOP: "these cases were not decided;
@@ -1182,6 +1192,85 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
     };
   });
 
+  // ── plan ─────────────────────────────────────────────────────────────────────
+  // THE PRE-BUILD GATE (agent-contracts increment 1). Project the gathered contract +
+  // trigger into a plain-language PLAN, tagged by confidence (stated / found / inferred),
+  // and show it ONCE — right before the expensive whole-spec build. The user catches a
+  // misread in a glance instead of after a 3-5 min Opus pass; the approved plan then
+  // gives `generate` an explicit skeleton to fill, so the same intent builds the same way
+  // with fewer regenerations.
+  //
+  // FAIL-SAFE, exactly like `verify`: no contract, no LLM, or an unusable projection ⇒ it
+  // skips straight to the build unchanged. So a build is never blocked on the plan, and
+  // every existing converger test — whose stub LLM returns {} for this prompt — keeps its
+  // exact behaviour (empty projection → skip → generate, no new interrupt in the trace).
+  //
+  // Skippable: the plan is pre-accepted (§11.9), so the client's default answer builds it.
+  const MAX_PLAN_ROUNDS = 2;
+  graph.addNode('plan', async (state, cfg) => {
+    const sessionId = cfg?.configurable?.threadId;
+    const draft = state.draft ?? { ...DRAFT_DEFAULT };
+
+    // Nothing to plan against — proceed to build, unchanged. (`_planShown` latches so
+    // this decision, like an approval, is not re-made on the way back through analyze.)
+    if (!draft.outcome?.statement) return { _planShown: true, phase: 'proposing' };
+
+    let plan = null;
+    try {
+      plan = await llmJson(llm, [
+        new SystemMessage(buildSystemPrompt(state.capabilities)),
+        new HumanMessage(buildPlanPrompt({
+          intent:         state.intent,
+          outcome:        draft.outcome,
+          triggers:       draft.triggers,
+          clarifications: state.clarifications,
+        })),
+      ], tierCfg('balanced', sessionId));
+    } catch { plan = null; }
+
+    // Unusable projection → skip (fail-safe). A plan with no steps is not worth a turn.
+    if (!plan || !Array.isArray(plan.steps) || !plan.steps.length) {
+      return { _planShown: true, phase: 'proposing' };
+    }
+
+    const reply = await interrupt({
+      type: 'plan_review',
+      plan,
+      // Every interrupt carries a default (§11.9): the plan is pre-selected, so the
+      // client's Enter/accept builds it — the zero-typing path survives.
+      choices: [
+        { id: 'build',  label: 'Build it',         selected: true },
+        { id: 'change', label: 'Change something' },
+      ],
+      step: state.step,
+    });
+
+    // "Change something" — fold the correction in as a clarification so the build (and a
+    // re-shown plan) reflect it. Re-show the plan ONCE more (bounded by MAX_PLAN_ROUNDS)
+    // so the user confirms the fix before the expensive build; past the cap, build anyway.
+    const change = (reply?.type === 'change' || reply?.type === 'modify')
+      ? (reply.text ?? reply.modification ?? reply.answer ?? null)
+      : null;
+    if (change && (state.planRounds ?? 0) < MAX_PLAN_ROUNDS) {
+      return {
+        clarifications:  [{ q: '(plan change)', a: String(change) }],
+        planRounds:      (state.planRounds ?? 0) + 1,
+        confirmationLog: [{ step: state.step, type: 'plan_review', changed: true, change }],
+        step:            state.step + 1,
+        phase:           'planning',   // re-enter `plan` with the change folded in
+      };
+    }
+
+    return {
+      _planShown:      true,
+      _approvedPlan:   plan,
+      ...(change ? { clarifications: [{ q: '(plan change)', a: String(change) }] } : {}),
+      confirmationLog: [{ step: state.step, type: 'plan_review', approved: true }],
+      step:            state.step + 1,
+      phase:           'proposing',    // → generate
+    };
+  });
+
   // ── generate ─────────────────────────────────────────────────────────────────
   // Emit the WHOLE spec in one model call. (Converger rearchitecture, Increment 2.)
   //
@@ -1268,6 +1357,7 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
         draft,
         capabilities:   state.capabilities,
         setupResults:   state.setup_results,
+        plan:           state._approvedPlan,   // the user-approved skeleton (increment 1)
       })),
       // The whole-spec call is the n8n-level reasoning step — it emits every node, every
       // edge and every branch case at once — so it runs on a DEDICATED top tier,
@@ -2368,11 +2458,24 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
     if (state.phase === 'gapping')    return 'destinations'; // …→ decisions → gaps,
     if (state.phase === 'ratifying')  return 'ratify';       //   each a pass-through
     if (state.phase === 'clarifying') return 'clarify';      //   when it has nothing
-    // proposing: build (or REBUILD) the whole spec in one `generate` pass. This is the
-    // first build AND every later "the spec must change" pass — the retired `propose`
-    // drip is never routed to (its UI surface no longer exists client-side, so a route
-    // into it would hang). The MAX_REGEN_ROUNDS guard above stops the rebuild loop.
+    // THE PLAN GATE (agent-contracts increment 1): the FIRST build routes through `plan`
+    // once — a plain-language, confidence-tagged preview the user approves before the
+    // expensive `generate`. Only the first build: a regeneration (`_generated`) or a plan
+    // already shown (`_planShown`) goes straight to `generate`, so a verify fix, a gap
+    // rebuild and the aggregate-cap path never re-show it.
+    if (!state._generated && !state._planShown) return 'plan';
+    // proposing: build (or REBUILD) the whole spec in one `generate` pass. This is every
+    // later "the spec must change" pass — the retired `propose` drip is never routed to
+    // (its UI surface no longer exists client-side, so a route into it would hang). The
+    // MAX_REGEN_ROUNDS guard above stops the rebuild loop.
     return 'generate';
+  });
+
+  // plan → generate on approval; plan → plan on a "change" (bounded by MAX_PLAN_ROUNDS),
+  // re-projecting the plan with the user's correction folded in. This is the ONLY node
+  // that emits `plan_review`, and it does so before the first build, never on a rebuild.
+  graph.addConditionalEdges('plan', (state) => {
+    return state.phase === 'planning' ? 'plan' : 'generate';
   });
 
   graph.addEdge('clarify', 'analyze');

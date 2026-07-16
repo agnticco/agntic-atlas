@@ -546,6 +546,96 @@
                 </div>
               </sc-if>
 
+              <!-- PLAN CARD (plan_review) — the PRE-BUILD gate (agent-contracts
+                   increment 1). A plain-language, confidence-tagged preview of HOW the
+                   workflow will work, shown BEFORE the expensive build. `you said /
+                   I found / I inferred` chips send the eye to what Atlas inferred. -->
+              <sc-if value="{{ item.isPlan }}" hint-placeholder-val="{{ false }}">
+                <div style="display:flex;gap:13px;align-items:flex-start;animation:msgIn .45s ease both">
+                  <div style="flex:none;width:32px;height:32px"></div>
+                  <div style="min-width:0;flex:1">
+                    <div style="font-size:15px;line-height:1.5;color:#fff;font-weight:500">Before I build, here's my plan — skim it and I'll get started.</div>
+                    <div style="font-size:13px;line-height:1.55;color:rgba(255,255,255,.5);margin-top:6px;max-width:56ch">You approved what this should do; this is how. The amber items are things I filled in — worth a glance.</div>
+
+                    <div style="margin-top:14px;border:1px solid rgba(231,178,94,.22);background:rgba(231,178,94,.03);border-radius:15px;overflow:hidden">
+                      <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:14px;padding:15px 17px 12px">
+                        <div style="min-width:0">
+                          <div style="font-size:10px;letter-spacing:.16em;text-transform:uppercase;color:rgba(240,191,107,.7);font-weight:600;margin-bottom:5px">The plan</div>
+                          <div style="font-size:14.5px;line-height:1.5;color:#fff;font-weight:500">{{ item.summary }}</div>
+                        </div>
+                        <div style="flex:none;font-family:ui-monospace,SFMono-Regular,monospace;font-size:9.5px;font-weight:600;letter-spacing:.1em;color:rgba(240,191,107,.7);padding-top:3px;white-space:nowrap">{{ item.stamp }}</div>
+                      </div>
+
+                      <div style="padding:13px 17px;border-top:1px solid rgba(255,255,255,.05)">
+                        <div style="font-family:ui-monospace,SFMono-Regular,monospace;font-size:9px;font-weight:600;letter-spacing:.16em;text-transform:uppercase;color:rgba(255,255,255,.4);margin-bottom:10px">Starts when</div>
+                        <div style="display:flex;gap:11px;align-items:flex-start;padding:2px 0">
+                          <div style="flex:none;width:20px;height:20px;border-radius:6px;background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.1);display:flex;align-items:center;justify-content:center;font-family:ui-monospace,SFMono-Regular,monospace;font-size:11px;color:rgba(255,255,255,.55);margin-top:1px">▸</div>
+                          <div style="min-width:0;flex:1;font-size:13.5px;line-height:1.5;color:rgba(255,255,255,.86)">{{ item.trigger.text }}<span style="{{ item.trigger.chip.style }}"><span style="{{ item.trigger.chip.dotStyle }}"></span>{{ item.trigger.chip.label }}</span></div>
+                        </div>
+                      </div>
+
+                      <div style="padding:13px 17px;border-top:1px solid rgba(255,255,255,.05)">
+                        <div style="font-family:ui-monospace,SFMono-Regular,monospace;font-size:9px;font-weight:600;letter-spacing:.16em;text-transform:uppercase;color:rgba(255,255,255,.4);margin-bottom:10px">Then, in order</div>
+                        <sc-for list="{{ item.steps }}" as="st" hint-placeholder-count="2">
+                          <div style="display:flex;gap:11px;align-items:flex-start;padding:4px 0">
+                            <div style="flex:none;width:20px;height:20px;border-radius:6px;background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.1);display:flex;align-items:center;justify-content:center;font-family:ui-monospace,SFMono-Regular,monospace;font-size:10px;color:rgba(255,255,255,.55);font-weight:600;margin-top:1px">{{ st.idx }}</div>
+                            <div style="min-width:0;flex:1;font-size:13.5px;line-height:1.5;color:rgba(255,255,255,.86)">{{ st.text }}<span style="{{ st.chip.style }}"><span style="{{ st.chip.dotStyle }}"></span>{{ st.chip.label }}</span></div>
+                          </div>
+                        </sc-for>
+                      </div>
+
+                      <sc-if value="{{ item.hasBranches }}" hint-placeholder-val="{{ false }}">
+                        <div style="padding:13px 17px;border-top:1px solid rgba(255,255,255,.05)">
+                          <div style="font-family:ui-monospace,SFMono-Regular,monospace;font-size:9px;font-weight:600;letter-spacing:.16em;text-transform:uppercase;color:rgba(255,255,255,.4);margin-bottom:10px">Routes to</div>
+                          <sc-for list="{{ item.branches }}" as="br" hint-placeholder-count="2">
+                            <div style="display:flex;gap:10px;align-items:baseline;padding:4px 0;font-size:13.5px;line-height:1.5">
+                              <div style="flex:none;font-family:'Instrument Serif',Georgia,serif;font-style:italic;font-size:14px;color:#f3cd86;min-width:110px">{{ br.when }}</div>
+                              <div style="min-width:0;color:rgba(255,255,255,.86)">{{ br.then }}<span style="{{ br.chip.style }}"><span style="{{ br.chip.dotStyle }}"></span>{{ br.chip.label }}</span></div>
+                            </div>
+                          </sc-for>
+                        </div>
+                      </sc-if>
+
+                      <sc-if value="{{ item.hasError }}" hint-placeholder-val="{{ false }}">
+                        <div style="padding:13px 17px;border-top:1px solid rgba(255,255,255,.05)">
+                          <div style="font-family:ui-monospace,SFMono-Regular,monospace;font-size:9px;font-weight:600;letter-spacing:.16em;text-transform:uppercase;color:rgba(255,255,255,.4);margin-bottom:10px">If something breaks</div>
+                          <div style="display:flex;gap:11px;align-items:flex-start;padding:2px 0">
+                            <div style="flex:none;width:20px;height:20px;border-radius:6px;background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.1);display:flex;align-items:center;justify-content:center;font-family:ui-monospace,SFMono-Regular,monospace;font-size:11px;color:rgba(255,255,255,.55);margin-top:1px">↺</div>
+                            <div style="min-width:0;flex:1;font-size:13.5px;line-height:1.5;color:rgba(255,255,255,.86)">{{ item.errorText }}<span style="{{ item.errorChip.style }}"><span style="{{ item.errorChip.dotStyle }}"></span>{{ item.errorChip.label }}</span></div>
+                          </div>
+                        </div>
+                      </sc-if>
+
+                      <sc-if value="{{ item.hasKnowledge }}" hint-placeholder-val="{{ false }}">
+                        <div style="padding:12px 17px;border-top:1px solid rgba(255,255,255,.05);background:rgba(95,199,138,.03)">
+                          <div style="font-family:ui-monospace,SFMono-Regular,monospace;font-size:9px;font-weight:600;letter-spacing:.16em;text-transform:uppercase;color:#7fd6a0;margin-bottom:8px">From your knowledge</div>
+                          <sc-for list="{{ item.knowledge }}" as="kn" hint-placeholder-count="1">
+                            <div style="font-size:12.5px;line-height:1.5;color:rgba(255,255,255,.78);padding:2px 0">{{ kn.text }} <span style="color:#7fd6a0;font-size:11px">— {{ kn.source }}</span></div>
+                          </sc-for>
+                        </div>
+                      </sc-if>
+
+                      <sc-if value="{{ item.hasUpload }}" hint-placeholder-val="{{ false }}">
+                        <div style="padding:12px 17px;border-top:1px solid rgba(255,255,255,.05);display:flex;gap:9px;align-items:flex-start">
+                          <span style="color:#f3cd86;flex:none">💡</span>
+                          <div style="font-size:12.5px;line-height:1.5;color:rgba(255,255,255,.7)">Want this sharper? Upload <span style="color:#f3cd86">{{ item.upload.artifact }}</span> — {{ item.upload.reason }}. <span style="color:rgba(255,255,255,.4)">(optional — add it any time from Knowledge)</span></div>
+                        </div>
+                      </sc-if>
+
+                      <div style="display:flex;gap:16px;flex-wrap:wrap;padding:11px 17px;border-top:1px solid rgba(255,255,255,.05);background:rgba(255,255,255,.012)">
+                        <div style="display:flex;align-items:center;gap:7px;font-size:11px;color:rgba(255,255,255,.5)"><span style="width:7px;height:7px;border-radius:50%;background:rgba(255,255,255,.45)"></span> you said</div>
+                        <div style="display:flex;align-items:center;gap:7px;font-size:11px;color:rgba(255,255,255,.5)"><span style="width:7px;height:7px;border-radius:50%;background:#5fc78a"></span> I found (from your tools)</div>
+                        <div style="display:flex;align-items:center;gap:7px;font-size:11px;color:rgba(255,255,255,.5)"><span style="width:7px;height:7px;border-radius:50%;background:#e7b25e"></span> I inferred — check it</div>
+                      </div>
+                      <div style="display:flex;gap:10px;align-items:center;padding:13px 17px 15px;border-top:1px solid rgba(255,255,255,.05)">
+                        <button onClick="{{ item.onBuild }}" style="border:1px solid rgba(240,191,107,.45);background:rgba(240,191,107,.14);color:#f3cd86;font-family:inherit;font-size:14px;font-weight:600;padding:9px 20px;border-radius:999px;cursor:pointer" style-hover="background:rgba(240,191,107,.22)">Build it →</button>
+                        <button onClick="{{ item.onChange }}" style="border:1px solid rgba(255,255,255,.14);background:transparent;color:rgba(255,255,255,.6);font-family:inherit;font-size:14px;padding:9px 18px;border-radius:999px;cursor:pointer" style-hover="color:#fff">Change something</button>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </sc-if>
+
               <!-- GAP LIST / DECISION TABLE cards retired (#24): gaps and decision-
                    table confirmations now use the conversational `clarification`
                    surface (chips + composer) instead of bespoke cards. -->
@@ -4529,6 +4619,14 @@ class Component extends DCLogic {
       this._send({ type: "clarification", answer: t });
       return;
     }
+    // Plan gate (agent-contracts increment 1): a typed change to the pre-build plan.
+    // The plan node folds it in as a clarification and re-shows the plan (bounded), so
+    // the user iterates on the plan CHEAPLY, before the expensive build.
+    if (S.inputMode === "planchange") {
+      this.setState({ msgs: [...S.msgs, { isOperator: true, text: t }], inputValue: "", thinking: true, inputMode: "locked", phase: "building" });
+      this._send({ type: "change", text: t });
+      return;
+    }
     if (S.inputMode === "change") {
       this.setState({ msgs: [...S.msgs, { isOperator: true, text: t }], inputValue: "", thinking: true, inputMode: "locked", phase: "building", testState: "idle", runStepIndex: 0, runSteps: [], failIndex: -1 });
       if (!S.threadId) { this._applyEditChange(t); return; }
@@ -4868,6 +4966,60 @@ class Component extends DCLogic {
                  altCount: nAlt + " other reading" + (nAlt === 1 ? "" : "s"),
                  onToggleAlts: () => self.setState({ msgs: self.state.msgs.map(m => (m._id === oid ? { ...m, altsOpen: !m.altsOpen } : m)) }) }],
         thinking: false, inputMode: "clarify", phase: "building",
+      });
+      return;
+    }
+
+    // ── plan_review — THE PRE-BUILD PLAN GATE (agent-contracts increment 1) ──
+    // A plain-language, confidence-tagged preview of HOW the workflow will work,
+    // shown BEFORE the expensive build. "Build it" accepts (one click — the
+    // zero-typing safe default); a typed change folds a correction back in. The
+    // `you said / I found / I inferred` chips direct attention to exactly what
+    // Atlas inferred, so the eye goes to the guesses, not the whole card.
+    if (iv.type === "plan_review") {
+      const self = this;
+      const p = iv.plan || {};
+      const CHIP_BASE = "display:inline-flex;align-items:center;gap:5px;margin-left:8px;padding:1.5px 8px;border-radius:999px;font-size:10px;font-weight:600;letter-spacing:.02em;font-family:ui-monospace,SFMono-Regular,monospace;text-transform:uppercase;white-space:nowrap;vertical-align:middle;";
+      const DOT = "width:6px;height:6px;border-radius:50%;flex:none;";
+      const chip = (conf) => {
+        if (conf === "found")    return { label: "I found",    style: CHIP_BASE + "background:rgba(95,199,138,.1);color:#7fd6a0;border:1px solid rgba(95,199,138,.4)",  dotStyle: DOT + "background:#5fc78a" };
+        if (conf === "inferred") return { label: "I inferred", style: CHIP_BASE + "background:rgba(231,178,94,.1);color:#f3cd86;border:1px dashed rgba(231,178,94,.5)", dotStyle: DOT + "background:#e7b25e" };
+        return                          { label: "you said",   style: CHIP_BASE + "background:rgba(255,255,255,.04);color:rgba(255,255,255,.4);border:1px solid rgba(255,255,255,.08)", dotStyle: DOT + "background:rgba(255,255,255,.45)" };
+      };
+      const steps     = (p.steps || []).map((s, i) => ({ idx: String(i + 1), text: s.text || "", chip: chip(s.confidence) }));
+      const branches  = (p.branches || []).filter(b => b && (b.when || b.then)).map((b) => ({ when: b.when || "otherwise", then: b.then || "", chip: chip(b.confidence) }));
+      const knowledge = (p.knowledge || []).filter(k => k && k.text).map(k => ({ text: k.text, source: k.source || "knowledge" }));
+      const up        = (p.upload_suggestion && p.upload_suggestion.artifact)
+        ? { artifact: p.upload_suggestion.artifact, reason: p.upload_suggestion.reason || "" } : null;
+      const nPaths = branches.length;
+      const stamp = (steps.length ? steps.length + " STEP" + (steps.length === 1 ? "" : "S") : "")
+                  + (nPaths ? " · " + nPaths + " PATH" + (nPaths === 1 ? "" : "S") : "");
+      const onBuild = () => {
+        self.setState({ msgs: [...self.state.msgs, { isOperator: true, text: "Build it" }], thinking: true, inputMode: "locked", phase: "building" });
+        self._send({ type: "accept" });
+      };
+      const onChange = () => {
+        self.setState({ inputMode: "planchange" });
+        if (self._chatInputEl && self._chatInputEl.focus) { try { self._chatInputEl.focus(); } catch (e) {} }
+      };
+      this.setState({
+        msgs: [...this.state.msgs, {
+          isPlan: true,
+          summary: p.summary || (p.trigger && p.trigger.text) || "Here's the plan.",
+          stamp,
+          trigger: { text: (p.trigger && p.trigger.text) || "", chip: chip(p.trigger && p.trigger.confidence) },
+          steps,
+          hasBranches: branches.length > 0, branches,
+          hasError: !!(p.error_handling && p.error_handling.text),
+          errorText: (p.error_handling && p.error_handling.text) || "",
+          errorChip: chip(p.error_handling && p.error_handling.confidence),
+          hasKnowledge: knowledge.length > 0, knowledge,
+          hasUpload: !!up, upload: up || { artifact: "", reason: "" },
+          onBuild, onChange,
+        }],
+        // planchange = the composer sends a typed correction to the plan; "Build it"
+        // is the one-click accept. Both keep the zero-typing path intact.
+        thinking: false, inputMode: "planchange", phase: "building",
       });
       return;
     }
@@ -6748,7 +6900,7 @@ class Component extends DCLogic {
     const accentGlow = published ? "drop-shadow(0 0 5px rgba(127,194,138,.85))" : "drop-shadow(0 0 5px rgba(240,191,107,.7))";
     const accentRadius = published ? "border-radius:2px" : "border-radius:50%";
 
-    const inputEnabled = !S.thinking && S.phase !== "draft" && S.phase !== "published" && (S.phase === "chat" || S.inputMode === "clarify" || S.inputMode === "change");
+    const inputEnabled = !S.thinking && S.phase !== "draft" && S.phase !== "published" && (S.phase === "chat" || S.inputMode === "clarify" || S.inputMode === "change" || S.inputMode === "planchange");
     const trg = (S.spec && S.spec.triggers && S.spec.triggers[0]) || {};
 
     return {
@@ -6967,7 +7119,8 @@ class Component extends DCLogic {
         : (S.phase === "chat" ? "Message Atlas — chat, or tell me what to automate…"
         : (S.inputMode === "clarify" ? "Type your answer…"
         : (S.inputMode === "change" ? "Tell Atlas what to change…"
-        : "Atlas is building — respond on the cards above ↑")))),
+        : (S.inputMode === "planchange" ? "Tell Atlas what to change — or click Build it ↑"
+        : "Atlas is building — respond on the cards above ↑"))))),
       // @-mention autocomplete
       mentionOpen: S.mentionOpen && this._mentionList().length > 0,
       // / knowledge file picker

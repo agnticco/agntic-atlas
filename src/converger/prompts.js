@@ -588,6 +588,95 @@ ${outcome.statement ? `  "${outcome.statement}"\n` : ''}${lines.join('\n')}${con
 // ── Generate prompt — emit the WHOLE spec at once (rearchitecture, Increment 2) ─
 
 /**
+ * THE PRE-BUILD PLAN (agent-contracts increment 1). Project the gathered contract +
+ * trigger into a human-legible plan, tagged by confidence, BEFORE the expensive
+ * whole-spec build — so the user catches a misread in one glance instead of after a
+ * 3-5 min Opus pass, and the approved plan gives `generate` an explicit skeleton to
+ * fill (fewer regenerations, same-intent → same-structure).
+ *
+ * Confidence is the honesty layer, and it is the ONLY thing that asks for attention:
+ *   stated   — the user said this outright in the intent.
+ *   found    — grounded in a tool: a connector resource listed in the system prompt,
+ *              or the KNOWLEDGE BASE CONTENT in the system prompt (cite the source).
+ *   inferred — a reasonable guess the user should check (a step added, a safe default).
+ *
+ * `upload_suggestion` turns an ungrounded JUDGMENT into an invitation: when a step
+ * makes a policy/criteria/tone decision with NO knowledge to ground it, name ONE
+ * specific artifact the user could upload and the concrete benefit. Null otherwise —
+ * never nag. `knowledge` surfaces what was actually used from the knowledge base, with
+ * its source, so the grounding that already happens silently becomes visible.
+ *
+ * @param {{ intent, outcome, triggers, clarifications }} args
+ * @returns {string} the user-message prompt
+ */
+export function buildPlanPrompt({ intent, outcome, triggers, clarifications } = {}) {
+  const prior = (clarifications ?? []).map(({ q, a }) => `  Q: ${q}\n  A: ${a}`).join('\n');
+  const assertions = (outcome?.assertions ?? []).map(a => {
+    const fields = a.fields ? ` [fields: ${(Array.isArray(a.fields) ? a.fields : [a.fields]).join(', ')}]` : '';
+    return `  - ${a.kind} → ${a.target}${a.when ? ` (when ${a.when})` : ''}${fields}`;
+  }).join('\n');
+  const trig = (Array.isArray(triggers) ? triggers : []).map(t =>
+    `  - ${t.type}${t.filter ? ` (filter: ${t.filter})` : ''}${t.cron ? ` (cron: ${t.cron})` : ''}`
+  ).join('\n');
+
+  return `Before building the workflow, write the PLAN the user will approve — HOW this workflow will
+work, in plain language, tagged by how sure you are of each part. It is shown BEFORE the build so the
+user can catch a misunderstanding in one glance.
+
+INTENT: "${intent}"
+OUTCOME: ${outcome?.statement ?? '(none)'}
+CONTRACT (what the finished workflow must deliver):
+${assertions || '  (none)'}
+TRIGGER (already derived):
+${trig || '  (none derived yet)'}
+${prior ? `\nWHAT THE USER HAS CLARIFIED / CHANGED (reflect this — it overrides your first read):\n${prior}\n` : ''}
+Tag EVERY item with a confidence:
+  "stated"   — the user said this outright in the intent above.
+  "found"    — grounded in a tool: a connector resource listed in your system prompt, or the
+               KNOWLEDGE BASE CONTENT in your system prompt. When "found" from the knowledge base,
+               ALSO add it to "knowledge" below with its source label.
+  "inferred" — a reasonable guess the user should check (a step you added, a safe default).
+
+Keep each item to ONE short plain-language line — no jargon, no node types, no config. Describe what
+happens the way you'd tell a coworker.
+
+UPLOAD SUGGESTION — when a step makes a JUDGMENT (a classification rule, an escalation/priority policy,
+a tone or wording choice) and you had NO knowledge base content to ground it, you MAY suggest ONE
+specific document the user could upload to make it precise: name the artifact and the concrete benefit.
+Only for genuine judgment calls, at most one, and null when nothing qualifies — never nag.
+
+Return JSON only:
+{
+  "summary": "<one plain sentence: the whole workflow>",
+  "trigger": { "text": "<when it starts>", "confidence": "stated|found|inferred" },
+  "steps":   [ { "text": "<what happens, in order>", "confidence": "..." } ],
+  "branches":[ { "when": "<condition, plain words>", "then": "<what happens>", "confidence": "..." } ],
+  "error_handling": { "text": "<what happens if a step fails>", "confidence": "inferred" },
+  "knowledge": [ { "text": "<the relevant fact you used>", "source": "<the document label>" } ],
+  "upload_suggestion": { "artifact": "<what to upload>", "reason": "<the concrete benefit>" }
+}
+"branches" is [] for a linear workflow. "knowledge" is [] when nothing in the knowledge base applied.
+"upload_suggestion" is null unless a real judgment gap qualifies.`;
+}
+
+/**
+ * The APPROVED PLAN, rendered into the generate prompt as the skeleton to fill. The
+ * user has already signed off on this shape, so `generate` builds it rather than
+ * re-deriving structure from a one-line outcome — which is what drove the
+ * regeneration variance (a branch build rediscovering extract-first three times).
+ */
+function approvedPlanBlock(plan) {
+  if (!plan || !Array.isArray(plan.steps) || !plan.steps.length) return '';
+  const steps    = plan.steps.map((s, i) => `  ${i + 1}. ${s.text}`).join('\n');
+  const branches = (plan.branches ?? []).map(b => `  - when ${b.when} → ${b.then}`).join('\n');
+  const fail     = plan.error_handling?.text ? `\n  On failure: ${plan.error_handling.text}` : '';
+  return `\nAPPROVED PLAN — the user approved this exact shape; BUILD IT. Do not add steps it does not
+call for, and do not drop any it lists:
+  Trigger: ${plan.trigger?.text ?? ''}
+  Steps:\n${steps}${branches ? `\n  Routes:\n${branches}` : ''}${fail}\n`;
+}
+
+/**
  * Ask the model for the COMPLETE spec in ONE structured JSON object —
  * `{ triggers, nodes, edges }` — instead of one component per round.
  *
@@ -603,7 +692,7 @@ ${outcome.statement ? `  "${outcome.statement}"\n` : ''}${lines.join('\n')}${con
  * @param {{ intent, clarifications, outcome, draft, capabilities, setupResults }} args
  * @returns {string} the user-message prompt
  */
-export function buildGeneratePrompt({ intent, clarifications, outcome, draft, capabilities, setupResults } = {}) {
+export function buildGeneratePrompt({ intent, clarifications, outcome, draft, capabilities, setupResults, plan } = {}) {
   const prior = (clarifications ?? []).map(({ q, a }) => `  Q: ${q}\n  A: ${a}`).join('\n');
   const contract = outcome ?? draft?.outcome ?? null;
   const existing = JSON.stringify({
@@ -616,7 +705,7 @@ component — you are emitting the entire spec at once: the trigger, every node 
 and EVERY edge that connects them.
 
 INTENT: "${intent}"
-${prior ? `\nCLARIFICATIONS:\n${prior}\n` : ''}${setupResultsSummary(setupResults)}${outcomeBlock(contract)}
+${prior ? `\nCLARIFICATIONS:\n${prior}\n` : ''}${setupResultsSummary(setupResults)}${approvedPlanBlock(plan)}${outcomeBlock(contract)}
 ALREADY DERIVED (reuse these exact ids and triggers where present — do not contradict them):
 ${existing}
 
