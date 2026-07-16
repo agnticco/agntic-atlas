@@ -480,6 +480,24 @@ export class ChatModel extends Runnable {
       if (hasTools) baseParams.tools = isRawTools ? toolRegistry : toolRegistry.toAnthropicSchemas();
       if (config.tool_choice) baseParams.tool_choice = config.tool_choice;
 
+      // Extended thinking (Anthropic only). Opt-in PER CALL via config.thinking —
+      // accepts `true`, a budget number, or `{ budget_tokens }`. Anthropic streams
+      // the model's raw reasoning as `thinking_delta` events; we surface each delta
+      // to the caller via config.onThinking(delta), kept DISTINCT from the answer
+      // text (which streams as AIMessage chunks). The API enforces three constraints
+      // we normalise so a caller can't 400: temperature MUST be 1, budget >= 1024,
+      // and max_tokens MUST exceed budget_tokens. Only sent when requested, so a
+      // model/tier that doesn't support thinking never receives the field.
+      if (config.thinking) {
+        const budget = typeof config.thinking === 'number'
+          ? config.thinking
+          : (config.thinking.budget_tokens ?? 3072);
+        const budgetTokens = Math.max(1024, budget);
+        baseParams.thinking     = { type: 'enabled', budget_tokens: budgetTokens };
+        baseParams.temperature  = 1;
+        if (baseParams.max_tokens <= budgetTokens) baseParams.max_tokens = budgetTokens + 4096;
+      }
+
       const safeParse = (s) => { try { return JSON.parse(s || '{}'); } catch { return { _raw: s, _parseError: true }; } };
 
       // Collect content blocks across the full pause_turn round-trip.
@@ -515,7 +533,20 @@ export class ChatModel extends Runnable {
             contentBlocks.push(currentBlock);
           }
           if (event.type === 'content_block_delta') {
-            if (event.delta?.type === 'text_delta' && currentBlock?.type === 'text') {
+            if (event.delta?.type === 'thinking_delta') {
+              // Raw extended-thinking tokens — the model reasoning out loud, BEFORE
+              // the answer. Surfaced to the caller via onThinking(), never mixed into
+              // the yielded answer text (only `text` blocks become AIMessage chunks).
+              const td = event.delta.thinking ?? '';
+              if (currentBlock?.type === 'thinking') currentBlock.thinking = (currentBlock.thinking ?? '') + td;
+              if (td && typeof config.onThinking === 'function') {
+                try { config.onThinking(td); } catch { /* narration is best-effort */ }
+              }
+            } else if (event.delta?.type === 'signature_delta') {
+              // Cryptographic signature over a completed thinking block — accumulated
+              // so the block round-trips verbatim if re-submitted (tool-use turns).
+              if (currentBlock?.type === 'thinking') currentBlock.signature = (currentBlock.signature ?? '') + (event.delta.signature ?? '');
+            } else if (event.delta?.type === 'text_delta' && currentBlock?.type === 'text') {
               currentBlock.text = (currentBlock.text ?? '') + event.delta.text;
               yield new AIMessage(event.delta.text);
             } else if (event.delta?.type === 'input_json_delta' && currentBlock?.type === 'tool_use') {

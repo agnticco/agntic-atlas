@@ -107,6 +107,43 @@ async function llmJson(llm, messages, config = {}) {
   }
 }
 
+// Default extended-thinking budget (tokens) for the streaming generate call. Sits
+// in the 2048–4096 band: enough for the model to reason through trigger/step/branch
+// choices for the whole spec, without dwarfing the answer's own output budget.
+const DEFAULT_THINKING_BUDGET = 3072;
+
+// Stream a JSON-emitting model call, forwarding the model's RAW extended-thinking
+// deltas to `onThinking` AS THEY ARRIVE (the visible chain of thought), and returning
+// the parsed JSON exactly like `llmJson`. This is the same tier/cost path as the
+// blocking call — the ModelPool tracks the streamed call's tokens (thinking tokens
+// included, since Anthropic bills them in output) against the config's sessionId/tier.
+//
+// FALLS BACK TO BLOCKING, by construction: if the model doesn't support streaming,
+// the stream throws, or it yields nothing usable, we call `llmJson` — so a thinking
+// or transport failure NEVER stops the build from completing. A completed stream
+// whose text isn't valid JSON returns null (same contract as `llmJson`), rather than
+// paying for a second blocking call to reach the identical null.
+export async function llmJsonStreaming(llm, messages, config = {}, { onThinking } = {}) {
+  let text = null;
+  if (typeof llm.stream === 'function') {
+    try {
+      let acc = '';
+      const streamCfg = { ...config, thinking: DEFAULT_THINKING_BUDGET };
+      if (typeof onThinking === 'function') streamCfg.onThinking = onThinking;
+      for await (const chunk of llm.stream(messages, streamCfg)) {
+        const c = typeof chunk === 'string' ? chunk : (chunk?.content ?? '');
+        if (c) acc += c;
+      }
+      if (acc.trim()) text = acc;
+    } catch {
+      text = null; // streaming/thinking failed → fall through to the blocking path
+    }
+  }
+  if (text == null) return llmJson(llm, messages, config); // no-stream-support OR stream failed
+  try { return JSON.parse(extractJson(text)); }
+  catch { return null; }
+}
+
 export const DRAFT_DEFAULT = {
   name:          null,
   description:   null,
@@ -424,6 +461,21 @@ function tierCfg(tierName, sessionId) {
   return { configurable: { modelTier: tierName, sessionId, costContext: 'converger' } };
 }
 
+// ── Reasoning narrator (Increment #22) ────────────────────────────────────────
+// The REASONING surface streams the model's OWN chain of thought — the raw
+// extended-thinking tokens emitted while `generate` designs the whole spec — NOT
+// hand-authored stand-in narration. The server injects a threadId-bound `narrate`
+// into cfg.configurable; `narrateThinking` forwards one raw thinking delta as a
+// `{ kind:'thinking', text, streamId }` beat. Best-effort by construction: if no
+// narrator is wired, or it throws, the build is unaffected — the panel is a free
+// side-channel, never load-bearing. `streamId` lets the client keep one build's
+// thinking in its own block (a revise starts a fresh block).
+function narrateThinking(cfg, delta, streamId) {
+  const fn = cfg?.configurable?.narrate;
+  if (typeof fn !== 'function') return;
+  try { fn({ kind: 'thinking', text: delta, streamId }); } catch { /* narration is best-effort */ }
+}
+
 // ── Graph builder ─────────────────────────────────────────────────────────────
 
 /**
@@ -431,6 +483,15 @@ function tierCfg(tierName, sessionId) {
  * @returns {CompiledGraph}
  */
 export function buildElicitationGraph({ llm, checkpointerDir = './memory/converger', invokeCapability = null }) {
+  // Which generate executions have already STREAMED their thinking. A node that
+  // calls interrupt() re-executes from the top on resume (compiled-graph.js), so
+  // `generate` would re-stream (and re-narrate) its thinking every time the user
+  // answers the workflow-approval interrupt. This closure persists for the life of
+  // the converger instance (one per session, reused across every /respond), so a
+  // given generation streams its thinking EXACTLY ONCE. Keyed by `state.step`, which
+  // is stable across a pass and its resume yet advances for a later (revise) rebuild.
+  const streamedThinking = new Set();
+
   const graph = new StateGraph({
     stateSchema: {
       // Plain defaults (no reducer — replacement semantics)
@@ -858,7 +919,7 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
 
   // ── clarify ────────────────────────────────────────────────────────────────
   // Ask one focused question; interrupt for the user's answer.
-  graph.addNode('clarify', async (state) => {
+  graph.addNode('clarify', async (state, cfg) => {
     const question = state._pendingQuestion ?? 'Could you tell me more about what you need?';
 
     const answer = await interrupt({ type: 'clarification', question, step: state.step });
@@ -1023,7 +1084,22 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
       ? [...(state.clarifications ?? []), { q: '(still missing)', a: String(state._missingNote) }]
       : state.clarifications;
 
-    const generated = await llmJson(llm, [
+    // THE ONE PLACE REAL REASONING HAPPENS. This is the 30–60s Opus call that emits
+    // the whole spec at once — the emptiest stretch of the panel. We STREAM it with
+    // extended thinking ENABLED and forward the model's raw thinking tokens to the
+    // REASONING surface as they arrive, so the user watches the model reason through
+    // the build (trigger, steps, branches, delivery) instead of staring at a spinner.
+    //
+    // Stream ONCE per generation: interrupt() below re-runs this node from the top on
+    // resume, so we gate narration on `state.step` (stable across a pass + its resume,
+    // advances for a later revise-rebuild). A resumed pass still RE-RUNS the model —
+    // that is the engine's existing behaviour — it simply does not re-narrate.
+    const streamKey = `${sessionId ?? ''}:${state.step}`;
+    const firstPass = !streamedThinking.has(streamKey);
+    if (firstPass) streamedThinking.add(streamKey);
+    const onThinking = firstPass ? (delta) => narrateThinking(cfg, delta, streamKey) : null;
+
+    const generated = await llmJsonStreaming(llm, [
       new SystemMessage(buildSystemPrompt(state.capabilities)),
       new HumanMessage(buildGeneratePrompt({
         intent:         state.intent,
@@ -1042,9 +1118,12 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
       // default tier if 'architect' isn't mapped yet, so this is safe before the mapping
       // lands. Cost is attributed to the tenant via tierCfg(name, sessionId): sessionId
       // (the build's threadId) is what the CostTracker resolves session→user→tenant with,
-      // and costContext:'converger' labels the spend — so an un-attributed call that drops
-      // out of per-tenant/per-build aggregates cannot happen here.
-    ], tierCfg('architect', sessionId));
+      // and costContext:'converger' labels the spend — the streamed path tracks the
+      // call's tokens (thinking tokens included, billed in output) exactly as the
+      // blocking one did, so an un-attributed call that drops out of per-tenant/per-build
+      // aggregates cannot happen here. If streaming/thinking fails, it falls back to the
+      // blocking call, so the build still completes.
+    ], tierCfg('architect', sessionId), { onThinking });
 
     // DEFENSIVE: the model returned nothing usable (no nodes). Do NOT crash and do
     // NOT ship an empty spec — fall back to a clarification interrupt, the same honest
@@ -1523,7 +1602,7 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
 
   // ── ratify ─────────────────────────────────────────────────────────────────
   // Present the completed draft for final HITL approval before publish.
-  graph.addNode('ratify', async (state) => {
+  graph.addNode('ratify', async (state, cfg) => {
     // ESCALATION BECOMES STRUCTURE HERE (P12 Increment D).
     //
     // Everything the user chose not to decide — every gap left on its default —

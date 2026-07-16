@@ -69,11 +69,17 @@ export function createConverger({
   // rather than asking them to be typed (§6.2.3). Absent ⇒ the graph degrades to
   // asking, which is exactly what it did before F — never to guessing.
   invokeCapability = null,
+  // Reasoning-beat narrator (Increment #22). The server binds this to the build's
+  // threadId and puts it in configurable, so every graph node can call
+  // cfg.configurable.narrate({kind,text,detail}) to stream the WHY behind a step to
+  // the right-panel REASONING surface. Purely additive: absent ⇒ nodes narrate to
+  // nothing and the build is byte-for-byte unchanged.
+  narrate = null,
 } = {}) {
   const graph = buildElicitationGraph({ llm, checkpointerDir, invokeCapability });
 
   // Each converger turn = ~3 node executions (analyze + propose/clarify + interrupt).
-  const cfg = (threadId) => ({ configurable: { threadId }, recursionLimit: 300 });
+  const cfg = (threadId) => ({ configurable: { threadId, ...(narrate ? { narrate } : {}) }, recursionLimit: 300 });
 
   async function run(threadId, intent) {
     if (interactionStore && tenantId) {

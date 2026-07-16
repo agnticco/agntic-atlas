@@ -37,6 +37,7 @@ import { oauthRedirectBase } from '../connectors/oauth-redirect.js';
 import { seatLimit, entitlement, entitlementsFor, nextPlan, PLAN_META, BUILD_RUN_COST, PUBLIC_PLANS, isSelfServe } from '../entitlements/index.js';
 import { isBillingConfigured } from '../billing/stripe.js';
 import { randomBytes } from 'node:crypto';
+import { EventEmitter } from 'node:events';
 
 // Retry an LLM call up to maxRetries times on transient provider errors (500/529/503).
 async function withLLMRetry(fn, maxRetries = 2) {
@@ -234,6 +235,88 @@ function isStaleResumeError(err) {
   const m = String(err?.message ?? err ?? '');
   return /has no resumeFrom|no checkpoint found for thread|session not found or already complete/i.test(m);
 }
+
+// ── Reasoning beat hub (Increment #22) ───────────────────────────────────────
+// The converger is a reasoning agent; the right-panel REASONING surface streams
+// the *why* behind each step as it builds. The build itself runs synchronously
+// inside POST /sessions and each /respond — this is a SEPARATE, purely additive
+// side-channel. `narrate(threadId, beat)` pushes a short beat onto the session's
+// buffer and emits it live; GET .../reasoning replays the buffer then streams new
+// beats over SSE. If nobody subscribes (or the EventSource errors), the build is
+// byte-for-byte unchanged: beats are just free server strings dropped on the floor.
+//
+// Keyed strictly by threadId, and each hub records the OWNING tenant/user so the
+// SSE endpoint can prove the caller owns the stream — one session's beats can
+// never leak into another's (or another tenant's).
+const reasoningHubs = new Map();          // threadId → { emitter, buffer, seq, tenantId, userId }
+// Retained for a late/reconnecting subscriber's replay. Sized to hold a whole
+// extended-thinking stream (the ~3072-token thinking budget arrives as up to
+// ~1.5k word-level deltas), so a build that runs `generate` INSIDE the initial
+// POST /sessions pass — before the client's EventSource connects — still replays
+// the full chain of thought rather than only its tail. The live path (stream
+// opened before generate runs) never depends on the buffer.
+const REASONING_BUFFER_CAP = 2000;
+// 'thinking' carries the model's RAW reasoning tokens (streamed live during
+// `generate`); the rest are discrete human-legible status beats.
+const BEAT_KINDS = new Set(['read', 'wire', 'fix', 'check', 'prose', 'thinking']);
+
+function openReasoningHub(threadId, { tenantId = null, userId = null } = {}) {
+  const emitter = new EventEmitter();
+  emitter.setMaxListeners(0);             // a reconnecting EventSource re-subscribes; never warn
+  const hub = { emitter, buffer: [], seq: 0, tenantId, userId };
+  reasoningHubs.set(threadId, hub);
+  return hub;
+}
+
+// Push a beat. Normalizes to the closed shape { kind, text, detail? } (+ an internal
+// _seq for SSE Last-Event-ID dedupe on reconnect). Best-effort: never throws into the
+// graph, and silently no-ops when the session has no hub (build with no listener wired).
+function narrate(threadId, beat) {
+  const hub = reasoningHubs.get(threadId);
+  if (!hub || !beat) return;
+  const kind = BEAT_KINDS.has(beat.kind) ? beat.kind : 'read';
+  const raw  = typeof beat.text === 'string' ? beat.text : '';
+  // A 'thinking' delta is a RAW model token — whitespace between words is meaningful,
+  // so we must NOT trim it, and drop only a truly empty string. Discrete status beats
+  // are human-authored lines: trim and drop-if-blank as before.
+  const text = kind === 'thinking' ? raw : raw.trim();
+  if (!text) return;
+  const b = { kind, text };
+  if (beat.detail != null && String(beat.detail).trim()) b.detail = String(beat.detail).trim();
+  // A thinking delta carries its stream's id so the client keeps one generation's
+  // thinking in its own growing block (a revise-rebuild starts a fresh one).
+  if (kind === 'thinking' && beat.streamId != null) b.streamId = String(beat.streamId);
+  b._seq = ++hub.seq;
+  hub.buffer.push(b);
+  if (hub.buffer.length > REASONING_BUFFER_CAP) {
+    hub.buffer.splice(0, hub.buffer.length - REASONING_BUFFER_CAP);
+  }
+  try { hub.emitter.emit('beat', b); } catch { /* no subscriber */ }
+}
+
+// The client-facing SSE payload for a buffered beat: the closed public shape, with
+// the internal _seq stripped (it rides the SSE `id:` line, not the data) and streamId
+// carried only when present (thinking beats).
+function beatPayload(b) {
+  return {
+    kind: b.kind, text: b.text,
+    ...(b.detail ? { detail: b.detail } : {}),
+    ...(b.streamId ? { streamId: b.streamId } : {}),
+  };
+}
+
+// End the stream and free the entry. Called wherever a session is deleted, so a hub
+// never outlives its session. Signals subscribers to close (so their EventSource does
+// not retry-storm a dead thread).
+function closeReasoningHub(threadId) {
+  const hub = reasoningHubs.get(threadId);
+  if (!hub) return;
+  try { hub.emitter.emit('end'); } catch { /* ignore */ }
+  reasoningHubs.delete(threadId);
+}
+
+// Exported for unit tests (the hub is server-internal; these are the primitives).
+export { reasoningHubs, openReasoningHub, narrate, closeReasoningHub, REASONING_BUFFER_CAP };
 
 function pubUser(u) {
   return { id: u.id, email: u.email, display_name: u.display_name ?? u.email, role: u.role };
@@ -1320,6 +1403,11 @@ Rules:
     }
 
     const threadId  = `build-${req.tenant.id}-${Date.now()}`;
+    // Open the reasoning beat hub BEFORE the graph runs, so beats emitted during
+    // this first synchronous pass (outcome → process → examples → analyze → …) are
+    // buffered and replayed to the EventSource the client opens right after it gets
+    // this threadId back. Owner is recorded for the SSE ownership check.
+    openReasoningHub(threadId, { tenantId: req.tenant.id, userId: req.user?.id });
     // Register user attribution so converger LLM cost records carry tenant_id.
     spine.costTracker?.setSessionUser?.(threadId, req.user?.id);
     // Start intro message after threadId exists so it shares the same session attribution.
@@ -1333,6 +1421,10 @@ Rules:
       interactionStore: spine.interactionStore,
       tenantId:         req.tenant.id,
       userId:           req.user?.id,
+      // The graph narrates its reasoning through this (Increment #22). Bound to the
+      // threadId so every converger node can call cfg.configurable.narrate(beat)
+      // without knowing which session it is in. Additive — absent, the graph is silent.
+      narrate:          (beat) => narrate(threadId, beat),
     });
 
     sessions.set(threadId, converger);
@@ -1347,6 +1439,7 @@ Rules:
       } else {
         logEvent('session.error', { tenant: req.tenant?.id ?? null, threadId, phase: 'start', ...errFields(err) });
         sessions.delete(threadId);
+        closeReasoningHub(threadId);
         return res.status(500).json({ error: err.message ?? String(err) });
       }
     }
@@ -1429,7 +1522,7 @@ Rules:
     }
 
     logEvent('respond.ok', { tenant: req.tenant?.id ?? null, threadId, sent: req.body?.type, interrupt: result?.type });
-    if (result?.type === 'done') sessions.delete(threadId);
+    if (result?.type === 'done') { sessions.delete(threadId); closeReasoningHub(threadId); }
     res.json(result);
   });
 
@@ -1479,6 +1572,74 @@ Rules:
     }
   });
 
+  // ── GET /api/builder/sessions/:threadId/reasoning ────────────────────────────
+  // Live "why/how" narration for a build (Increment #22). A SEPARATE, additive SSE
+  // channel — the synchronous /sessions + /respond flow is unchanged and does not
+  // depend on it. On connect we replay the buffered beats (so a client that opens
+  // slightly late still sees the opening narration), then stream each new beat.
+  //
+  // Tenant/session isolation: the threadId is minted server-side with the tenant
+  // baked in, and the hub records its OWNER — we serve the stream only when the
+  // hub's tenant equals the authenticated caller's, so one tenant can never read
+  // another's reasoning (or another session's). Reconnects carry Last-Event-ID, so
+  // the replay skips beats the client already saw (no duplicates on a network blip).
+  app.get('/api/builder/sessions/:threadId/reasoning', requireActiveTenant, (req, res) => {
+    const { threadId } = req.params;
+    const hub = reasoningHubs.get(threadId);
+
+    // Ownership FIRST, before any SSE header is flushed: refuse a threadId this
+    // caller does not own with a real 403. (A mismatched tenant already knows the
+    // threadId doesn't belong to them, so 403 leaks nothing 404 wouldn't.) Once
+    // flushHeaders() has run the status is locked to 200, so this must precede it.
+    if (hub && hub.tenantId && req.tenant?.id && hub.tenantId !== req.tenant.id) {
+      return res.status(403).end();
+    }
+
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('X-Accel-Buffering', 'no');
+    res.flushHeaders?.();
+
+    let closed = false;
+    const sseWrite = (obj, id) => {
+      if (closed) return;
+      try { res.write(`${id != null ? `id: ${id}\n` : ''}data: ${JSON.stringify(obj)}\n\n`); } catch { closed = true; }
+    };
+    const endStream = () => {
+      if (closed) return;
+      try { res.write('event: end\ndata: {}\n\n'); } catch { /* ignore */ }
+      closed = true;
+      try { res.end(); } catch { /* ignore */ }
+    };
+
+    // No hub → the session already finished (or the threadId isn't a live build).
+    // Emit a terminal `end` event and close so the client's EventSource stops
+    // rather than reconnecting every few seconds against a dead thread.
+    if (!hub) { endStream(); return; }
+
+    // Replay everything after the client's last-seen beat (0 on a fresh connection).
+    const lastId = Number(req.headers['last-event-id'] || 0) || 0;
+    for (const b of hub.buffer) {
+      if (b._seq > lastId) sseWrite(beatPayload(b), b._seq);
+    }
+
+    const onBeat = (b) => sseWrite(beatPayload(b), b._seq);
+    const onEnd  = () => { cleanup(); endStream(); };
+    hub.emitter.on('beat', onBeat);
+    hub.emitter.on('end', onEnd);
+
+    const heartbeat = setInterval(() => {
+      if (!closed) { try { res.write(': hb\n\n'); } catch { closed = true; } }
+    }, 15000);
+
+    const cleanup = () => {
+      clearInterval(heartbeat);
+      try { hub.emitter.removeListener('beat', onBeat); } catch { /* ignore */ }
+      try { hub.emitter.removeListener('end', onEnd); } catch { /* ignore */ }
+    };
+    req.on('close', () => { closed = true; cleanup(); });
+  });
+
   // ── DELETE /api/builder/sessions/:threadId ───────────────────────────────────
   app.delete('/api/builder/sessions/:threadId', requireActiveTenant, async (req, res) => {
     const { threadId } = req.params;
@@ -1487,6 +1648,7 @@ Rules:
       try { await converger.abandon(threadId); } catch { /* ignore */ }
       sessions.delete(threadId);
     }
+    closeReasoningHub(threadId);
     res.json({ ok: true });
   });
 

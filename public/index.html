@@ -872,7 +872,10 @@
                         <div ref="{{ rsn.bodyRef }}" style="padding:2px 0 2px 13px;border-left:2px solid rgba(231,178,94,.22)">
                           <sc-for list="{{ rsn.segs }}" as="g" hint-placeholder-count="2">
                             <div>
-                              <sc-if value="{{ g.isProse }}" hint-placeholder-val="{{ true }}">
+                              <sc-if value="{{ g.isThinking }}" hint-placeholder-val="{{ true }}">
+                                <div style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11.5px;line-height:1.68;color:rgba(255,255,255,.5);white-space:pre-wrap;word-break:break-word;margin:0 0 10px">{{ g.text }}<sc-if value="{{ g.caret }}" hint-placeholder-val="{{ true }}"><span style="display:inline-block;width:6px;height:12px;background:rgba(231,178,94,.7);vertical-align:-1px;margin-left:2px;animation:cpBlink 1.1s steps(1) infinite"></span></sc-if></div>
+                              </sc-if>
+                              <sc-if value="{{ g.isProse }}" hint-placeholder-val="{{ false }}">
                                 <div style="font-size:12.5px;line-height:1.7;color:rgba(255,255,255,.48);margin:0 0 10px;word-break:break-word"><sc-for list="{{ g.parts }}" as="pp" hint-placeholder-count="1"><span style="font-weight:{{ pp.w }};color:{{ pp.c }}">{{ pp.t }}</span></sc-for><sc-if value="{{ g.caret }}" hint-placeholder-val="{{ false }}"><span style="display:inline-block;width:7px;height:13px;background:rgba(231,178,94,.65);vertical-align:-2px;margin-left:3px;animation:cpBlink 1.1s steps(1) infinite"></span></sc-if></div>
                               </sc-if>
                               <sc-if value="{{ g.isBeat }}" hint-placeholder-val="{{ false }}">
@@ -901,7 +904,10 @@
                             <div style="padding:2px 0 2px 13px;border-left:2px solid rgba(255,255,255,.10)">
                               <sc-for list="{{ rsn.segs }}" as="g" hint-placeholder-count="2">
                                 <div>
-                                  <sc-if value="{{ g.isProse }}" hint-placeholder-val="{{ true }}">
+                                  <sc-if value="{{ g.isThinking }}" hint-placeholder-val="{{ true }}">
+                                    <div style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11px;line-height:1.66;color:rgba(255,255,255,.42);white-space:pre-wrap;word-break:break-word;margin:0 0 10px">{{ g.text }}</div>
+                                  </sc-if>
+                                  <sc-if value="{{ g.isProse }}" hint-placeholder-val="{{ false }}">
                                     <div style="font-size:12.5px;line-height:1.7;color:rgba(255,255,255,.42);margin:0 0 10px;word-break:break-word"><sc-for list="{{ g.parts }}" as="pp" hint-placeholder-count="1"><span style="font-weight:{{ pp.w }};color:{{ pp.c }}">{{ pp.t }}</span></sc-for></div>
                                   </sc-if>
                                   <sc-if value="{{ g.isBeat }}" hint-placeholder-val="{{ false }}">
@@ -960,36 +966,11 @@
                   </div>
                 </sc-if>
 
-                <!-- STEP FIRING PIPELINE — the build/run narration (empty at rest; see contract panel above) -->
-                <sc-for list="{{ testSteps }}" as="s" hint-placeholder-count="3">
-                  <div>
-                    <sc-if value="{{ s.showConnector }}" hint-placeholder-val="{{ false }}">
-                      <div style="display:flex;justify-content:center;padding:3px 0"><div style="width:2px;height:15px;border-radius:2px;background:{{ s.connColor }};transition:background .4s"></div></div>
-                    </sc-if>
-                    <div style="border-radius:15px;border:1px solid {{ s.border }};background:{{ s.bg }};padding:14px 15px;transition:border .35s,background .35s">
-                      <div style="display:flex;align-items:center;gap:12px">
-                        <span style="flex:none;width:30px;height:30px;border-radius:50%;border:1px solid {{ s.border }};background:{{ s.iconBg }};display:flex;align-items:center;justify-content:center;color:{{ s.iconColor }};font-size:13px">{{ s.icon }}</span>
-                        <div style="flex:1;min-width:0">
-                          <div style="font-size:10px;font-weight:600;letter-spacing:.16em;text-transform:uppercase;color:{{ s.labelColor }};margin-bottom:3px">{{ s.label }}</div>
-                          <div style="font-size:14px;font-weight:500;color:{{ s.titleColor }};letter-spacing:-0.01em;line-height:1.25;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ s.title }}</div>
-                        </div>
-                        <span style="flex:none;font-size:11.5px;font-weight:500;color:{{ s.statusColor }};text-align:right;white-space:nowrap">{{ s.statusText }}</span>
-                      </div>
-                      <sc-if value="{{ s.showCheck }}" hint-placeholder-val="{{ false }}">
-                        <div style="display:flex;align-items:center;gap:8px;margin-top:11px;padding-top:11px;border-top:1px solid rgba(255,255,255,.06);font-size:11.5px;color:{{ s.checkColor }}"><span style="flex:none">{{ s.checkIcon }}</span>{{ s.checkText }}</div>
-                      </sc-if>
-                      <sc-if value="{{ s.showOutput }}" hint-placeholder-val="{{ false }}">
-                        <div style="margin-top:12px;border-radius:11px;border:1px solid rgba(127,194,138,.22);background:rgba(0,0,0,.3);padding:13px">
-                          <div style="display:flex;align-items:center;gap:7px;margin-bottom:10px;font-size:12px;border-bottom:1px solid rgba(255,255,255,.07);padding-bottom:9px"><span style="color:#7fc28a;font-size:14px">{{ deliveryGlyph }}</span><span style="font-weight:600;color:#fff">{{ deliveryHeader }}</span><span style="margin-left:auto;font-size:9.5px;font-weight:500;letter-spacing:.1em;text-transform:uppercase;color:#6B6B6B">Test output</span></div>
-                          <div style="display:flex;gap:9px;align-items:flex-start">
-                            <div style="flex:none;width:26px;height:26px;border-radius:7px;background:#101012;border:1px solid rgba(255,255,255,.12);display:flex;align-items:center;justify-content:center"><img src="assets/atlas-globe-white.svg" alt="" style="width:15px;height:15px"/></div>
-                            <div style="min-width:0;flex:1"><div style="font-size:12.5px;color:#fff;font-weight:600;display:flex;align-items:center;gap:6px">Atlas <span style="font-size:8.5px;font-weight:500;color:rgba(255,255,255,.5);background:rgba(255,255,255,.08);padding:1px 5px;border-radius:4px">APP</span></div><div style="font-size:12.5px;color:rgba(255,255,255,.85);line-height:1.45;margin-top:3px">{{ summaryText }}</div></div>
-                          </div>
-                        </div>
-                      </sc-if>
-                    </div>
-                  </div>
-                </sc-for>
+                <!-- (removed) The right-panel step-list / firing pipeline was a residual
+                     duplicate of the real-time node graph that builds in the chat
+                     (the dagre walkthrough). The right panel is now just: Test
+                     environment header + status, the REASONING (chain-of-thought)
+                     stream above, and the Run test button/footer below. -->
 
                 <!-- OUTCOME ORACLE — per-example contract verdicts (P12 Increment G).
                      Each card: did this example keep the workflow's PROMISES (gated),
@@ -2988,6 +2969,9 @@ class Component extends DCLogic {
     return {
       phase: "chat",           // chat | building | proposed | draft | published
       intent: null, threadId: null,
+      // Live converger reasoning beats (Increment #22), streamed over SSE from
+      // GET /api/builder/sessions/:id/reasoning. Empty until the first beat arrives.
+      reasoningSegs: [],
       msgs: [], inputMode: "chat", inputValue: "", thinking: false, thinkingLabel: null,
       spec: null,
       // Dedicated generated-workflow canvas (converger v2, increment 4):
@@ -3035,6 +3019,7 @@ class Component extends DCLogic {
   reset() {
     this._clearBuild();
     this._abortChat();
+    this._closeReasoningStream();
     if (this._testInterval) { clearInterval(this._testInterval); this._testInterval = null; }
     const tid = this.state.threadId;
     if (tid) { fetch('/api/builder/sessions/' + tid, { method: 'DELETE', headers: this._H() }).catch(function(e) {}); }
@@ -4831,6 +4816,7 @@ class Component extends DCLogic {
     // from the conversation so the button is never a dead end.
     if (!intent || !String(intent).trim()) intent = this._deriveBuildIntent();
     this._slId = null; this._slPendingReplace = false; this._slStepCount = 0;
+    this._closeReasoningStream();
     const self = this;
     this.setState({
       phase: "building", intent, inputValue: "", thinking: true, inputMode: "locked",
@@ -4840,12 +4826,21 @@ class Component extends DCLogic {
       // and stale run results (outcomeResults/deliveries) would show "Contract
       // kept ✓" before this workflow has been tested at all.
       spec: null, threadId: null, testState: "idle", outcome: null,
+      // Fresh reasoning feed for this build (last build's beats must not carry over).
+      reasoningSegs: [],
       awaitingGraphApproval: false, graphApproved: [], graphSelNode: null, graphReviseOpen: false, graphReviseText: "",
       outcomeResults: [], deliveries: [], runOutput: null, runError: ""
     });
     fetch("/api/builder/sessions", { method: "POST", headers: this._H(), body: JSON.stringify({ intent }) })
       .then(r => this._readJson(r))
-      .then(r => { if (!r.ok) return self._apiError(r.data.error); self.setState({ threadId: r.data.threadId }); self._handleInterrupt(r.data.interrupt); })
+      .then(r => {
+        if (!r.ok) return self._apiError(r.data.error);
+        self.setState({ threadId: r.data.threadId });
+        // Subscribe to the build's reasoning stream. The endpoint replays any beats
+        // already emitted during this first synchronous pass, then streams new ones.
+        self._openReasoningStream(r.data.threadId);
+        self._handleInterrupt(r.data.interrupt);
+      })
       .catch(e => self._apiError(String(e)));
   }
 
@@ -5373,6 +5368,9 @@ class Component extends DCLogic {
   }
 
   _apiError(msg) {
+    // The build errored — tear the reasoning stream down so it does not keep a
+    // dead thread's EventSource open.
+    this._closeReasoningStream();
     let clean = msg || 'Something went wrong.';
     // Defense in depth: no internal/engine text ever reaches the chat as-is. A raw
     // graph error, a tool-loop limit, or a stack trace becomes a plain, human line —
@@ -5664,6 +5662,9 @@ class Component extends DCLogic {
     if (this._saving) return; // in-flight guard: a double-click (phase stays
     // "draft" until the POST resolves) would otherwise persist the workflow twice
     this._saving = true;
+    // The converger session is finished by the time we save — close the reasoning
+    // stream (the server has already ended the hub; this is the client's half).
+    this._closeReasoningStream();
     const self = this;
     const S = this.state;
     const testRun = (S.testState === "passed" || S.testState === "failed") ? {
@@ -6408,16 +6409,94 @@ class Component extends DCLogic {
     });
   }
 
-  // Thinking-stream mock (Stage C). Realistic lead-router reasoning; DEMO-ONLY
-  // (window.__ATLAS_DEMO__). The live streamed feed is the backend follow-up.
-  _rsnSegs() {
-    const P = (t, w, c) => ({ t, w: w || '400', c: c || 'rgba(255,255,255,.48)' });
-    const S = {
+  // Style map for a reasoning beat, keyed by kind. Shared by the demo feed
+  // (_rsnSegs) and the live stream mapper (_beatToSeg) so both render identically.
+  _rsnStyleMap() {
+    return {
       read:  { bg: 'rgba(255,255,255,.03)', border: 'rgba(255,255,255,.10)', anim: 'none', icon: '↳', iconColor: 'rgba(255,255,255,.5)', textColor: 'rgba(255,255,255,.6)', chipFg: 'rgba(255,255,255,.7)', chipBg: 'rgba(255,255,255,.06)', chipBorder: 'rgba(255,255,255,.12)' },
       wire:  { bg: 'rgba(231,178,94,.06)', border: 'rgba(231,178,94,.18)', anim: 'none', icon: '→', iconColor: '#efc892', textColor: 'rgba(239,200,146,.85)', chipFg: '#efc892', chipBg: 'rgba(231,178,94,.10)', chipBorder: 'rgba(231,178,94,.22)' },
       fix:   { bg: 'rgba(231,178,94,.06)', border: 'rgba(231,178,94,.20)', anim: 'flowPulse 2.4s ease-in-out infinite', icon: '⚠', iconColor: '#efc892', textColor: 'rgba(239,200,146,.85)', chipFg: '#efc892', chipBg: 'rgba(231,178,94,.10)', chipBorder: 'rgba(231,178,94,.22)' },
       check: { bg: 'rgba(127,194,138,.06)', border: 'rgba(127,194,138,.2)', anim: 'none', isCheck: true, icon: '✓', iconColor: '#7fc28a', textColor: 'rgba(159,214,168,.9)', chipFg: '#7fc28a', chipBg: 'rgba(127,194,138,.10)', chipBorder: 'rgba(127,194,138,.22)' },
     };
+  }
+
+  // Map one live server beat {kind,text,detail?} → the panel's render seg shape.
+  // Server beats carry plain text (not styled parts), so the whole line is one part.
+  // NOTE: {kind:'thinking'} deltas are NOT mapped here — they are accumulated into a
+  // single growing block by _appendThinking (see the onmessage handler).
+  _beatToSeg(b) {
+    if (!b) return null;
+    const kind = b.kind || 'read';
+    const text = String(b.text == null ? '' : b.text);
+    if (!text) return null;
+    if (kind === 'prose') {
+      return { isProse: true, parts: [{ t: text, w: '400', c: 'rgba(255,255,255,.48)' }], caret: false };
+    }
+    const S = this._rsnStyleMap();
+    const s = S[kind] || S.read;
+    return { isBeat: true, kind, bg: s.bg, border: s.border, anim: s.anim, isCheck: !!s.isCheck,
+      icon: s.icon, iconStatic: s.icon, iconColor: s.iconColor, textColor: s.textColor,
+      parts: [{ t: text, w: '400', c: s.textColor }], detail: b.detail ? String(b.detail) : '',
+      chipFg: s.chipFg, chipBg: s.chipBg, chipBorder: s.chipBorder, caret: false };
+  }
+
+  // Append one RAW thinking delta to the live thinking block. Consecutive deltas of
+  // the SAME stream grow one block (Claude-style flowing chain of thought); a new
+  // streamId (a revise-rebuild) starts a fresh block, and the prior one stops blinking.
+  // This is what makes the panel read like the model thinking out loud, rather than a
+  // wall of one-token cards.
+  _appendThinking(delta, streamId) {
+    if (!delta) return;
+    const sid = streamId == null ? '' : String(streamId);
+    const segs = (this.state.reasoningSegs || []).slice();
+    const last = segs[segs.length - 1];
+    if (last && last.isThinking && last.streamId === sid) {
+      segs[segs.length - 1] = { isThinking: true, streamId: sid, text: last.text + delta, caret: true };
+    } else {
+      if (last && last.isThinking) segs[segs.length - 1] = Object.assign({}, last, { caret: false });
+      segs.push({ isThinking: true, streamId: sid, text: delta, caret: true });
+    }
+    this.setState({ reasoningSegs: segs });
+  }
+
+  // Open the SSE reasoning stream for a build. Additive: if EventSource is missing,
+  // the endpoint errors, or nothing streams, the build proceeds exactly as before —
+  // the panel just stays on its RESTING placeholder. Reconnects are handled natively
+  // by EventSource (Last-Event-ID → server replay skips already-seen beats).
+  _openReasoningStream(threadId) {
+    this._closeReasoningStream();
+    if (!threadId || typeof EventSource === 'undefined') return;
+    const self = this;
+    let es;
+    try { es = new EventSource('/api/builder/sessions/' + encodeURIComponent(threadId) + '/reasoning'); }
+    catch (e) { return; }
+    this._rsnES = es;
+    this._rsnTid = threadId;
+    es.onmessage = function (ev) {
+      // Ignore beats for a stream we've since torn down / replaced.
+      if (self._rsnES !== es || self.state.threadId !== threadId) return;
+      let b; try { b = JSON.parse(ev.data); } catch (e) { return; }
+      // Raw model thinking accumulates into one growing block; everything else is a
+      // discrete seg appended to the feed.
+      if (b && b.kind === 'thinking') { self._appendThinking(String(b.text == null ? '' : b.text), b.streamId); return; }
+      const seg = self._beatToSeg(b);
+      if (seg) self.setState({ reasoningSegs: [...(self.state.reasoningSegs || []), seg] });
+    };
+    es.addEventListener('end', function () { self._closeReasoningStream(); });
+    // A network blip is non-fatal — EventSource auto-reconnects. Do not surface it.
+    es.onerror = function () { /* best-effort; the build does not depend on this */ };
+  }
+
+  _closeReasoningStream() {
+    if (this._rsnES) { try { this._rsnES.close(); } catch (e) {} this._rsnES = null; }
+    this._rsnTid = null;
+  }
+
+  // Thinking-stream mock (Stage C). Realistic lead-router reasoning; DEMO-ONLY
+  // (window.__ATLAS_DEMO__). The live streamed feed is _openReasoningStream above.
+  _rsnSegs() {
+    const P = (t, w, c) => ({ t, w: w || '400', c: c || 'rgba(255,255,255,.48)' });
+    const S = this._rsnStyleMap();
     const beat = (kind, parts, detail) => {
       const s = S[kind] || S.read;
       return { isBeat: true, kind, bg: s.bg, border: s.border, anim: s.anim, isCheck: !!s.isCheck,
@@ -6899,21 +6978,24 @@ class Component extends DCLogic {
     const TS = S.testState;
     const contract = this._contractPanel();
     // Thinking stream (right panel). Lives inside modeBuild (phase chat/building/
-    // proposed). The fabricated lead-router narration is DEMO-ONLY — showing
-    // hardcoded reasoning next to a real, different build is misleading, so a
-    // real build shows only the RESTING placeholder (never fake streaming/collapsed
-    // beats). The genuine streamed feed replaces this later.
-    // TODO Stage F: real feed — stream the model's guardrailed reasoning into rsn.segs.
+    // proposed). Two feeds: a DEMO mock (window.__ATLAS_DEMO__), and — for a real
+    // build — the LIVE converger reasoning streamed over SSE into S.reasoningSegs
+    // (Increment #22). A real build with no beats yet shows the RESTING placeholder
+    // (never fabricated narration next to a different build); once beats arrive it
+    // streams, and after the draft is proposed/published it collapses to "Show reasoning".
     const rsnDemo = !!(typeof window !== "undefined" && window.__ATLAS_DEMO__);
-    const rsnStreaming = rsnDemo && S.phase === "building";
-    const rsnCollapsed = rsnDemo && (S.phase === "proposed" || S.phase === "published");
+    const liveSegs = Array.isArray(S.reasoningSegs) ? S.reasoningSegs : [];
+    const hasLive = !rsnDemo && liveSegs.length > 0;
+    const segs = rsnDemo ? this._rsnSegs() : liveSegs;
+    const rsnStreaming = rsnDemo ? (S.phase === "building") : (hasLive && S.phase === "building");
+    const rsnCollapsed = (rsnDemo || hasLive) && (S.phase === "proposed" || S.phase === "published");
     const rsnOpen = !!S.rsnOpen;
     const rsn = {
       show: true,
       streaming: rsnStreaming,
       collapsed: rsnCollapsed,
       resting: !rsnStreaming && !rsnCollapsed,
-      segs: rsnDemo ? this._rsnSegs() : [],
+      segs: segs,
       bodyRef: (el) => { if (el) el.scrollTop = el.scrollHeight; },
       onToggle: () => this.setState({ rsnOpen: !this.state.rsnOpen }),
       open: rsnOpen,
