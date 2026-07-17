@@ -567,6 +567,7 @@
                 <div style="animation:msgIn .4s ease both">
                   <div class="ab-scroll" style="overflow-x:auto;padding:26px 2px 56px">
                     <div style="display:flex;align-items:flex-start;gap:0;min-height:118px">
+                      <sc-if value="{{ !liveGraph.hasLanes }}" hint-placeholder-val="{{ true }}">
                       <sc-for list="{{ liveGraph.nodes }}" as="an" hint-placeholder-count="3">
                         <div style="display:flex;align-items:center;flex:none">
                           <div class="nodewrap" style="flex:none;position:relative;opacity:{{ an.o }};transform:{{ an.tr }};transition:opacity .5s,transform .5s cubic-bezier(.2,.7,.3,1)">
@@ -608,6 +609,102 @@
                           </sc-if>
                         </div>
                       </sc-for>
+                    </sc-if>
+                    <sc-if value="{{ liveGraph.hasLanes }}" hint-placeholder-val="{{ false }}">
+                      <div style="display:flex;align-items:flex-start;gap:0">
+                        <sc-for list="{{ liveGraph.trunk }}" as="an" hint-placeholder-count="2">
+                        <div style="display:flex;align-items:center;flex:none">
+                          <div class="nodewrap" style="flex:none;position:relative;opacity:{{ an.o }};transform:{{ an.tr }};transition:opacity .5s,transform .5s cubic-bezier(.2,.7,.3,1)">
+                            <div style="width:{{ an.w }};height:{{ an.h }};border-radius:{{ an.radius }};border:1.5px solid {{ an.border }};background:{{ an.bg }};transform:{{ an.rot }};animation:{{ an.anim }};display:flex;align-items:center;justify-content:center;color:{{ an.fg }};transition:border .25s,color .25s">
+                              <span style="transform:{{ an.unrot }};display:flex">
+                                <sc-if value="{{ an.icoMail }}" hint-placeholder-val="{{ false }}"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="2"></rect><path d="M3 7l9 6 9-6"></path></svg></sc-if>
+                                <sc-if value="{{ an.icoFork }}" hint-placeholder-val="{{ false }}"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12h7"></path><path d="M10 12c4.5 0 4.5-5.5 9-5.5"></path><path d="M10 12c4.5 0 4.5 5.5 9 5.5"></path><circle cx="20.5" cy="6.5" r="1.4"></circle><circle cx="20.5" cy="17.5" r="1.4"></circle></svg></sc-if>
+                                <sc-if value="{{ an.icoDoc }}" hint-placeholder-val="{{ false }}"><svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="8" y1="13" x2="16" y2="13"></line><line x1="8" y1="17" x2="13" y2="17"></line></svg></sc-if>
+                                <sc-if value="{{ an.icoDb }}" hint-placeholder-val="{{ false }}"><svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5" rx="8" ry="3"></ellipse><path d="M4 5v14c0 1.7 3.6 3 8 3s8-1.3 8-3V5"></path><path d="M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3"></path></svg></sc-if>
+                                <sc-if value="{{ an.icoInbox }}" hint-placeholder-val="{{ false }}"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M22 12h-6l-2 3h-4l-2-3H2"></path><path d="M5.5 5h13L22 12v6a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2v-6z"></path></svg></sc-if>
+                                <sc-if value="{{ an.icoGear }}" hint-placeholder-val="{{ false }}"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><circle cx="12" cy="12" r="3.2"></circle><path d="M12 2.5v3M12 18.5v3M2.5 12h3M18.5 12h3M5.2 5.2l2.1 2.1M16.7 16.7l2.1 2.1M18.8 5.2l-2.1 2.1M7.3 16.7l-2.1 2.1"></path></svg></sc-if>
+                                <sc-if value="{{ an.icoSpark }}" hint-placeholder-val="{{ false }}"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"><path d="M12 3l2.1 6.4L20.5 11.5l-6.4 2.1L12 20l-2.1-6.4L3.5 11.5l6.4-2.1z"></path></svg></sc-if>
+                                <sc-if value="{{ an.icoSplit }}" hint-placeholder-val="{{ false }}"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M5 12h6M11 12l5-5M11 12l5 5"></path></svg></sc-if>
+                                <sc-if value="{{ an.icoPerson }}" hint-placeholder-val="{{ false }}"><svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><circle cx="12" cy="8" r="4"></circle><path d="M4 21c0-4 3.6-6.5 8-6.5s8 2.5 8 6.5"></path></svg></sc-if>
+                                <sc-if value="{{ an.icoBolt }}" hint-placeholder-val="{{ false }}"><svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor"><path d="M13 2 4.5 13.5H11L9.5 22 19 10h-6.5z"></path></svg></sc-if>
+                                <sc-if value="{{ an.icoLayers }}" hint-placeholder-val="{{ false }}"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2 2 7.5 12 13l10-5.5z"></path><path d="M2 12.5 12 18l10-5.5"></path><path d="M2 17.5 12 23l10-5.5"></path></svg></sc-if>
+                                <sc-if value="{{ an.icoPlug }}" hint-placeholder-val="{{ false }}"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M9 7V3M15 7V3"></path><path d="M6 7h12v4a6 6 0 0 1-12 0z"></path><path d="M12 17v4"></path></svg></sc-if>
+                                <sc-if value="{{ an.icoGlobe }}" hint-placeholder-val="{{ false }}"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"></circle><path d="M3 12h18M12 3c2.7 2.6 4 5.7 4 9s-1.3 6.4-4 9c-2.7-2.6-4-5.7-4-9s1.3-6.4 4-9z"></path></svg></sc-if>
+                                <sc-if value="{{ an.icoSend }}" hint-placeholder-val="{{ false }}"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M22 2 11 13"></path><path d="M22 2 15 22l-4-9-9-4z"></path></svg></sc-if>
+                                <sc-if value="{{ an.icoLoop }}" hint-placeholder-val="{{ false }}"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M17 2l4 4-4 4"></path><path d="M3 11V9a4 4 0 0 1 4-4h14"></path><path d="M7 22l-4-4 4-4"></path><path d="M21 13v2a4 4 0 0 1-4 4H3"></path></svg></sc-if>
+                                <sc-if value="{{ an.icoGrid }}" hint-placeholder-val="{{ false }}"><svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"></rect><path d="M3 9h18M3 15h18M12 3v18"></path></svg></sc-if>
+                                <sc-if value="{{ an.icoStop }}" hint-placeholder-val="{{ false }}"><svg viewBox="0 0 24 24" width="15" height="15" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="2.5"></rect></svg></sc-if>
+                              </span>
+                            </div>
+                            <sc-if value="{{ an.check }}" hint-placeholder-val="{{ false }}"><span style="position:absolute;right:{{ an.checkR }};bottom:{{ an.checkB }};width:17px;height:17px;border-radius:50%;background:#5fc78a;border:2px solid #0A0A0A;display:flex;align-items:center;justify-content:center"><svg viewBox="0 0 24 24" width="9" height="9" fill="none" stroke="#06210d" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4 4 9-10"></path></svg></span></sc-if>
+                            <sc-if value="{{ an.decide }}" hint-placeholder-val="{{ false }}">
+                              <span class="nctrl" style="position:absolute;right:{{ an.checkR }};bottom:{{ an.checkB }};display:flex;gap:5px">
+                                <span onClick="{{ an.onApprove }}" title="Confirm" style="width:19px;height:19px;border-radius:50%;background:#0A0A0A;border:2px solid #5fc78a;cursor:pointer;display:flex;align-items:center;justify-content:center"><svg viewBox="0 0 24 24" width="9" height="9" fill="none" stroke="#5fc78a" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4 4 9-10"></path></svg></span>
+                                <span onClick="{{ an.onReject }}" title="Reject" style="width:19px;height:19px;border-radius:50%;background:#0A0A0A;border:2px solid #e87878;cursor:pointer;display:flex;align-items:center;justify-content:center"><svg viewBox="0 0 24 24" width="9" height="9" fill="none" stroke="#e87878" stroke-width="4" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"></path></svg></span>
+                              </span>
+                            </sc-if>
+                            <span style="position:absolute;top:calc(100% + 8px);left:50%;transform:translateX(-50%);width:92px;display:flex;flex-direction:column;gap:2px;text-align:center;pointer-events:none">
+                              <span style="font-size:10.5px;font-weight:600;line-height:1.25;color:{{ an.titleColor }};overflow:hidden;text-overflow:ellipsis;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical">{{ an.title }}</span>
+                              <span style="font-family:ui-monospace,SFMono-Regular,monospace;font-size:7.5px;font-weight:600;letter-spacing:.12em;color:rgba(255,255,255,.3);white-space:nowrap">{{ an.tag }}</span>
+                            </span>
+                          </div>
+                          <sc-if value="{{ an.showConn }}" hint-placeholder-val="{{ true }}">
+                            <span style="flex:none;display:flex;align-items:center;opacity:{{ an.connO }};transition:opacity .4s"><span style="width:42px;height:2px;background:{{ an.connColor }};transition:background .3s"></span><span style="width:0;height:0;border-top:4px solid transparent;border-bottom:4px solid transparent;border-left:6px solid {{ an.connColor }};transition:border-color .3s"></span></span>
+                          </sc-if>
+                        </div>
+                      </sc-for>
+                        <div style="display:flex;flex-direction:column;gap:64px;padding-left:16px">
+                          <sc-for list="{{ liveGraph.lanes }}" as="ln" hint-placeholder-count="2">
+                            <div>
+                              <div style="font-family:'Instrument Serif',Georgia,serif;font-style:italic;font-size:13px;color:rgba(239,200,146,.8);margin:0 0 8px 2px;white-space:nowrap">{{ ln.label }}</div>
+                              <div style="display:flex;align-items:flex-start;gap:0">
+                                <sc-for list="{{ ln.nodes }}" as="an" hint-placeholder-count="2">
+                        <div style="display:flex;align-items:center;flex:none">
+                          <div class="nodewrap" style="flex:none;position:relative;opacity:{{ an.o }};transform:{{ an.tr }};transition:opacity .5s,transform .5s cubic-bezier(.2,.7,.3,1)">
+                            <div style="width:{{ an.w }};height:{{ an.h }};border-radius:{{ an.radius }};border:1.5px solid {{ an.border }};background:{{ an.bg }};transform:{{ an.rot }};animation:{{ an.anim }};display:flex;align-items:center;justify-content:center;color:{{ an.fg }};transition:border .25s,color .25s">
+                              <span style="transform:{{ an.unrot }};display:flex">
+                                <sc-if value="{{ an.icoMail }}" hint-placeholder-val="{{ false }}"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="2"></rect><path d="M3 7l9 6 9-6"></path></svg></sc-if>
+                                <sc-if value="{{ an.icoFork }}" hint-placeholder-val="{{ false }}"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12h7"></path><path d="M10 12c4.5 0 4.5-5.5 9-5.5"></path><path d="M10 12c4.5 0 4.5 5.5 9 5.5"></path><circle cx="20.5" cy="6.5" r="1.4"></circle><circle cx="20.5" cy="17.5" r="1.4"></circle></svg></sc-if>
+                                <sc-if value="{{ an.icoDoc }}" hint-placeholder-val="{{ false }}"><svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="8" y1="13" x2="16" y2="13"></line><line x1="8" y1="17" x2="13" y2="17"></line></svg></sc-if>
+                                <sc-if value="{{ an.icoDb }}" hint-placeholder-val="{{ false }}"><svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5" rx="8" ry="3"></ellipse><path d="M4 5v14c0 1.7 3.6 3 8 3s8-1.3 8-3V5"></path><path d="M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3"></path></svg></sc-if>
+                                <sc-if value="{{ an.icoInbox }}" hint-placeholder-val="{{ false }}"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M22 12h-6l-2 3h-4l-2-3H2"></path><path d="M5.5 5h13L22 12v6a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2v-6z"></path></svg></sc-if>
+                                <sc-if value="{{ an.icoGear }}" hint-placeholder-val="{{ false }}"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><circle cx="12" cy="12" r="3.2"></circle><path d="M12 2.5v3M12 18.5v3M2.5 12h3M18.5 12h3M5.2 5.2l2.1 2.1M16.7 16.7l2.1 2.1M18.8 5.2l-2.1 2.1M7.3 16.7l-2.1 2.1"></path></svg></sc-if>
+                                <sc-if value="{{ an.icoSpark }}" hint-placeholder-val="{{ false }}"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"><path d="M12 3l2.1 6.4L20.5 11.5l-6.4 2.1L12 20l-2.1-6.4L3.5 11.5l6.4-2.1z"></path></svg></sc-if>
+                                <sc-if value="{{ an.icoSplit }}" hint-placeholder-val="{{ false }}"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M5 12h6M11 12l5-5M11 12l5 5"></path></svg></sc-if>
+                                <sc-if value="{{ an.icoPerson }}" hint-placeholder-val="{{ false }}"><svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><circle cx="12" cy="8" r="4"></circle><path d="M4 21c0-4 3.6-6.5 8-6.5s8 2.5 8 6.5"></path></svg></sc-if>
+                                <sc-if value="{{ an.icoBolt }}" hint-placeholder-val="{{ false }}"><svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor"><path d="M13 2 4.5 13.5H11L9.5 22 19 10h-6.5z"></path></svg></sc-if>
+                                <sc-if value="{{ an.icoLayers }}" hint-placeholder-val="{{ false }}"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2 2 7.5 12 13l10-5.5z"></path><path d="M2 12.5 12 18l10-5.5"></path><path d="M2 17.5 12 23l10-5.5"></path></svg></sc-if>
+                                <sc-if value="{{ an.icoPlug }}" hint-placeholder-val="{{ false }}"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M9 7V3M15 7V3"></path><path d="M6 7h12v4a6 6 0 0 1-12 0z"></path><path d="M12 17v4"></path></svg></sc-if>
+                                <sc-if value="{{ an.icoGlobe }}" hint-placeholder-val="{{ false }}"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"></circle><path d="M3 12h18M12 3c2.7 2.6 4 5.7 4 9s-1.3 6.4-4 9c-2.7-2.6-4-5.7-4-9s1.3-6.4 4-9z"></path></svg></sc-if>
+                                <sc-if value="{{ an.icoSend }}" hint-placeholder-val="{{ false }}"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M22 2 11 13"></path><path d="M22 2 15 22l-4-9-9-4z"></path></svg></sc-if>
+                                <sc-if value="{{ an.icoLoop }}" hint-placeholder-val="{{ false }}"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M17 2l4 4-4 4"></path><path d="M3 11V9a4 4 0 0 1 4-4h14"></path><path d="M7 22l-4-4 4-4"></path><path d="M21 13v2a4 4 0 0 1-4 4H3"></path></svg></sc-if>
+                                <sc-if value="{{ an.icoGrid }}" hint-placeholder-val="{{ false }}"><svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"></rect><path d="M3 9h18M3 15h18M12 3v18"></path></svg></sc-if>
+                                <sc-if value="{{ an.icoStop }}" hint-placeholder-val="{{ false }}"><svg viewBox="0 0 24 24" width="15" height="15" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="2.5"></rect></svg></sc-if>
+                              </span>
+                            </div>
+                            <sc-if value="{{ an.check }}" hint-placeholder-val="{{ false }}"><span style="position:absolute;right:{{ an.checkR }};bottom:{{ an.checkB }};width:17px;height:17px;border-radius:50%;background:#5fc78a;border:2px solid #0A0A0A;display:flex;align-items:center;justify-content:center"><svg viewBox="0 0 24 24" width="9" height="9" fill="none" stroke="#06210d" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4 4 9-10"></path></svg></span></sc-if>
+                            <sc-if value="{{ an.decide }}" hint-placeholder-val="{{ false }}">
+                              <span class="nctrl" style="position:absolute;right:{{ an.checkR }};bottom:{{ an.checkB }};display:flex;gap:5px">
+                                <span onClick="{{ an.onApprove }}" title="Confirm" style="width:19px;height:19px;border-radius:50%;background:#0A0A0A;border:2px solid #5fc78a;cursor:pointer;display:flex;align-items:center;justify-content:center"><svg viewBox="0 0 24 24" width="9" height="9" fill="none" stroke="#5fc78a" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4 4 9-10"></path></svg></span>
+                                <span onClick="{{ an.onReject }}" title="Reject" style="width:19px;height:19px;border-radius:50%;background:#0A0A0A;border:2px solid #e87878;cursor:pointer;display:flex;align-items:center;justify-content:center"><svg viewBox="0 0 24 24" width="9" height="9" fill="none" stroke="#e87878" stroke-width="4" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"></path></svg></span>
+                              </span>
+                            </sc-if>
+                            <span style="position:absolute;top:calc(100% + 8px);left:50%;transform:translateX(-50%);width:92px;display:flex;flex-direction:column;gap:2px;text-align:center;pointer-events:none">
+                              <span style="font-size:10.5px;font-weight:600;line-height:1.25;color:{{ an.titleColor }};overflow:hidden;text-overflow:ellipsis;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical">{{ an.title }}</span>
+                              <span style="font-family:ui-monospace,SFMono-Regular,monospace;font-size:7.5px;font-weight:600;letter-spacing:.12em;color:rgba(255,255,255,.3);white-space:nowrap">{{ an.tag }}</span>
+                            </span>
+                          </div>
+                          <sc-if value="{{ an.showConn }}" hint-placeholder-val="{{ true }}">
+                            <span style="flex:none;display:flex;align-items:center;opacity:{{ an.connO }};transition:opacity .4s"><span style="width:42px;height:2px;background:{{ an.connColor }};transition:background .3s"></span><span style="width:0;height:0;border-top:4px solid transparent;border-bottom:4px solid transparent;border-left:6px solid {{ an.connColor }};transition:border-color .3s"></span></span>
+                          </sc-if>
+                        </div>
+                      </sc-for>
+                              </div>
+                            </div>
+                          </sc-for>
+                        </div>
+                      </div>
+                    </sc-if>
                     </div>
                   </div>
                   <sc-if value="{{ liveGraph.explaining }}" hint-placeholder-val="{{ false }}">
@@ -4992,7 +5089,9 @@ class Component extends DCLogic {
       const stamp = (steps.length ? steps.length + " STEP" + (steps.length === 1 ? "" : "S") : "")
                   + (nPaths ? " · " + nPaths + " PATH" + (nPaths === 1 ? "" : "S") : "");
       const onBuild = () => {
-        self.setState({ msgs: [...self.state.msgs, { isOperator: true, text: "Build it" }], thinking: true, inputMode: "locked", phase: "building" });
+        // Cache the approved plan: its branches carry the PLAIN-LANGUAGE route labels the
+        // live graph shows on each lane ("if it is urgent" rather than the raw enum).
+        self.setState({ msgs: [...self.state.msgs, { isOperator: true, text: "Build it" }], thinking: true, inputMode: "locked", phase: "building", _approvedPlanCache: p });
         self._send({ type: "accept" });
       };
       const onChange = () => {
@@ -6351,6 +6450,63 @@ class Component extends DCLogic {
       icoStop: !!icons.icoStop,
     };
   }
+  // Plain-language label for a branch case. The PLAN already phrased each route in the
+  // user's words ("if it's a lead" / "otherwise"), so prefer that; fall back to the raw
+  // case value, and render the catch-all as "otherwise" rather than "*".
+  _laneLabelFor(caseWhen, idx) {
+    const plan = this.state._approvedPlanCache || null;
+    const b = plan && Array.isArray(plan.branches) ? plan.branches[idx] : null;
+    if (b && b.when) return this._clip(String(b.when), 34);
+    if (!caseWhen || caseWhen === '*') return 'otherwise';
+    return this._clip(String(caseWhen), 34);
+  }
+  // Everything from the entry node up to and INCLUDING the first branch. Derived from the
+  // spec's real edges, so a workflow of any shape resolves correctly.
+  _liveTrunkOf(spec, nodes, confirmed, flashIdx, explaining) {
+    const br = (spec?.nodes || []).find(n => n.type === 'branch' || n.type === 'decision');
+    if (!br) return nodes.map((n, i) => this._liveCardFor(n, i, confirmed, flashIdx, explaining));
+    const cut = nodes.findIndex(n => n.id === br.id);
+    const upto = cut < 0 ? nodes.length - 1 : cut;
+    return nodes.slice(0, upto + 1).map((n, i) => this._liveCardFor(n, i, confirmed, flashIdx, explaining));
+  }
+  // One lane per branch case: walk the spec's edges from each case target, collecting the
+  // chain until it ends. Any number of lanes, any depth — nothing about shape is assumed.
+  _liveLanes(spec, nodes, confirmed, flashIdx, explaining) {
+    const br = (spec?.nodes || []).find(n => n.type === 'branch' || n.type === 'decision');
+    if (!br) return null;
+    const cases = (br.config && br.config.cases) || [];
+    if (!cases.length) return null;
+    const edges = spec?.edges || [];
+    const byId = new Map((spec?.nodes || []).map(n => [n.id, n]));
+    const idxOf = (id) => nodes.findIndex(n => n.id === id);
+    const chainFrom = (startId) => {
+      const chain = []; const seen = new Set();
+      let cur = startId;
+      while (cur && byId.has(cur) && !seen.has(cur)) {
+        seen.add(cur); chain.push(cur);
+        const next = edges.find(e => e.from === cur);
+        cur = next ? next.to : null;
+      }
+      return chain;
+    };
+    const lanes = [];
+    const usedTargets = new Set();
+    cases.forEach((c, i) => {
+      if (!c || !c.to || usedTargets.has(c.to)) return;   // collapse duplicate targets
+      usedTargets.add(c.to);
+      const chain = chainFrom(c.to);
+      if (!chain.length) return;
+      lanes.push({
+        label: this._laneLabelFor(c.when, i),
+        nodes: chain.map(id => {
+          const gi = idxOf(id);
+          const n = gi >= 0 ? nodes[gi] : byId.get(id);
+          return this._liveCardFor(n, gi >= 0 ? gi : 1e9, confirmed, flashIdx, explaining);
+        }),
+      });
+    });
+    return lanes.length ? lanes : null;
+  }
   // Confirm advances to the next node (with the 560ms green flash). Reject stops and
   // asks for a note in the chat — the note goes to the converger, which re-proposes.
   _liveApprove() {
@@ -7198,7 +7354,16 @@ class Component extends DCLogic {
         const explaining = !!S.liveExplaining;
         const total = nodes.length;
         const done  = confirmed >= total;
+        // LANES — derived from the spec's REAL edges (never assumed). Everything up to
+        // and including the first branch is the trunk; each of that branch's cases opens
+        // a lane, labelled in the plan's own plain words where we have them. A workflow
+        // with no branch has no lanes and simply renders as a trunk. Any lane count.
+        const lanes = this._liveLanes(S.spec, nodes, confirmed, flashIdx, explaining);
         return {
+          lanes, hasLanes: !!(lanes && lanes.length),
+          trunk: lanes && lanes.length
+            ? this._liveTrunkOf(S.spec, nodes, confirmed, flashIdx, explaining)
+            : nodes.map((n, i) => this._liveCardFor(n, i, confirmed, flashIdx, explaining)),
           nodes: nodes.map((n, i) => this._liveCardFor(n, i, confirmed, flashIdx, explaining)),
           total, confirmed, done,
           building: !S.spec,
