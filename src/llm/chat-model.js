@@ -488,14 +488,37 @@ export class ChatModel extends Runnable {
       // we normalise so a caller can't 400: temperature MUST be 1, budget >= 1024,
       // and max_tokens MUST exceed budget_tokens. Only sent when requested, so a
       // model/tier that doesn't support thinking never receives the field.
+      // TWO API SHAPES (verified against the live API, 2026-07-17). The budget form
+      // (`{type:'enabled', budget_tokens}`) is what THIS APP'S TIERS want — opus-4-6 and
+      // sonnet-4-6 both stream `thinking_delta` with it. But the NEWEST models reject it:
+      //   400 — "thinking.type.enabled is not supported for this model. Use
+      //          thinking.type.adaptive and output_config.effort"
+      // …and the reverse also exists (opus-4-5: "adaptive thinking is not supported").
+      // So neither shape is universally right, and the wrong one is a HARD 400.
+      //
+      // That matters more than it looks: llmJsonStreaming CATCHES a stream error and
+      // falls back to the blocking call, so a 400 here is SILENT — the build still
+      // works, but onThinking never fires and the chain-of-thought surface is empty
+      // forever, with nothing in any log. A silent fallback that disables a feature is
+      // the bug, not the safety net.
+      //
+      // Default to the budget form (right for this app's tiers). A caller on a newer
+      // model opts in with `{ adaptive: true }`, which maps its budget to an effort.
       if (config.thinking) {
         const budget = typeof config.thinking === 'number'
           ? config.thinking
           : (config.thinking.budget_tokens ?? 3072);
         const budgetTokens = Math.max(1024, budget);
-        baseParams.thinking     = { type: 'enabled', budget_tokens: budgetTokens };
-        baseParams.temperature  = 1;
-        if (baseParams.max_tokens <= budgetTokens) baseParams.max_tokens = budgetTokens + 4096;
+        const adaptive = typeof config.thinking === 'object' && config.thinking.adaptive === true;
+        if (adaptive) {
+          baseParams.thinking      = { type: 'adaptive' };
+          baseParams.output_config = { ...(baseParams.output_config ?? {}), effort: budgetTokens >= 8192 ? 'high' : (budgetTokens >= 2048 ? 'medium' : 'low') };
+          baseParams.temperature   = 1;
+        } else {
+          baseParams.thinking    = { type: 'enabled', budget_tokens: budgetTokens };
+          baseParams.temperature = 1;
+          if (baseParams.max_tokens <= budgetTokens) baseParams.max_tokens = budgetTokens + 4096;
+        }
       }
 
       const safeParse = (s) => { try { return JSON.parse(s || '{}'); } catch { return { _raw: s, _parseError: true }; } };
