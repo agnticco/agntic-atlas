@@ -5538,6 +5538,9 @@ class Component extends DCLogic {
     } : null;
     const isUpdate = !!S.workflowId;
     const body = { spec: spec || S.spec, intent: S.intent, testRun };
+    // Send the build session id so the server can attach this build's chain of thought
+    // (from its reasoning buffer) to the workflow on publish (operator 2026-07-16).
+    if (!isUpdate && S.threadId) body.threadId = S.threadId;
     if (!isUpdate && confirmationLog) body.confirmationLog = confirmationLog;
     fetch(isUpdate ? `/api/builder/workflows/${S.workflowId}` : "/api/builder/workflows", { method: isUpdate ? "PUT" : "POST", headers: this._H(), body: JSON.stringify(body) })
       .then(r => self._readJson(r))

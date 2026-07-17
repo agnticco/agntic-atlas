@@ -113,6 +113,9 @@ export class WorkflowService {
       errorHandling: def.errorHandling,
       outcome:      def.outcome ?? null,
       specVersion:  def.outcome ? 2 : 1,
+      // The build's chain of thought (operator 2026-07-16) — persisted with the
+      // workflow as the "how this was decided" record. Passed straight through.
+      buildReasoning: input.buildReasoning ?? null,
       status,
     });
     events?.push({ type: 'workflow_created', workflow });

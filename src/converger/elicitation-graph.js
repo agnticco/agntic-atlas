@@ -822,32 +822,15 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
       };
     }
 
-    const confirmation = await interrupt({
-      type:       'outcome_check',
-      candidates,
-      notice,                                         // what we refused to promise, and why
-
-      // Every interrupt carries a default (§11.9). The first candidate is the
-      // model's best guess, and it is pre-selected.
-      choices:    candidates.map((c, i) => ({
-        id: c.id ?? `c${i + 1}`, label: c.statement,
-        hint: (c.assertions ?? []).map(a => `${a.kind} → ${a.target}`).join(' · '),
-        selected: i === 0,
-      })),
-      step: state.step,
-    });
-
-    const pickedId = confirmation?.id ?? confirmation?.choice ?? candidates[0].id ?? 'c1';
-    let picked = candidates.find((c, i) => (c.id ?? `c${i + 1}`) === pickedId) ?? candidates[0];
-
-    // "Close, but…" — merge the correction rather than starting over.
-    if (confirmation?.type === 'modify' && confirmation.modification) {
-      const merged = await llmJson(llm, [
-        new SystemMessage(buildSystemPrompt(state.capabilities)),
-        new HumanMessage(buildModifyPrompt({ original: picked, modification: confirmation.modification })),
-      ], tierCfg('fast', sessionId));
-      if (merged?.statement) picked = merged;
-    }
+    // NO SEPARATE "here's what I understood" VOLLEY (operator 2026-07-16). It was
+    // redundant with the Plan gate, whose FIRST section restates this outcome and whose
+    // "Change something" handles corrections — so a user confirmed the same understanding
+    // twice. We auto-select the model's best reading (the pre-selected top candidate) and
+    // proceed; the single confirmation happens once, at the plan. If we had to refuse a
+    // connector the user named (`notice`), surface it in the CoT rather than silently
+    // dropping it — the plan will also reflect only what's actually promisable.
+    if (notice) emitBeat(cfg, { kind: 'check', text: notice });
+    const picked = candidates[0];
 
     const outcome = {
       statement:  picked.statement,
@@ -857,7 +840,7 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
 
     return {
       draft: { ...state.draft, outcome },
-      confirmationLog: [{ step: state.step, type: 'outcome_check', outcome, confirmation }],
+      confirmationLog: [{ step: state.step, type: 'outcome_selected', outcome, notice: notice ?? null }],
       step:  state.step + 1,
       phase: 'examples',
     };

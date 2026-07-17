@@ -105,6 +105,12 @@ const ADDITIVE_COLUMNS = [
   // Defect #1 would come straight back through the edit path.
   { col: 'outcome',                 type: 'TEXT' },
   { col: 'spec_version',            type: 'INTEGER NOT NULL DEFAULT 1' },
+  // The build's CHAIN OF THOUGHT (operator 2026-07-16) — the converger's reasoning
+  // transcript captured at publish, attached to the workflow as the permanent
+  // "how this was decided" record (feeds the SOP + audit + debugging). JSON:
+  // { text, beats[], capturedAt }. Nullable — a workflow built before this, or one
+  // whose reasoning wasn't captured, simply has none.
+  { col: 'build_reasoning',         type: 'TEXT' },
 ];
 
 // Additive columns for workflow_runs (same idempotent pattern as ADDITIVE_COLUMNS).
@@ -698,6 +704,10 @@ export class WorkflowStore {
       // let the contract evaporate on save.
       outcome:         fields.outcome ? JSON.stringify(fields.outcome) : null,
       spec_version:    Number(fields.specVersion ?? (fields.outcome ? 2 : 1)),
+      // The build's chain of thought (operator 2026-07-16), the "how this was
+      // decided" record. Stored as-given (already a JSON string) or serialized.
+      build_reasoning: fields.buildReasoning == null ? null
+                       : (typeof fields.buildReasoning === 'string' ? fields.buildReasoning : JSON.stringify(fields.buildReasoning)),
       created_at:      now,
       updated_at:      now,
     };
@@ -706,11 +716,11 @@ export class WorkflowStore {
       INSERT INTO workflows (
         id, slug, session_id, user_id, tenant_id, user_intent, source_id, schedule, output_format, delivery,
         config, status, name, description, kind, triggers, nodes, edges, error_handling,
-        version, outcome, spec_version, created_at, updated_at
+        version, outcome, spec_version, build_reasoning, created_at, updated_at
       ) VALUES (
         @id, @slug, @session_id, @user_id, @tenant_id, @user_intent, @source_id, @schedule, @output_format, @delivery,
         @config, @status, @name, @description, @kind, @triggers, @nodes, @edges, @error_handling,
-        @version, @outcome, @spec_version, @created_at, @updated_at
+        @version, @outcome, @spec_version, @build_reasoning, @created_at, @updated_at
       )
     `).run(row);
 

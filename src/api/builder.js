@@ -323,6 +323,22 @@ function beatPayload(b) {
   };
 }
 
+// Assemble a build's CHAIN OF THOUGHT from its reasoning buffer, for persistence with
+// the workflow (operator 2026-07-16) — the permanent "how this was decided" record.
+// `text` is the joined raw thinking a human reads; `beats` keeps the structured record
+// (thinking + node + status) for provenance. Returns null when there is nothing to store
+// (no hub, or the buffer was empty). Best-effort: never throws into the publish path.
+function reasoningTranscript(threadId) {
+  try {
+    const hub = reasoningHubs.get(threadId);
+    if (!hub || !Array.isArray(hub.buffer) || !hub.buffer.length) return null;
+    const beats = hub.buffer.map((b) => beatPayload(b));
+    const text = beats.filter((b) => b.kind === 'thinking').map((b) => b.text || '').join('').trim();
+    if (!text && !beats.length) return null;
+    return { text, beats, capturedAt: new Date().toISOString() };
+  } catch { return null; }
+}
+
 // End the stream and free the entry. Called wherever a session is deleted, so a hub
 // never outlives its session. Signals subscribers to close (so their EventSource does
 // not retry-storm a dead thread).
@@ -2250,8 +2266,13 @@ Rules:
   // Body: { spec, intent }
   // Returns: { ok, workflowId } or { ok: false, error }
   app.post('/api/builder/workflows', requireActiveTenant, async (req, res) => {
-    const { spec, intent, testRun } = req.body ?? {};
+    const { spec, intent, testRun, threadId } = req.body ?? {};
     if (!spec?.nodes) return res.status(400).json({ error: 'spec with nodes[] is required' });
+
+    // Capture the build's chain of thought (operator 2026-07-16) from this session's
+    // reasoning buffer, to persist alongside the workflow. Best-effort — a missing
+    // transcript never blocks publish.
+    const buildReasoning = threadId ? reasoningTranscript(threadId) : null;
 
     // ── activeWorkflows gate — the loud adoption constraint ──────────────────
     // Only PUBLISHED (active) workflows count; drafts are unlimited. This route
@@ -2273,7 +2294,7 @@ Rules:
     let result;
     try {
       result = await spine.engine.workflowService.create(
-        { ...spec, userIntent: intent ?? spec.name, status: 'active' },
+        { ...spec, userIntent: intent ?? spec.name, status: 'active', buildReasoning },
         { userId: req.user.id, tenantId: req.tenant.id },
       );
     } catch (err) {
