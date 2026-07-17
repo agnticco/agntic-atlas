@@ -4994,10 +4994,17 @@ class Component extends DCLogic {
       // node list is authoritative (it has been through the tail: destinations resolved,
       // gaps repaired, verify run), so reconcile the streamed list to it rather than
       // trusting a partial stream.
-      const specNodes = (sp.nodes || []).map(n => ({
+      // The TRIGGER is a real node the user approves like any other (operator 2026-07-17):
+      // every node is addressed during the build. It lives in spec.triggers[], so it is
+      // prepended to the approvable node list as the entry node.
+      const trigNode = this._triggerNodeFrom(sp);
+      const specNodes = (trigNode ? [trigNode] : []).concat((sp.nodes || []).map(n => ({
         id: n.id, type: n.type, label: n.label ?? null,
         mode: (n.config && n.config.mode) || null, description: n.description ?? null,
-      }));
+      })));
+      // Preserve any approvals the user already made while nodes streamed: reconcile to
+      // the authoritative spec order but keep the confirmed count valid (it indexes into
+      // this list, and the trigger is index 0 in both).
       const patch = {
         spec: sp,
         awaitingGraphApproval: true,
@@ -6506,45 +6513,35 @@ class Component extends DCLogic {
     if (!caseWhen || caseWhen === '*') return 'otherwise';
     return this._clip(String(caseWhen), 34);
   }
-  // THE TRIGGER IS THE FIRST NODE (design system): it starts the workflow, so it renders
-  // as a capsule-left at the head of the graph. It lives in spec.triggers[], NOT nodes[],
-  // and it is the ENTRY POINT — not a step the user approves — so it renders as a
-  // display-only, always-"done" card that never enters the approval count. Falls back to
+  // The TRIGGER as a real node — it starts the workflow, so it is the first node the user
+  // approves (operator 2026-07-17: every node is addressed during the build). It lives in
+  // spec.triggers[], so build a node record for it here (id '__trigger__'). Falls back to
   // the plan's trigger while the spec is still streaming.
-  _liveTriggerCard(spec) {
+  _triggerNodeFrom(spec) {
     const t = (spec?.triggers && spec.triggers[0])
       || (this.state._approvedPlanCache && this.state._approvedPlanCache.trigger
           ? { type: (this.state._approvedPlanCache.trigger.type || 'trigger'), _planText: this.state._approvedPlanCache.trigger.text } : null);
     if (!t) return null;
-    // Human label: an email trigger names the mailbox; a schedule names the cadence; else
-    // the plan's own words, else a title-cased type.
     const ty = String(t.type || 'trigger').toLowerCase();
     let label = t.label || t._planText || '';
     if (!label) {
       if (ty === 'email' || ty === 'connector_event') label = 'A new email arrives';
-      else if (ty === 'schedule') label = t.cron ? ('On schedule') : 'On a schedule';
+      else if (ty === 'schedule') label = t.cron ? 'On schedule' : 'On a schedule';
       else if (ty === 'manual') label = 'When you run it';
       else label = this._titleCase(ty);
     }
-    const shapeNode = { id: '__trigger__', type: 'trigger', label, mode: ty === 'email' || ty === 'connector_event' ? 'email' : null };
-    // gi = -1 keeps it out of the approval math; force it to the "done/ok" look (a trigger
-    // is a given, not a pending step) but with no check badge and no confirm controls.
-    const card = this._liveCardFor(shapeNode, -1, 1, -99, false);
-    return { ...card, check: false, decide: false, showConn: true, o: 1,
-             fg: 'rgba(255,255,255,.8)', titleColor: 'rgba(255,255,255,.7)',
-             border: 'rgba(255,255,255,.18)', connColor: 'rgba(231,178,94,.5)', connO: 1 };
+    return { id: '__trigger__', type: 'trigger', label,
+             mode: (ty === 'email' || ty === 'connector_event') ? 'email' : null };
   }
   // Everything from the entry node up to and INCLUDING the first branch. Derived from the
-  // spec's real edges, so a workflow of any shape resolves correctly. The trigger is
-  // prepended as the always-present entry node.
+  // spec's real edges. The trigger is already the first entry in `nodes` (it is a real
+  // approvable node now), so no special-casing here — just find the branch by id.
   _liveTrunkOf(spec, nodes, confirmed, flashIdx, explaining) {
-    const trig = this._liveTriggerCard(spec);
-    const head = trig ? [trig] : [];
     const br = (spec?.nodes || []).find(n => n.type === 'branch' || n.type === 'decision');
-    if (!br) return head.concat(nodes.map((n, i) => this._liveCardFor(n, i, confirmed, flashIdx, explaining)));
+    if (!br) return nodes.map((n, i) => this._liveCardFor(n, i, confirmed, flashIdx, explaining));
     const cut = nodes.findIndex(n => n.id === br.id);
     const upto = cut < 0 ? nodes.length - 1 : cut;
-    return head.concat(nodes.slice(0, upto + 1).map((n, i) => this._liveCardFor(n, i, confirmed, flashIdx, explaining)));
+    return nodes.slice(0, upto + 1).map((n, i) => this._liveCardFor(n, i, confirmed, flashIdx, explaining));
   }
   // One lane per branch case: walk the spec's edges from each case target, collecting the
   // chain until it ends. Any number of lanes, any depth — nothing about shape is assumed.
@@ -6626,7 +6623,15 @@ class Component extends DCLogic {
   // itself is mounted once, in the chat, under the reasoning that produced it.
   _onLiveNode(node, streamId) {
     if (!node || !node.id) return;
-    const nodes = (this.state.liveNodes || []);
+    let nodes = (this.state.liveNodes || []);
+    // THE TRIGGER STREAMS IN FIRST (operator 2026-07-17: every node is addressed). On the
+    // first real node beat, seed the trigger (from the approved plan) as node 0 so it is
+    // approved before the steps — the actual trigger from spec.triggers[] reconciles onto
+    // the same '__trigger__' id when generated_workflow arrives.
+    if (!nodes.length) {
+      const trig = this._triggerNodeFrom(this.state.spec);
+      if (trig) nodes = [trig];
+    }
     if (nodes.some(n => n.id === node.id)) return;         // dedupe re-sends/replays
     const next = [...nodes, node];
     const msgs = this.state.msgs.some(m => m.isLiveGraph)
@@ -7186,8 +7191,16 @@ class Component extends DCLogic {
     const segs = rsnDemo ? this._rsnSegs() : liveSegs;
     const rsnActive = rsnDemo || hasLive;
     const testStarted = TS === "running" || TS === "passed" || TS === "failed";
-    const rsnStreaming = rsnActive && !testStarted && S.phase === "building";
-    const rsnReviewing = rsnActive && !testStarted && S.phase !== "building";
+    // The CoT stays in its BUILDING state (iris + "Building…") until the WHOLE build is
+    // done — which includes the user approving every node in the live graph — not just
+    // until the phase flips (operator 2026-07-17). It only collapses to "How Atlas thought
+    // through this build" once the graph is fully approved (or there is no graph to
+    // approve). A graph still awaiting approval, or with unapproved nodes, is still
+    // "building" from the user's point of view.
+    const graphPending = !!S.awaitingGraphApproval
+      || ((S.liveNodes || []).length > 0 && (S.liveConfirmed || 0) < (S.liveNodes || []).length);
+    const rsnStreaming = rsnActive && !testStarted && (S.phase === "building" || graphPending);
+    const rsnReviewing = rsnActive && !testStarted && !rsnStreaming;
     const rsnOpen = !!S.rsnOpen;
     const rsnReduceMotion = typeof window !== "undefined" && window.matchMedia
       && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
@@ -7436,10 +7449,9 @@ class Component extends DCLogic {
         // a lane, labelled in the plan's own plain words where we have them. A workflow
         // with no branch has no lanes and simply renders as a trunk. Any lane count.
         const lanes = this._liveLanes(S.spec, nodes, confirmed, flashIdx, explaining);
-        // The trigger heads every graph (the entry point). In the no-lanes case it is
-        // prepended to the flat node row; in the lanes case it is part of the trunk.
-        const trig = this._liveTriggerCard(S.spec);
-        const flat = (trig ? [trig] : []).concat(nodes.map((n, i) => this._liveCardFor(n, i, confirmed, flashIdx, explaining)));
+        // The trigger is already `nodes[0]` (a real approvable node), so the flat row and
+        // the trunk render it naturally — no prepend needed.
+        const flat = nodes.map((n, i) => this._liveCardFor(n, i, confirmed, flashIdx, explaining));
         return {
           lanes, hasLanes: !!(lanes && lanes.length),
           trunk: lanes && lanes.length
