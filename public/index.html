@@ -7199,8 +7199,15 @@ class Component extends DCLogic {
     // "building" from the user's point of view.
     const graphPending = !!S.awaitingGraphApproval
       || ((S.liveNodes || []).length > 0 && (S.liveConfirmed || 0) < (S.liveNodes || []).length);
-    const rsnStreaming = rsnActive && !testStarted && (S.phase === "building" || graphPending);
-    const rsnReviewing = rsnActive && !testStarted && !rsnStreaming;
+    // The in-chat CoT is in its BUILDING state (iris + "Building…") from the moment it
+    // mounts until the build is entirely done — the "How Atlas thought through this build"
+    // done-header appears ONLY after (operator 2026-07-17). Crucially this does NOT require
+    // segs to have arrived yet: at mount, before the first thinking token, the block must
+    // already read "Building…", not flash the done-header. So `streaming` keys purely on
+    // "is the build still going", never on whether content has streamed.
+    const buildOngoing = !testStarted && (S.phase === "building" || graphPending);
+    const rsnStreaming = buildOngoing;
+    const rsnReviewing = rsnActive && !testStarted && !buildOngoing;
     const rsnOpen = !!S.rsnOpen;
     const rsnReduceMotion = typeof window !== "undefined" && window.matchMedia
       && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
