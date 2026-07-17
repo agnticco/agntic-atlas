@@ -638,6 +638,52 @@
                 </div>
               </sc-if>
 
+              <!-- CoT IN THE CHAT (isReasoning) — the build's thinking streams INLINE in
+                   the conversation (operator 2026-07-16), directly above the node tree it
+                   produces. The right panel keeps only "what this must deliver". The
+                   header stays; the chevron collapses the body for people who'd rather
+                   not watch. Fed by the same reasoningSegs the SSE stream fills. -->
+              <sc-if value="{{ item.isReasoning }}" hint-placeholder-val="{{ false }}">
+                <div style="display:flex;gap:13px;align-items:flex-start;animation:msgIn .4s ease both">
+                  <div style="flex:none;width:32px;height:32px"></div>
+                  <div style="min-width:0;flex:1">
+                    <div onClick="{{ rsn.onToggleBody }}" style="display:flex;align-items:center;gap:8px;margin-bottom:10px;cursor:pointer" style-hover="opacity:.85">
+                      <sc-if value="{{ rsn.streaming }}" hint-placeholder-val="{{ true }}">
+                        <span style="flex:none;width:7px;height:7px;border-radius:50%;background:#e7b25e;box-shadow:0 0 8px rgba(231,178,94,.55);animation:flowPulse 2.4s ease-in-out infinite"></span>
+                        <span style="flex:1;font-size:11px;font-weight:600;letter-spacing:.16em;text-transform:uppercase;color:rgba(231,178,94,.75);animation:flowPulse 2.4s ease-in-out infinite">Thinking through your build</span>
+                      </sc-if>
+                      <sc-if value="{{ !rsn.streaming }}" hint-placeholder-val="{{ false }}">
+                        <span style="flex:none;width:6px;height:6px;border-radius:50%;background:rgba(255,255,255,.3)"></span>
+                        <span style="flex:1;font-size:11px;font-weight:600;letter-spacing:.16em;text-transform:uppercase;color:rgba(255,255,255,.42)">How Atlas thought through this build</span>
+                      </sc-if>
+                      <span style="flex:none;color:rgba(231,178,94,.55);font-size:10px;display:inline-block;transform:{{ rsn.bodyChev }};transition:transform .15s">▾</span>
+                    </div>
+                    <sc-if value="{{ !rsn.bodyHidden }}" hint-placeholder-val="{{ true }}">
+                      <div ref="{{ rsn.bodyRef }}" class="ab-scroll" style="padding:2px 0 2px 13px;border-left:2px solid rgba(231,178,94,.22);max-height:340px;overflow-y:auto;-webkit-mask-image:{{ rsn.bodyMask }};mask-image:{{ rsn.bodyMask }}">
+                        <sc-for list="{{ rsn.segs }}" as="g" hint-placeholder-count="2">
+                          <div>
+                            <sc-if value="{{ g.isThinking }}" hint-placeholder-val="{{ true }}">
+                              <div style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11.5px;line-height:1.68;color:rgba(255,255,255,.5);white-space:pre-wrap;word-break:break-word;margin:0 0 10px">{{ g.text }}<sc-if value="{{ g.caret }}" hint-placeholder-val="{{ true }}"><span style="display:inline-block;width:6px;height:12px;background:rgba(231,178,94,.7);vertical-align:-1px;margin-left:2px;animation:cpBlink 1.1s steps(1) infinite"></span></sc-if></div>
+                            </sc-if>
+                            <sc-if value="{{ g.isProse }}" hint-placeholder-val="{{ false }}">
+                              <div style="font-size:12.5px;line-height:1.7;color:rgba(255,255,255,.48);margin:0 0 10px;word-break:break-word"><sc-for list="{{ g.parts }}" as="pp" hint-placeholder-count="1"><span style="font-weight:{{ pp.w }};color:{{ pp.c }}">{{ pp.t }}</span></sc-for></div>
+                            </sc-if>
+                            <sc-if value="{{ g.isBeat }}" hint-placeholder-val="{{ false }}">
+                              <div style="display:flex;align-items:flex-start;gap:9px;margin:2px 0 12px;padding:8px 11px;border-radius:9px;background:{{ g.bg }};border:1px solid {{ g.border }}">
+                                <sc-if value="{{ g.isCheck }}" hint-placeholder-val="{{ false }}"><svg viewBox="0 0 24 24" width="13" height="13" style="flex:none;margin-top:3px" fill="none" stroke="#7fc28a" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12.5l5 5 11-11"></path></svg></sc-if>
+                                <sc-if value="{{ !g.isCheck }}" hint-placeholder-val="{{ true }}"><span style="flex:none;font-size:12px;line-height:1.6;color:{{ g.iconColor }}">{{ g.icon }}</span></sc-if>
+                                <span style="flex:1;min-width:0;font-size:12.5px;line-height:1.6;color:{{ g.textColor }};word-break:break-word"><sc-for list="{{ g.parts }}" as="pp" hint-placeholder-count="1"><span style="font-weight:{{ pp.w }};color:{{ pp.c }}">{{ pp.t }}</span></sc-for></span>
+                                <sc-if value="{{ g.detail }}" hint-placeholder-val="{{ false }}"><span style="flex:none;font-family:ui-monospace,SFMono-Regular,monospace;font-size:10px;font-weight:600;letter-spacing:.08em;color:{{ g.chipFg }};background:{{ g.chipBg }};border:1px solid {{ g.chipBorder }};border-radius:6px;padding:3px 7px;white-space:nowrap">{{ g.detail }}</span></sc-if>
+                              </div>
+                            </sc-if>
+                          </div>
+                        </sc-for>
+                      </div>
+                    </sc-if>
+                  </div>
+                </div>
+              </sc-if>
+
               <!-- LIVE BUILD STRIP (isLiveGraph) — the workflow assembles IN THE CHAT as
                    the converger writes it: each finished node pops in (operator 2026-07-16).
                    A progress view; the full graph + approval arrives on completion. -->
@@ -4870,7 +4916,10 @@ class Component extends DCLogic {
     const self = this;
     this.setState({
       phase: "building", intent, inputValue: "", thinking: true, inputMode: "locked",
-      msgs: [...this.state.msgs, { isNote: true, text: "Great — let's build it. I'll ask a couple of quick questions, then show you the complete workflow to review." }],
+      // A new build starts a fresh reasoning/live-graph block: drop the previous build's
+      // in-chat CoT + node strip so two builds' thinking never interleave.
+      msgs: [...this.state.msgs.filter(m => !m.isReasoning && !m.isLiveGraph),
+             { isNote: true, text: "Great — let me put a plan together for you to look over." }],
       // The pinned outcome belongs to ONE build. Carrying it into the next one
       // would show the user a contract they never agreed to for this workflow —
       // and stale run results (outcomeResults/deliveries) would show "Contract
@@ -6312,8 +6361,16 @@ class Component extends DCLogic {
   // streamId (a revise-rebuild) starts a fresh block, and the prior one stops blinking.
   // This is what makes the panel read like the model thinking out loud, rather than a
   // wall of one-token cards.
+  // Make sure the in-chat CoT block exists (operator 2026-07-16: the reasoning streams
+  // INLINE in the conversation, above the node tree it produces). Inserted on the first
+  // beat of a build; the right panel keeps only "what this must deliver".
+  _ensureReasoningMsg() {
+    if (this.state.msgs.some(m => m.isReasoning)) return;
+    this.setState({ msgs: [...this.state.msgs, { isReasoning: true, _id: 'rsn_' + (this._pc = (this._pc || 0) + 1) }] });
+  }
   _appendThinking(delta, streamId) {
     if (!delta) return;
+    this._ensureReasoningMsg();
     const sid = streamId == null ? '' : String(streamId);
     const segs = (this.state.reasoningSegs || []).slice();
     const last = segs[segs.length - 1];
@@ -6918,8 +6975,12 @@ class Component extends DCLogic {
     const rsnReduceMotion = typeof window !== "undefined" && window.matchMedia
       && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
     const rsn = {
-      // Hidden entirely once a test run starts — the testing UI takes the panel.
-      show: !testStarted,
+      // MOVED INTO THE CHAT (operator 2026-07-16). The reasoning now streams inline in
+      // the conversation, directly above the node tree it produces; the right panel keeps
+      // only "what this must deliver" (+ the test surface). This VM still drives the
+      // in-chat block (segs/streaming/collapse), so it stays computed — only the
+      // right-panel rendering is off.
+      show: false,
       streaming: rsnStreaming,
       reviewing: rsnReviewing,
       // The transcript renders in BOTH building (streaming) and proposed (reviewing).
