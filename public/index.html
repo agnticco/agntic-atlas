@@ -73,7 +73,7 @@
 <body>
 <x-dc>
 <helmet>
-<link href="https://fonts.googleapis.com/css2?family=Inter+Tight:wght@400;500;600&family=Instrument+Serif:ital@0;1&display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Inter+Tight:wght@400;500;600&family=Instrument+Serif:ital@0;1&family=Dancing+Script:wght@600;700&display=swap" rel="stylesheet"/>
 <style>
   *{box-sizing:border-box}
   /* ── Theme tokens ──────────────────────────────────────────────────────────
@@ -438,86 +438,92 @@
                    increment 1). A plain-language, confidence-tagged preview of HOW the
                    workflow will work, shown BEFORE the expensive build. `you said /
                    I found / I inferred` chips send the eye to what Atlas inferred. -->
+              <!-- PLAN GATE (isPlan · LOCKED · SOP) — the design system's signed operating
+                   procedure: letterhead, serif title, PURPOSE / TRIGGER / PROCEDURE (numbered)
+                   / ROUTES TO / ON FAILURE, provenance chips, a Dancing Script signature. All
+                   copy is data; nothing about the workflow's shape is assumed. -->
               <sc-if value="{{ item.isPlan }}" hint-placeholder-val="{{ false }}">
                 <div style="display:flex;gap:13px;align-items:flex-start;animation:msgIn .45s ease both">
                   <div style="flex:none;width:32px;height:32px"></div>
                   <div style="min-width:0;flex:1">
-                    <div style="font-size:15px;line-height:1.5;color:#fff;font-weight:500">Before I build, here's my plan — skim it and I'll get started.</div>
-                    <div style="font-size:13px;line-height:1.55;color:rgba(255,255,255,.5);margin-top:6px;max-width:56ch">You approved what this should do; this is how. The amber items are things I filled in — worth a glance.</div>
+                    <div style="font-size:15px;line-height:1.5;color:#fff;font-weight:500">Before I build, here's the plan — approve it and I'll get started.</div>
+                    <div style="font-size:13px;line-height:1.55;color:rgba(255,255,255,.5);margin-top:6px;max-width:56ch">The amber items are things I filled in — worth a glance.</div>
 
-                    <div style="margin-top:14px;border:1px solid rgba(231,178,94,.22);background:rgba(231,178,94,.03);border-radius:15px;overflow:hidden">
-                      <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:14px;padding:15px 17px 12px">
-                        <div style="min-width:0">
-                          <div style="font-size:10px;letter-spacing:.16em;text-transform:uppercase;color:rgba(240,191,107,.7);font-weight:600;margin-bottom:5px">The plan</div>
-                          <div style="font-size:14.5px;line-height:1.5;color:#fff;font-weight:500">{{ item.summary }}</div>
+                    <div style="margin-top:14px;border:1px solid rgba(127,194,138,.3);border-radius:18px;overflow:hidden;background:#0A0A0A;box-shadow:0 0 0 1px rgba(127,194,138,.08)">
+                      <div style="background-image:radial-gradient(rgba(255,255,255,.05) 1px,transparent 1px);background-size:16px 16px;padding:30px 30px 26px">
+                        <!-- letterhead -->
+                        <div style="display:flex;align-items:center;justify-content:space-between;gap:14px;padding-bottom:15px;border-bottom:1px solid rgba(255,255,255,.14)">
+                          <div style="display:flex;align-items:center;gap:12px"><img src="/assets/atlas-globe-white.svg" style="width:32px;height:32px;opacity:.85" alt=""/><div><div style="font-size:14px;font-weight:600;color:rgba(255,255,255,.9);letter-spacing:-0.01em;line-height:1.1">Atlas</div><div style="font-family:ui-monospace,monospace;font-size:8px;font-weight:700;letter-spacing:.2em;color:rgba(240,191,107,.75);margin-top:2px">OPERATING PROCEDURE</div></div></div>
+                          <div style="flex:none;font-family:ui-monospace,monospace;font-size:8px;font-weight:700;letter-spacing:.18em;color:rgba(255,255,255,.32)">{{ item.stamp }}</div>
                         </div>
-                        <div style="flex:none;font-family:ui-monospace,SFMono-Regular,monospace;font-size:9.5px;font-weight:600;letter-spacing:.1em;color:rgba(240,191,107,.7);padding-top:3px;white-space:nowrap">{{ item.stamp }}</div>
-                      </div>
-
-                      <div style="padding:13px 17px;border-top:1px solid rgba(255,255,255,.05)">
-                        <div style="font-family:ui-monospace,SFMono-Regular,monospace;font-size:9px;font-weight:600;letter-spacing:.16em;text-transform:uppercase;color:rgba(255,255,255,.4);margin-bottom:10px">Starts when</div>
-                        <div style="display:flex;gap:11px;align-items:flex-start;padding:2px 0">
-                          <div style="flex:none;width:20px;height:20px;border-radius:6px;background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.1);display:flex;align-items:center;justify-content:center;font-family:ui-monospace,SFMono-Regular,monospace;font-size:11px;color:rgba(255,255,255,.55);margin-top:1px">▸</div>
-                          <div style="min-width:0;flex:1;font-size:13.5px;line-height:1.5;color:rgba(255,255,255,.86)">{{ item.trigger.text }}<span style="{{ item.trigger.chip.style }}"><span style="{{ item.trigger.chip.dotStyle }}"></span>{{ item.trigger.chip.label }}</span></div>
+                        <!-- title -->
+                        <div style="margin:22px 0 20px">
+                          <div style="font-family:'Instrument Serif',serif;font-size:26px;line-height:1.2;color:rgba(255,255,255,.94);letter-spacing:-0.01em">{{ item.titleHead }} <span style="font-style:italic;color:#efc892">{{ item.titleAccent }}</span></div>
                         </div>
-                      </div>
-
-                      <div style="padding:13px 17px;border-top:1px solid rgba(255,255,255,.05)">
-                        <div style="font-family:ui-monospace,SFMono-Regular,monospace;font-size:9px;font-weight:600;letter-spacing:.16em;text-transform:uppercase;color:rgba(255,255,255,.4);margin-bottom:10px">Then, in order</div>
-                        <sc-for list="{{ item.steps }}" as="st" hint-placeholder-count="2">
-                          <div style="display:flex;gap:11px;align-items:flex-start;padding:4px 0">
-                            <div style="flex:none;width:20px;height:20px;border-radius:6px;background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.1);display:flex;align-items:center;justify-content:center;font-family:ui-monospace,SFMono-Regular,monospace;font-size:10px;color:rgba(255,255,255,.55);font-weight:600;margin-top:1px">{{ st.idx }}</div>
-                            <div style="min-width:0;flex:1;font-size:13.5px;line-height:1.5;color:rgba(255,255,255,.86)">{{ st.text }}<span style="{{ st.chip.style }}"><span style="{{ st.chip.dotStyle }}"></span>{{ st.chip.label }}</span></div>
+                        <!-- PURPOSE -->
+                        <div style="display:flex;gap:18px;align-items:baseline;padding-bottom:6px">
+                          <div style="flex:none;width:96px;font-family:ui-monospace,monospace;font-size:9px;font-weight:700;letter-spacing:.16em;color:rgba(255,255,255,.4)">PURPOSE</div>
+                          <div style="flex:1;font-size:14px;line-height:1.55;color:rgba(255,255,255,.78)">{{ item.summary }}</div>
+                        </div>
+                        <div style="display:flex;flex-direction:column;gap:0">
+                          <!-- TRIGGER -->
+                          <div style="display:flex;gap:18px;align-items:baseline;padding:15px 0;border-top:1px solid rgba(255,255,255,.1)">
+                            <div style="flex:none;width:96px;font-family:ui-monospace,monospace;font-size:9px;font-weight:700;letter-spacing:.16em;color:rgba(255,255,255,.4)">TRIGGER</div>
+                            <div style="flex:1;font-size:14px;line-height:1.55;color:rgba(255,255,255,.86)">{{ item.trigger.text }}<span style="{{ item.trigger.chip.style }}"><span style="{{ item.trigger.chip.dotStyle }}"></span>{{ item.trigger.chip.label }}</span></div>
                           </div>
-                        </sc-for>
-                      </div>
-
-                      <sc-if value="{{ item.hasBranches }}" hint-placeholder-val="{{ false }}">
-                        <div style="padding:13px 17px;border-top:1px solid rgba(255,255,255,.05)">
-                          <div style="font-family:ui-monospace,SFMono-Regular,monospace;font-size:9px;font-weight:600;letter-spacing:.16em;text-transform:uppercase;color:rgba(255,255,255,.4);margin-bottom:10px">Routes to</div>
-                          <sc-for list="{{ item.branches }}" as="br" hint-placeholder-count="2">
-                            <div style="display:flex;gap:10px;align-items:baseline;padding:4px 0;font-size:13.5px;line-height:1.5">
-                              <div style="flex:none;font-family:'Instrument Serif',Georgia,serif;font-style:italic;font-size:14px;color:#f3cd86;min-width:110px">{{ br.when }}</div>
-                              <div style="min-width:0;color:rgba(255,255,255,.86)">{{ br.then }}<span style="{{ br.chip.style }}"><span style="{{ br.chip.dotStyle }}"></span>{{ br.chip.label }}</span></div>
+                          <!-- PROCEDURE -->
+                          <div style="display:flex;gap:18px;align-items:flex-start;padding:15px 0;border-top:1px solid rgba(255,255,255,.1)">
+                            <div style="flex:none;width:96px;font-family:ui-monospace,monospace;font-size:9px;font-weight:700;letter-spacing:.16em;color:rgba(255,255,255,.4);padding-top:1px">PROCEDURE</div>
+                            <div style="flex:1;display:flex;flex-direction:column;gap:10px">
+                              <sc-for list="{{ item.steps }}" as="st" hint-placeholder-count="2">
+                                <div style="font-size:14px;line-height:1.55;color:rgba(255,255,255,.86)"><span style="font-family:ui-monospace,monospace;color:rgba(255,255,255,.35);font-size:11px;margin-right:9px">{{ st.idx }}</span>{{ st.text }}<span style="{{ st.chip.style }}"><span style="{{ st.chip.dotStyle }}"></span>{{ st.chip.label }}</span></div>
+                              </sc-for>
                             </div>
-                          </sc-for>
-                        </div>
-                      </sc-if>
-
-                      <sc-if value="{{ item.hasError }}" hint-placeholder-val="{{ false }}">
-                        <div style="padding:13px 17px;border-top:1px solid rgba(255,255,255,.05)">
-                          <div style="font-family:ui-monospace,SFMono-Regular,monospace;font-size:9px;font-weight:600;letter-spacing:.16em;text-transform:uppercase;color:rgba(255,255,255,.4);margin-bottom:10px">If something breaks</div>
-                          <div style="display:flex;gap:11px;align-items:flex-start;padding:2px 0">
-                            <div style="flex:none;width:20px;height:20px;border-radius:6px;background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.1);display:flex;align-items:center;justify-content:center;font-family:ui-monospace,SFMono-Regular,monospace;font-size:11px;color:rgba(255,255,255,.55);margin-top:1px">↺</div>
-                            <div style="min-width:0;flex:1;font-size:13.5px;line-height:1.5;color:rgba(255,255,255,.86)">{{ item.errorText }}<span style="{{ item.errorChip.style }}"><span style="{{ item.errorChip.dotStyle }}"></span>{{ item.errorChip.label }}</span></div>
                           </div>
+                          <!-- ROUTES TO (only when the workflow branches) -->
+                          <sc-if value="{{ item.hasBranches }}" hint-placeholder-val="{{ false }}">
+                            <div style="display:flex;gap:18px;align-items:flex-start;padding:15px 0;border-top:1px solid rgba(255,255,255,.1)">
+                              <div style="flex:none;width:96px;font-family:ui-monospace,monospace;font-size:9px;font-weight:700;letter-spacing:.16em;color:rgba(255,255,255,.4);padding-top:1px">ROUTES TO</div>
+                              <div style="flex:1;display:flex;flex-direction:column;gap:9px">
+                                <sc-for list="{{ item.branches }}" as="br" hint-placeholder-count="2">
+                                  <div style="font-size:14px;line-height:1.5;color:rgba(255,255,255,.86)"><span style="font-family:'Instrument Serif',Georgia,serif;font-style:italic;color:#efc892;margin-right:8px">{{ br.when }}</span>{{ br.then }}<span style="{{ br.chip.style }}"><span style="{{ br.chip.dotStyle }}"></span>{{ br.chip.label }}</span></div>
+                                </sc-for>
+                              </div>
+                            </div>
+                          </sc-if>
+                          <!-- ON FAILURE -->
+                          <sc-if value="{{ item.hasError }}" hint-placeholder-val="{{ false }}">
+                            <div style="display:flex;gap:18px;align-items:baseline;padding:15px 0;border-top:1px solid rgba(255,255,255,.1);border-bottom:1px solid rgba(255,255,255,.1)">
+                              <div style="flex:none;width:96px;font-family:ui-monospace,monospace;font-size:9px;font-weight:700;letter-spacing:.16em;color:rgba(231,178,94,.7)">ON FAILURE</div>
+                              <div style="flex:1;font-size:14px;line-height:1.55;color:rgba(255,255,255,.86)">{{ item.errorText }}<span style="{{ item.errorChip.style }}"><span style="{{ item.errorChip.dotStyle }}"></span>{{ item.errorChip.label }}</span></div>
+                            </div>
+                          </sc-if>
                         </div>
-                      </sc-if>
-
-                      <sc-if value="{{ item.hasKnowledge }}" hint-placeholder-val="{{ false }}">
-                        <div style="padding:12px 17px;border-top:1px solid rgba(255,255,255,.05);background:rgba(95,199,138,.03)">
-                          <div style="font-family:ui-monospace,SFMono-Regular,monospace;font-size:9px;font-weight:600;letter-spacing:.16em;text-transform:uppercase;color:#7fd6a0;margin-bottom:8px">From your knowledge</div>
-                          <sc-for list="{{ item.knowledge }}" as="kn" hint-placeholder-count="1">
-                            <div style="font-size:12.5px;line-height:1.5;color:rgba(255,255,255,.78);padding:2px 0">{{ kn.text }} <span style="color:#7fd6a0;font-size:11px">— {{ kn.source }}</span></div>
-                          </sc-for>
+                        <!-- FROM YOUR KNOWLEDGE (when a knowledge match applied) -->
+                        <sc-if value="{{ item.hasKnowledge }}" hint-placeholder-val="{{ false }}">
+                          <div style="margin-top:16px;padding:12px 14px;border:1px solid rgba(95,199,138,.25);background:rgba(95,199,138,.04);border-radius:11px">
+                            <div style="font-family:ui-monospace,monospace;font-size:9px;font-weight:700;letter-spacing:.16em;color:#7fd6a0;margin-bottom:8px">FROM YOUR KNOWLEDGE</div>
+                            <sc-for list="{{ item.knowledge }}" as="kn" hint-placeholder-count="1">
+                              <div style="font-size:12.5px;line-height:1.5;color:rgba(255,255,255,.78);padding:2px 0">{{ kn.text }} <span style="color:#7fd6a0;font-size:11px">— {{ kn.source }}</span></div>
+                            </sc-for>
+                          </div>
+                        </sc-if>
+                        <!-- upload suggestion (an ungrounded judgment) -->
+                        <sc-if value="{{ item.hasUpload }}" hint-placeholder-val="{{ false }}">
+                          <div style="margin-top:14px;display:flex;gap:9px;align-items:flex-start">
+                            <span style="color:#f3cd86;flex:none">💡</span>
+                            <div style="font-size:12.5px;line-height:1.5;color:rgba(255,255,255,.7)">Want this sharper? Upload <span style="color:#f3cd86">{{ item.upload.artifact }}</span> — {{ item.upload.reason }}. <span style="color:rgba(255,255,255,.4)">(optional — add it any time from Knowledge)</span></div>
+                          </div>
+                        </sc-if>
+                        <!-- signature -->
+                        <div style="display:flex;align-items:flex-end;justify-content:flex-end;margin-top:24px">
+                          <div style="text-align:right"><div style="font-family:ui-monospace,monospace;font-size:8px;letter-spacing:.14em;color:rgba(255,255,255,.3);margin-bottom:5px">PREPARED BY</div><div style="font-family:'Dancing Script','Instrument Serif',cursive;font-weight:600;font-size:30px;color:rgba(255,255,255,.9);line-height:1;padding-right:6px">Atlas</div><div style="width:128px;height:1px;background:rgba(255,255,255,.28);margin:7px 0 0 auto"></div></div>
                         </div>
-                      </sc-if>
-
-                      <sc-if value="{{ item.hasUpload }}" hint-placeholder-val="{{ false }}">
-                        <div style="padding:12px 17px;border-top:1px solid rgba(255,255,255,.05);display:flex;gap:9px;align-items:flex-start">
-                          <span style="color:#f3cd86;flex:none">💡</span>
-                          <div style="font-size:12.5px;line-height:1.5;color:rgba(255,255,255,.7)">Want this sharper? Upload <span style="color:#f3cd86">{{ item.upload.artifact }}</span> — {{ item.upload.reason }}. <span style="color:rgba(255,255,255,.4)">(optional — add it any time from Knowledge)</span></div>
+                        <!-- actions -->
+                        <div style="display:flex;gap:10px;align-items:center;margin-top:20px">
+                          <button onClick="{{ item.onBuild }}" style="border:none;background:#efc892;color:#0a0a0a;font-family:inherit;font-size:14px;font-weight:600;padding:11px 24px;border-radius:999px;cursor:pointer" style-hover="background:#f3cd86">Approve &amp; build →</button>
+                          <button onClick="{{ item.onChange }}" style="border:1px solid rgba(255,255,255,.16);background:transparent;color:rgba(255,255,255,.65);font-family:inherit;font-size:14px;padding:11px 20px;border-radius:999px;cursor:pointer" style-hover="color:#fff">Request a change</button>
                         </div>
-                      </sc-if>
-
-                      <div style="display:flex;gap:16px;flex-wrap:wrap;padding:11px 17px;border-top:1px solid rgba(255,255,255,.05);background:rgba(255,255,255,.012)">
-                        <div style="display:flex;align-items:center;gap:7px;font-size:11px;color:rgba(255,255,255,.5)"><span style="width:7px;height:7px;border-radius:50%;background:rgba(255,255,255,.45)"></span> you said</div>
-                        <div style="display:flex;align-items:center;gap:7px;font-size:11px;color:rgba(255,255,255,.5)"><span style="width:7px;height:7px;border-radius:50%;background:#5fc78a"></span> I found (from your tools)</div>
-                        <div style="display:flex;align-items:center;gap:7px;font-size:11px;color:rgba(255,255,255,.5)"><span style="width:7px;height:7px;border-radius:50%;background:#e7b25e"></span> I inferred — check it</div>
-                      </div>
-                      <div style="display:flex;gap:10px;align-items:center;padding:13px 17px 15px;border-top:1px solid rgba(255,255,255,.05)">
-                        <button onClick="{{ item.onBuild }}" style="border:1px solid rgba(240,191,107,.45);background:rgba(240,191,107,.14);color:#f3cd86;font-family:inherit;font-size:14px;font-weight:600;padding:9px 20px;border-radius:999px;cursor:pointer" style-hover="background:rgba(240,191,107,.22)">Build it →</button>
-                        <button onClick="{{ item.onChange }}" style="border:1px solid rgba(255,255,255,.14);background:transparent;color:rgba(255,255,255,.6);font-family:inherit;font-size:14px;padding:9px 18px;border-radius:999px;cursor:pointer" style-hover="color:#fff">Change something</button>
                       </div>
                     </div>
                   </div>
@@ -3727,7 +3733,12 @@ class Component extends DCLogic {
       // threadId points at a dead session ("session not found"). Omitting it means
       // a restored draft routes change requests through the spec-based edit-change
       // path (which works from the spec alone) instead of a dead converger session.
-      const F = ["view","phase","intent","inputMode","spec","testState","runSteps","failIndex","deliveries","runOutput","runError","workflowId","outcomeResults"];
+      // The build UI is state on the workflow — everything the user sees must survive a
+      // reload (operator 2026-07-17). The live graph (its nodes + how many are approved +
+      // whether it is awaiting approval), the outcome contract shown in the right panel,
+      // and the reasoning transcript are all part of that.
+      const F = ["view","phase","intent","inputMode","spec","testState","runSteps","failIndex","deliveries","runOutput","runError","workflowId","outcomeResults",
+                 "outcome","reasoningSegs","liveNodes","liveConfirmed","liveFlashIdx","awaitingGraphApproval","_approvedPlanCache"];
       const slice = {}; F.forEach(k => { slice[k] = S[k]; });
       slice.msgs = cleanMsgs;
       const str = JSON.stringify(slice);
@@ -3779,7 +3790,27 @@ class Component extends DCLogic {
     // session ("session not found"). Applies to every restored phase, not just building.
     const overrides = Object.assign({ view: 'build', thinking: false, inputValue: "", threadId: null, mentionOpen: false, mentionQuery: "", mentionAt: -1, connectionsOpen: false, accountOpen: false, profileOpen: false, newStateExiting: false }, extra || {});
     if (slice.inputMode === 'locked') overrides.inputMode = 'chat';
-    if (slice.phase === 'building') { overrides.phase = 'chat'; }
+    // THE BUILD UI IS ATTACHED TO THE WORKFLOW (operator 2026-07-17). A reload must NOT
+    // lose the graph the user was approving. The converger session is gone, but the graph
+    // is fully derivable from the persisted spec — so if a slice was mid-build/awaiting
+    // approval AND carries a spec, reconstitute the live graph from spec.nodes and keep it
+    // awaiting approval. Only a slice with NO spec (still elicitating) drops to chat, since
+    // there is nothing to show.
+    const hasSpec = slice.spec && Array.isArray(slice.spec.nodes) && slice.spec.nodes.length;
+    if (slice.phase === 'building' && !hasSpec) {
+      overrides.phase = 'chat';
+    } else if (slice.phase === 'building' && hasSpec) {
+      // Rebuild liveNodes from the spec if they weren't persisted (older slices), and keep
+      // the approval surface up. The Run test panel reads `spec`/`outcome`, both restored.
+      if (!(slice.liveNodes && slice.liveNodes.length)) {
+        overrides.liveNodes = slice.spec.nodes.map(n => ({
+          id: n.id, type: n.type, label: n.label ?? null,
+          mode: (n.config && n.config.mode) || null, description: n.description ?? null,
+        }));
+      }
+      overrides.awaitingGraphApproval = slice.awaitingGraphApproval !== false;
+      overrides.inputMode = 'locked';
+    }
     this.setState(Object.assign({}, slice, overrides));
   }
   _clearBuild() { this._lastBuildStr = ""; try { localStorage.removeItem(this._buildKey()); } catch (e) {} }
@@ -4895,13 +4926,12 @@ class Component extends DCLogic {
     const self = this;
     this.setState({
       phase: "building", intent, inputValue: "", thinking: true, inputMode: "locked",
-      // A new build starts a fresh reasoning/live-graph block: drop the previous build's
-      // in-chat CoT + node strip so two builds' thinking never interleave. The CoT block
-      // is mounted HERE (at build start), not on the first thinking delta — a fast build
-      // can finish before a delta-mounted block ever appears.
+      // A new build starts fresh: drop any previous build's CoT + graph. The CoT block is
+      // NOT mounted here — it belongs AFTER the plan (operator 2026-07-17). The plan comes
+      // first (elicitation), the user approves it, and only THEN does the model think
+      // through the build. Mounting it at build-start put the reasoning above the plan.
       msgs: [...this.state.msgs.filter(m => !m.isReasoning && !m.isLiveGraph),
-             { isNote: true, text: "Great — let me put a plan together for you to look over." },
-             { isReasoning: true, _id: 'rsn_' + (this._pc = (this._pc || 0) + 1) }],
+             { isNote: true, text: "Great — let me put a plan together for you to look over." }],
       // The pinned outcome belongs to ONE build. Carrying it into the next one
       // would show the user a contract they never agreed to for this workflow —
       // and stale run results (outcomeResults/deliveries) would show "Contract
@@ -5080,8 +5110,16 @@ class Component extends DCLogic {
         if (conf === "inferred") return { label: "I inferred", style: CHIP_BASE + "background:rgba(231,178,94,.1);color:#f3cd86;border:1px dashed rgba(231,178,94,.5)", dotStyle: DOT + "background:#e7b25e" };
         return                          { label: "you said",   style: CHIP_BASE + "background:rgba(255,255,255,.04);color:rgba(255,255,255,.4);border:1px solid rgba(255,255,255,.08)", dotStyle: DOT + "background:rgba(255,255,255,.45)" };
       };
-      const steps     = (p.steps || []).map((s, i) => ({ idx: String(i + 1), text: s.text || "", chip: chip(s.confidence) }));
+      // Procedure steps are numbered 01, 02, … in the SOP (design system).
+      const steps     = (p.steps || []).map((s, i) => ({ idx: String(i + 1).padStart(2, "0"), text: s.text || "", chip: chip(s.confidence) }));
       const branches  = (p.branches || []).filter(b => b && (b.when || b.then)).map((b) => ({ when: b.when || "otherwise", then: b.then || "", chip: chip(b.confidence) }));
+      // The SOP title — a short serif headline. Use the workflow name the plan derived,
+      // else fall back to a trimmed summary. The trailing word is italicised amber in the
+      // template, so split off the last word for that accent.
+      const rawTitle  = (p.name || p.title || (iv.spec && iv.spec.name) || (p.summary || "Workflow plan")).replace(/[.]+$/, "");
+      const titleWords = String(rawTitle).trim().split(/\s+/);
+      const titleAccent = titleWords.length > 1 ? titleWords.pop() : "";
+      const titleHead   = titleWords.join(" ");
       const knowledge = (p.knowledge || []).filter(k => k && k.text).map(k => ({ text: k.text, source: k.source || "knowledge" }));
       const up        = (p.upload_suggestion && p.upload_suggestion.artifact)
         ? { artifact: p.upload_suggestion.artifact, reason: p.upload_suggestion.reason || "" } : null;
@@ -5091,7 +5129,14 @@ class Component extends DCLogic {
       const onBuild = () => {
         // Cache the approved plan: its branches carry the PLAIN-LANGUAGE route labels the
         // live graph shows on each lane ("if it is urgent" rather than the raw enum).
-        self.setState({ msgs: [...self.state.msgs, { isOperator: true, text: "Build it" }], thinking: true, inputMode: "locked", phase: "building", _approvedPlanCache: p });
+        // The CoT block mounts HERE — AFTER the plan (operator 2026-07-17): the user
+        // approves the plan, THEN watches the model think through the build below it.
+        self.setState({
+          msgs: [...self.state.msgs,
+                 { isOperator: true, text: "Build it" },
+                 { isReasoning: true, _id: 'rsn_' + (self._pc = (self._pc || 0) + 1) }],
+          thinking: true, inputMode: "locked", phase: "building", _approvedPlanCache: p,
+        });
         self._send({ type: "accept" });
       };
       const onChange = () => {
@@ -5102,6 +5147,7 @@ class Component extends DCLogic {
         msgs: [...this.state.msgs, {
           isPlan: true,
           summary: p.summary || (p.trigger && p.trigger.text) || "Here's the plan.",
+          titleHead, titleAccent,
           stamp,
           trigger: { text: (p.trigger && p.trigger.text) || "", chip: chip(p.trigger && p.trigger.confidence) },
           steps,
@@ -6460,14 +6506,45 @@ class Component extends DCLogic {
     if (!caseWhen || caseWhen === '*') return 'otherwise';
     return this._clip(String(caseWhen), 34);
   }
+  // THE TRIGGER IS THE FIRST NODE (design system): it starts the workflow, so it renders
+  // as a capsule-left at the head of the graph. It lives in spec.triggers[], NOT nodes[],
+  // and it is the ENTRY POINT — not a step the user approves — so it renders as a
+  // display-only, always-"done" card that never enters the approval count. Falls back to
+  // the plan's trigger while the spec is still streaming.
+  _liveTriggerCard(spec) {
+    const t = (spec?.triggers && spec.triggers[0])
+      || (this.state._approvedPlanCache && this.state._approvedPlanCache.trigger
+          ? { type: (this.state._approvedPlanCache.trigger.type || 'trigger'), _planText: this.state._approvedPlanCache.trigger.text } : null);
+    if (!t) return null;
+    // Human label: an email trigger names the mailbox; a schedule names the cadence; else
+    // the plan's own words, else a title-cased type.
+    const ty = String(t.type || 'trigger').toLowerCase();
+    let label = t.label || t._planText || '';
+    if (!label) {
+      if (ty === 'email' || ty === 'connector_event') label = 'A new email arrives';
+      else if (ty === 'schedule') label = t.cron ? ('On schedule') : 'On a schedule';
+      else if (ty === 'manual') label = 'When you run it';
+      else label = this._titleCase(ty);
+    }
+    const shapeNode = { id: '__trigger__', type: 'trigger', label, mode: ty === 'email' || ty === 'connector_event' ? 'email' : null };
+    // gi = -1 keeps it out of the approval math; force it to the "done/ok" look (a trigger
+    // is a given, not a pending step) but with no check badge and no confirm controls.
+    const card = this._liveCardFor(shapeNode, -1, 1, -99, false);
+    return { ...card, check: false, decide: false, showConn: true, o: 1,
+             fg: 'rgba(255,255,255,.8)', titleColor: 'rgba(255,255,255,.7)',
+             border: 'rgba(255,255,255,.18)', connColor: 'rgba(231,178,94,.5)', connO: 1 };
+  }
   // Everything from the entry node up to and INCLUDING the first branch. Derived from the
-  // spec's real edges, so a workflow of any shape resolves correctly.
+  // spec's real edges, so a workflow of any shape resolves correctly. The trigger is
+  // prepended as the always-present entry node.
   _liveTrunkOf(spec, nodes, confirmed, flashIdx, explaining) {
+    const trig = this._liveTriggerCard(spec);
+    const head = trig ? [trig] : [];
     const br = (spec?.nodes || []).find(n => n.type === 'branch' || n.type === 'decision');
-    if (!br) return nodes.map((n, i) => this._liveCardFor(n, i, confirmed, flashIdx, explaining));
+    if (!br) return head.concat(nodes.map((n, i) => this._liveCardFor(n, i, confirmed, flashIdx, explaining)));
     const cut = nodes.findIndex(n => n.id === br.id);
     const upto = cut < 0 ? nodes.length - 1 : cut;
-    return nodes.slice(0, upto + 1).map((n, i) => this._liveCardFor(n, i, confirmed, flashIdx, explaining));
+    return head.concat(nodes.slice(0, upto + 1).map((n, i) => this._liveCardFor(n, i, confirmed, flashIdx, explaining)));
   }
   // One lane per branch case: walk the spec's edges from each case target, collecting the
   // chain until it ends. Any number of lanes, any depth — nothing about shape is assumed.
@@ -7359,12 +7436,16 @@ class Component extends DCLogic {
         // a lane, labelled in the plan's own plain words where we have them. A workflow
         // with no branch has no lanes and simply renders as a trunk. Any lane count.
         const lanes = this._liveLanes(S.spec, nodes, confirmed, flashIdx, explaining);
+        // The trigger heads every graph (the entry point). In the no-lanes case it is
+        // prepended to the flat node row; in the lanes case it is part of the trunk.
+        const trig = this._liveTriggerCard(S.spec);
+        const flat = (trig ? [trig] : []).concat(nodes.map((n, i) => this._liveCardFor(n, i, confirmed, flashIdx, explaining)));
         return {
           lanes, hasLanes: !!(lanes && lanes.length),
           trunk: lanes && lanes.length
             ? this._liveTrunkOf(S.spec, nodes, confirmed, flashIdx, explaining)
-            : nodes.map((n, i) => this._liveCardFor(n, i, confirmed, flashIdx, explaining)),
-          nodes: nodes.map((n, i) => this._liveCardFor(n, i, confirmed, flashIdx, explaining)),
+            : flat,
+          nodes: flat,
           total, confirmed, done,
           building: !S.spec,
           stepCounter: confirmed + ' / ' + total + ' APPROVED',
