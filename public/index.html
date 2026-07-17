@@ -615,7 +615,7 @@
                         </div>
                       </sc-for>
                     <sc-if value="{{ liveGraph.hasLanes }}" hint-placeholder-val="{{ false }}">
-                      <div style="flex:none;position:relative;width:{{ liveGraph.fan.wpx }};height:{{ liveGraph.fan.hpx }};margin:0 -3px">
+                      <div style="flex:none;position:relative;width:{{ liveGraph.fan.wpx }};height:{{ liveGraph.fan.hpx }};margin:0 -3px;opacity:{{ liveGraph.fan.o }};transition:opacity .4s">
                         <sc-for list="{{ liveGraph.fan.paths }}" as="fp" hint-placeholder-count="2">
                           <span style="position:absolute;left:0;top:0;width:{{ liveGraph.fan.wpx }};height:{{ liveGraph.fan.hpx }};display:block"><svg viewBox="{{ liveGraph.fan.viewBox }}" width="{{ liveGraph.fan.w }}" height="{{ liveGraph.fan.h }}" fill="none" style="display:block;overflow:visible"><path d="{{ fp.d }}" stroke="{{ fp.color }}" stroke-width="2" stroke-linecap="round" fill="none"></path><polygon points="{{ fp.head }}" fill="{{ fp.color }}"></polygon></svg></span>
                         </sc-for>
@@ -624,7 +624,7 @@
                         <div style="display:flex;flex-direction:column;gap:56px;padding-left:0">
                           <sc-for list="{{ liveGraph.lanes }}" as="ln" hint-placeholder-count="2">
                             <div>
-                              <div style="font-family:'Instrument Serif',Georgia,serif;font-style:italic;font-size:13px;color:rgba(239,200,146,.8);margin:0 0 8px 2px;white-space:nowrap">{{ ln.label }}</div>
+                              <div style="font-family:'Instrument Serif',Georgia,serif;font-style:italic;font-size:13px;color:rgba(239,200,146,.8);margin:0 0 8px 2px;white-space:nowrap;opacity:{{ ln.labelO }};transition:opacity .4s">{{ ln.label }}</div>
                               <div style="display:flex;align-items:flex-start;gap:0">
                                 <sc-for list="{{ ln.nodes }}" as="an" hint-placeholder-count="2">
                         <div style="display:flex;align-items:center;flex:none">
@@ -3769,7 +3769,13 @@ class Component extends DCLogic {
           mode: (n.config && n.config.mode) || null, description: n.description ?? null,
         }));
       }
-      overrides.awaitingGraphApproval = slice.awaitingGraphApproval !== false;
+      // A restored graph has NO live converger session — the build-reveal animation is a
+      // build-time flourish only, so on restore we skip it: show the graph FULLY (liveRevealed
+      // null ⇒ all nodes shown) and make it immediately approvable. Without this, a reload
+      // caught mid-reveal (awaitingGraphApproval persisted false) would restore a complete but
+      // un-approvable graph with no animation left to unstick it. (operator 2026-07-17)
+      overrides.awaitingGraphApproval = true;
+      overrides.liveRevealed = null;
       overrides.inputMode = 'locked';
     }
     this.setState(Object.assign({}, slice, overrides));
@@ -4885,8 +4891,9 @@ class Component extends DCLogic {
     this._slId = null; this._slPendingReplace = false; this._slStepCount = 0;
     this._closeReasoningStream();
     const self = this;
+    clearInterval(this._liveRevealT);   // cancel any in-flight build-reveal from a prior build
     this.setState({
-      phase: "building", intent, inputValue: "", thinking: true, inputMode: "locked",
+      phase: "building", intent, inputValue: "", thinking: true, inputMode: "locked", liveRevealed: 0,
       // A new build starts fresh: drop any previous build's CoT + graph. The CoT block is
       // NOT mounted here — it belongs AFTER the plan (operator 2026-07-17). The plan comes
       // first (elicitation), the user approves it, and only THEN does the model think
@@ -4963,25 +4970,19 @@ class Component extends DCLogic {
         id: n.id, type: n.type, label: n.label ?? null,
         mode: (n.config && n.config.mode) || null, description: n.description ?? null,
       })));
-      // Preserve any approvals the user already made while nodes streamed: reconcile to
-      // the authoritative spec order but keep the confirmed count valid (it indexes into
-      // this list, and the trigger is index 0 in both).
-      // The graph may ALREADY be mounted (it streamed in node-by-node during the build) or
-      // not (a rebuild/replay produced no node beats). Ensure it exists, then append the
-      // "confirm each step" narration ONCE — this fires when the build finishes and the graph
-      // becomes the user's to approve, regardless of whether it was streamed (operator
-      // 2026-07-17). `_confirmNote` is the idempotency marker so a re-emitted generated_workflow
-      // (a revise) never double-posts it.
-      let nextMsgs = this.state.msgs;
-      if (!nextMsgs.some(m => m.isLiveGraph)) {
-        nextMsgs = [...nextMsgs, { isLiveGraph: true, _id: 'lg_' + (this._pc = (this._pc || 0) + 1) }];
-      }
-      if (!nextMsgs.some(m => m._confirmNote)) {
-        nextMsgs = [...nextMsgs, { isNote: true, _confirmNote: true, text: "Your workflow is built. Now confirm each step in the flow — hover a step to approve it, or reject one to tell me what to change. Nothing goes live until you've tested it." }];
-      }
+      // THE GRAPH IS BUILT ONCE, FROM THE COMPLETE SPEC, THEN ANIMATED (operator 2026-07-17).
+      // The full spec has edges, so the laned layout is correct from the first frame; the
+      // node-by-node reveal (`_animateReveal`) makes it read as a live build without ever
+      // showing the flat, edge-less interim. Approval is NOT enabled here — the reveal enables
+      // it when the last node lands, and posts the "confirm each step" note then. The graph
+      // card is mounted here; the "confirm" note is deliberately NOT added yet.
+      const nextMsgs = this.state.msgs.some(m => m.isLiveGraph)
+        ? this.state.msgs
+        : [...this.state.msgs, { isLiveGraph: true, _id: 'lg_' + (this._pc = (this._pc || 0) + 1) }];
       const patch = {
         spec: sp,
-        awaitingGraphApproval: true,
+        awaitingGraphApproval: false,   // enabled by _animateReveal when the reveal completes
+        liveRevealed: 0,
         graphApproved: [], graphSelNode: null, graphReviseOpen: false, graphReviseText: "",
         thinking: false, inputMode: "locked", phase: "building",
         ...(specNodes.length ? { liveNodes: specNodes } : {}),
@@ -4994,6 +4995,8 @@ class Component extends DCLogic {
         patch.outcome = { statement: sp.outcome.statement, assertions: sp.outcome.assertions || [] };
       }
       this.setState(patch);
+      if (specNodes.length) this._animateReveal(specNodes.length);
+      else this.setState({ awaitingGraphApproval: true });
       return;
     }
 
@@ -6428,7 +6431,7 @@ class Component extends DCLogic {
   // One node's full visual state, exactly as the design models it: everything before the
   // confirmed index is approved (check), the node AT it is proposed (amber, breathing,
   // hover controls), everything after is not yet revealed.
-  _liveCardFor(node, gi, confirmed, flashIdx, explaining, ready) {
+  _liveCardFor(node, gi, confirmed, flashIdx, explaining, ready, revealed) {
     const et = node.type === 'llm' ? (node.mode || 'freeform') : node.type;
     const { typeLabel, icons } = this._nodeShape(et, node.mode);
     const shape = this._liveShapeOf(node.type);
@@ -6448,13 +6451,20 @@ class Component extends DCLogic {
     const flash = gi === flashIdx;
     const isStop = String(node.type).toLowerCase() === 'stop';
     const isDeliver = String(node.type).toLowerCase() === 'deliver';
+    // REVEAL ANIMATION (operator 2026-07-17). `revealed` is how many nodes have "built" so
+    // far; a node at or past it is not shown yet (pops in via the wrap's opacity/transform
+    // transition as the reveal cursor reaches it). `revealed == null` means "not animating"
+    // (a restored or settled build) → everything shown. Layout is unaffected — a hidden node
+    // still occupies its slot, so the graph never reflows and the fit is stable.
+    const shown = (revealed == null) || gi < revealed;
     return {
       id: node.id,
       title: this._clip(node.label || this._titleCase(et), 18),
       tag: typeLabel,
-      // Upcoming nodes are DIM, not hidden — the design's own UPCOMING state.
-      o: ok || active ? 1 : 0.45,
-      tr: 'none',
+      // Shown nodes: the cursor/confirmed are full, the rest dim (the design's UPCOMING state).
+      // Not-yet-revealed nodes are invisible and slightly displaced, so they pop in on reveal.
+      o: shown ? (ok || active ? 1 : 0.45) : 0,
+      tr: shown ? 'none' : 'translateY(10px) scale(.82)',
       w: diamond ? '46px' : (circle ? '56px' : '58px'),
       h: diamond ? '46px' : (circle ? '56px' : '58px'),
       radius: circle ? '50%' : (diamond ? '11px' : (shape === 'capsuleL' ? '29px 13px 13px 29px' : (shape === 'capsuleR' ? '13px 29px 29px 13px' : '13px'))),
@@ -6517,16 +6527,16 @@ class Component extends DCLogic {
   // Everything from the entry node up to and INCLUDING the first branch. Derived from the
   // spec's real edges. The trigger is already the first entry in `nodes` (it is a real
   // approvable node now), so no special-casing here — just find the branch by id.
-  _liveTrunkOf(spec, nodes, confirmed, flashIdx, explaining, ready) {
+  _liveTrunkOf(spec, nodes, confirmed, flashIdx, explaining, ready, revealed) {
     const br = (spec?.nodes || []).find(n => n.type === 'branch' || n.type === 'decision');
-    if (!br) return nodes.map((n, i) => this._liveCardFor(n, i, confirmed, flashIdx, explaining, ready));
+    if (!br) return nodes.map((n, i) => this._liveCardFor(n, i, confirmed, flashIdx, explaining, ready, revealed));
     const cut = nodes.findIndex(n => n.id === br.id);
     const upto = cut < 0 ? nodes.length - 1 : cut;
-    return nodes.slice(0, upto + 1).map((n, i) => this._liveCardFor(n, i, confirmed, flashIdx, explaining, ready));
+    return nodes.slice(0, upto + 1).map((n, i) => this._liveCardFor(n, i, confirmed, flashIdx, explaining, ready, revealed));
   }
   // One lane per branch case: walk the spec's edges from each case target, collecting the
   // chain until it ends. Any number of lanes, any depth — nothing about shape is assumed.
-  _liveLanes(spec, nodes, confirmed, flashIdx, explaining, ready) {
+  _liveLanes(spec, nodes, confirmed, flashIdx, explaining, ready, revealed) {
     const br = (spec?.nodes || []).find(n => n.type === 'branch' || n.type === 'decision');
     if (!br) return null;
     const cases = (br.config && br.config.cases) || [];
@@ -6551,12 +6561,16 @@ class Component extends DCLogic {
       usedTargets.add(c.to);
       const chain = chainFrom(c.to);
       if (!chain.length) return;
+      const firstGi = idxOf(c.to);
       lanes.push({
         label: this._laneLabelFor(c.when, i),
+        // The lane's italic label fades in WITH its first node during the reveal, so a lane
+        // header never floats above an empty lane. `revealed == null` (settled) ⇒ shown.
+        labelO: (revealed == null || (firstGi >= 0 && firstGi < revealed)) ? 1 : 0,
         nodes: chain.map(id => {
           const gi = idxOf(id);
           const n = gi >= 0 ? nodes[gi] : byId.get(id);
-          return this._liveCardFor(n, gi >= 0 ? gi : 1e9, confirmed, flashIdx, explaining, ready);
+          return this._liveCardFor(n, gi >= 0 ? gi : 1e9, confirmed, flashIdx, explaining, ready, revealed);
         }),
       });
     });
@@ -6642,26 +6656,35 @@ class Component extends DCLogic {
     });
     this._send({ type: 'request_changes', feedback: note });
   }
-  // A node beat arrived: append the RAW node to state. The visual model is computed at
-  // render (_liveCardFor), so approval state and streaming stay decoupled. The graph card
-  // itself is mounted once, in the chat, under the reasoning that produced it.
-  _onLiveNode(node, streamId) {
-    if (!node || !node.id) return;
-    let nodes = (this.state.liveNodes || []);
-    // THE TRIGGER STREAMS IN FIRST (operator 2026-07-17: every node is addressed). On the
-    // first real node beat, seed the trigger (from the approved plan) as node 0 so it is
-    // approved before the steps — the actual trigger from spec.triggers[] reconciles onto
-    // the same '__trigger__' id when generated_workflow arrives.
-    if (!nodes.length) {
-      const trig = this._triggerNodeFrom(this.state.spec);
-      if (trig) nodes = [trig];
-    }
-    if (nodes.some(n => n.id === node.id)) return;         // dedupe re-sends/replays
-    const next = [...nodes, node];
-    const msgs = this.state.msgs.some(m => m.isLiveGraph)
-      ? this.state.msgs
-      : [...this.state.msgs, { isLiveGraph: true, _id: 'lg_' + (this._pc = (this._pc || 0) + 1) }];
-    this.setState({ liveNodes: next, msgs });
+  // A node beat arrived MID-BUILD. We DON'T render it (operator 2026-07-17): the raw node
+  // stream has no edges — edges only exist in the finished spec — so a graph built from these
+  // beats can only draw a flat, edge-less chain that snaps into its real branch/lane shape at
+  // the end (the "formatting is wrong until it's done" the user saw). Instead the graph is
+  // built ONCE from the complete spec at `generated_workflow`, then ANIMATED as if it were
+  // being built live (`_animateReveal`) — the reveal is indistinguishable from a real stream
+  // but every frame has the correct laned layout. Node beats are ignored here.
+  _onLiveNode(_node, _streamId) { /* intentionally inert — see _animateReveal */ }
+  // Reveal the finished graph one node at a time so the build reads as live. `liveRevealed`
+  // is the count of nodes shown so far; `_liveCardFor` hides any node at or past it. When the
+  // last node lands, the graph becomes approvable (`awaitingGraphApproval`) and the "confirm
+  // each step" note posts. Cancelled/superseded by any new build or a revise.
+  _animateReveal(total) {
+    clearInterval(this._liveRevealT);
+    if (!total) { this.setState({ liveRevealed: 0, awaitingGraphApproval: true }); return; }
+    this.setState({ liveRevealed: 0 });
+    const stepMs = total > 7 ? 260 : 340;                  // a touch quicker for big graphs
+    this._liveRevealT = setInterval(() => {
+      const shown = (this.state.liveRevealed || 0) + 1;
+      if (shown >= total) {
+        clearInterval(this._liveRevealT);
+        const msgs = this.state.msgs.some(m => m._confirmNote)
+          ? this.state.msgs
+          : [...this.state.msgs, { isNote: true, _confirmNote: true, text: "Your workflow is built. Now confirm each step in the flow — hover a step to approve it, or reject one to tell me what to change. Nothing goes live until you've tested it." }];
+        this.setState({ liveRevealed: total, awaitingGraphApproval: true, msgs });
+      } else {
+        this.setState({ liveRevealed: shown });
+      }
+    }, stepMs);
   }
 
   // Open the SSE reasoning stream for a build. Additive: if EventSource is missing,
@@ -7484,17 +7507,21 @@ class Component extends DCLogic {
         // `generated_workflow` has landed (`awaitingGraphApproval`). `ready` carries that gate
         // to every card, so no node lights amber or shows a confirm control before then.
         const ready = !!S.awaitingGraphApproval;
+        // REVEAL CURSOR (operator 2026-07-17): how many nodes have "built" so far during the
+        // post-spec reveal animation. `null` ⇒ not animating (a settled or restored build) ⇒
+        // everything shown. Clamped to total.
+        const revealed = S.liveRevealed == null ? total : Math.min(S.liveRevealed, total);
         // LANES — derived from the spec's REAL edges (never assumed). Everything up to
         // and including the first branch is the trunk; each of that branch's cases opens
         // a lane, labelled in the plan's own plain words where we have them. A workflow
         // with no branch has no lanes and simply renders as a trunk. Any lane count.
-        const lanes = this._liveLanes(S.spec, nodes, confirmed, flashIdx, explaining, ready);
+        const lanes = this._liveLanes(S.spec, nodes, confirmed, flashIdx, explaining, ready, revealed);
         const hasLanes = !!(lanes && lanes.length);
         // The trigger is already `nodes[0]` (a real approvable node), so the flat row and
         // the trunk render it naturally — no prepend needed.
-        const flat = nodes.map((n, i) => this._liveCardFor(n, i, confirmed, flashIdx, explaining, ready));
+        const flat = nodes.map((n, i) => this._liveCardFor(n, i, confirmed, flashIdx, explaining, ready, revealed));
         const trunk = hasLanes
-          ? this._liveTrunkOf(S.spec, nodes, confirmed, flashIdx, explaining, ready)
+          ? this._liveTrunkOf(S.spec, nodes, confirmed, flashIdx, explaining, ready, revealed)
           : flat;
         // The branch node is the LAST trunk node when lanes exist — its outgoing arrow is
         // replaced by the fan-out, so drop its trailing connector (the design's `conn:false`).
@@ -7505,6 +7532,9 @@ class Component extends DCLogic {
           const brConfirmed = confirmed > brGi;
           const brFlash = flashIdx === brGi;
           fan = this._liveFanout(lanes.length, brConfirmed, brFlash);
+          // The fan-out fades in only once the branch itself has been revealed, so it never
+          // dangles from a node that has not appeared yet during the build animation.
+          fan.o = revealed > brGi ? 1 : 0;
         }
         return {
           lanes, hasLanes, fan,
