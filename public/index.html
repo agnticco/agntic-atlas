@@ -751,7 +751,7 @@
                  CoT that produced it, instead of a pinned band above the conversation. -->
 
 
-            <sc-if value="{{ thinking }}" hint-placeholder-val="{{ false }}">
+            <sc-if value="{{ chatThinking }}" hint-placeholder-val="{{ false }}">
               <div style="display:flex;flex-direction:column;align-items:flex-start;gap:8px">
               <div style="position:relative;width:44px;height:44px;color:rgba(255,255,255,.7);flex:none">
                   <div style="position:absolute;inset:-30%;border-radius:50%;background:radial-gradient(circle,rgba(255,255,255,.12) 0%,rgba(255,255,255,0) 65%);animation:irisGlow 3500ms cubic-bezier(.5,0,.2,1) infinite;pointer-events:none;"></div>
@@ -7334,6 +7334,12 @@ class Component extends DCLogic {
     const trg = (S.spec && S.spec.triggers && S.spec.triggers[0]) || {};
 
     return {
+      // The standalone "thinking" iris is for ORDINARY chat turns. During a build the
+      // reasoning stream (isReasoning) shows its OWN iris header ("Building…"), so the
+      // standalone one below is a REDUNDANT second Atlas logo (operator 2026-07-17) — hide
+      // it whenever a reasoning block is on screen; keep it for pre-build chat thinking.
+      chatThinking: !!S.thinking && !(S.msgs || []).some(m => m.isReasoning),
+
       // panels
       leftOpen: S.leftOpen, leftCollapsed: !S.leftOpen,
       leftWidth: S.leftOpen ? `${S.leftW ?? 248}px` : "56px",
@@ -7506,8 +7512,24 @@ class Component extends DCLogic {
           nodes: flat,
           total, confirmed, done,
           building: !S.spec,
-          fitRef: (el) => { this._lgOuter = el; if (el && !this._lgRO) { try { this._lgRO = new ResizeObserver(() => this._fitLiveGraph()); this._lgRO.observe(el); } catch (e) {} } },
-          fitInnerRef: (el) => { this._lgInner = el; if (el && typeof requestAnimationFrame === 'function') requestAnimationFrame(() => this._fitLiveGraph()); },
+          // ONE ResizeObserver watches BOTH boxes: the OUTER for column/window resize, and
+          // the INNER for CONTENT growth — as nodes stream in the inner widens, and without
+          // observing it the graph is never re-fitted mid-build, so it overflows and reads as
+          // broken until the final render (operator 2026-07-17: "renders properly only when the
+          // build is done"). transform:scale does not change the observed border-box, so this
+          // cannot feed back on itself. requestAnimationFrame also fits on first mount.
+          fitRef: (el) => {
+            this._lgOuter = el;
+            if (el) { this._lgRO = this._lgRO || new ResizeObserver(() => this._fitLiveGraph()); try { this._lgRO.observe(el); } catch (e) {} }
+          },
+          fitInnerRef: (el) => {
+            this._lgInner = el;
+            if (el) {
+              this._lgRO = this._lgRO || new ResizeObserver(() => this._fitLiveGraph());
+              try { this._lgRO.observe(el); } catch (e) {}
+              if (typeof requestAnimationFrame === 'function') requestAnimationFrame(() => this._fitLiveGraph());
+            }
+          },
           stepCounter: confirmed + ' / ' + total + ' APPROVED',
           hint: done ? 'every step approved' : (ready ? 'hover a node to confirm or reject' : 'building…'),
           progressW: total ? Math.round((confirmed / total) * 100) + '%' : '0%',
