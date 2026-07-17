@@ -4966,16 +4966,26 @@ class Component extends DCLogic {
       // Preserve any approvals the user already made while nodes streamed: reconcile to
       // the authoritative spec order but keep the confirmed count valid (it indexes into
       // this list, and the trigger is index 0 in both).
+      // The graph may ALREADY be mounted (it streamed in node-by-node during the build) or
+      // not (a rebuild/replay produced no node beats). Ensure it exists, then append the
+      // "confirm each step" narration ONCE — this fires when the build finishes and the graph
+      // becomes the user's to approve, regardless of whether it was streamed (operator
+      // 2026-07-17). `_confirmNote` is the idempotency marker so a re-emitted generated_workflow
+      // (a revise) never double-posts it.
+      let nextMsgs = this.state.msgs;
+      if (!nextMsgs.some(m => m.isLiveGraph)) {
+        nextMsgs = [...nextMsgs, { isLiveGraph: true, _id: 'lg_' + (this._pc = (this._pc || 0) + 1) }];
+      }
+      if (!nextMsgs.some(m => m._confirmNote)) {
+        nextMsgs = [...nextMsgs, { isNote: true, _confirmNote: true, text: "Your workflow is built. Now confirm each step in the flow — hover a step to approve it, or reject one to tell me what to change. Nothing goes live until you've tested it." }];
+      }
       const patch = {
         spec: sp,
         awaitingGraphApproval: true,
         graphApproved: [], graphSelNode: null, graphReviseOpen: false, graphReviseText: "",
         thinking: false, inputMode: "locked", phase: "building",
         ...(specNodes.length ? { liveNodes: specNodes } : {}),
-        // A build that produced no node beats (a rebuild, a replay) still needs the graph.
-        msgs: this.state.msgs.some(m => m.isLiveGraph)
-          ? this.state.msgs
-          : [...this.state.msgs, { isLiveGraph: true, _id: 'lg_' + (this._pc = (this._pc || 0) + 1) }],
+        msgs: nextMsgs,
       };
       // Surface the outcome contract in the pinned card if the spec carries one
       // (same shape the outcome_check handler sets), so "what this must deliver"
@@ -5102,6 +5112,9 @@ class Component extends DCLogic {
         self.setState({
           msgs: [...self.state.msgs,
                  { isOperator: true, text: "Build it" },
+                 // Narration (operator 2026-07-17): tell the user what is about to happen so the
+                 // streaming reasoning + assembling graph read as a deliberate process, not noise.
+                 { isNote: true, text: "On it — follow my thinking below as I build your workflow. Each step will appear in the flow as I add it." },
                  { isReasoning: true, _id: 'rsn_' + (self._pc = (self._pc || 0) + 1) }],
           thinking: true, inputMode: "locked", phase: "building", _approvedPlanCache: p,
           rsnBodyHidden: true,

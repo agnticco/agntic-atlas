@@ -948,11 +948,18 @@ ${JSON.stringify({
 It is already VALID and it already delivers everything the outcome promises. The only question
 is whether the intent asks for work this draft does not do.
 
+Each node's internal CONFIG is deliberately omitted above (you see only id/type/mode/label) and it
+has ALREADY been validated as present and correct — a classify node's categories, a branch node's
+\`on\`/cases/edges, a deliver node's channel, every prompt and field list. Do NOT report any of that
+as missing: not categories, not cases, not edges, not \`on\`, not mode, not instructions, not config
+of any kind. It is not your concern and it IS there. Judge ONLY whether the intent asks for an entire
+STEP (a whole node) that no node above performs.
+
 BE CONSERVATIVE. A workflow with no AI step is a perfectly good workflow — moving an email into a
 spreadsheet needs no model call, and adding one costs the user money on every single run, forever.
-Only say it is incomplete if the intent explicitly asks for something no step does: a summary
+Only say it is incomplete if the intent explicitly asks for a WHOLE STEP no node does: a summary
 nobody writes, a translation nobody makes, a field nobody extracts, a destination nobody sends to.
-"It could be nicer" is not incomplete. If in doubt, it is COMPLETE.
+"It could be nicer" is not incomplete, and a config detail is never missing. If in doubt, it is COMPLETE.
 
 Return JSON only:
   {"complete":true}
