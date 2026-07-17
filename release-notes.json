@@ -1,5 +1,15 @@
 [
   {
+    "version": "1.6.0",
+    "date": "2026-07-17",
+    "title": "A clearer, live workflow builder",
+    "notes": [
+      "See a plain-language plan before Atlas builds — approve it in one click.",
+      "Watch your workflow assemble step by step, then confirm each step before anything goes live.",
+      "Faster, more reliable builds."
+    ]
+  },
+  {
     "version": "1.5.5",
     "date": "2026-07-16",
     "title": "Atlas builds workflows by talking",
