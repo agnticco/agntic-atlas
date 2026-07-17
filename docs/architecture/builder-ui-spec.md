@@ -68,6 +68,25 @@ icons — largely a re-skin, not a rebuild.
    ignore lane — a silent violation of user intent). Render it in the design's language: a
    terminal **capsule-right like deliver, but muted/outlined rather than green, no out-port**.
 
+## What is BUILT (2026-07-17, verified headed)
+
+- **Dotted chat surface** — the design's exact token.
+- **Reasoning Stream** (`isReasoning`) — iris header + "Building…" + live streamed prose +
+  caret, collapsing to "How Atlas thought through this build". Prose only, no beats.
+- **Live Graph** (`isLiveGraph`) — assembles in the chat under the CoT as the converger
+  writes it. Shape-per-role from the Node System catalog. Per-node hover confirm/reject;
+  confirm advances with the 560ms green flash; the last confirm sends the accept and the
+  right panel flips to Ready-to-test. Reject opens a note → `request_changes`.
+  **Lanes** derived from the spec's real edges (any count, any depth), labelled in the
+  plan's plain words. `stop` renders as the muted terminal.
+- **Retired**: the pinned graph band and `isSignalLine`.
+- **Right panel** — contract + test only.
+- **CoT persistence** — `build_reasoning` on the workflow row.
+
+Deliberate deviation from the design file: **every streamed node is visible** (dim ahead
+of the approval cursor) rather than hidden. The demo hides them because it replays a
+canned build; here the user approves a REAL graph and must see what they are confirming.
+
 ## Backend gaps the design implies
 
 - **Edges + lane grouping during streaming.** `node` beats carry `{id,type,label,mode,description}`
