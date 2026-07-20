@@ -1,5 +1,14 @@
 [
   {
+    "version": "1.6.1",
+    "date": "2026-07-20",
+    "title": "Health numbers now count real runs only",
+    "notes": [
+      "Your workflow's success rate and run count now reflect only real runs — test runs from the builder are shown separately instead of being mixed in. A workflow you've tested but that hasn't fired for real now reads \"not yet run live\" rather than \"100% success\".",
+      "Some success rates will look different (usually lower) after this update. Nothing about your workflows changed — the number is just measuring the right thing now."
+    ]
+  },
+  {
     "version": "1.6.0",
     "date": "2026-07-17",
     "title": "A clearer, live workflow builder",

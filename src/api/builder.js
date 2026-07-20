@@ -28,7 +28,7 @@ import { mailerConfigured } from '../utils/mailer.js';
 import { getGoogleAccessToken } from '../connectors/google/index.js';
 import { getSlackToken } from '../connectors/slack/oauth.js';
 import { getAirtableAccessToken } from '../connectors/airtable/oauth.js';
-import { sumTimeSavedMinutes, timeSavedMinutesForRun, isValueRun } from '../workflows/time-saved.js';
+import { sumTimeSavedMinutes, timeSavedMinutesForRun, isValueRun, isLiveRun } from '../workflows/time-saved.js';
 import { APP_VERSION } from '../version.js';
 import { notesSince } from '../release-notes.js';
 import { sendMail } from '../utils/mailer.js';
@@ -685,7 +685,7 @@ function cronToTime(cron) {
 }
 
 /** A run counts toward "done" activity when it is a real (non-test) success or error. */
-function isDoneRun(r) { return !r.is_test && (r.status === 'success' || r.status === 'error'); }
+function isDoneRun(r) { return isLiveRun(r) && (r.status === 'success' || r.status === 'error'); }
 
 /**
  * Composite health score (0–100) over a set of done runs: the success ratio,
@@ -1725,8 +1725,14 @@ Rules:
         // 500 (not 20) so run counts and time-saved aren't undercounted for
         // high-volume workflows; matches the ROI report's window.
         const runs = store.getRuns(wf.id, 500, { userId, tenantId }) || [];
-        const ok   = runs.filter(r => r.status === 'success').length;
-        const fail = runs.filter(r => r.status === 'error').length;
+        // Health counts describe the LIVE workflow, so they exclude test runs —
+        // the same policy `isDoneRun` already applies to the aggregates below.
+        // Without this, a workflow that has only ever been test-run shows a
+        // 100% success rate under "Top workflows" and inflates the
+        // platform-wide success_rate module (F14, second surface).
+        const liveRuns = runs.filter(isLiveRun);
+        const ok   = liveRuns.filter(r => r.status === 'success').length;
+        const fail = liveRuns.filter(r => r.status === 'error').length;
         const last = runs[0] ?? null;
         const trg  = (wf.triggers || [])[0] ?? null;
         const baseline = wf.baseline_duration_s ?? 0;
@@ -1745,7 +1751,8 @@ Rules:
           trigger: trg?.label || trg?.type || 'manual',
           triggerType: trg?.type || 'manual',
           schedule: trg?.schedule || trg?.cron || null,
-          runCount: runs.length, successCount: ok, failCount: fail,
+          runCount: liveRuns.length, successCount: ok, failCount: fail,
+          testRunCount: runs.length - liveRuns.length,
           // Unified time-saved: real successful runs only, measured-or-estimated
           // per run (see time-saved.js). Home total === ROI total === sum(Profile).
           savedMinutes: sumTimeSavedMinutes(runs, wf.baseline_duration_s ?? 0),

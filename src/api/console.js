@@ -17,7 +17,7 @@ import { promises as fs } from 'node:fs';
 import { logEvent, errFields } from '../utils/event-log.js';
 import { generateSopMarkdown } from '../workflows/sop-generator.js';
 import { generateRoiMarkdown } from '../workflows/roi-report.js';
-import { timeSavedMinutesForRun } from '../workflows/time-saved.js';
+import { timeSavedMinutesForRun, isLiveRun } from '../workflows/time-saved.js';
 
 export function mountConsoleRoutes(app, { spine, requireActiveTenant }) {
   const store = spine.engine.workflowStore;
@@ -108,23 +108,32 @@ export function mountConsoleRoutes(app, { spine, requireActiveTenant }) {
       const wf = store.get(req.params.id, { userId: req.user.id });
       if (!wf || wf.tenant_id !== req.tenant.id) return res.status(404).json({ error: 'Not found' });
 
-      // Test runs are real executions (end-to-end, produce output), so they count
-      // as runs here — this keeps the metrics band consistent with the run-history
-      // list, which shows them with a TEST badge (Q13). Time-saved/ROI still
-      // excludes test runs (that measures real-work value, not executions).
       const runs = store.getRuns(req.params.id, 200, {
         userId:   req.user.id,
         tenantId: req.tenant.id,
       });
 
-      const total   = runs.length;
-      const success = runs.filter(r => r.status === 'success').length;
-      const errors  = runs.filter(r => r.status === 'error').length;
+      // The health band describes the LIVE workflow, so it counts only real
+      // runs. Test runs are SEPARATED, not hidden — `tests` is returned so the
+      // band can show them alongside, and they stay in the run-history list
+      // with their TEST badge. That is what keeps the band consistent with the
+      // list below it (Q13's concern, commit c3aad3c) WITHOUT the band making a
+      // claim that isn't true: a workflow that has only ever been test-run now
+      // reads "no runs yet" instead of "100% success · 1 run", and test runs are
+      // the ones most likely to have been re-run until green (F14).
+      // Time-saved/ROI already excludes test runs (time-saved.js `isValueRun`).
+      const live  = runs.filter(isLiveRun);
+      const tests = runs.length - live.length;
+
+      const total   = live.length;
+      const success = live.filter(r => r.status === 'success').length;
+      const errors  = live.filter(r => r.status === 'error').length;
       const rate    = total > 0 ? Math.round((success / total) * 100) : null;
-      const lastRun = runs[0]?.started_at ?? null;
+      const lastRun = live[0]?.started_at ?? null;
+      // Cost is SPEND, not health: a test run costs real money, so it counts.
       const costUsd = runs.reduce((s, r) => s + (r.cost_usd ?? 0), 0);
 
-      res.json({ metrics: { total, success, errors, rate, lastRun, costUsd } });
+      res.json({ metrics: { total, success, errors, rate, lastRun, costUsd, tests } });
     } catch (err) {
       logEvent('console.metrics.error', errFields(err));
       res.status(500).json({ error: err.message });

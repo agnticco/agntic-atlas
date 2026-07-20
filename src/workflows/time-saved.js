@@ -9,6 +9,11 @@
  *
  * Callers pass raw run rows; helpers filter to real successful runs themselves
  * (or use `isValueRun` when they need the filtered set for other purposes).
+ *
+ * This module also owns the run-classification predicates the value model rests
+ * on — `isLiveRun` (non-test) and `isValueRun` (non-test AND successful) — so
+ * that every surface reporting a workflow's health or value filters runs the
+ * same way. See `isLiveRun` for why that is load-bearing.
  */
 
 /** Flat per-run estimate (minutes) used when no baseline has been recorded. */
@@ -17,9 +22,26 @@ export const FLAT_ESTIMATE_MINUTES = (() => {
   return Number.isFinite(n) && n >= 0 ? n : 3;
 })();
 
+/**
+ * A LIVE run: one the workflow performed for real, not a build-time test.
+ *
+ * The single definition of "test runs don't count", shared by every surface an
+ * operator judges a workflow's health by — the console metrics band, the Home
+ * success-rate and top-workflows modules, and `isValueRun` below. Three copies
+ * of `!r.is_test` is three chances to disagree, and the disagreement is silent:
+ * a workflow that has only ever been test-run reporting "100% success" is a
+ * health claim about runs that never happened (F14).
+ *
+ * Status is deliberately NOT considered — a failed live run is still a live
+ * run, and it must count against the success rate.
+ */
+export function isLiveRun(run) {
+  return !!run && !run.is_test;
+}
+
 /** A run that counts toward value: a real (non-test) successful run. */
 export function isValueRun(run) {
-  return !!run && !run.is_test && run.status === 'success';
+  return isLiveRun(run) && run.status === 'success';
 }
 
 /**

@@ -577,7 +577,7 @@ spec is worse than none — it reads as authoritative.
 `outcome.statement` either reflects the change or the contract is marked stale, and that
 no certification is offered against a stale statement.
 
-### F14 — Test runs are counted in the live workflow's success metrics
+### F14 — Test runs are counted in the live workflow's success metrics — **FIXED 2026-07-20**
 
 **Severity: RESIDUAL** (metric hygiene).
 
@@ -594,6 +594,42 @@ fired on schedule.
 **Acceptance test.** Publish a workflow after a passing test. Assert the console's run
 count and success rate reflect only non-test runs, or that test runs are visually
 segregated from the headline metric.
+
+**FIXED 2026-07-20.** Pinned by `tests/api/console-health-metrics.test.js` (9 tests, at
+the HTTP layer against a real SQLite store — a predicate-only test would stay green if
+the route reverted).
+
+- **This reversed a DELIBERATE decision.** Commit `c3aad3c` (2026-07-03, "Q13") *removed*
+  an existing `.filter(r => !r.is_test)` on purpose, so the band's run count would agree
+  with the run-history list beneath it. That concern was real; the remedy made the band
+  untrue. The fix **separates rather than hides**: `GET .../metrics` counts live runs and
+  additionally returns `tests`, so the band renders *"not yet run live · 1 test run"*, and
+  the run-history list still lists test runs with their `TEST` badge. Both numbers are now
+  true and they no longer contradict each other.
+- **A second surface, never filed, had the identical defect.** `src/api/builder.js:1727`
+  computed the Home dashboard's platform-wide `success_rate` module and `top_workflows[]`
+  success rates over the same unfiltered `getRuns` — so a workflow that had only ever been
+  test-run showed a 100% success rate on the *first screen of the product*. Fixed in the
+  same pass. (`isDoneRun` at `builder.js:688` already excluded test runs, so the file's own
+  policy was right and the per-workflow counts simply never followed it.)
+- **One definition, not three.** `isLiveRun` now lives in `src/workflows/time-saved.js`
+  beside `isValueRun` (which is re-expressed in terms of it) and is imported by both
+  surfaces. Three copies of `!r.is_test` is three chances to disagree, and the disagreement
+  is silent.
+- **Cost is unchanged and deliberately so:** a test run costs real money, so it still
+  counts toward `costUsd`. That is spend, not health.
+- **Verified in a headed browser** (2026-07-20, operator-witnessed) against an isolated
+  instance seeded with the two shapes. Both surfaces render correctly:
+  - *Support Email Auto-Reply* (1 test, 0 live) — band reads **"— · not yet run live ·
+    1 test run"**, `0 RUNS / 0 ERRORS`, while the run-history list below still shows the
+    run with its `TEST` badge. Previously: *"100% success · 1 RUNS · 0 ERRORS"*.
+  - *Weekday Morning Digest* (2 test, 3 live: 2 ok / 1 error) — band reads **"67% success
+    · last 5m ago · 2 test runs"**, `3 RUNS / 1 ERRORS`, with all five rows listed. **This
+    is Q13's concern resolved rather than traded away:** the band says 3, the list shows 5,
+    and the caption explains the difference.
+  - Home dashboard: *Support Email Auto-Reply* now contributes `runCount 0, successRate "—"`
+    to `top_workflows` (was 1 run / 100%), and the platform `success_rate` module reads
+    **67% over 3 runs** (was 83% over 6).
 
 ### F15 — SOP trigger section is boilerplate, not the actual trigger
 
@@ -2197,7 +2233,11 @@ written and never verified.
    answer in the DMN coverage work (`decision-analysis.js` already subtracts boxes) worth
    reusing rather than inventing a second notion of coverage — `CLAUDE.md` is emphatic
    that two implementations of one rule drift.
-3. **Should test runs count toward console health metrics?** (F14.)
+3. ~~**Should test runs count toward console health metrics?** (F14.)~~ **ANSWERED
+   2026-07-20 — no, and the question was a false binary.** Counting them makes the health
+   band untrue; hiding them makes it disagree with the run-history list (which is why Q13
+   reverted the filter in the first place). Both surfaces now count live runs and report
+   the test count *alongside*, so nothing is hidden and nothing is overstated. See F14.
 
 ## Reproduction assets
 

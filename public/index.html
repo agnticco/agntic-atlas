@@ -1590,7 +1590,7 @@
           <div style="margin-top:18px;padding:18px 22px;border-radius:16px;border:1px solid rgba(255,255,255,.09);background:linear-gradient(170deg,rgba(255,255,255,.04),rgba(255,255,255,.01));display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap">
             <div style="display:flex;align-items:baseline;gap:10px">
               <span style="font-family:'Instrument Serif',serif;font-style:italic;font-size:26px;letter-spacing:-0.01em;color:{{ consoleMRateColor }}">{{ consoleMRate }}</span>
-              <span style="font-size:12px;color:rgba(255,255,255,.45)">success · last {{ consoleMLastRun }}</span>
+              <span style="font-size:12px;color:rgba(255,255,255,.45)">{{ consoleMSubline }}</span>
             </div>
             <div style="display:flex;align-items:stretch;gap:0">
               <div style="padding:0 20px;border-left:1px solid rgba(255,255,255,.1);display:flex;flex-direction:column;gap:3px"><span style="font-size:20px;font-weight:600;letter-spacing:-0.02em;color:#fff">{{ consoleMTotal }}</span><span style="font-size:10px;font-weight:500;letter-spacing:.14em;text-transform:uppercase;color:#7A7A7A">Runs</span></div>
@@ -8701,6 +8701,18 @@ class Component extends DCLogic {
       consoleMRateColor: S.consoleMetrics && S.consoleMetrics.rate != null ? (S.consoleMetrics.rate >= 90 ? "#9fd6a8" : S.consoleMetrics.rate >= 70 ? "#f0bf6b" : "#f0a896") : "rgba(255,255,255,.6)",
       consoleMLastRun: S.consoleMetrics ? this._relTime(S.consoleMetrics.lastRun) : "—",
       consoleMErrors: S.consoleMetrics ? String(S.consoleMetrics.errors) : "—",
+      // The band counts LIVE runs only, so it must say so when a workflow has
+      // only ever been tested — otherwise "—" beside a populated run-history
+      // list reads as a glitch rather than as "this hasn't fired for real yet".
+      consoleMSubline: (() => {
+        const m = S.consoleMetrics;
+        if (!m) return "success · last —";
+        const tests = m.tests || 0;
+        const testNote = tests > 0 ? `${tests} test run${tests === 1 ? "" : "s"}` : "";
+        if (m.total === 0) return testNote ? `not yet run live · ${testNote}` : "not yet run";
+        const base = `success · last ${this._relTime(m.lastRun)}`;
+        return testNote ? `${base} · ${testNote}` : base;
+      })(),
       // pipeline DAG from spec
       consoleDag: (() => {
         const wf = S.consoleWf; if (!wf) return [];
