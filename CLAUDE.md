@@ -1829,10 +1829,16 @@ workflow by talking to it, test it, publish it, and watch it run on a schedule.
 Thirteen phases of work got it there; the first eleven are finished and signed
 off.
 
-**The current phase (P12) is built and shipped, but not signed off.** Everything
-in it works and is in production. What is missing is the formal checkpoint —
-and the operator chose to ship ahead of that deliberately, which is recorded
-below rather than glossed over.
+**P12 is closed.** It was closed on 2026-07-20 by operator decision, on the
+grounds that the work has been finished, shipped and in real use for weeks. It was
+**not** closed by a passing checkpoint and **not** reviewed by an independent
+verifier, and the record says so plainly
+([`docs/gates/p12.md`](docs/gates/p12.md)) rather than implying a check that did
+not happen. The closing commit carries **no `Gate: P12` trailer**, so
+`git log --grep "^Gate:"` does not list it — that absence is correct.
+
+**Next up is P13**, once the product's behaviour and appearance have been
+hardened (below).
 
 **What is being worked on right now:** the defects found by driving the real
 product through six kinds of workflow in a browser, written up in
@@ -1885,7 +1891,8 @@ been checked when it had not been.** Most of those are now fixed.
         skipped one is the first thing the gate is meant to prove. Run it with a
         key (7/7) or you are passing a gate you have not tested.*
 
-- [~] **P12 — the promise system.** *Built, shipped to production, NOT signed off.*
+- [x] **P12 — the promise system.** *Closed 2026-07-20 by operator decision —
+  NOT by a passing checkpoint, and NOT independently reviewed.*
 
   This is the phase that made a workflow **state what it will deliver** and then
   hold itself to that. It added: a written promise attached to every workflow;
@@ -1893,23 +1900,30 @@ been checked when it had not been.** Most of those are now fixed.
   where it stops and asks a person for approval before doing something serious;
   and a test panel that runs real examples and reports whether the promise held.
 
-  All seven pieces (A–G) are built and merged. The code has been in production
-  since 2026-07-14, shipped at the operator's explicit direction *before* the
-  checkpoint passed — a deliberate, recorded trade, not an oversight.
+  All seven pieces (A–G) are built, merged, and have been serving real users in
+  production since 2026-07-14 (v1.6.0).
 
-  **Why it is still not signed off:** it used to fail on a coverage score from an
-  automated code-breaking tool. **That tool was removed on 2026-07-19** at the
-  operator's direction (see "Mutation testing was removed"), so that particular
-  blocker is gone. **Nobody has re-run the checkpoint since.** Run
-  `bash scripts/gate.sh 12` to find out where it actually stops now, rather than
-  trusting this paragraph.
+  **How it closed, stated honestly.** The operator closed it because the work was
+  long finished and the team had moved on to hardening the product ahead of P13.
+  The checkpoint script was not run to completion and no fresh verifier reviewed
+  the phase. The closing commit therefore carries **no `Gate: P12` trailer**, so
+  nothing in the history claims a check that did not happen. Full record:
+  [`docs/gates/p12.md`](docs/gates/p12.md).
+
+  **What that leaves unproven** — recorded so nobody mistakes silence for
+  assurance: where `bash scripts/gate.sh 12` stops today is *unknown* (its old
+  failure, a coverage floor, vanished with the tooling removed on 2026-07-19);
+  no whole-phase review was done, and every per-increment review that *was* done
+  found real blocking defects; and the open defects in
+  [`docs/handoff/ui-test-findings-2026-07-19.md`](docs/handoff/ui-test-findings-2026-07-19.md)
+  are still being worked through.
 
   - *Build spec: [`docs/architecture/converger-v2.md`](docs/architecture/converger-v2.md);
     theory: [`bpmn-dmn-foundations.md`](docs/architecture/bpmn-dmn-foundations.md).
     The gate is progressive — it walks increments A–G and stops at the first
-    unbuilt one, so it answers both "is this finished?" and "what is next?".
-    Increments never carry a `Gate:` trailer; only the phase's close does, and
-    this phase has not been closed.*
+    unbuilt one, so it still answers "what is next?" if anyone re-runs it.
+    Increments never carried a `Gate:` trailer; only a phase close does, and this
+    one deliberately does not either.*
 
   **Two rules in here must never be weakened.** Both look like technicalities and
   are not:
