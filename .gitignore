@@ -49,3 +49,5 @@ Thumbs.db
 
 # Design/brand asset drops — large binaries, not source.
 *.zip
+tmp-uitest/
+tmp-g-verify/

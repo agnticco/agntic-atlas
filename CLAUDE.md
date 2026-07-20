@@ -1,8 +1,9 @@
 # Atlas — Build Constitution
 
 Read this first, every session. It encodes the decisions that are **closed**, the
-code that is **off-limits**, and the rules that keep agents from reasoning over
-stale state. If something here is wrong, fix *this file* in the same commit —
+code that is **off-limits**, the rules that keep agents from reasoning over
+stale state, and **how to communicate with the operator** (see "How to talk to
+the operator" below — that rule outranks brevity and speed). If something here is wrong, fix *this file* in the same commit —
 don't work around it.
 
 Full context: [`docs/agntic-ops-gap-and-build-plan.md`](docs/agntic-ops-gap-and-build-plan.md).
@@ -14,6 +15,114 @@ A conversational workflow builder. The system starts from a vague intent and
 closes the gap through dialogue — propose one step, user confirms, measure the
 distance to a complete spec, repeat — then emits a JSON spec the existing engine
 executes. The hard, unbuilt IP is that **converger**.
+
+## How to talk to the operator (READ THIS BEFORE YOU WRITE ANYTHING TO THEM)
+
+**This rule outranks brevity, and it outranks speed. The operator has said
+explicitly: if communicating clearly slows production down, that is fine.**
+
+The operator directs this build. They are **not a software engineer**. They know
+technology well enough to set direction, judge trade-offs, and call priorities —
+and they cannot do any of that if the choice is described in engineer's jargon.
+When they are handed a decision they cannot parse, one of two things happens:
+they rubber-stamp it, or they spend their attention decoding instead of
+deciding. Both are failures, and **both are the writer's fault, not theirs.**
+
+This governs **the main session and every subagent**. Agents write their reports
+for the Builder; **the Builder must translate before anything reaches the
+operator.** Never paste a verifier or scout report through raw — those are dense
+by design and are written for a machine-adjacent reader.
+
+### The rules
+
+1. **Lead with what it means, then how it works — never the reverse.**
+   The first sentence says what a person using Atlas would experience. The
+   mechanism comes after, and only if it matters to the decision.
+   - ✅ *"A workflow that emails customers could go live having been checked
+     against nothing — the panel said it was verified when it hadn't tested
+     anything."*
+   - ❌ *"`contract.every(c => c.ok)` is vacuously true over an empty set."*
+
+2. **Name things by what they DO, not by their identifier in the code.**
+   Function names, file names, error codes and validator rules are the codebase's
+   filing system, not English.
+   - ✅ *"the check that stops a workflow going live when it hasn't been tested"*
+   - ❌ *"`UNSATISFIED_ASSERTION`"* / *"`closedDomainOf`"* / *"`_liveLanes`"*
+   Mention the identifier only when the operator would need it to find something,
+   and put it in parentheses after the plain-language name.
+
+3. **Finding codes and phase labels are internal filing labels. Always restate
+   the substance.** "F16", "P12-C", "increment D", "R3" mean nothing on their own
+   and the operator should never have to hold that index in their head.
+   - ✅ *"the router problem — where a workflow with three paths was approved
+     after testing only one of them (filed as F16)"*
+   - ❌ *"F16's remaining half"*
+
+4. **Every decision you bring them must have four things**, in this order: what
+   is wrong from a user's point of view; what the realistic options are; **what
+   you recommend and why**; and what it costs to be wrong. **Never present
+   options without a recommendation** — that offloads an engineering judgement
+   onto someone who has told you they cannot make it.
+
+5. **Describe what a user would SEE.** "The panel shows a green tick and the Go
+   live button unlocks" beats any description of state, flags, or return values.
+
+6. **Numbers need a unit and a comparison.** "0.44 seconds out of a 2.7 second
+   test run" is usable; "0.44s" and "76.2%" alone are not. A percentage always
+   needs "percent of what".
+
+7. **If a technical term is genuinely unavoidable, define it inline, once, in the
+   same sentence.** Do not send them to a glossary mid-decision.
+   - ✅ *"mutation testing — deliberately re-breaking the code to confirm a test
+     actually catches it"*
+
+8. **Separate what you PROVED from what you BELIEVE, in plain words.** The
+   operator has been burned by confident-sounding claims that turned out to be
+   noise. Say "I ran this and saw X" or "I have not checked this — it's a
+   suspicion based on reading the code." Never blur the two.
+
+9. **Bad news goes first, plainly, without cushioning.** If something is broken,
+   was shipped broken, or a previous claim of yours was wrong, that is the
+   opening line — not a discovery buried in paragraph four.
+
+10. **Do not narrate process the operator did not ask about.** Which agent ran,
+    which file you grepped, and how many rounds it took are not interesting
+    unless they change the decision or the cost.
+
+### The words that keep coming up
+
+The operator will keep hearing these because the product is built out of them.
+Use these plain-language versions; the code names are in brackets **for other
+agents' benefit, not for quoting at the operator**.
+
+- **The promise / the deal** [`outcome contract`] — what the finished workflow
+  swears it will do, in the user's own words, plus the machine-checkable version
+  of it. It is what "cleared to go live" is measured against.
+- **The builder / the interviewer** [`converger`] — the part that talks to a user,
+  works out what they actually want, and writes the workflow.
+- **A step** [`node`] — one thing a workflow does: read email, summarize, post to
+  Slack, ask a person.
+- **The blueprint** [`spec`] — the saved definition of a workflow: its steps, its
+  trigger, and its promise.
+- **A path** [`lane` / `branch case`] — one of the routes a workflow can take
+  ("urgent goes to Slack, billing goes to the inbox").
+- **The approval step** [`human node`] — where the workflow stops and waits for a
+  person to say yes or no.
+- **A checkpoint** [`gate`] — the pass/fail check that says a phase is finished.
+- **Re-breaking the code on purpose** [`mutation testing`] — changing the code
+  back to the broken version to confirm a test actually notices. A test that
+  still passes when the bug is back is protecting nothing.
+- **Must-fix vs. write-it-down** [`blocker` vs `residual`] — must-fix means a real
+  user can hit it and it either looks like success or destroys something.
+  Everything else gets recorded and carried, not fixed now.
+
+### The test
+
+Before sending: **could the operator act on this without asking you what a word
+means?** If not, rewrite it. If you genuinely cannot make something simple
+without making it false, say that out loud — *"the honest version of this is
+technical, here it is, and here is the decision it leads to"* — and then give
+them the decision in plain language anyway.
 
 ## Closed decisions (do not re-litigate)
 
@@ -777,7 +886,8 @@ refactor them without an explicit decision recorded here:
     gate and the sweep. **A green suite is evidence of nothing until a second pair of eyes has watched
     it go red.**
 
-  **⚠️ OPERATIONAL HAZARD, learned the hard way (TWICE): mutation-testing eats uncommitted work.**
+  **⚠️ OPERATIONAL HAZARD (HISTORICAL — the sweep was removed 2026-07-19; kept because the lesson
+  generalises to any tool that rewrites `src/` in place): mutation-testing eats uncommitted work.**
   - `mutation-sweep.mjs` **rewrites files under `src/` in place** and restores them between mutants.
     Run in the background while you are editing, it will clobber your work — or, if it is killed
     mid-mutant, leave a **live mutant in your source tree** (`if (!fetcher)` → `if (false)`; a `throw`
@@ -911,6 +1021,90 @@ refactor them without an explicit decision recorded here:
   - **Two of the guards written in the FIX then SURVIVED the curated mutation-guard** — deletable with
     the whole suite still green. **Mutation-test the guards you add in the fix, not just the ones you
     started with.** Fifth occurrence of that exact lesson; it is now 35 curated mutations, all killed.
+
+- **"Not exercised" is a VERDICT, not a pass and not a failure (2026-07-19, live UI test
+  remediation).** Findings F11/F12/F16 from [`docs/handoff/ui-test-findings-2026-07-19.md`](docs/handoff/ui-test-findings-2026-07-19.md).
+  - **The oracle certified the ABSENCE of evidence as success.** `contract.every(c => c.ok)`
+    is true over an empty set *and* over a set that is entirely skips, and both rendered as
+    *"every promise held — it's cleared to go live"* on the control that gates **Go live**.
+    Three live shapes reached it: a spec with no assertions; an ordinary edit that cleared
+    `outcome.examples` to 0; and a 3-lane router whose one sample took the do-nothing lane,
+    so every assertion was `skipped:true, ok:true` and **no delivery node executed at all**.
+    `evaluateExampleRun` now returns **`verdict`** (`kept | broken | not_exercised`) and
+    **`enforced`** (assertions this run actually CHECKED — a skipped lane is not a check).
+    Kept requires `enforced > 0`. The client certifies on `verdict`, with a new
+    `testState:"unverified"` that leaves Go live locked (`reviewDraft` gates on `"passed"`).
+  - **`contractPassed` was deliberately NOT changed, and that restraint is the fix.** The
+    converger's `verify` node reads it to decide whether to REGENERATE. Resolving
+    "unexercised" pessimistically there is exactly what threw away a valid 12-node draft
+    and rebuilt it until the build gave up, then told the user *"I couldn't assemble the
+    workflow from that"* (F17) — while the reasoning stream visibly concluded *"The
+    workflow looks complete."* **The optimistic reading (false pass) and the pessimistic
+    reading (false failure, expensive rebuild loop) are the two wrong answers to one
+    question the system could not express.** So the fix ADDS the missing answer instead of
+    flipping the sign of the existing one. Anyone tightening this further must keep them
+    separate, or they will trade F12 for F17.
+  - **The structural fallback survives only where there is no contract.** A spec that
+    promises nothing has nothing to certify, so "it ran cleanly" stays the honest bar and
+    v1 workflows publish unchanged. A spec that DOES promise something and proved none of
+    it is `unverified`. **Refusing to certify is always available; certifying without
+    checking is not** (same doctrine as `CHANNELS_UNVERIFIED`, third occurrence).
+  - **THE CONTRACT WAS NEVER PERSISTED — and the brief's diagnosis of why was wrong.**
+    `outcome` was NULL on 100% of stored workflows (148/148 on the pre-purge backup),
+    including rows the builder had just displayed a contract for, silently disabling
+    `UNSATISFIED_ASSERTION` on every later edit and leaving the SOP nothing to render. The
+    handoff brief blamed the **POST** body; re-grounding showed that path is correct
+    (`assembleSpec` emits `{version:2, outcome}`, and `{ ...spec }` carries it through).
+    **The real cause is that POST is nearly unreachable:** `_ensureDraft` creates the draft
+    row on the FIRST MESSAGE, so `S.workflowId` is always set and publish goes through
+    **PUT** — which enumerated its fields and omitted `outcome`. `workflowService.update`
+    correctly read the absent key as *inherit*, and inherited the draft row's `NULL`.
+    Fixed by carrying `...(spec.outcome !== undefined ? { outcome: spec.outcome } : {})`,
+    preserving `undefined`=inherit / `null`=retract.
+    **A route that "updates an existing workflow" may in fact be your PUBLISH path — check
+    which branch production actually takes before trusting either one's field list.** This
+    is architectural flaw #2 in a new costume: the POST branch was correct, tested, and
+    almost never executed.
+  - **Reconciling beat believing, in both directions.** The brief's evidence (148/148 NULL)
+    was sound and its mechanism was false. Trusting the mechanism would have "fixed" a
+    correct handler and shipped the bug; trusting the fresh grounding alone would have
+    closed a real, universal defect as a non-bug. CLAUDE.md's rule 4 ("believe the
+    executing agent's fresh grounding") is about a brief's *conclusions* — it never
+    licenses discarding a brief's *measurements*.
+
+- **LANE COVERAGE — a router is only proved on the routes you test (2026-07-19, F16).** The
+  per-example verdict cannot catch an unexercised lane, because each example is individually
+  honest; it is a property of the SAMPLE SET. `laneCoverage` / `laneInventoryOf`
+  (`outcome-oracle.js`) subtract the lanes any run actually took from every lane the spec
+  has, and an uncovered lane BLOCKS certification and is named in the user's own case words.
+  The live 3-lane router was certified "every promise held" on one sample that took the
+  do-nothing lane and executed no delivery node at all.
+  - **A lane is a `(branch, target)` pair — not a target, and not a route value.** Keyed on
+    the target alone, two branches with a same-named target conflate and covering one
+    silently marks the other covered (the approval shape has exactly two branches). Keyed
+    per VALUE, a decision table mapping P2 and P3 to one "stay quiet" step would demand a
+    sample per enum member — unreachable on the tables that most need it. **Found by
+    mutation: dropping the branch from the key SURVIVED the first version of the suite,
+    because every fixture in it had a single branch.**
+  - **The lane a run took is read from the branch's OWN `{value, matched, to}` output.**
+    Re-matching the routed value against the cases here would be a second implementation of
+    `branch.run()`'s selection rule, and `decision-analysis.js` held one rule in two
+    functions and diverged twice. A test asserts the engine's record wins even when it
+    contradicts the classifier's output.
+  - **The client holds no copy of the rule.** The lane inventory (what lanes exist and what
+    to call them) ships with each example result; the browser does set subtraction only. A
+    `_laneCoverage` helper in `public/index.html` would have been a second definition of
+    "what is a lane" in a file nothing type-checks.
+  - **`decision-analysis.js` box subtraction was considered and REJECTED as the primitive.**
+    It answers a build-time question ("which input combinations do these rules fail to
+    cover"), not the run-time one ("which lanes did the samples fail to exercise"). Forcing
+    one to serve the other is the fit-forcing that CAUSES drift, not the cure for it. The
+    genuinely shared primitives are `closedDomainOf` and `normalizeCases`, which the oracle,
+    the validator's moat and the SOP already share.
+  - **Never use an unprintable character as a separator — second occurrence.** `laneKey` was
+    first written with `\u0001` between the ids. Same class as the NUL that made a whole
+    feature unpublishable in increment B. It is `JSON.stringify([branch, to])` now: no
+    collision is possible for any id, and it prints as itself in a debugger.
 
 - **Multiple destinations — a delivery's return value is a RECEIPT, not the work product
   (2026-07-14).** Surfaced by a load-bearing test and reported as *"the workflow only did the Slack
@@ -1338,10 +1532,10 @@ phase, not just this one.
    file exists, that it passes, and grepped the validator for symbol names. **A suite of 70 tests
    that cannot fail satisfies that perfectly.** So "gate green" and "code correct" were only weakly
    correlated — which is exactly what seven rounds demonstrated.
-   → **Fixed:** `scripts/checks/mutation-guard.mjs` re-introduces each historical defect and
-   requires the suite to FAIL. It runs **inside the gate**. A guard whose mutation survives is a
-   guard nothing pins, and the next person can delete it with the gate still smiling. It earned
-   its keep on its first run, immediately finding a survivor.
+   → **Was fixed by `scripts/checks/mutation-guard.mjs`, which is REMOVED (2026-07-19) — see
+   "Mutation testing was removed" below.** The hole it covered is real and is now covered by
+   PRACTICE, not by a gate step: when you add a guard, re-introduce the bug by hand and watch the
+   test go red. A guard whose mutation survives is a guard nothing pins.
 
 2. **The tests exercised a configuration production never uses.** Every idempotency test
    constructed `FlowTester` directly and hand-passed a `workflowId` that **no production caller
@@ -1360,17 +1554,13 @@ phase, not just this one.
    self-authored mutation score is a tautology**: you can only mutate what you already thought of,
    which is exactly what you already wrote tests for.
    → **Fixed, both halves:**
-   - *Mechanically* — `scripts/checks/mutation-sweep.mjs` **generates** mutants across the engine
-     (every `if` → `true`/`false`, every `??` → no default, every `throw` → swallowed). The builder
-     is out of the loop: you cannot omit a mutation you did not think of when you are not choosing
-     them. It found real holes the curated list never touched — an untested `escalate` flag, the
-     untested branch/`foreach` throws, untested JSON-string paths. It runs **in the gate** with a
-     kill-rate **ratchet** (raise it, never lower it). The **survivor list is the coverage report**.
-   - *In process* — the new **`test-adversary`** agent (`.claude/agents/test-adversary.md`) writes
-     the pinning tests. It may write `tests/` and `scripts/checks/` and **must not touch `src/`**:
-     if a test cannot pass without a source change, that is a finding, reported and left failing.
-     **Spawn it after every Builder increment, before the verifier.** The Builder no longer grades
-     his own homework.
+   → **Both halves are REMOVED (2026-07-19) — `mutation-sweep.mjs` and the `test-adversary`
+   agent. See "Mutation testing was removed" below.** This hole is the one that is now genuinely
+   UNCOVERED, and it should be named honestly rather than papered over: the Builder writes both
+   the code and the tests again. What still stands against it is the **independent `verifier`**,
+   which is retained, did not write the code, and may still FAIL a merge — and which caught
+   exactly this class on the very increment the apparatus was removed during (both guards in the
+   `not_exercised` fix survived deletion with the whole suite green).
 
 **The one-line lesson: a green suite is evidence of nothing until you have watched it go red.**
 
@@ -1452,8 +1642,8 @@ phase, not just this one.
   Confirmed by the test-adversary and the verifier independently, on a clean tree. They also flake
   (one run showed 6). Someone should own these; they are a broken window in the E2E suite.
 
-**⚠️ PROCESS HAZARD, found by the verifier (2026-07-14): do NOT run the test-adversary and the verifier
-in parallel if BOTH are told to run `mutation-sweep`.** The sweep rewrites `src/` in place, so one
+**⚠️ PROCESS HAZARD (HISTORICAL — resolved by removing the sweep, 2026-07-19): do NOT run the
+test-adversary and the verifier in parallel if BOTH are told to run `mutation-sweep`.** The sweep rewrites `src/` in place, so one
 agent's sweep corrupts the other's results **in both directions** — the verifier caught a live mutant
 (`const cfg = node.config};`) in its working tree mid-run and had to discard and re-derive every
 finding on a clean tree. CLAUDE.md already says "run it in the FOREGROUND"; that is necessary and not
@@ -1506,8 +1696,10 @@ the test — **the Builder overriding the adversary's scope call is itself the a
 
 ## Agents & gate enforcement
 
-The build runs with four roles. **Builder is this main session** (you), governed
-by this file — not a subagent. The other three are subagents in `.claude/agents/`:
+The build runs with three roles. **Builder is this main session** (you), governed
+by this file — not a subagent. The other two are subagents in `.claude/agents/`:
+*(The `test-adversary` was a fourth; it was removed 2026-07-19 — see "Mutation
+testing was removed".)*
 
 - **`scout`** — read-only explorer; fan out for "where does X live", returns
   conclusions with `file:line`, never edits.
@@ -1570,59 +1762,214 @@ that SHA** and that the log shows the expected stop point — not to recompute a
   fake), plus an independent attempt to **break the increment's stated
   invariants**. That is where every real finding in this phase came from — not
   from re-running the suite.
-- **The full `mutation-sweep` is the Builder's to run, not the verifier's.** The
-  verifier reads its **survivor list** — which is the honest coverage report — and
-  says whether the Builder read past something. *(In P12-C the sweep named the
-  exact line of the blocker as a survivor, and the Builder read past it.)*
+- *(The `mutation-sweep` clause here is void — the sweep was removed 2026-07-19.
+  The verifier's targeted hand-mutation of the increment's NEW guards is retained
+  and is now the only mutation step that runs at all. It stays because it is
+  cheap, it is the one thing a log cannot fake, and it is where the findings come
+  from.)*
 
-**3. `test-adversary` and `verifier` run in PARALLEL, not in series.**
-Both are read-only with respect to `src/`, so they cannot race. Spawn them
-together after the build.
-- If the adversary finds a defect the Builder then fixes in `src/`, the verifier
-  gets **the fix diff as a delta message** — it does not restart. (`SendMessage`
-  resumes it with its context intact.)
-- The Builder still **fixes** what the adversary finds. The adversary never
-  touches `src/`; the verifier never touches `src/`.
+**3. Only the `verifier` runs after a build.** *(Amended 2026-07-19 — the
+`test-adversary` was removed; see "Mutation testing was removed" below.)* Spawn it
+after the build; it is read-only with respect to `src/` and may still FAIL the
+merge.
+- If the Builder then fixes something in `src/`, the verifier gets **the fix diff
+  as a delta message** — it does not restart. (`SendMessage` resumes it with its
+  context intact.)
+- The Builder **fixes**; the verifier never touches `src/`.
 
 **What did NOT change, and must not:** the verifier is fresh, independent, and did
 not write the code; it may still FAIL the merge; and a gate still closes only
 through its check. Velocity is bought by removing *duplication*, never by removing
 *the second pair of eyes*.
 
-## Phase status
+## Mutation testing was removed (2026-07-19, operator's explicit direction)
 
-Update as gates close. `git log --grep "^Gate:"` is the authoritative ledger.
+**Removed:** `scripts/checks/mutation-sweep.mjs`, `scripts/checks/mutation-guard.mjs`,
+the `test-adversary` agent (`.claude/agents/test-adversary.md`), and the two gate
+steps in `scripts/gates/p12.sh` that ran them. **Recorded loudly and deliberately**
+— this file states that a diff against `scripts/` is how a verifier detects a
+builder quietly weakening their own gate, so a removal must never be silent. This
+was the operator's call, not the Builder's, and the Builder must not re-introduce
+it unasked.
 
-- [x] **P0** — clean spine: engine boots in new repo, UI hits one health route
-- [x] **P1** — Slack connector: clicking "run" posts to Slack
-- [x] **P2** — event triggers + Gmail: hand-authored UPS→Slack fires on real email *(freeze the spec here)*
-- [x] **P3** — converger reproduces the frozen spec, confirmations logged
-- [x] **P4** — builder UI: workflow built entirely by talking *(design-first: Claude generates mockups → approval → build)*
-- [x] **P5** — console UI: inventory, live run monitoring, SOP view + SOP export (PDF + Markdown).
-- [~] **P6** — *(scrapped 2026-06-20)* current sidebar + surface switching is sufficient; floating pill / launcher layer dropped from scope.
-- [x] **P7** — Airtable + Google write + error handling + sub-daily scheduling
-- [x] **P8** — web research (`search_web` native Anthropic tool, already built) + filesystem connector (`filesystem_read`/`filesystem_list`, tenant-sandboxed to Knowledge-page approved folders)
-- [x] **P9** — value tracking: time-saved metrics per run, all-up ROI summary, customer-facing report
-- [x] **P10** — admin observability: standalone admin app, per-tenant usage + cost monitoring *(merged `601760c`; carries `Gate: P10` trailer + passing `scripts/gates/p10.sh`. Ledger backfilled by independent verifier: `docs/gates/p10.md`.)*
-- [x] **P11** — E2E validation + production hardening + VPS migration. **Closed 2026-07-13** (`b711b44`, `Gate: P11`, ledger `docs/gates/p11.md`). Built & merged long before (`d73b813`…`75891b7` + artifacts `2106f71`); the gate was un-closeable only because `scripts/gates/p11.sh` fail-closes when `PROD_HOST` is unset — it cannot smoke-test a VPS that doesn't exist. Prod went live, so `PROD_HOST=atlas.agntic.co bash scripts/gate.sh 11` finally runs. **Note for anyone re-running it:** the E2E suite *self-skips the converger test* without `ANTHROPIC_API_KEY` (`tests/e2e/full-journey.test.js`), so a bare run reports "6 pass / 1 skip" and the skipped one is Done-when #1. Run it with a key (7/7) or you are passing a gate you haven't proven.
-- [~] **P12** — **converger v2**: outcome contracts + BPMN/DMN shape (decisions, gap analysis) + the elicitation UI + the human approval gate. Build spec: [`docs/architecture/converger-v2.md`](docs/architecture/converger-v2.md) (theory: [`bpmn-dmn-foundations.md`](docs/architecture/bpmn-dmn-foundations.md)). Gate `scripts/gates/p12.sh` is **progressive** — it runs increments A–G in order and stops at the first unbuilt one, so `bash scripts/gate.sh 12` answers both *"is the phase closed?"* and *"which increment next?"*. **Increments A (validator hardening + node re-cut), B (engine control flow), C (converger v2 core + the outcome contract), D (the human approval gate), E (the `decision` node + DMN gap analysis + the table review UI), F (schema-aware connectors + the example picker + `foreach` turned on) and G (the test-panel outcome oracle + the SOP sections + the zero-typing path) are all BUILT and merged to `main`.** **⚠️ P12 is NOT gate-closed.** The code shipped to prod (2026-07-14) at the operator's explicit direction *ahead of a passing gate*: `scripts/gates/p12.sh` currently **FAILS** because the **mutation sweep is below its 78% floor (76.2%)**. This is a **test-coverage gap, not a functional defect** — G's own runtime-oracle suite (`tests/workflows/example-oracle.test.js`) was written but **never added to `mutation-sweep.mjs`'s SUITES list**, so the whole runtime oracle (`checkAssertionAtRuntime` / `evaluateExampleRun` / `normalizeDelivery` / `isDeliveryNode`) is unkillable by construction (the recurring "a mutant is only killable by a suite the sweep RUNS" lesson — D and F both hit and fixed it for their suites). The sweep has been below floor **since G was built** — the earlier "gate-green at `0df0bfb` / 94.6%" note was inaccurate (that figure predates F widening the sweep TARGETS to `elicitation-graph.js` (42 survivors), `workflow-validator.js` (31), `flow-tester.js` (24), `workflow-scheduler.js` (18)). **To actually close P12:** wire `example-oracle.test.js` (+ any other G suites that exercise a target) into the sweep SUITES and strengthen the `normalizeDelivery` NULLISH-default tests — expected to kill ~15–20 of the 26 `outcome-oracle.js` survivors and clear the floor; if marginal, pin more of the pre-existing engine survivors. **Do NOT lower the floor.** Increments do NOT carry a `Gate:` trailer; only the phase's close does — and this phase has NOT been closed. Two invariants are load-bearing and must never be weakened: **`LLM_INPUT_NOT_ENUM`** (an LLM-evaluated decision input must classify into a *closed enum* — without it there is no completeness proof, and the completeness proof is the moat) and **`EMAIL_REPLY_APPROVAL`** (an approval parsed out of an email reply body authenticates *nothing*: `From:` is spoofable, and SPF/DKIM authenticate a sending domain, not a human intent — use a signed, hashed, single-use magic link).
-- [ ] **P13** — **connector breadth**: OpenAPI-autogen (**primary**) + MCP adapter (**fallback**),
-  both projecting into the existing `CapabilityRegistry` (one internal contract, two thin adapters).
-  Triggers stay hand-built. Design: [`docs/architecture/mcp-capability-adapter.md`](docs/architecture/mcp-capability-adapter.md);
-  build: [`docs/handoff/p13-implementation-brief.md`](docs/handoff/p13-implementation-brief.md). Planning
-  merged (#22, 2026-07-15); **not started**. Start at **P13-0** — generalize three F-era converger seams
-  (effect-from-**structure** not an id-regex; a `deliver`-node effect fallback; connector-generic
-  destination schema-discovery, which also wires the already-built-but-unwired native `sheets_describe`)
-  — **before** any adapter, or every new connector inherits the silent write-misclassification. Gate
-  `scripts/gates/p13.sh` is **progressive/fail-closed** (`bash scripts/gate.sh 13` names the next
-  increment; `scripts/gate.sh`'s case widened to accept `13`). **Gate calibration (operator,
-  2026-07-15):** the gate proves ONLY (1) **the backend works** — behavioral acceptance tests +
-  cross-tenant isolation — and (2) **the UI/UX works for the phase's expected outcome**: a live,
-  **headed, operator-witnessed** run (connect a service Atlas never hand-built → build a workflow with
-  it → run it → real read/write), attested in `docs/gates/p13.md` with screenshots. **NO aggregate
-  mutation-coverage floor blocks the close** — mutation-testing is an internal per-guard technique
-  (revert the bug, watch the test go red), not a percentage to chase; that chase is what stalled P12.
-  Apply the INCREMENT-loop review calibration (block only on user-reachable silent/destructive defects;
-  everything else is a residual; gate run once by the builder; adversary + verifier in parallel).
-  **Branch-per-increment** off `main` → PR → squash-merge; the phase closes only on the final merge with
-  `Gate: P13` + `Phase:` + `Verified-by:` from a fresh verifier who did not write the code.
+**Why.** Both scripts rewrite files under `src/` **in place**. That makes them
+unrunnable alongside any other work, and the failure is not theoretical: a sweep
+left a live mutant in the working tree (`if (allowed === false)` → `if (true)`,
+which disables the monthly run cap for every scheduled run), and it produced a
+false "resume is broken" finding that was one step from being reported as fact.
+Add ~10-minute runtimes and a mandated agent round-trip per increment, and the
+apparatus cost more than it returned. Its 78% floor was also, at the time of
+removal, the **only** thing failing the P12 gate.
+
+**What was KEPT, and why it is not a compromise.** Every `*-adversarial.test.js`
+suite the apparatus produced stays in the tree and in the gate — ~70 tests that
+run in **0.44s** inside a 2.67s suite. They pin real defects that reached `main`
+behind a green suite. Measured: the tests were never the cost; the machinery was.
+**Do not delete them to "finish the cleanup" — that trades protection for nothing.**
+
+**What this costs, stated honestly.** Architectural flaw #3 above — *the Builder
+writes both the code and the tests, so they share blind spots* — is now
+**uncovered**. The independent `verifier` is the remaining defence, and it is not
+a full substitute. The discipline survives as a **practice, not a gate step**:
+
+> **When you add a guard, re-introduce the bug by hand and watch the test go red.**
+> A green suite is evidence of nothing until you have watched it go red.
+
+This is not a licence to skip it. It is the same rule with the enforcement removed,
+which means it now depends on the person doing it.
+
+## Where things stand, and what's next
+
+*(Written for the operator. Plain language first; the technical anchors an agent
+needs are in the indented notes. `git log --grep "^Gate:"` is the authoritative
+record of which phases are formally finished.)*
+
+**Atlas is live and in use** at https://atlas.agntic.co. People can build a
+workflow by talking to it, test it, publish it, and watch it run on a schedule.
+Thirteen phases of work got it there; the first eleven are finished and signed
+off.
+
+**P12 is closed.** It was closed on 2026-07-20 by operator decision, on the
+grounds that the work has been finished, shipped and in real use for weeks. It was
+**not** closed by a passing checkpoint and **not** reviewed by an independent
+verifier, and the record says so plainly
+([`docs/gates/p12.md`](docs/gates/p12.md)) rather than implying a check that did
+not happen. The closing commit carries **no `Gate: P12` trailer**, so
+`git log --grep "^Gate:"` does not list it — that absence is correct.
+
+**Next up is P13**, once the product's behaviour and appearance have been
+hardened (below).
+
+**What is being worked on right now:** the defects found by driving the real
+product through six kinds of workflow in a browser, written up in
+[`docs/handoff/ui-test-findings-2026-07-19.md`](docs/handoff/ui-test-findings-2026-07-19.md).
+That document is the live to-do list. The theme of the serious ones was a single
+problem wearing different masks: **the product told people their workflow had
+been checked when it had not been.** Most of those are now fixed.
+
+**Still open, roughly in the order they matter:**
+
+1. **Test examples can't reach some workflows.** If a workflow starts by going
+   and fetching something (say, "read my unread email"), the made-up test cases
+   can't influence what it fetches — so every test case runs against the same
+   live data and proves the same one thing. Filed as F3.
+2. **Editing a workflow may quietly drop its promise.** Suspected, not proven —
+   it needs a live test before anyone acts on it. If real, someone could edit a
+   live workflow and have it marked "verified" against a promise nothing checked.
+3. **Test runs are counted in the live health dashboard**, so a workflow that has
+   never actually fired can show "100% success". Cosmetic, but it is the number
+   an operator trusts. Filed as F14.
+4. The rest of the handoff document — smaller, individually recorded there.
+
+## The phases
+
+- [x] **P0** — the skeleton: the engine starts up in the new codebase and the
+      screen can reach it.
+- [x] **P1** — Slack: pressing "run" actually posts a message.
+- [x] **P2** — workflows that fire on a real event (an email arriving), not just
+      on a button.
+      - *Hand-authored UPS→Slack spec frozen here as the test fixture.*
+- [x] **P3** — the interviewer works: describe a workflow in conversation and it
+      builds the same thing a person would have built by hand.
+- [x] **P4** — the building screen: a workflow made entirely by talking.
+- [x] **P5** — the management screen: see your workflows, watch runs happen, and
+      export a written procedure document (PDF and Markdown).
+- [~] **P6** — *dropped 2026-06-20.* A floating launcher was planned; the sidebar
+      already does the job. Not built, on purpose.
+- [x] **P7** — writing to other systems (Airtable, Google), handling failures,
+      and running more often than daily.
+- [x] **P8** — web research, and reading files from approved folders.
+- [x] **P9** — value tracking: time saved per run, and a report a customer can be
+      shown.
+- [x] **P10** — the admin view: what each customer is using, and what it costs.
+      - *Merged `601760c`, `Gate: P10`, ledger `docs/gates/p10.md`.*
+- [x] **P11** — end-to-end testing, production hardening, and the move onto a
+      real server. **Finished 2026-07-13.**
+      - *`b711b44`, `Gate: P11`, ledger `docs/gates/p11.md`. If you re-run this
+        gate: the end-to-end suite SKIPS its interviewer test when
+        `ANTHROPIC_API_KEY` is unset and still reports "6 pass / 1 skip" — and the
+        skipped one is the first thing the gate is meant to prove. Run it with a
+        key (7/7) or you are passing a gate you have not tested.*
+
+- [x] **P12 — the promise system.** *Closed 2026-07-20 by operator decision —
+  NOT by a passing checkpoint, and NOT independently reviewed.*
+
+  This is the phase that made a workflow **state what it will deliver** and then
+  hold itself to that. It added: a written promise attached to every workflow;
+  the ability for a workflow to make decisions and take different paths; a step
+  where it stops and asks a person for approval before doing something serious;
+  and a test panel that runs real examples and reports whether the promise held.
+
+  All seven pieces (A–G) are built, merged, and have been serving real users in
+  production since 2026-07-14 (v1.6.0).
+
+  **How it closed, stated honestly.** The operator closed it because the work was
+  long finished and the team had moved on to hardening the product ahead of P13.
+  The checkpoint script was not run to completion and no fresh verifier reviewed
+  the phase. The closing commit therefore carries **no `Gate: P12` trailer**, so
+  nothing in the history claims a check that did not happen. Full record:
+  [`docs/gates/p12.md`](docs/gates/p12.md).
+
+  **What that leaves unproven** — recorded so nobody mistakes silence for
+  assurance: where `bash scripts/gate.sh 12` stops today is *unknown* (its old
+  failure, a coverage floor, vanished with the tooling removed on 2026-07-19);
+  no whole-phase review was done, and every per-increment review that *was* done
+  found real blocking defects; and the open defects in
+  [`docs/handoff/ui-test-findings-2026-07-19.md`](docs/handoff/ui-test-findings-2026-07-19.md)
+  are still being worked through.
+
+  - *Build spec: [`docs/architecture/converger-v2.md`](docs/architecture/converger-v2.md);
+    theory: [`bpmn-dmn-foundations.md`](docs/architecture/bpmn-dmn-foundations.md).
+    The gate is progressive — it walks increments A–G and stops at the first
+    unbuilt one, so it still answers "what is next?" if anyone re-runs it.
+    Increments never carried a `Gate:` trailer; only a phase close does, and this
+    one deliberately does not either.*
+
+  **Two rules in here must never be weakened.** Both look like technicalities and
+  are not:
+  - **A workflow may only branch on a value from a fixed, known list**
+    (`LLM_INPUT_NOT_ENUM`). If the AI can answer a routing question in free prose,
+    nothing can prove the workflow handles every case — and the whole promise
+    system rests on being able to prove that.
+  - **An approval must never be accepted from a reply email**
+    (`EMAIL_REPLY_APPROVAL`). Anyone can forge a "From" address, and a forwarded
+    thread is full of the word "yes". Approvals go through a signed, single-use
+    link.
+
+- [ ] **P13 — many more connectors.** *Planned, not started.*
+
+  Today each new service Atlas can talk to is hand-built, which is why there are
+  only a handful. This phase makes Atlas able to pick up a service's own published
+  description and generate the connection automatically — with a second, fallback
+  method for services that don't publish one. Triggers ("when this happens…") stay
+  hand-built either way.
+
+  **Start with the groundwork, not the connectors.** Three things in the existing
+  code assume the connectors we happen to have; if new ones are added first, every
+  one of them inherits the same silent bug (Atlas mistaking which steps write data,
+  which is how a workflow ends up not doing the thing it promised).
+
+  **How this phase gets signed off** — decided by the operator, 2026-07-15, and
+  deliberately narrower than P12's:
+  1. **The backend works** — behavioural tests, plus proof that one customer's
+     data can never reach another's.
+  2. **The product works for a real person** — a live, operator-witnessed run in a
+     visible browser: connect a service Atlas has never hand-built, build a
+     workflow with it, run it, see real data read and written. Recorded in
+     `docs/gates/p13.md` with screenshots.
+
+  **No coverage percentage blocks this phase.** Re-breaking the code to check a
+  test notices is a per-fix technique, not a score to chase — chasing the score is
+  what stalled P12.
+
+  - *Design: [`docs/architecture/mcp-capability-adapter.md`](docs/architecture/mcp-capability-adapter.md);
+    build: [`docs/handoff/p13-implementation-brief.md`](docs/handoff/p13-implementation-brief.md).
+    Planning merged (#22, 2026-07-15). Start at **P13-0** — generalize three F-era
+    seams (effect-from-STRUCTURE not an id-regex; a `deliver`-node effect fallback;
+    connector-generic destination schema discovery, which also wires the built-but-
+    unwired `sheets_describe`). Gate `scripts/gates/p13.sh` is progressive and
+    fail-closed. Apply the increment-loop review calibration: block only on defects
+    a real user can hit that either look like success or destroy something;
+    everything else is recorded and carried. Branch per increment off `main` → PR →
+    squash-merge; the phase closes only on the final merge carrying `Gate: P13` +
+    `Phase:` + `Verified-by:` from a fresh verifier who did not write the code.*

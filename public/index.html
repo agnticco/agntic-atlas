@@ -106,7 +106,7 @@
   @keyframes nodePop{0%{transform:scale(.5);opacity:0}60%{transform:scale(1.08)}100%{transform:scale(1);opacity:1}}
   /* Live Graph — the proposed node reveals its confirm/reject controls on hover. */
   .nodewrap .nctrl{opacity:0;pointer-events:none;transition:opacity .15s}
-  .nodewrap:hover .nctrl{opacity:1;pointer-events:auto}
+  .nodewrap:hover .nctrl,.nodewrap:focus-within .nctrl{opacity:1;pointer-events:auto}.nctrl button:focus-visible{outline:2px solid #9fd6a8;outline-offset:2px}
   @keyframes liveRing{0%,100%{box-shadow:0 0 0 rgba(127,194,138,0)}50%{box-shadow:0 0 30px rgba(127,194,138,.22)}}
   .wf-item-inactive:hover { color: rgba(255,255,255,.8) !important; }
   @keyframes modalExpand { from { opacity:0; transform:scale(.2); } to { opacity:1; transform:none; } }
@@ -179,7 +179,7 @@
             </div>
             <div class="ab-scroll" style="display:flex;flex-direction:column;gap:1px;flex:1;min-height:0;overflow-y:auto;margin:0 -6px 6px 0;padding-right:4px">
               <sc-for list="{{ sidebarWorkflows }}" as="w" hint-placeholder-count="4">
-                <div class="{{ w.itemClass }} wf-item-row" onClick="{{ w.onClick }}" style="position:relative;display:flex;align-items:center;gap:10px;padding:10px;border-radius:9px;background:{{ w.bg }};border:1px solid {{ w.border }};cursor:pointer;color:{{ w.nameColor }};transition:color .15s" style-hover="background:rgba(255,255,255,.06)">
+                <div class="{{ w.itemClass }} wf-item-row" onClick="{{ w.onClick }}" onKeyDown="{{ w.onClickKey }}" role="button" tabindex="0" aria-label="Open workflow {{ w.name }}" style="position:relative;display:flex;align-items:center;gap:10px;padding:10px;border-radius:9px;background:{{ w.bg }};border:1px solid {{ w.border }};cursor:pointer;color:{{ w.nameColor }};transition:color .15s" style-hover="background:rgba(255,255,255,.06)">
                   <span style="flex:none;width:8px;height:8px;{{ w.radius }};background:{{ w.dot }};filter:{{ w.glow }}"></span>
 
                   <sc-if value="{{ w.isRenaming }}">
@@ -309,7 +309,7 @@
             </sc-if>
             <div style="display:flex;align-items:center;gap:12px;border-radius:26px;padding:16px 14px 16px 22px;background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.14);backdrop-filter:blur(24px) saturate(180%);-webkit-backdrop-filter:blur(24px) saturate(180%);box-shadow:inset 0 1px 0 rgba(255,255,255,.06),0 8px 28px rgba(0,0,0,.32)">
               <span style="flex:none;color:rgba(255,255,255,.42);font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:0.9em;user-select:none;line-height:1">›</span>
-              <div ref="{{ chatInputRef }}" contenteditable="true" onInput="{{ onIntentInput }}" onKeyDown="{{ onNewStateKey }}" class="chat-input" data-ph="Describe what you want to automate…" style="flex:1;min-width:0;outline:none;color:#fff;font-family:'Inter Tight',-apple-system,BlinkMacSystemFont,'Helvetica Neue',sans-serif;font-size:17px;letter-spacing:-0.005em;line-height:1.5;cursor:text;word-break:break-word"></div>
+              <div ref="{{ chatInputRef }}" contenteditable="true" role="textbox" aria-multiline="true" aria-label="Describe what you want to automate" onInput="{{ onIntentInput }}" onKeyDown="{{ onNewStateKey }}" class="chat-input" data-ph="Describe what you want to automate…" style="flex:1;min-width:0;outline:none;color:#fff;font-family:'Inter Tight',-apple-system,BlinkMacSystemFont,'Helvetica Neue',sans-serif;font-size:17px;letter-spacing:-0.005em;line-height:1.5;cursor:text;word-break:break-word"></div>
             </div>
           </div>
         </div>
@@ -519,11 +519,20 @@
                         <div style="display:flex;align-items:flex-end;justify-content:flex-end;margin-top:24px">
                           <div style="text-align:right"><div style="font-family:ui-monospace,monospace;font-size:8px;letter-spacing:.14em;color:rgba(255,255,255,.3);margin-bottom:5px">PREPARED BY</div><div style="font-family:'Dancing Script','Instrument Serif',cursive;font-weight:600;font-size:30px;color:rgba(255,255,255,.9);line-height:1;padding-right:6px">Atlas</div><div style="width:128px;height:1px;background:rgba(255,255,255,.28);margin:7px 0 0 auto"></div></div>
                         </div>
-                        <!-- actions -->
-                        <div style="display:flex;gap:10px;align-items:center;margin-top:20px">
-                          <button onClick="{{ item.onBuild }}" style="border:none;background:#efc892;color:#0a0a0a;font-family:inherit;font-size:14px;font-weight:600;padding:11px 24px;border-radius:999px;cursor:pointer" style-hover="background:#f3cd86">Approve &amp; build →</button>
-                          <button onClick="{{ item.onChange }}" style="border:1px solid rgba(255,255,255,.16);background:transparent;color:rgba(255,255,255,.65);font-family:inherit;font-size:14px;padding:11px 20px;border-radius:999px;cursor:pointer" style-hover="color:#fff">Request a change</button>
-                        </div>
+                        <!-- actions · an ACTED-UPON plan is a record, not a control.
+                             Leaving these live meant a user scrolling up to re-read the
+                             plan could re-fire a build that had already happened. -->
+                        <sc-if value="{{ item.acted }}" hint-placeholder-val="{{ false }}">
+                          <div style="display:flex;gap:10px;align-items:center;margin-top:20px">
+                            <div style="font-family:ui-monospace,monospace;font-size:9px;letter-spacing:.14em;color:rgba(127,194,138,.75)">✓ APPROVED — BUILT BELOW</div>
+                          </div>
+                        </sc-if>
+                        <sc-if value="{{ item.pending }}" hint-placeholder-val="{{ true }}">
+                          <div style="display:flex;gap:10px;align-items:center;margin-top:20px">
+                            <button onClick="{{ item.onBuild }}" style="border:none;background:#efc892;color:#0a0a0a;font-family:inherit;font-size:14px;font-weight:600;padding:11px 24px;border-radius:999px;cursor:pointer" style-hover="background:#f3cd86">Approve &amp; build →</button>
+                            <button onClick="{{ item.onChange }}" style="border:1px solid rgba(255,255,255,.16);background:transparent;color:rgba(255,255,255,.65);font-family:inherit;font-size:14px;padding:11px 20px;border-radius:999px;cursor:pointer" style-hover="color:#fff">Request a change</button>
+                          </div>
+                        </sc-if>
                       </div>
                     </div>
                   </div>
@@ -597,11 +606,11 @@
                                 <sc-if value="{{ an.icoStop }}" hint-placeholder-val="{{ false }}"><svg viewBox="0 0 24 24" width="15" height="15" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="2.5"></rect></svg></sc-if>
                               </span>
                             </div>
-                            <sc-if value="{{ an.check }}" hint-placeholder-val="{{ false }}"><span style="position:absolute;right:{{ an.checkR }};bottom:{{ an.checkB }};width:17px;height:17px;border-radius:50%;background:#5fc78a;border:2px solid #0A0A0A;display:flex;align-items:center;justify-content:center"><svg viewBox="0 0 24 24" width="9" height="9" fill="none" stroke="#06210d" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4 4 9-10"></path></svg></span></sc-if>
+                            <sc-if value="{{ an.check }}" hint-placeholder-val="{{ false }}"><span style="position:absolute;right:{{ an.checkR }};bottom:{{ an.checkB }};width:17px;height:17px;border-radius:50%;background:#5fc78a;border:2px solid #0A0A0A;display:flex;align-items:center;justify-content:center"><svg viewBox="0 0 24 24" width="9" height="9" fill="none" stroke="#06210d" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4 4 9-10"></path></svg></button></sc-if>
                             <sc-if value="{{ an.decide }}" hint-placeholder-val="{{ false }}">
                               <span class="nctrl" style="position:absolute;right:{{ an.checkR }};bottom:{{ an.checkB }};display:flex;gap:5px">
-                                <span onClick="{{ an.onApprove }}" title="Confirm" style="width:19px;height:19px;border-radius:50%;background:#0A0A0A;border:2px solid #5fc78a;cursor:pointer;display:flex;align-items:center;justify-content:center"><svg viewBox="0 0 24 24" width="9" height="9" fill="none" stroke="#5fc78a" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4 4 9-10"></path></svg></span>
-                                <span onClick="{{ an.onReject }}" title="Reject" style="width:19px;height:19px;border-radius:50%;background:#0A0A0A;border:2px solid #e87878;cursor:pointer;display:flex;align-items:center;justify-content:center"><svg viewBox="0 0 24 24" width="9" height="9" fill="none" stroke="#e87878" stroke-width="4" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"></path></svg></span>
+                                <button onClick="{{ an.onApprove }}" type="button" title="Confirm" aria-label="Confirm this step: {{ an.title }}" style="width:19px;height:19px;padding:0;border-radius:50%;background:#0A0A0A;border:2px solid #5fc78a;cursor:pointer;display:flex;align-items:center;justify-content:center"><svg viewBox="0 0 24 24" width="9" height="9" fill="none" stroke="#5fc78a" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4 4 9-10"></path></svg></button>
+                                <button onClick="{{ an.onReject }}" type="button" title="Reject" aria-label="Reject this step: {{ an.title }}" style="width:19px;height:19px;padding:0;border-radius:50%;background:#0A0A0A;border:2px solid #e87878;cursor:pointer;display:flex;align-items:center;justify-content:center"><svg viewBox="0 0 24 24" width="9" height="9" fill="none" stroke="#e87878" stroke-width="4" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"></path></svg></button>
                               </span>
                             </sc-if>
                             <span style="position:absolute;top:calc(100% + 8px);left:50%;transform:translateX(-50%);width:92px;display:flex;flex-direction:column;gap:2px;text-align:center;pointer-events:none">
@@ -625,8 +634,19 @@
                           <sc-for list="{{ liveGraph.lanes }}" as="ln" hint-placeholder-count="2">
                             <div>
                               <div style="font-family:'Instrument Serif',Georgia,serif;font-style:italic;font-size:13px;color:rgba(239,200,146,.8);margin:0 0 8px 2px;white-space:nowrap;opacity:{{ ln.labelO }};transition:opacity .4s">{{ ln.label }}</div>
-                              <div style="display:flex;align-items:flex-start;gap:0">
-                                <sc-for list="{{ ln.nodes }}" as="an" hint-placeholder-count="2">
+                              <sc-for list="{{ ln.rows }}" as="rw" hint-placeholder-count="1">
+                              <sc-if value="{{ rw.hasLabel }}" hint-placeholder-val="{{ false }}">
+                                <div style="font-family:'Instrument Serif',Georgia,serif;font-style:italic;font-size:12px;color:rgba(239,200,146,.62);margin:0 0 8px 2px;white-space:nowrap">↳ {{ rw.label }}</div>
+                              </sc-if>
+                              <!-- A node's TITLE is absolutely positioned under its circle
+                                   (top:calc(100% + 8px)) so it contributes NO layout height.
+                                   Rows must therefore reserve that space themselves, or the
+                                   next row's label lands on top of the previous row's titles
+                                   — which is exactly what happened on first render. 40px ≈
+                                   two lines of title + the 8px offset, matching the 46px the
+                                   trunk reserves via its own padding-bottom. -->
+                              <div style="display:flex;align-items:flex-start;gap:0;padding-bottom:40px">
+                                <sc-for list="{{ rw.nodes }}" as="an" hint-placeholder-count="2">
                         <div style="display:flex;align-items:center;flex:none">
                           <div class="nodewrap" style="flex:none;position:relative;opacity:{{ an.o }};transform:{{ an.tr }};transition:opacity .5s,transform .5s cubic-bezier(.2,.7,.3,1)">
                             <div style="width:{{ an.w }};height:{{ an.h }};border-radius:{{ an.radius }};border:1.5px solid {{ an.border }};background:{{ an.bg }};transform:{{ an.rot }};animation:{{ an.anim }};display:flex;align-items:center;justify-content:center;color:{{ an.fg }};transition:border .25s,color .25s">
@@ -650,11 +670,11 @@
                                 <sc-if value="{{ an.icoStop }}" hint-placeholder-val="{{ false }}"><svg viewBox="0 0 24 24" width="15" height="15" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="2.5"></rect></svg></sc-if>
                               </span>
                             </div>
-                            <sc-if value="{{ an.check }}" hint-placeholder-val="{{ false }}"><span style="position:absolute;right:{{ an.checkR }};bottom:{{ an.checkB }};width:17px;height:17px;border-radius:50%;background:#5fc78a;border:2px solid #0A0A0A;display:flex;align-items:center;justify-content:center"><svg viewBox="0 0 24 24" width="9" height="9" fill="none" stroke="#06210d" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4 4 9-10"></path></svg></span></sc-if>
+                            <sc-if value="{{ an.check }}" hint-placeholder-val="{{ false }}"><span style="position:absolute;right:{{ an.checkR }};bottom:{{ an.checkB }};width:17px;height:17px;border-radius:50%;background:#5fc78a;border:2px solid #0A0A0A;display:flex;align-items:center;justify-content:center"><svg viewBox="0 0 24 24" width="9" height="9" fill="none" stroke="#06210d" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4 4 9-10"></path></svg></button></sc-if>
                             <sc-if value="{{ an.decide }}" hint-placeholder-val="{{ false }}">
                               <span class="nctrl" style="position:absolute;right:{{ an.checkR }};bottom:{{ an.checkB }};display:flex;gap:5px">
-                                <span onClick="{{ an.onApprove }}" title="Confirm" style="width:19px;height:19px;border-radius:50%;background:#0A0A0A;border:2px solid #5fc78a;cursor:pointer;display:flex;align-items:center;justify-content:center"><svg viewBox="0 0 24 24" width="9" height="9" fill="none" stroke="#5fc78a" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4 4 9-10"></path></svg></span>
-                                <span onClick="{{ an.onReject }}" title="Reject" style="width:19px;height:19px;border-radius:50%;background:#0A0A0A;border:2px solid #e87878;cursor:pointer;display:flex;align-items:center;justify-content:center"><svg viewBox="0 0 24 24" width="9" height="9" fill="none" stroke="#e87878" stroke-width="4" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"></path></svg></span>
+                                <button onClick="{{ an.onApprove }}" type="button" title="Confirm" aria-label="Confirm this step: {{ an.title }}" style="width:19px;height:19px;padding:0;border-radius:50%;background:#0A0A0A;border:2px solid #5fc78a;cursor:pointer;display:flex;align-items:center;justify-content:center"><svg viewBox="0 0 24 24" width="9" height="9" fill="none" stroke="#5fc78a" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4 4 9-10"></path></svg></button>
+                                <button onClick="{{ an.onReject }}" type="button" title="Reject" aria-label="Reject this step: {{ an.title }}" style="width:19px;height:19px;padding:0;border-radius:50%;background:#0A0A0A;border:2px solid #e87878;cursor:pointer;display:flex;align-items:center;justify-content:center"><svg viewBox="0 0 24 24" width="9" height="9" fill="none" stroke="#e87878" stroke-width="4" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"></path></svg></button>
                               </span>
                             </sc-if>
                             <span style="position:absolute;top:calc(100% + 8px);left:50%;transform:translateX(-50%);width:92px;display:flex;flex-direction:column;gap:2px;text-align:center;pointer-events:none">
@@ -668,6 +688,7 @@
                         </div>
                       </sc-for>
                               </div>
+                              </sc-for>
                             </div>
                           </sc-for>
                         </div>
@@ -796,7 +817,7 @@
 
             <div onDragOver="{{ onChatDragOver }}" onDrop="{{ onChatDrop }}" style="display:flex;align-items:center;gap:10px;border-radius:22px;padding:13px 10px 13px 18px;background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.14);backdrop-filter:blur(24px) saturate(180%);-webkit-backdrop-filter:blur(24px) saturate(180%);box-shadow:inset 0 1px 0 rgba(255,255,255,.06),0 8px 28px rgba(0,0,0,.32)">
               <span style="flex:none;color:rgba(255,255,255,.42);font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:0.86em;user-select:none;line-height:1">›</span>
-              <div ref="{{ chatInputRef }}" contenteditable="{{ chatInputEditable }}" onInput="{{ onIntentInput }}" onKeyDown="{{ onIntentKey }}" class="chat-input" data-ph="{{ inputPlaceholder }}" style="flex:1;min-width:0;outline:none;color:#fff;font-family:'Inter Tight',-apple-system,BlinkMacSystemFont,'Helvetica Neue',sans-serif;font-size:15px;letter-spacing:-0.005em;line-height:1.5;cursor:text;word-break:break-word"></div>
+              <div ref="{{ chatInputRef }}" contenteditable="{{ chatInputEditable }}" role="textbox" aria-multiline="true" aria-label="{{ inputPlaceholder }}" onInput="{{ onIntentInput }}" onKeyDown="{{ onIntentKey }}" class="chat-input" data-ph="{{ inputPlaceholder }}" style="flex:1;min-width:0;outline:none;color:#fff;font-family:'Inter Tight',-apple-system,BlinkMacSystemFont,'Helvetica Neue',sans-serif;font-size:15px;letter-spacing:-0.005em;line-height:1.5;cursor:text;word-break:break-word"></div>
               <sc-if value="{{ chatFolderIndexing }}">
                 <span style="flex:none;display:flex;align-items:center;padding:4px 6px"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="rgba(255,255,255,.35)" stroke-width="2" stroke-linecap="round"><path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"/></svg></span>
               </sc-if>
@@ -1060,6 +1081,9 @@
               <div style="position:relative;margin-top:16px">
                 <sc-if value="{{ footRunTest }}" hint-placeholder-val="{{ false }}">
                   <button onClick="{{ onRunTest }}" style="width:100%;border:none;cursor:pointer;background:#fff;color:#0a0a0a;font-family:inherit;font-weight:500;font-size:15px;letter-spacing:-0.01em;padding:14px;border-radius:999px;display:flex;align-items:center;justify-content:center;gap:9px"><span style="font-size:11px">▶</span>Run test</button>
+                  <sc-if value="{{ runTestDisclosure }}" hint-placeholder-val="{{ '' }}">
+                    <div style="text-align:center;font-size:11.5px;color:rgba(240,191,107,.75);margin-top:9px;line-height:1.45">{{ runTestDisclosure }}</div>
+                  </sc-if>
                 </sc-if>
                 <sc-if value="{{ footTesting }}" hint-placeholder-val="{{ false }}">
                   <button disabled="{{ true }}" style="width:100%;border:1px solid rgba(255,255,255,.1);background:rgba(255,255,255,.04);color:rgba(255,255,255,.7);font-family:inherit;font-weight:500;font-size:15px;padding:14px;border-radius:999px;cursor:progress;display:flex;align-items:center;justify-content:center;gap:10px"><span style="position:relative;display:inline-flex;width:20px;height:20px;color:rgba(255,255,255,.75);flex:none;vertical-align:middle"><span style="position:absolute;inset:-30%;border-radius:50%;background:radial-gradient(circle,rgba(255,255,255,.12) 0%,rgba(255,255,255,0) 65%);animation:irisGlow 3500ms cubic-bezier(.5,0,.2,1) infinite;pointer-events:none;"></span><svg viewBox="0 0 1080 1080" style="position:relative;width:100%;height:100%;overflow:visible;display:block;filter:drop-shadow(0 0 1px rgba(255,255,255,.5)) drop-shadow(0 0 4px rgba(255,255,255,.25));"><circle cx="540" cy="540" r="318" fill="none" stroke="currentColor" stroke-width="20" stroke-linejoin="round" style="transform-box:view-box;transform-origin:540px 540px;animation:irisRing 3500ms cubic-bezier(.5,0,.2,1) infinite;animation-delay:0ms;"></circle><ellipse cx="540" cy="540" rx="232" ry="318" fill="none" stroke="currentColor" stroke-width="13" stroke-linejoin="round" style="transform-box:view-box;transform-origin:540px 540px;animation:irisRing 3500ms cubic-bezier(.5,0,.2,1) infinite;animation-delay:120ms;"></ellipse><ellipse cx="540" cy="540" rx="112" ry="318" fill="none" stroke="currentColor" stroke-width="13" stroke-linejoin="round" style="transform-box:view-box;transform-origin:540px 540px;animation:irisRing 3500ms cubic-bezier(.5,0,.2,1) infinite;animation-delay:200ms;"></ellipse><ellipse cx="540" cy="540" rx="318" ry="64" fill="none" stroke="currentColor" stroke-width="12" stroke-linejoin="round" style="transform-box:view-box;transform-origin:540px 540px;animation:irisRing 3500ms cubic-bezier(.5,0,.2,1) infinite;animation-delay:80ms;"></ellipse><ellipse cx="540" cy="378" rx="274" ry="55" fill="none" stroke="currentColor" stroke-width="12" stroke-linejoin="round" style="transform-box:view-box;transform-origin:540px 540px;animation:irisRing 3500ms cubic-bezier(.5,0,.2,1) infinite;animation-delay:160ms;"></ellipse><ellipse cx="540" cy="702" rx="274" ry="55" fill="none" stroke="currentColor" stroke-width="12" stroke-linejoin="round" style="transform-box:view-box;transform-origin:540px 540px;animation:irisRing 3500ms cubic-bezier(.5,0,.2,1) infinite;animation-delay:240ms;"></ellipse><line x1="540" y1="208" x2="540" y2="158" stroke="currentColor" stroke-width="9" stroke-linecap="butt" style="transform-box:view-box;transform-origin:540px 540px;animation:irisTick 3500ms cubic-bezier(.5,0,.2,1) infinite;animation-delay:260ms;"></line><line x1="601.8" y1="189.4" x2="606.3" y2="163.8" stroke="currentColor" stroke-width="9" stroke-linecap="butt" style="transform-box:view-box;transform-origin:540px 540px;animation:irisTick 3500ms cubic-bezier(.5,0,.2,1) infinite;animation-delay:269ms;"></line><line x1="661.8" y1="205.5" x2="670.7" y2="181" stroke="currentColor" stroke-width="9" stroke-linecap="butt" style="transform-box:view-box;transform-origin:540px 540px;animation:irisTick 3500ms cubic-bezier(.5,0,.2,1) infinite;animation-delay:278ms;"></line><line x1="718" y1="231.7" x2="731" y2="209.2" stroke="currentColor" stroke-width="9" stroke-linecap="butt" style="transform-box:view-box;transform-origin:540px 540px;animation:irisTick 3500ms cubic-bezier(.5,0,.2,1) infinite;animation-delay:287ms;"></line><line x1="768.8" y1="267.3" x2="785.5" y2="247.4" stroke="currentColor" stroke-width="9" stroke-linecap="butt" style="transform-box:view-box;transform-origin:540px 540px;animation:irisTick 3500ms cubic-bezier(.5,0,.2,1) infinite;animation-delay:296ms;"></line><line x1="812.7" y1="311.2" x2="832.6" y2="294.5" stroke="currentColor" stroke-width="9" stroke-linecap="butt" style="transform-box:view-box;transform-origin:540px 540px;animation:irisTick 3500ms cubic-bezier(.5,0,.2,1) infinite;animation-delay:305ms;"></line><line x1="848.3" y1="362" x2="870.8" y2="349" stroke="currentColor" stroke-width="9" stroke-linecap="butt" style="transform-box:view-box;transform-origin:540px 540px;animation:irisTick 3500ms cubic-bezier(.5,0,.2,1) infinite;animation-delay:314ms;"></line><line x1="874.5" y1="418.2" x2="899" y2="409.3" stroke="currentColor" stroke-width="9" stroke-linecap="butt" style="transform-box:view-box;transform-origin:540px 540px;animation:irisTick 3500ms cubic-bezier(.5,0,.2,1) infinite;animation-delay:323ms;"></line><line x1="890.6" y1="478.2" x2="916.2" y2="473.7" stroke="currentColor" stroke-width="9" stroke-linecap="butt" style="transform-box:view-box;transform-origin:540px 540px;animation:irisTick 3500ms cubic-bezier(.5,0,.2,1) infinite;animation-delay:332ms;"></line><line x1="872" y1="540" x2="922" y2="540" stroke="currentColor" stroke-width="9" stroke-linecap="butt" style="transform-box:view-box;transform-origin:540px 540px;animation:irisTick 3500ms cubic-bezier(.5,0,.2,1) infinite;animation-delay:341ms;"></line><line x1="890.6" y1="601.8" x2="916.2" y2="606.3" stroke="currentColor" stroke-width="9" stroke-linecap="butt" style="transform-box:view-box;transform-origin:540px 540px;animation:irisTick 3500ms cubic-bezier(.5,0,.2,1) infinite;animation-delay:350ms;"></line><line x1="874.5" y1="661.8" x2="899" y2="670.7" stroke="currentColor" stroke-width="9" stroke-linecap="butt" style="transform-box:view-box;transform-origin:540px 540px;animation:irisTick 3500ms cubic-bezier(.5,0,.2,1) infinite;animation-delay:359ms;"></line><line x1="848.3" y1="718" x2="870.8" y2="731" stroke="currentColor" stroke-width="9" stroke-linecap="butt" style="transform-box:view-box;transform-origin:540px 540px;animation:irisTick 3500ms cubic-bezier(.5,0,.2,1) infinite;animation-delay:368ms;"></line><line x1="812.7" y1="768.8" x2="832.6" y2="785.5" stroke="currentColor" stroke-width="9" stroke-linecap="butt" style="transform-box:view-box;transform-origin:540px 540px;animation:irisTick 3500ms cubic-bezier(.5,0,.2,1) infinite;animation-delay:377ms;"></line><line x1="768.8" y1="812.7" x2="785.5" y2="832.6" stroke="currentColor" stroke-width="9" stroke-linecap="butt" style="transform-box:view-box;transform-origin:540px 540px;animation:irisTick 3500ms cubic-bezier(.5,0,.2,1) infinite;animation-delay:386ms;"></line><line x1="718" y1="848.3" x2="731" y2="870.8" stroke="currentColor" stroke-width="9" stroke-linecap="butt" style="transform-box:view-box;transform-origin:540px 540px;animation:irisTick 3500ms cubic-bezier(.5,0,.2,1) infinite;animation-delay:395ms;"></line><line x1="661.8" y1="874.5" x2="670.7" y2="899" stroke="currentColor" stroke-width="9" stroke-linecap="butt" style="transform-box:view-box;transform-origin:540px 540px;animation:irisTick 3500ms cubic-bezier(.5,0,.2,1) infinite;animation-delay:404ms;"></line><line x1="601.8" y1="890.6" x2="606.3" y2="916.2" stroke="currentColor" stroke-width="9" stroke-linecap="butt" style="transform-box:view-box;transform-origin:540px 540px;animation:irisTick 3500ms cubic-bezier(.5,0,.2,1) infinite;animation-delay:413ms;"></line><line x1="540" y1="872" x2="540" y2="922" stroke="currentColor" stroke-width="9" stroke-linecap="butt" style="transform-box:view-box;transform-origin:540px 540px;animation:irisTick 3500ms cubic-bezier(.5,0,.2,1) infinite;animation-delay:422ms;"></line><line x1="478.2" y1="890.6" x2="473.7" y2="916.2" stroke="currentColor" stroke-width="9" stroke-linecap="butt" style="transform-box:view-box;transform-origin:540px 540px;animation:irisTick 3500ms cubic-bezier(.5,0,.2,1) infinite;animation-delay:431ms;"></line><line x1="418.2" y1="874.5" x2="409.3" y2="899" stroke="currentColor" stroke-width="9" stroke-linecap="butt" style="transform-box:view-box;transform-origin:540px 540px;animation:irisTick 3500ms cubic-bezier(.5,0,.2,1) infinite;animation-delay:440ms;"></line><line x1="362" y1="848.3" x2="349" y2="870.8" stroke="currentColor" stroke-width="9" stroke-linecap="butt" style="transform-box:view-box;transform-origin:540px 540px;animation:irisTick 3500ms cubic-bezier(.5,0,.2,1) infinite;animation-delay:449ms;"></line><line x1="311.2" y1="812.7" x2="294.5" y2="832.6" stroke="currentColor" stroke-width="9" stroke-linecap="butt" style="transform-box:view-box;transform-origin:540px 540px;animation:irisTick 3500ms cubic-bezier(.5,0,.2,1) infinite;animation-delay:458ms;"></line><line x1="267.3" y1="768.8" x2="247.4" y2="785.5" stroke="currentColor" stroke-width="9" stroke-linecap="butt" style="transform-box:view-box;transform-origin:540px 540px;animation:irisTick 3500ms cubic-bezier(.5,0,.2,1) infinite;animation-delay:467ms;"></line><line x1="231.7" y1="718" x2="209.2" y2="731" stroke="currentColor" stroke-width="9" stroke-linecap="butt" style="transform-box:view-box;transform-origin:540px 540px;animation:irisTick 3500ms cubic-bezier(.5,0,.2,1) infinite;animation-delay:476ms;"></line><line x1="205.5" y1="661.8" x2="181" y2="670.7" stroke="currentColor" stroke-width="9" stroke-linecap="butt" style="transform-box:view-box;transform-origin:540px 540px;animation:irisTick 3500ms cubic-bezier(.5,0,.2,1) infinite;animation-delay:485ms;"></line><line x1="189.4" y1="601.8" x2="163.8" y2="606.3" stroke="currentColor" stroke-width="9" stroke-linecap="butt" style="transform-box:view-box;transform-origin:540px 540px;animation:irisTick 3500ms cubic-bezier(.5,0,.2,1) infinite;animation-delay:494ms;"></line><line x1="208" y1="540" x2="158" y2="540" stroke="currentColor" stroke-width="9" stroke-linecap="butt" style="transform-box:view-box;transform-origin:540px 540px;animation:irisTick 3500ms cubic-bezier(.5,0,.2,1) infinite;animation-delay:503ms;"></line><line x1="189.4" y1="478.2" x2="163.8" y2="473.7" stroke="currentColor" stroke-width="9" stroke-linecap="butt" style="transform-box:view-box;transform-origin:540px 540px;animation:irisTick 3500ms cubic-bezier(.5,0,.2,1) infinite;animation-delay:512ms;"></line><line x1="205.5" y1="418.2" x2="181" y2="409.3" stroke="currentColor" stroke-width="9" stroke-linecap="butt" style="transform-box:view-box;transform-origin:540px 540px;animation:irisTick 3500ms cubic-bezier(.5,0,.2,1) infinite;animation-delay:521ms;"></line><line x1="231.7" y1="362" x2="209.2" y2="349" stroke="currentColor" stroke-width="9" stroke-linecap="butt" style="transform-box:view-box;transform-origin:540px 540px;animation:irisTick 3500ms cubic-bezier(.5,0,.2,1) infinite;animation-delay:530ms;"></line><line x1="267.3" y1="311.2" x2="247.4" y2="294.5" stroke="currentColor" stroke-width="9" stroke-linecap="butt" style="transform-box:view-box;transform-origin:540px 540px;animation:irisTick 3500ms cubic-bezier(.5,0,.2,1) infinite;animation-delay:539ms;"></line><line x1="311.2" y1="267.3" x2="294.5" y2="247.4" stroke="currentColor" stroke-width="9" stroke-linecap="butt" style="transform-box:view-box;transform-origin:540px 540px;animation:irisTick 3500ms cubic-bezier(.5,0,.2,1) infinite;animation-delay:548ms;"></line><line x1="362" y1="231.7" x2="349" y2="209.2" stroke="currentColor" stroke-width="9" stroke-linecap="butt" style="transform-box:view-box;transform-origin:540px 540px;animation:irisTick 3500ms cubic-bezier(.5,0,.2,1) infinite;animation-delay:557ms;"></line><line x1="418.2" y1="205.5" x2="409.3" y2="181" stroke="currentColor" stroke-width="9" stroke-linecap="butt" style="transform-box:view-box;transform-origin:540px 540px;animation:irisTick 3500ms cubic-bezier(.5,0,.2,1) infinite;animation-delay:566ms;"></line><line x1="478.2" y1="189.4" x2="473.7" y2="163.8" stroke="currentColor" stroke-width="9" stroke-linecap="butt" style="transform-box:view-box;transform-origin:540px 540px;animation:irisTick 3500ms cubic-bezier(.5,0,.2,1) infinite;animation-delay:575ms;"></line></svg></span>Testing…</button>
@@ -1231,7 +1255,7 @@
                       <div style="display:flex;flex-direction:column;gap:8px">
                         <sc-for list="{{ hmOverdueWfs }}" as="ow" hint-placeholder-count="1">
                           <div style="display:flex;align-items:center;gap:12px;padding:10px 14px;border:1px solid rgba(240,191,107,.2);background:rgba(240,191,107,.05);border-radius:12px">
-                            <div onClick="{{ ow.onOpen }}" style="flex:1;min-width:0;cursor:pointer">
+                            <div onClick="{{ ow.onOpen }}" onKeyDown="{{ ow.onOpenKey }}" role="button" tabindex="0" aria-label="Open workflow {{ ow.name }}" style="flex:1;min-width:0;cursor:pointer">
                               <div style="font-size:14px;font-weight:500;color:rgba(var(--fg),.9);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ ow.name }}</div>
                               <div style="font-size:12px;color:rgba(var(--fg),.4);margin-top:1px">{{ ow.schedule }}</div>
                             </div>
@@ -1404,7 +1428,7 @@
                       <div style="display:flex;flex-wrap:wrap;gap:8px">
                         <sc-for list="{{ hmQrWfs }}" as="qw" hint-placeholder-count="2">
                           <div style="display:flex;align-items:center;border:1px solid rgba(var(--fg),.1);border-radius:12px;overflow:hidden">
-                            <div onClick="{{ qw.onOpen }}" style="font-size:13.5px;font-weight:500;color:rgba(var(--fg),.75);padding:11px 16px;cursor:pointer">{{ qw.name }}</div>
+                            <div onClick="{{ qw.onOpen }}" onKeyDown="{{ qw.onOpenKey }}" role="button" tabindex="0" aria-label="Open workflow {{ qw.name }}" style="font-size:13.5px;font-weight:500;color:rgba(var(--fg),.75);padding:11px 16px;cursor:pointer">{{ qw.name }}</div>
                             <div onClick="{{ qw.onRun }}" style="border-left:1px solid rgba(var(--fg),.1);padding:11px 14px;cursor:pointer;color:var(--green);font-size:14px">▶</div>
                           </div>
                         </sc-for>
@@ -3061,7 +3085,7 @@ class Component extends DCLogic {
       phase: "chat", intent: null, threadId: null, msgs: [], inputMode: "chat",
       inputValue: "", thinking: false, spec: null, outcome: null, testState: "idle", runSteps: [], contractOpenRow: null,
       awaitingGraphApproval: false, graphApproved: [], graphSelNode: null, graphReviseOpen: false, graphReviseText: "",
-      runStepIndex: 0, failIndex: -1, deliveries: [], runOutput: null, runError: "", outcomeResults: [], workflowId: null, isEditing: false, isDraftBuild: false, editingIntro: null,
+      runStepIndex: 0, failIndex: -1, deliveries: [], runOutput: null, runError: "", outcomeResults: [], pausedAsk: null, pausedNote: null, workflowId: null, isEditing: false, isDraftBuild: false, editingIntro: null,
       renamingWfId: null, renamingValue: "", draftName: null,
       connectionsOpen: false, accountOpen: false, profileOpen: false, connectionsClosing: false, accountClosing: false,
       mentionOpen: false, mentionQuery: "", mentionAt: -1,
@@ -3764,10 +3788,7 @@ class Component extends DCLogic {
       // Rebuild liveNodes from the spec if they weren't persisted (older slices), and keep
       // the approval surface up. The Run test panel reads `spec`/`outcome`, both restored.
       if (!(slice.liveNodes && slice.liveNodes.length)) {
-        overrides.liveNodes = slice.spec.nodes.map(n => ({
-          id: n.id, type: n.type, label: n.label ?? null,
-          mode: (n.config && n.config.mode) || null, description: n.description ?? null,
-        }));
+        overrides.liveNodes = this._liveNodesFromSpec(slice.spec);
       }
       // A restored graph has NO live converger session — the build-reveal animation is a
       // build-time flourish only, so on restore we skip it: show the graph FULLY (liveRevealed
@@ -3777,6 +3798,24 @@ class Component extends DCLogic {
       overrides.awaitingGraphApproval = true;
       overrides.liveRevealed = null;
       overrides.inputMode = 'locked';
+    }
+    // A slice can carry a spec and its nodes and STILL have no graph card — every
+    // draft saved before the graph was mounted on reopen is in exactly that state,
+    // and would keep showing a blank canvas forever. Rebuild the nodes from the
+    // blueprint if they are missing, then make sure something draws them.
+    if (hasSpec) {
+      const live = (overrides.liveNodes && overrides.liveNodes.length)
+        ? overrides.liveNodes
+        : (slice.liveNodes && slice.liveNodes.length ? slice.liveNodes : this._liveNodesFromSpec(slice.spec));
+      overrides.liveNodes = live;
+      const msgs = Array.isArray(slice.msgs) ? slice.msgs.slice() : [];
+      if (!msgs.some(m => m && m.isLiveGraph)) {
+        msgs.push({ isLiveGraph: true, _id: 'lg_restore_' + (slice.workflowId || 'x') });
+        overrides.msgs = msgs;
+        // Nothing is mid-reveal on a restore, so show the whole graph at once.
+        overrides.liveRevealed = null;
+        if (overrides.liveConfirmed == null && !(slice.liveConfirmed > 0)) overrides.liveConfirmed = live.length;
+      }
     }
     this.setState(Object.assign({}, slice, overrides));
   }
@@ -4219,8 +4258,30 @@ class Component extends DCLogic {
         this.setState({
           view: 'build', connectionsOpen: false, accountOpen: false, profileOpen: false,
           workflowId: wf.id, isDraftBuild: true, phase: "proposed", spec,
+          // RENDER THE SAVED WORKFLOW. Without these the canvas is blank while
+          // "Run test" is enabled — the user is invited to review something the
+          // page never draws.
+          //
+          // Shown as fully confirmed, deliberately: this route ALREADY treats the
+          // draft as testable (`testUnlocked` is spec && !awaitingGraphApproval &&
+          // phase === 'proposed', all true here), so drawing the nodes as
+          // unapproved would contradict the enabled button beside them. Per-node
+          // approval is build-session state and is not persisted server-side, so
+          // there is no stored answer to restore — this reflects the state the app
+          // is already in rather than asserting a new one.
+          liveNodes: this._liveNodesFromSpec(spec),
+          liveConfirmed: this._liveNodesFromSpec(spec).length,
+          liveRevealed: null, awaitingGraphApproval: false, liveFlashIdx: -1,
           intent: wf.user_intent || wf.name || null, threadId: null, inputMode: "change",
-          msgs: [{ isAtlas: true, text: "Here's your saved draft — review it and publish when you're ready, or tell me what to change.", hasReason: false }],
+          // THE GRAPH IS A CHAT MESSAGE, so a reopened session must mount one.
+          // `liveNodes` alone renders nothing: the live graph is drawn by a card in
+          // `msgs` (`isLiveGraph`), which only ever existed because the BUILD pushed
+          // it. Reopening restored the spec and the nodes and still showed a blank
+          // canvas — the nodes had nowhere to be drawn.
+          msgs: [
+            { isAtlas: true, text: "Here's your saved draft — here's how it works. Review it and publish when you're ready, or tell me what to change.", hasReason: false },
+            { isLiveGraph: true, _id: 'lg_reopen_' + wf.id },
+          ],
           inputValue: "", thinking: false, testState: "idle",
           runSteps: [], runStepIndex: 0, failIndex: -1, deliveries: [], runOutput: null, runError: "",
           isEditing: false, editingIntro: null,
@@ -4769,7 +4830,14 @@ class Component extends DCLogic {
               // from the conversation via _deriveBuildIntent, so the CTA is never a
               // dead end. Gate on readyToBuild alone (Q10).
               const buildIntent = twDone.buildIntent || null;
-              newMsgs.push({ isCta: true, ctaAction: "build", buildIntent, text: "", btn: "Build it →", btnBg: "#7fc28a", btnFg: "#06210d", onClick: () => self.startBuild(buildIntent) });
+              newMsgs.push({ isCta: true, ctaAction: "build", buildIntent, text: "", btn: "Build it →", btnBg: "#7fc28a", btnFg: "#06210d",
+                onClick: () => {
+                  // Consume it: retire every prior build CTA before starting, so a
+                  // second click (or a click on an older one further up) cannot kick
+                  // off a duplicate build over the top of this one.
+                  self.setState({ msgs: self.state.msgs.map(m => (m && m.isCta && m.ctaAction === 'build') ? { ...m, isCta: false, isNote: true, text: '✓ Building this now.' } : m) });
+                  self.startBuild(buildIntent);
+                } });
             }
             // Outward-facing actions the chat proposed are HELD for confirmation —
             // nothing was sent. Render a confirm card; the action runs only on click.
@@ -4965,11 +5033,7 @@ class Component extends DCLogic {
       // The TRIGGER is a real node the user approves like any other (operator 2026-07-17):
       // every node is addressed during the build. It lives in spec.triggers[], so it is
       // prepended to the approvable node list as the entry node.
-      const trigNode = this._triggerNodeFrom(sp);
-      const specNodes = (trigNode ? [trigNode] : []).concat((sp.nodes || []).map(n => ({
-        id: n.id, type: n.type, label: n.label ?? null,
-        mode: (n.config && n.config.mode) || null, description: n.description ?? null,
-      })));
+      const specNodes = this._liveNodesFromSpec(sp);
       // THE GRAPH IS BUILT ONCE, FROM THE COMPLETE SPEC, THEN ANIMATED (operator 2026-07-17).
       // The full spec has edges, so the laned layout is correct from the first frame; the
       // node-by-node reveal (`_animateReveal`) makes it read as a live build without ever
@@ -5113,7 +5177,10 @@ class Component extends DCLogic {
         // The CoT block mounts HERE — AFTER the plan (operator 2026-07-17): the user
         // approves the plan, THEN watches the model think through the build below it.
         self.setState({
-          msgs: [...self.state.msgs,
+          // The plan has been acted on: retire its controls (see the markup's
+          // `acted`/`pending` pair) so the transcript records the decision instead
+          // of offering to make it again.
+          msgs: [...self.state.msgs.map(m => (m && m.isPlan) ? { ...m, acted: true } : m),
                  { isOperator: true, text: "Build it" },
                  // Narration (operator 2026-07-17): tell the user what is about to happen so the
                  // streaming reasoning + assembling graph read as a deliberate process, not noise.
@@ -5437,6 +5504,51 @@ class Component extends DCLogic {
   _titleCase(s) { s = String(s || ""); return s.charAt(0).toUpperCase() + s.slice(1); }
 
   // ── test (real engine run, required before publish) ───────────────
+  // WHAT "RUN TEST" ACTUALLY DOES, SAID BEFORE THE CLICK (F4).
+  //
+  // The panel is titled TEST ENVIRONMENT, which universally connotes a sandbox —
+  // and this runs the REAL engine against REAL connectors. Every delivery is a
+  // real Slack post / email / Airtable record, and it happens ONCE PER WORKED
+  // EXAMPLE, so the blast radius is a number the user never chose and could not
+  // see. Real delivery is the deliberate design (a dry run cannot prove a
+  // delivery works); the defect was never saying so. Disclosure, not a sandbox.
+  //
+  // Returns null when there is nothing to disclose — no write, no send.
+  _runTestDisclosure() {
+    const S = this.state, spec = S.spec;
+    if (!spec || !Array.isArray(spec.nodes)) return null;
+    const ex = (spec.outcome && Array.isArray(spec.outcome.examples)) ? spec.outcome.examples.length : 0;
+    const n = ex || 1;   // no examples ⇒ one sample run
+    // Count what actually leaves the building, INCLUDING inside a foreach — a loop
+    // is N sends per run, which is the shape most likely to surprise someone.
+    const dests = [];
+    const walk = (nodes) => (nodes || []).forEach((node) => {
+      if (!node) return;
+      if (node.type === 'foreach') { walk(node.config && node.config.steps); return; }
+      const c = node.config || {};
+      const ch = c.channel || c.action || '';
+      if (node.type === 'deliver' || (node.type === 'connector-action' && /_(create|send|append|update|write|post)/.test(String(ch)))) {
+        // NAME IT THE WAY THE USER WOULD. The fallback used to be the raw channel
+        // id, so the warning read "3 examples × #agntic-x-slack, inbox_deliver" —
+        // a code name in the one sentence whose whole job is telling someone what
+        // is about to be sent for real. `_deliverySentence` already owns this
+        // mapping for the contract chips; reuse it rather than keeping a second,
+        // divergent copy.
+        const loc = c.target || c.to || c.tableId || c.spreadsheetId || '';
+        // A destination in a LIST wants a noun ("your Atlas inbox"), not the
+        // sentence the contract chips use ("Saves it to your Atlas inbox") — the
+        // sentence reads as a clause spliced into the middle of another one.
+        const where = loc || this._deliverySentence({ target: String(ch) })
+          .replace(/^(Saves it to|Posts it to|Sends it to|Emails it to|Adds a record to|Adds a row to|Creates a[n]? [a-z ]+ in|Creates a[n]? )/i, '')
+          .trim() || String(ch);
+        if (where && dests.indexOf(String(where)) < 0) dests.push(String(where));
+      }
+    });
+    walk(spec.nodes);
+    if (!dests.length) return null;
+    const list = dests.slice(0, 3).join(", ") + (dests.length > 3 ? " and " + (dests.length - 3) + " more" : "");
+    return "This sends for real — " + n + " example" + (n === 1 ? "" : "s") + " × " + list + ".";
+  }
   runTest() {
     const S = this.state;
     if (S.phase !== "proposed" || !S.spec || S.testState === "running") return;
@@ -5527,17 +5639,93 @@ class Component extends DCLogic {
     // sample input. "It completed" is no longer the bar; "it did what it said"
     // is. With no examples the old structural check stands (v1, unchanged).
     const outcomeResults = d.outcomeResults || [];
-    const contractPassed = outcomeResults.length
-      ? outcomeResults.every(function(o) { return o.contractPassed; })
-      : (r.ok && d.completed && issues.length === 0);
-    const passed = contractPassed;
+    // ── ZERO EVIDENCE IS NOT A PASS ───────────────────────────────────────
+    // "Every promise held" over an empty set is a vacuous truth, and it was
+    // being rendered as a verification on the control that gates Go live:
+    // an ordinary edit could clear `outcome.examples` to 0 and the panel then
+    // certified "We ran 0 real examples … it's cleared to go live" (F12). The
+    // same vacuum arrives via a router whose only sample took the do-nothing
+    // lane, so every assertion is skipped and no delivery ever runs (F16).
+    //
+    // The distinction that makes this decidable is `verdict` (outcome-oracle):
+    // 'kept' means something was actually PROVED, 'not_exercised' means nothing
+    // was — neither a pass nor a failure. A workflow is cleared only if at least
+    // one example proved a promise and none broke one.
+    //
+    // The structural fallback is kept ONLY for a spec that carries no contract
+    // at all. There is nothing to certify there, so "it ran cleanly" is the
+    // honest bar and v1 workflows publish exactly as before. A spec that DOES
+    // promise something and proved none of it is `unverified` — which leaves
+    // Go live locked (reviewDraft requires testState === "passed") rather than
+    // presenting a green verdict over no evidence.
+    // ── A PAUSE IS NOT A BREAK ────────────────────────────────────────────
+    // A spec with a `human` node STOPS at the gate on the test path, and that is
+    // the correct, deliberate design: parking a test run would hand it to the
+    // timeout sweeper, which would later resume it and perform the steps AFTER
+    // the approval — the customer email, the record — for real, out of a run the
+    // user pressed "test" on. So the server stops and REPORTS the pause
+    // (`paused:true`, plus `awaiting` and a plain-language `note`).
+    //
+    // The client was discarding all of it. With `completed:false` the old
+    // structural check fell straight through to "failed", so the product's
+    // highest-stakes shape — an approval gate working exactly as designed —
+    // reported as "Break found" with a fabricated "A step failed". Read the
+    // server's answer instead of inventing a worse one.
+    if (d.paused) {
+      this.setState({
+        testState: "paused", runSteps: d.steps || [], deliveries: d.deliveries || [],
+        runOutput: d.output || null, runDurationMs: runDurationMs, outcomeResults: [],
+        pausedAsk: d.awaiting || null, pausedNote: d.note || null, laneCoverage: null,
+      });
+      return;
+    }
+    const hasContract = !!(spec && spec.outcome && Array.isArray(spec.outcome.assertions) && spec.outcome.assertions.length);
+    // `verdict` is absent on results from an older server — fall back to the
+    // boolean rather than silently reading undefined as "not broken".
+    const vOf = function(o) { return o.verdict || (o.contractPassed ? "kept" : "broken"); };
+    const anyBroken = outcomeResults.some(function(o) { return vOf(o) === "broken"; });
+    const anyKept   = outcomeResults.some(function(o) { return vOf(o) === "kept"; });
+    const structural = (r.ok && d.completed && issues.length === 0);
+    // ── LANE COVERAGE (F16 invariant 1) ───────────────────────────────────
+    // A router's value IS the routing, and one sample proves one lane. The live
+    // 3-lane router (urgent→Slack, billing→inbox, general→nothing) was certified
+    // "every promise held" on a single sample that classified `general`, ran no
+    // delivery node at all, and left both delivery promises unexercised.
+    // Per-example verdicts cannot see it — each example is individually honest —
+    // so it is judged over the SET, and an uncovered lane blocks certification
+    // exactly as an unexercised promise does.
+    // Pure set subtraction over data the SERVER produced. `laneInventory` (what
+    // lanes exist, and what to call them) and `lanes` (which were taken) both come
+    // from outcome-oracle.js — the client holds no copy of either rule, so the
+    // browser and the engine cannot drift about what a lane is.
+    const laneInv = (outcomeResults.find(function(o) { return o.laneInventory; }) || {}).laneInventory || [];
+    const laneHit = {};
+    outcomeResults.forEach(function(o) {
+      (o.lanes || []).forEach(function(l) { laneHit[JSON.stringify([l.branch, l.to])] = true; });
+    });
+    const coverage = laneInv.length
+      ? { applicable: true, total: laneInv.length,
+          uncovered: laneInv.filter(function(l) { return !laneHit[JSON.stringify([l.branch, l.to])]; }) }
+      : { applicable: false, total: 0, uncovered: [] };
+    const lanesMissing = coverage.applicable && coverage.uncovered.length > 0;
+    const passed = hasContract
+      ? (!anyBroken && anyKept && !lanesMissing)
+      : (outcomeResults.length ? (!anyBroken && !lanesMissing) : structural);
+    // Nothing broke, but nothing was proved either — say so instead of certifying.
+    const unverified = !anyBroken && (lanesMissing || (hasContract && !anyKept));
     const self = this;
     // R8: capture the real wall-clock test duration so the persisted test run
     // records true timing, not the ~1ms gap between back-to-back DB writes.
     const runDurationMs = this._testStartMs ? (Date.now() - this._testStartMs) : null;
 
     if (passed) {
-      this.setState({ testState: "passed", runSteps: d.steps || [], deliveries: d.deliveries || [], runOutput: d.output, runDurationMs: runDurationMs, outcomeResults: outcomeResults });
+      this.setState({ testState: "passed", runSteps: d.steps || [], deliveries: d.deliveries || [], runOutput: d.output, runDurationMs: runDurationMs, outcomeResults: outcomeResults, laneCoverage: coverage });
+    } else if (unverified) {
+      // NOT a failure — the run was clean, it simply proved nothing. Marking it
+      // "error" would be as dishonest in the other direction (and would flip a
+      // live workflow's status on a test that broke nothing). Go live stays
+      // locked because `reviewDraft` requires testState === "passed".
+      this.setState({ testState: "unverified", runSteps: d.steps || [], deliveries: d.deliveries || [], runOutput: d.output, runDurationMs: runDurationMs, outcomeResults: outcomeResults, laneCoverage: coverage });
     } else {
       const steps = d.steps || [];
       let failIndex = steps.length;
@@ -6482,7 +6670,10 @@ class Component extends DCLogic {
       checkB: diamond ? '-2px' : '-6px',
       titleColor: active ? '#efc892' : (ok ? 'rgba(255,255,255,.7)' : 'rgba(255,255,255,.45)'),
       // A terminal has no outgoing connector; every other node links to the next.
-      showConn: !isDeliver && !isStop,
+      // Type default, WIDENED by the real edge list: a `deliver` mid-chain still
+      // connects. Additive only — this can add an arrow the type default omitted,
+      // never remove one — so terminal deliveries and stops are unchanged.
+      showConn: (!isDeliver && !isStop) || !!(this._hasOutEdge && node && this._hasOutEdge.has(node.id)),
       connO: ok ? 1 : (vis ? 0.35 : 0),
       connColor: flash ? '#5fc78a' : (ok ? 'rgba(231,178,94,.5)' : 'rgba(255,255,255,.14)'),
       onApprove: () => this._liveApprove(),
@@ -6497,17 +6688,62 @@ class Component extends DCLogic {
   // Plain-language label for a branch case. The PLAN already phrased each route in the
   // user's words ("if it's a lead" / "otherwise"), so prefer that; fall back to the raw
   // case value, and render the catch-all as "otherwise" rather than "*".
+  // Enter / Space on a role="button" element. A div with an onClick is invisible to
+  // the keyboard: it cannot be tabbed to and cannot be activated. The sidebar's
+  // workflow list was exactly that, so there was no keyboard route to open a
+  // workflow at all.
+  _activateKey(fn) {
+    return (e) => {
+      if (!e) return;
+      if (e.key === 'Enter' || e.key === ' ' || e.key === 'Spacebar') {
+        if (e.preventDefault) e.preventDefault();
+        fn();
+      }
+    };
+  }
   _laneLabelFor(caseWhen, idx) {
     const plan = this.state._approvedPlanCache || null;
     const b = plan && Array.isArray(plan.branches) ? plan.branches[idx] : null;
     if (b && b.when) return this._clip(String(b.when), 34);
-    if (!caseWhen || caseWhen === '*') return 'otherwise';
-    return this._clip(String(caseWhen), 34);
+    if (!caseWhen || caseWhen === '*') return 'anything else';
+    // A CASE VALUE IS AN ENUM MEMBER, NOT ENGLISH. The classifier's own vocabulary
+    // leaks straight onto the diagram: a lane labelled "none" or "not_support"
+    // tells a non-technical reader nothing, and "none" in particular reads as
+    // "there is no label here" rather than "this is the leftover case".
+    const raw = String(caseWhen).trim();
+    const NEITHER = new Set(['none', 'other', 'others', 'neither', 'default', 'unknown', 'n/a', 'na', 'null']);
+    if (NEITHER.has(raw.toLowerCase())) return 'anything else';
+    return this._clip(raw.replace(/[_-]+/g, ' '), 34);
   }
   // The TRIGGER as a real node — it starts the workflow, so it is the first node the user
   // approves (operator 2026-07-17: every node is addressed during the build). It lives in
   // spec.triggers[], so build a node record for it here (id '__trigger__'). Falls back to
   // the plan's trigger while the spec is still streaming.
+  // THE APPROVABLE NODE LIST FOR A SPEC — one definition, three callers.
+  //
+  // The graph renders from `liveNodes`, which was BUILD-SESSION state: it existed
+  // only while a converger session was streaming. So reopening a saved workflow
+  // rendered NOTHING — an empty canvas, no diagram, while the panel offered "Run
+  // test" and the chat said "review it and publish when you're ready". There was
+  // nothing to review. That is the edit entry point, the surface a person returns
+  // to in order to check a live automation.
+  //
+  // A second, quieter defect sat next to it: the one existing rebuild (in
+  // `_applyBuildSlice`) mapped `spec.nodes` and OMITTED THE TRIGGER, while the
+  // build path prepends it. The same workflow would therefore show 3 nodes on one
+  // route and 4 on the other, and the approval counter would disagree with itself.
+  // Deriving it in one place is what stops that drifting again.
+  //
+  // The trigger is a real, approvable node (operator 2026-07-17): it is the "when",
+  // and every node is addressed during a build. It lives in `spec.triggers[]`, so
+  // `_triggerNodeFrom` synthesises the record.
+  _liveNodesFromSpec(spec) {
+    const trig = this._triggerNodeFrom(spec);
+    return (trig ? [trig] : []).concat(((spec && spec.nodes) || []).map(n => ({
+      id: n.id, type: n.type, label: n.label ?? null,
+      mode: (n.config && n.config.mode) || null, description: n.description ?? null,
+    })));
+  }
   _triggerNodeFrom(spec) {
     const t = (spec?.triggers && spec.triggers[0])
       || (this.state._approvedPlanCache && this.state._approvedPlanCache.trigger
@@ -6527,8 +6763,71 @@ class Component extends DCLogic {
   // Everything from the entry node up to and INCLUDING the first branch. Derived from the
   // spec's real edges. The trigger is already the first entry in `nodes` (it is a real
   // approvable node now), so no special-casing here — just find the branch by id.
+  // THE NODE THAT OPENS LANES IS THE ONE WITH `cases` — a `branch`. NOT a `decision`.
+  //
+  // These lookups used to be `find(n => n.type === 'branch' || n.type === 'decision')`,
+  // then read `config.cases` off whatever came back. A `decision` has no `cases` — its
+  // shape is `inputs / output / hitPolicy / RULES` — so on the canonical decision shape
+  // (`decision → branch`, which prompts.js teaches and the converger emits), the decision
+  // was found FIRST, `cases` came back empty, and lane rendering bailed out entirely.
+  // The whole graph then drew as one flat line: the branch present but not fanning out,
+  // its lanes gone, and the P1 / silent outcomes jammed together with overlapping labels
+  // (2026-07-19). A decision produces a VALUE; the branch downstream of it is what routes.
+  // A SPLIT IS ANY NODE WITH TWO OR MORE OUTGOING EDGES. It is NOT "a branch".
+  //
+  // This has now been the root cause three separate times, each patched at the
+  // symptom: a nested branch drawn as a straight run; a `decision` sitting before
+  // the branch collapsing the whole graph flat; and — the one that exposed the
+  // real rule — a plain FAN-OUT (one step feeding two deliveries) not being
+  // recognised as a split at all, so two simultaneous deliveries rendered as a
+  // run-on with their labels overlapping by 29px.
+  //
+  // The renderer used to know exactly one shape of split, `branch` + `cases`, and
+  // any workflow that split some other way fell through to a flat line. Out-degree
+  // is the honest definition: a `branch` is simply the split that also carries
+  // case labels. `rowsFrom` below has ALWAYS forked on out-degree — only this
+  // entry point insisted on a router, which is why the inner recursion was general
+  // and the top level was not.
+  //
+  // Order matters and is unchanged in effect: a `decision` feeds its branch through
+  // ONE edge, so the first node with 2+ targets is still the branch, never the
+  // decision.
+  _laneSourceOf(nodes, edges) {
+    const list = nodes || [];
+    const es = Array.isArray(edges) ? edges : [];
+    for (const n of list) {
+      if (!n || !n.id) continue;
+      const targets = new Set(es.filter(e => e && e.from === n.id).map(e => e.to).filter(Boolean));
+      if (targets.size >= 2) return n;
+    }
+    return null;
+  }
+  // Does this split mean "one of these" or "all of these"?
+  //
+  // A `branch`/`decision` ROUTES — exactly one lane runs, and the lanes are
+  // alternatives that must be labelled with the case that selects them. Anything
+  // else that splits BROADCASTS — every lane runs, every time. Drawing them the
+  // same way makes "post to Slack AND save to the inbox" indistinguishable from
+  // "post to Slack OR save to the inbox", and either/or is a worse lie than a
+  // run-on, because the user believes only one destination gets it.
+  _isExclusiveSplit(node) {
+    if (!node) return false;
+    if (node.type === 'branch' || node.type === 'decision') return true;
+    return (node.config && Array.isArray(node.config.cases) && node.config.cases.length > 0) || false;
+  }
+  // The distinct targets of a split, in edge order, deduped — several cases often
+  // route to the SAME node and that is ONE lane, not several.
+  _splitTargetsOf(node, edges) {
+    const out = [];
+    const seen = new Set();
+    for (const e of (edges || [])) {
+      if (!e || e.from !== (node && node.id) || !e.to || seen.has(e.to)) continue;
+      seen.add(e.to); out.push(e.to);
+    }
+    return out;
+  }
   _liveTrunkOf(spec, nodes, confirmed, flashIdx, explaining, ready, revealed) {
-    const br = (spec?.nodes || []).find(n => n.type === 'branch' || n.type === 'decision');
+    const br = this._laneSourceOf(spec?.nodes, spec?.edges);
     if (!br) return nodes.map((n, i) => this._liveCardFor(n, i, confirmed, flashIdx, explaining, ready, revealed));
     const cut = nodes.findIndex(n => n.id === br.id);
     const upto = cut < 0 ? nodes.length - 1 : cut;
@@ -6537,43 +6836,135 @@ class Component extends DCLogic {
   // One lane per branch case: walk the spec's edges from each case target, collecting the
   // chain until it ends. Any number of lanes, any depth — nothing about shape is assumed.
   _liveLanes(spec, nodes, confirmed, flashIdx, explaining, ready, revealed) {
-    const br = (spec?.nodes || []).find(n => n.type === 'branch' || n.type === 'decision');
+    const edges = spec?.edges || [];
+    const br = this._laneSourceOf(spec?.nodes, edges);
     if (!br) return null;
     const cases = (br.config && br.config.cases) || [];
-    if (!cases.length) return null;
-    const edges = spec?.edges || [];
+    // Lanes come from the split's EDGE TARGETS, not from `cases`. A fan-out has no
+    // cases at all and still has lanes; a router's cases only supply their labels.
+    const exclusive = this._isExclusiveSplit(br);
+    const laneTargets = this._splitTargetsOf(br, edges);
+    if (laneTargets.length < 2) return null;
     const byId = new Map((spec?.nodes || []).map(n => [n.id, n]));
     const idxOf = (id) => nodes.findIndex(n => n.id === id);
-    const chainFrom = (startId) => {
-      const chain = []; const seen = new Set();
+    // EVERY LIVE NODE MUST RENDER. The approval queue walks `nodes` by INDEX and shows a
+    // confirm control only for the node at `liveConfirmed`; a node that is never drawn has
+    // no control, so the queue stops dead, "Run test" never enables, and the workflow can
+    // be neither tested nor published — with no error (2026-07-19). `claimed` makes the
+    // coverage invariant structural: the trunk claims its nodes, each lane claims what it
+    // walks, and whatever is left is swept up below.
+    const claimed = new Set();
+    const brCut = nodes.findIndex(n => n.id === br.id);
+    nodes.slice(0, (brCut < 0 ? nodes.length - 1 : brCut) + 1).forEach(n => n && n.id && claimed.add(n.id));
+    const cardFor = (id) => {
+      const gi = idxOf(id);
+      const n = gi >= 0 ? nodes[gi] : byId.get(id);
+      return this._liveCardFor(n, gi >= 0 ? gi : 1e9, confirmed, flashIdx, explaining, ready, revealed);
+    };
+    // A LANE IS A LIST OF ROWS, NOT A LIST OF NODES — because a lane can contain another
+    // branch (2026-07-19). Rendering a nested branch's targets as one horizontal run joined
+    // by connector arrows says "these happen in sequence", when they are MUTUALLY EXCLUSIVE
+    // outcomes. On an approval workflow that read as "send the email, THEN mark it not
+    // approved, THEN stop" — the graph asserting the opposite of what the spec does.
+    //
+    // So: walk linearly while each node has ONE successor; the moment a node forks, close
+    // the row and open one row PER target, each labelled with that case's own words. Rows
+    // stack vertically inside the lane, so alternatives read as alternatives.
+    //
+    // Depth: this recurses, so a branch inside a branch inside a lane also gets its own
+    // labelled rows. What it does NOT do is draw sub-fan-out GEOMETRY (the curved connector
+    // per sub-lane) — a nested fork is expressed by the row break and the label, not by a
+    // second set of beziers. That is a deliberate limit, not an oversight: `_liveFanout`
+    // computes one branch point's geometry against the lane stack's height, and nesting it
+    // properly needs a real layout pass. Rows are honest and cheap; sub-beziers are the
+    // next increment if the shape warrants it.
+    const rowsFrom = (startId, label, depth) => {
+      const out = [];
+      let row = [];
       let cur = startId;
-      while (cur && byId.has(cur) && !seen.has(cur)) {
-        seen.add(cur); chain.push(cur);
-        const next = edges.find(e => e.from === cur);
-        cur = next ? next.to : null;
+      let rowLabel = label;
+      while (cur && byId.has(cur) && !claimed.has(cur)) {
+        claimed.add(cur); row.push(cur);
+        const outs = edges.filter(e => e.from === cur);
+        if (outs.length <= 1) { cur = outs.length ? outs[0].to : null; continue; }
+        // FORK. Close this row on the branch node, then one row per distinct target.
+        const forkNode = byId.get(cur);
+        const forkCases = (forkNode && forkNode.config && forkNode.config.cases) || [];
+        // A NESTED FORK IS LABELLED ONLY IF IT ROUTES. The same rule as the top
+        // level: an exclusive split's rows are alternatives and must say which case
+        // picks them; a PARALLEL fan-out's rows all run, so a case label is a lie.
+        //
+        // Worse than a lie, in practice: `_laneLabelFor` falls back to the approved
+        // plan's branch list BY INDEX, and an unmatched fork passes index 0 — so a
+        // fan-out nested inside a lane borrowed the plan's FIRST branch label and
+        // rendered "↳ Classified as a bug report" over BOTH halves of a broadcast.
+        // The reader is told a routing decision is being made, twice, with the same
+        // condition on each side.
+        const forkExclusive = this._isExclusiveSplit(forkNode);
+        out.push({ label: rowLabel, ids: row }); row = []; rowLabel = null;
+        const seenT = new Set();
+        const subs = [];
+        outs.forEach((e) => {
+          if (seenT.has(e.to)) return;             // several cases → one target: one row
+          seenT.add(e.to);
+          const ci = forkCases.findIndex(c => c && c.to === e.to);
+          const sub = forkExclusive
+            ? this._laneLabelFor(ci >= 0 ? forkCases[ci].when : null, ci >= 0 ? ci : 0)
+            : null;
+          subs.push(rowsFrom(e.to, sub, depth + 1));
+        });
+        // SIBLINGS BEFORE DESCENDANTS. Depth-first order put a fork's second case AFTER the
+        // first case's grandchildren, so on the approval workflow "↳ reject" rendered at the
+        // very bottom, four rows below the "↳ approve" it is the alternative to. The two
+        // outcomes of one decision must sit together or the reader cannot pair them: emit
+        // every sibling's FIRST row, then their remainders.
+        subs.forEach(s => { if (s.length) out.push(s[0]); });
+        subs.forEach(s => { for (let i = 1; i < s.length; i++) out.push(s[i]); });
+        cur = null;
       }
-      return chain;
+      if (row.length) out.push({ label: rowLabel, ids: row });
+      return out;
     };
     const lanes = [];
-    const usedTargets = new Set();
-    cases.forEach((c, i) => {
-      if (!c || !c.to || usedTargets.has(c.to)) return;   // collapse duplicate targets
-      usedTargets.add(c.to);
-      const chain = chainFrom(c.to);
-      if (!chain.length) return;
-      const firstGi = idxOf(c.to);
+    laneTargets.forEach((to, i) => {
+      const rawRows = rowsFrom(to, null, 0).filter(r => r.ids.length);
+      if (!rawRows.length) return;
+      const firstGi = idxOf(to);
+      // An exclusive split's lanes are ALTERNATIVES and must say which case picks
+      // them. A parallel split's lanes all run, so a case label would be a lie —
+      // they get no label, and the fan-out marker below says "all of these".
+      const ci = cases.findIndex(c => c && c.to === to);
       lanes.push({
-        label: this._laneLabelFor(c.when, i),
+        label: exclusive ? this._laneLabelFor(ci >= 0 ? cases[ci].when : null, ci >= 0 ? ci : i) : '',
         // The lane's italic label fades in WITH its first node during the reveal, so a lane
         // header never floats above an empty lane. `revealed == null` (settled) ⇒ shown.
         labelO: (revealed == null || (firstGi >= 0 && firstGi < revealed)) ? 1 : 0,
-        nodes: chain.map(id => {
-          const gi = idxOf(id);
-          const n = gi >= 0 ? nodes[gi] : byId.get(id);
-          return this._liveCardFor(n, gi >= 0 ? gi : 1e9, confirmed, flashIdx, explaining, ready, revealed);
+        rows: rawRows.map(r => {
+          const cards = r.ids.map(cardFor);
+          // No trailing arrow off the end of a row: the next row is an ALTERNATIVE, not a
+          // successor, and a dangling connector is exactly the false-sequence claim above.
+          if (cards.length) cards[cards.length - 1].showConn = false;
+          return { label: r.label || '', hasLabel: !!r.label, nodes: cards };
         }),
       });
     });
+    if (lanes.length) lanes[0]._parallel = !exclusive;
+    // SWEEP: anything the trunk and the lane walks did not claim. The walk above should
+    // cover every edge-connected node, so this is normally empty — but an orphan (a node
+    // with no incoming edge, or one reachable only through a shape not modelled here) must
+    // still render, because invisible ⇒ unapprovable ⇒ the build is stranded. Correctness
+    // beats layout: these are appended to the LAST lane rather than given a lane of their
+    // own, because lane count drives the fan-out and a new lane would draw an arrow from
+    // the branch, claiming a routing relationship that does not exist.
+    const orphans = nodes.filter(n => n && n.id && !claimed.has(n.id));
+    if (orphans.length) {
+      orphans.forEach(n => claimed.add(n.id));
+      const cards = orphans.map(n => cardFor(n.id));
+      if (cards.length) cards[cards.length - 1].showConn = false;
+      const row = { label: '', hasLabel: false, nodes: cards };
+      if (lanes.length) lanes[lanes.length - 1].rows.push(row);
+      else lanes.push({ label: '', labelO: 1, rows: [row] });
+    }
     return lanes.length ? lanes : null;
   }
   // The branch fan-out, drawn as the design draws it (curved bezier + arrowhead per lane)
@@ -6612,7 +7003,15 @@ class Component extends DCLogic {
   _fitLiveGraph() {
     const o = this._lgOuter, i = this._lgInner;
     if (!o || !i) return;
-    const k = Math.min(1, o.clientWidth / (i.scrollWidth || 1));
+    // FIT BOTH AXES. Scaling on width alone let a deep graph grow unboundedly tall
+    // — the nested fan-out shape ran to ~860px and the chat auto-scroll then left
+    // its first lane above the viewport, so the user's first sight of their
+    // workflow was its middle. Cap the height too and take whichever scale is
+    // tighter. Never scales UP (max 1), so small graphs are untouched.
+    const maxH = Math.max(320, Math.round(window.innerHeight * 0.62));
+    const kW = o.clientWidth / (i.scrollWidth || 1);
+    const kH = maxH / (i.scrollHeight || 1);
+    const k = Math.min(1, kW, kH);
     i.style.transform = 'scale(' + k + ')';
     o.style.height = (i.scrollHeight * k) + 'px';
   }
@@ -6754,7 +7153,9 @@ class Component extends DCLogic {
       if (S.editingIntro === null) out.push({ isLoading: true });
       else out.push(this._withParts({ isAtlas: true, text: S.editingIntro, hasReason: false }));
     }
-    for (const m of S.msgs) out.push(this._withParts(m));
+    // `pending` drives the plan card's live controls; `acted` its receipt. Computed
+    // here so a message only ever carries one source of truth for "has this fired".
+    for (const m of S.msgs) out.push(this._withParts(m && m.isPlan ? { ...m, pending: !m.acted } : m));
     if (S.phase === "proposed") {
       const TS = S.testState;
       if (S.isEditing) {
@@ -6764,6 +7165,10 @@ class Component extends DCLogic {
       } else {
         if (TS === "running") out.push(this._withParts({ isAtlas: true, text: "Testing each step end-to-end — watch them fire on the right →", hasReason: false }));
         else if (TS === "failed") out.push(this._withParts({ isAtlas: true, text: "A step broke during the test — see the break on the right. Tell me what to change below and I'll fix it.", hasReason: false }));
+        // Nothing broke and nothing was proved. Say so plainly and ask for what
+        // would actually settle it — a silent panel here reads as a pass.
+        else if (TS === "paused") out.push(this._withParts({ isAtlas: true, text: "The test ran up to your approval step and stopped there — that's correct: in a real run it waits for your answer before doing anything after it. I can't answer it for you here, so the steps after the gate aren't covered by this test.", hasReason: false }));
+        else if (TS === "unverified") out.push(this._withParts({ isAtlas: true, text: "The test ran cleanly, but it didn't exercise what this workflow promises — so I can't call it verified yet. Describe a real case that should trigger it and I'll test against that.", hasReason: false }));
       }
     }
     return out;
@@ -7122,32 +7527,67 @@ class Component extends DCLogic {
     // `footRunTest` button (gated on `!contract.show`), not the contract footer.
     if (TS === "idle") return { show: false, building: false };
     // Not yet proposed (still building in chat / incomplete) — no contract to show.
-    if (!testUnlocked && TS !== "passed" && TS !== "failed") return { show: false, building: TS === "running" };
+    if (!testUnlocked && TS !== "passed" && TS !== "failed" && TS !== "unverified") return { show: false, building: TS === "running" };
 
     let state, accent, verdictWord, verdictNote, evidenceLabel, evidenceNote, rows, secondaryCta, cta;
 
-    if (TS === "passed" || TS === "failed") {
+    if (TS === "passed" || TS === "failed" || TS === "unverified") {
       const failed = TS === "failed";
+      const notVerified = TS === "unverified";
       const results = S.outcomeResults || [];
+      const uncoveredLanes = ((S.laneCoverage || {}).uncovered) || [];
+      // A row's mark reads the THIRD VERDICT, not a boolean. "Not exercised" is
+      // its own outcome: the example ran, nothing broke, and nothing was proved
+      // — most often because the sample took a lane the promise doesn't cover.
+      // Showing that as ✓ is what let a 3-lane router certify two deliveries it
+      // never performed (F16); showing it as ✗ would be the opposite lie.
       rows = results.map((o, i) => {
-        const kept = !!o.contractPassed;
+        const v = o.verdict || (o.contractPassed ? "kept" : "broken");
         const brokeReason = (o.contract || []).find(c => !c.ok);
-        const detail = kept
+        const skipped = (o.contract || []).filter(c => c.applicable === false);
+        const detail = v === "kept"
           ? ("What came back matched the deal — " + (this._clip(this._stringify(o.produced && (o.produced.summary || o.produced.text || o.produced)), 140) || "delivered as promised") + ".")
-          : ("This one fell short — " + ((brokeReason && (brokeReason.reason || ("nothing reached " + brokeReason.target))) || (o.error || "a promise wasn't kept")) + ". Fix it and re-test.");
-        return rowFrom(i, kept ? "✓" : "!", kept ? SAGE : CLAY, o.label || ("Example " + (i + 1)), detail);
+          : v === "not_exercised"
+            ? ("This example ran cleanly, but it didn't exercise anything the deal promises"
+               + (skipped.length ? " — it took a path that doesn't cover " + skipped.map(c => c.target).join(", ") : "")
+               + ". Nothing was proved either way.")
+            : ("This one fell short — " + ((brokeReason && (brokeReason.reason || ("nothing reached " + brokeReason.target))) || (o.error || "a promise wasn't kept")) + ". Fix it and re-test.");
+        return rowFrom(i, v === "kept" ? "✓" : v === "not_exercised" ? "○" : "!",
+                       v === "kept" ? SAGE : v === "not_exercised" ? DIM : CLAY,
+                       o.label || ("Example " + (i + 1)), detail);
       });
       const total = rows.length, broke = rows.filter(r => r.mark === "!").length;
-      state = failed ? "failed" : "passed";
-      accent = failed ? CLAY : SAGE;
-      verdictWord = failed ? "not met." : "kept.";
+      const proved = rows.filter(r => r.mark === "✓").length;
+      state = failed ? "failed" : notVerified ? "unverified" : "passed";
+      accent = failed ? CLAY : notVerified ? DIM : SAGE;
+      verdictWord = failed ? "not met." : notVerified ? "not verified." : "kept.";
+      // NEVER claim a promise held on evidence that does not exist. `total` can be
+      // zero (an edit that cleared the examples), and "we ran 0 real examples —
+      // every promise held" was being rendered over a green Go live button.
       verdictNote = failed
         ? ("We ran " + total + " real example" + (total === 1 ? "" : "s") + " through your workflow. " + broke + " of " + total + " promise" + (broke === 1 ? "" : "s") + " fell short — nothing goes live until the contract holds.")
-        : ("We ran " + total + " real example" + (total === 1 ? "" : "s") + " through your workflow. Every promise held — it's cleared to go live.");
+        : notVerified
+          ? (uncoveredLanes.length
+              // NAME the lanes nothing exercised. "We couldn't verify it" invites
+              // the user to shrug; "nothing tested the billing path" tells them
+              // exactly which example to give us.
+              ? ("We ran " + total + " real example" + (total === 1 ? "" : "s") + ", but nothing went down "
+                 + (uncoveredLanes.length === 1 ? "one path: " : (uncoveredLanes.length + " paths: "))
+                 + uncoveredLanes.map(function(l) { return "\u201c" + l.label + "\u201d"; }).join(", ")
+                 + ". A workflow that routes is only proved on the routes you test, so give me an example that takes "
+                 + (uncoveredLanes.length === 1 ? "it" : "each of them") + " and I'll check the rest.")
+              : results.some(function(o) { return o.contractIncomplete; })
+              // A blank THE DEAL. Don't say "nothing was exercised" — the steps may
+              // well have run; what's missing is the promise itself.
+              ? "This workflow has no stated outcome — there's no promise recorded for it to keep, so there's nothing to check it against. Tell Atlas what it should deliver and I'll hold it to that."
+              : total === 0
+                ? "We couldn't check this workflow — there are no worked examples to run it against, so none of its promises have been tested. Ask Atlas for examples, or describe a real case to try."
+                : ("We ran " + total + " real example" + (total === 1 ? "" : "s") + ", and none of them exercised what this workflow promises. Nothing broke — but nothing is proved either, so it isn't cleared to go live yet."))
+          : ("We ran " + total + " real example" + (total === 1 ? "" : "s") + " through your workflow" + (proved === total ? "" : " (" + proved + " of them exercised the deal)") + ". Every promise held — it's cleared to go live.");
       evidenceLabel = "The evidence · " + total + " real example" + (total === 1 ? "" : "s");
       evidenceNote = "Kept means what came back matched the deal above — checked automatically, shown here so you can see it yourself.";
       secondaryCta = "Try again";
-      cta = failed ? "Fix & re-test" : "Go live";
+      cta = failed ? "Fix & re-test" : notVerified ? "Try a real example" : "Go live";
     } else {
       // proposed — the checks are the worked examples the run will be tested against.
       // These live on the SPEC's outcome (S.spec.outcome.examples); S.outcome is only
@@ -7192,20 +7632,45 @@ class Component extends DCLogic {
   _stepShape(spec) {
     const nodes = (spec && Array.isArray(spec.nodes)) ? spec.nodes : [];
     if (!nodes.length) return null;
-    const brIdx = nodes.findIndex(n => n && (n.type === 'branch' || n.type === 'decision'));
-    if (brIdx < 0) return { steps: nodes.length, paths: 0 };
-    const cases = (nodes[brIdx].config && nodes[brIdx].config.cases) || [];
-    // Count DISTINCT lane targets, not raw cases — several cases (incl. the catch-all) often
-    // route to the SAME node, so the raw count (e.g. 5) overstates the lanes the user sees
-    // (3). This mirrors `_liveLanes`, which dedupes by target, and the plan's `branches`.
-    const targets = new Set(cases.map(c => c && c.to).filter(Boolean));
-    return { steps: brIdx + 1, paths: targets.size };
+    // Same rule as the graph: lanes come from the BRANCH (the node with `cases`), never
+    // from a `decision` (which has `rules`). Matching on `decision` here cut the step
+    // count short at the decision and reported 0 paths for a workflow that visibly has
+    // several — the panel and the graph then disagreed on the same spec.
+    const edges = (spec && Array.isArray(spec.edges)) ? spec.edges : [];
+    const src = this._laneSourceOf(nodes, edges);
+    const brIdx = src ? nodes.indexOf(src) : -1;
+    if (brIdx < 0) return { steps: nodes.length, paths: 0, parallel: false };
+    // Count DISTINCT lane targets from the EDGES, mirroring `_liveLanes`, so the panel
+    // and the graph cannot disagree about the same spec. Reading `cases` here instead
+    // would report 0 paths for a fan-out, which HAS lanes and no cases — and several
+    // cases (including the catch-all) routing to one node is ONE lane, not several.
+    const targets = this._splitTargetsOf(src, edges);
+    const parallel = !this._isExclusiveSplit(src);
+    // "paths" only means alternatives. A fan-out's lanes ALL run, so calling them
+    // paths tells the user a choice is being made when nothing is choosing.
+    //
+    // And STEPS differ by split kind. After a router only ONE lane runs, so the
+    // lane nodes are not steps this workflow always takes and the count stops at
+    // the branch. After a fan-out EVERY lane runs, so they are all steps — counting
+    // only the trunk would report "1 step" for a workflow the plan card correctly
+    // calls "3 STEPS", widening the very step-count disagreement that is already on
+    // record as a defect.
+    return {
+      steps: parallel ? nodes.length : brIdx + 1,
+      paths: targets.length,
+      parallel,
+    };
   }
   _stepShapeLabel(spec) {
     const s = this._stepShape(spec);
     if (!s) return null;
     return s.steps + ' step' + (s.steps === 1 ? '' : 's')
-         + (s.paths ? (' · ' + s.paths + ' path' + (s.paths === 1 ? '' : 's')) : '');
+         + (s.paths
+             ? (s.parallel
+                 // Both destinations get it, every time — not one of two.
+                 ? (' · ' + s.paths + ' at once')
+                 : (' · ' + s.paths + ' path' + (s.paths === 1 ? '' : 's')))
+             : '');
   }
   // Adaptive "What starts it" card — replaces the hardcoded UPS email mock.
   _sampleTriggerView(trg) {
@@ -7371,9 +7836,17 @@ class Component extends DCLogic {
       TS === "running" ? { show: true, icon: "◐", color: "#f3cd86", border: "rgba(240,191,107,.3)", bg: "rgba(240,191,107,.06)", iconBg: "rgba(240,191,107,.14)", text: "Running the workflow end-to-end through the engine…" }
       : TS === "passed" ? { show: true, icon: "✓", color: "#9fd6a8", border: "rgba(127,194,138,.32)", bg: "rgba(127,194,138,.07)", iconBg: "rgba(127,194,138,.16)", text: "No breaks — every step ran. Safe to publish." }
       : TS === "failed" ? { show: true, icon: "✕", color: "#f0a896", border: "rgba(232,116,97,.4)", bg: "rgba(232,116,97,.08)", iconBg: "rgba(232,116,97,.16)", text: "Break: " + (S.runError || "a step failed") + ". Tell Atlas what to change." }
+      // Neither green nor red. "Safe to publish" over an unexercised contract is
+      // the claim this whole verdict exists to stop making.
+      : TS === "unverified" ? { show: true, icon: "○", color: "rgba(255,255,255,.55)", border: "rgba(255,255,255,.14)", bg: "rgba(255,255,255,.03)", iconBg: "rgba(255,255,255,.06)", text: "Ran cleanly, but nothing the workflow promises was exercised — not verified yet." }
+      // Working as designed, so neither green nor red. The run reached the gate.
+      : TS === "paused" ? { show: true, icon: "⏸", color: "#f3cd86", border: "rgba(240,191,107,.3)", bg: "rgba(240,191,107,.06)", iconBg: "rgba(240,191,107,.14)", text: (S.pausedNote || "This workflow stops here and asks a person. In a real run it would wait for their answer before going on.") }
       : { show: false };
 
-    const wfName = (S.spec && S.spec.name) || S.draftName || (S.phase === "chat" ? "New workflow" : "Untitled workflow");
+    // ONE placeholder, everywhere. The sidebar said "New workflow" while this panel
+    // said "Untitled workflow" — two names for one unnamed thing, visible on the
+    // same screen at the same time.
+    const wfName = (S.spec && S.spec.name) || S.draftName || "New workflow";
     const accent = published ? SVG_PLAY : "#f0bf6b";
     const accentGlow = published ? "drop-shadow(0 0 5px rgba(127,194,138,.85))" : "drop-shadow(0 0 5px rgba(240,191,107,.7))";
     const accentRadius = published ? "border-radius:2px" : "border-radius:50%";
@@ -7419,7 +7892,7 @@ class Component extends DCLogic {
             ? () => this.setState({ view: 'build', connectionsOpen: false, accountOpen: false, profileOpen: false })
             : () => this.openConsole(wf.id);
           const isRenaming = S.renamingWfId === wf.id;
-          return { name: this._wfDisplayName(wf), dot, glow, radius, bg: "transparent", border: "transparent", nameColor: isHighlighted ? "#fff" : "rgba(255,255,255,.5)", itemClass: isHighlighted ? "" : "wf-item-inactive", onClick, onDelete: (e) => { e.stopPropagation(); this.softDeleteWorkflow(wf.id); }, isRenaming, renameValue: isRenaming ? S.renamingValue : "", onEditClick: (e) => { e.stopPropagation(); this.startRename(wf.id, this._wfDisplayName(wf)); }, onRenameInput: (e) => this.setState({ renamingValue: e.target.value }), onRenameKeydown: (e) => { if (e.key === "Enter") { e.preventDefault(); this.commitRename(wf.id); } if (e.key === "Escape") { e.preventDefault(); this.cancelRename(); } }, onRenameBlur: () => this.commitRename(wf.id), onRenameInputClick: (e) => e.stopPropagation(), showRun: isPublished && !isRunning, onRun: (e) => { e.stopPropagation(); this.runWorkflowFromSidebar(wf.id); } };
+          return { name: this._wfDisplayName(wf), onClickKey: this._activateKey(onClick), dot, glow, radius, bg: "transparent", border: "transparent", nameColor: isHighlighted ? "#fff" : "rgba(255,255,255,.5)", itemClass: isHighlighted ? "" : "wf-item-inactive", onClick, onDelete: (e) => { e.stopPropagation(); this.softDeleteWorkflow(wf.id); }, isRenaming, renameValue: isRenaming ? S.renamingValue : "", onEditClick: (e) => { e.stopPropagation(); this.startRename(wf.id, this._wfDisplayName(wf)); }, onRenameInput: (e) => this.setState({ renamingValue: e.target.value }), onRenameKeydown: (e) => { if (e.key === "Enter") { e.preventDefault(); this.commitRename(wf.id); } if (e.key === "Escape") { e.preventDefault(); this.cancelRename(); } }, onRenameBlur: () => this.commitRename(wf.id), onRenameInputClick: (e) => e.stopPropagation(), showRun: isPublished && !isRunning, onRun: (e) => { e.stopPropagation(); this.runWorkflowFromSidebar(wf.id); } };
         });
         // Show in-progress build entry when builder is the active view OR when a session with content exists
         // (so navigating to home/console/inbox doesn't lose the entry while a build is in flight)
@@ -7433,7 +7906,7 @@ class Component extends DCLogic {
           if (!alreadyInList && matchesSearch) {
             const wfIdForDel = S.workflowId;
             const onDelBuilder = (e) => { e.stopPropagation(); if (wfIdForDel) { this.softDeleteWorkflow(wfIdForDel); } else { this.reset(); } };
-            list.unshift({ name: label, dot: "#f3cd86", glow: "drop-shadow(0 0 5px rgba(240,191,107,.7))", radius: "border-radius:50%", bg: "transparent", border: "transparent", nameColor: "#fff", itemClass: "", onClick: () => this.setState({ view: 'build', connectionsOpen: false, accountOpen: false, profileOpen: false }), onDelete: onDelBuilder, showRun: false, onRun: null });
+            list.unshift({ name: label, dot: "#f3cd86", glow: "drop-shadow(0 0 5px rgba(240,191,107,.7))", radius: "border-radius:50%", bg: "transparent", border: "transparent", nameColor: "#fff", itemClass: "", onClick: () => this.setState({ view: 'build', connectionsOpen: false, accountOpen: false, profileOpen: false }), onClickKey: this._activateKey(() => this.setState({ view: 'build', connectionsOpen: false, accountOpen: false, profileOpen: false })), onDelete: onDelBuilder, showRun: false, onRun: null });
           }
         }
         // Only show a placeholder when actively searching with no results
@@ -7540,6 +8013,12 @@ class Component extends DCLogic {
         // and including the first branch is the trunk; each of that branch's cases opens
         // a lane, labelled in the plan's own plain words where we have them. A workflow
         // with no branch has no lanes and simply renders as a trunk. Any lane count.
+        // WHICH NODES ACTUALLY CONTINUE. A connector arrow is a claim about the
+        // EDGES, not about the node's type. `deliver` used to be assumed terminal,
+        // so a delivery that genuinely continues — "save it as a Google Doc, then
+        // email me the link", which the engine runs correctly — drew no outgoing
+        // arrow and the graph showed the chain broken exactly where it carries on.
+        this._hasOutEdge = new Set(((S.spec && S.spec.edges) || []).map(e => e && e.from).filter(Boolean));
         const lanes = this._liveLanes(S.spec, nodes, confirmed, flashIdx, explaining, ready, revealed);
         const hasLanes = !!(lanes && lanes.length);
         // The trigger is already `nodes[0]` (a real approvable node), so the flat row and
@@ -7627,11 +8106,24 @@ class Component extends DCLogic {
       // above the reasoning stream. Shown during build + review; nulled once a
       // test run starts (!testStarted) so the testing UI takes the panel, the
       // same swap the CoT does.
+      // DEDUPED. Two assertions can render the SAME sentence — a workflow that
+      // saves to the inbox on two different branches promises the inbox twice, and
+      // the panel listed "Saves it to your Atlas inbox" twice in a row, which reads
+      // as a mistake rather than as two lanes sharing a destination. The contract
+      // keeps both assertions (they are checked per lane); the SUMMARY shows each
+      // distinct promise once.
       outcomePin: (S.outcome && S.outcome.statement && !testStarted) ? {
         statement: S.outcome.statement,
-        assertions: (S.outcome.assertions || []).map((a) => ({
-          label: this._deliverySentence(a),
-        })),
+        assertions: (function (self) {
+          const seen = {}, out = [];
+          (S.outcome.assertions || []).forEach(function (a) {
+            const label = self._deliverySentence(a);
+            if (seen[label]) return;
+            seen[label] = true;
+            out.push({ label: label });
+          });
+          return out;
+        })(this),
       } : null,
       chatInputRef: (el) => {
         this._chatInputEl = el;
@@ -7691,7 +8183,7 @@ class Component extends DCLogic {
         : (S.phase === "chat" ? "Message Atlas — chat, or tell me what to automate…"
         : (S.inputMode === "clarify" ? "Type your answer…"
         : (S.inputMode === "change" ? "Tell Atlas what to change…"
-        : (S.inputMode === "planchange" ? "Tell Atlas what to change — or click Build it ↑"
+        : (S.inputMode === "planchange" ? "Tell Atlas what to change — or click Approve & build ↑"
         : "Atlas is building — respond on the cards above ↑"))))),
       // @-mention autocomplete
       mentionOpen: S.mentionOpen && this._mentionList().length > 0,
@@ -7705,7 +8197,7 @@ class Component extends DCLogic {
       onBuilderRenameInput: (e) => this.setState({ renamingValue: e.target.value }),
       onBuilderRenameKeydown: (e) => { if (e.key === 'Enter') { e.preventDefault(); this.commitRename(S.workflowId); } if (e.key === 'Escape') { e.preventDefault(); this.cancelRename(); } },
       onBuilderRenameBlur: () => { if (S.workflowId) this.commitRename(S.workflowId); },
-      testStatusLabel: published ? "Live" : (S.phase === "chat" ? "Not started" : (!testUnlocked ? (this._stepShapeLabel(S.spec) ? ("Building · " + this._stepShapeLabel(S.spec)) : "Incomplete") : (TS === "running" ? "Testing…" : (TS === "passed" ? "All steps passed" : (TS === "failed" ? "Break found" : "Ready to test"))))),
+      testStatusLabel: published ? "Live" : (S.phase === "chat" ? "Not started" : (!testUnlocked ? (this._stepShapeLabel(S.spec) ? ("Building · " + this._stepShapeLabel(S.spec)) : "Incomplete") : (TS === "running" ? "Testing…" : (TS === "passed" ? "All steps passed" : (TS === "failed" ? "Break found" : (TS === "unverified" ? "Not verified" : (TS === "paused" ? "Waiting on a person" : "Ready to test"))))))),
       testStatusColor: (TS === "passed" || published) ? "#9fd6a8" : (TS === "failed" ? "#f0a896" : (TS === "running" ? "#f3cd86" : "rgba(255,255,255,.45)")),
       testStatusGlow: (TS === "passed" || published) ? "rgba(127,194,138,.55)" : (TS === "failed" ? "rgba(232,116,97,.5)" : (TS === "running" ? "rgba(240,191,107,.5)" : "rgba(255,255,255,0)")),
       testCaption: S.phase === "chat" ? "Your workflow takes shape here once you're ready to build — just say the word in the chat."
@@ -7722,6 +8214,7 @@ class Component extends DCLogic {
       isPublished: published,
       footLocked: !testUnlocked, footRunTest: testUnlocked && TS === "idle" && !contract.show, footTesting: TS === "running", footProceed: testUnlocked && TS === "passed" && !contract.show, footContract: contract.show,
       onRunTest: () => this.runTest(), onReviewDraft: () => this.reviewDraft(),
+      runTestDisclosure: this._runTestDisclosure(),
 
       // workspace modes
       modeHome: S.view === 'home',
@@ -8449,6 +8942,8 @@ class Component extends DCLogic {
       hmQrWfs:    (S.homeData?.modules?.quick_run || []).map(w => ({
         name: w.name,
         onOpen: () => this.openConsole(w.id),
+        // Keyboard equivalent for the role="button" row (see the sidebar markup).
+        onOpenKey: this._activateKey(() => this.openConsole(w.id)),
         onRun:  () => this._quickRunWorkflow(w.id),
       })),
       hmSched:    (S.homeData?.modules?.next_scheduled || []).map(w => ({
@@ -8470,6 +8965,8 @@ class Component extends DCLogic {
       hmOverdueWfs: (S.homeData?.modules?.overdue?.workflows || []).map(w => ({
         name: w.name, schedule: w.schedule,
         onOpen: () => this.openConsole(w.id),
+        // Keyboard equivalent for the role="button" row (see the sidebar markup).
+        onOpenKey: this._activateKey(() => this.openConsole(w.id)),
         onRun: () => this.runOverdue(w.id),
         onDefer: () => this.deferOverdue(w.id),
       })),

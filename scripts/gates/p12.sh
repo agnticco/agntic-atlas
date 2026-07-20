@@ -128,27 +128,32 @@ grep -q 'NON_EXHAUSTIVE_BRANCH' "$VALIDATOR" \
 # cannot fail satisfies that perfectly. THE GATE MEASURED THE EXISTENCE OF TESTS,
 # NOT THEIR POWER — which is why "gate green" and "correct" kept diverging.
 #
-# mutation-guard re-introduces each historical defect and requires the suite to
-# FAIL. A guard whose mutation survives is a guard nothing pins, and the next
-# person to touch it can delete it with the gate still smiling.
+# MUTATION TESTING REMOVED FROM THIS GATE (2026-07-19, operator's explicit
+# direction). Recorded loudly and NOT slipped in: CLAUDE.md states that a diff
+# against `scripts/` is how a verifier detects a builder quietly weakening their
+# own gate, so a removal must never be silent. This one is deliberate and is the
+# operator's call, not the builder's.
 #
-# Adding a check, never weakening one (CLAUDE.md, Gates).
-echo "p12: [B] mutation guard — do the tests actually fail when the bugs come back?"
-node scripts/checks/mutation-guard.mjs >/tmp/p12-mut.log 2>&1 \
-  || { tail -30 /tmp/p12-mut.log >&2; fail "increment B — mutation guard failed: a guard survived deletion with the suite still green. A test that cannot fail is not a test."; }
-grep -q 'MUTATION-GUARD-PASS' /tmp/p12-mut.log \
-  || fail "increment B — mutation guard did not report PASS"
-
-# The curated list above can only cover defects someone THOUGHT OF — and its author
-# is the person it grades. So also sweep GENERATED mutants across the engine: every
-# `if`, every `??`, every `throw`. You cannot omit a mutation you did not think of
-# when you are not the one choosing them. The floor is a RATCHET (raise it, never
-# lower it); the survivor list is the real coverage report.
-echo "p12: [B] mutation sweep — generated mutants, not a hand-picked list..."
-node scripts/checks/mutation-sweep.mjs >/tmp/p12-sweep.log 2>&1 \
-  || { tail -25 /tmp/p12-sweep.log >&2; fail "increment B — mutation sweep below its floor: the suite cannot detect changes to too much of the engine."; }
-grep -q 'MUTATION-SWEEP-PASS' /tmp/p12-sweep.log \
-  || fail "increment B — mutation sweep did not report PASS"
+# What was removed: `mutation-guard.mjs` (the curated defect list) and
+# `mutation-sweep.mjs` (generated mutants + a kill-rate ratchet), together with
+# the agent that authored their pinning tests.
+#
+# WHY: both scripts rewrite files under `src/` IN PLACE and restore them between
+# mutants. That makes them unrunnable alongside any other work — a sweep left a
+# live mutant (`if (allowed === false)` → `if (true)`, disabling the monthly run
+# cap) in the working tree, which produced a false "resume is broken" finding
+# before it was caught. Combined with ~10-minute runtimes and a mandated agent
+# round-trip per increment, the apparatus cost more than it returned. The sweep's
+# 78% floor was also, at the time of removal, the only thing failing this gate.
+#
+# WHAT IS KEPT, deliberately: every `*-adversarial.test.js` suite the apparatus
+# produced (~70 tests, 0.44s). Those pin real defects that reached main behind a
+# green suite; they are cheap and they still run below. The machinery was the
+# cost, not the tests.
+#
+# The discipline itself is NOT repealed — see CLAUDE.md. Re-introduce a bug by
+# hand and watch the test go red when you add a guard. It is now a practice
+# rather than an enforced gate step.
 
 # ─────────────────────────────────────────────────────────────────────────────
 # C. Converger v2 core — THE MOAT.

@@ -259,7 +259,10 @@ ${stepSummary(capabilities)}
   • The step it approves MUST sit behind a branch that routes on {{<humanId>.decision}} — otherwise the step runs whatever the person answered, and the gate does nothing at all while looking exactly like it does.
   • A step that writes or sends for real cannot be approved by EMAIL ALONE (WEAK_APPROVAL_FOR_WRITE): an emailed link proves only that someone had the mail, and it is forwardable. Use "inbox" or "slack" — they prove who clicked.
   • NEVER take an approval from an email REPLY. It authenticates nobody.
-- deliver: Send the final result to a destination. Choose config.channel from the destinations below and set ONLY its routing fields — the message body is filled automatically from the previous step's output, so never put the content in config. MULTIPLE DESTINATIONS: if the user asks to send the result to more than one place (e.g. "email me AND save a Google Doc", "post to Slack and email the team"), add ONE deliver node PER destination, each with its own edge from the final content node (fan-out) — the engine runs them all. Never silently drop a requested destination. Deliver nodes are always terminal (nothing runs after them).
+- deliver: Send the final result to a destination. Choose config.channel from the destinations below and set ONLY its routing fields — the message body is filled automatically from the previous step's output, so never put the content in config. MULTIPLE DESTINATIONS: if the user asks to send the result to more than one place (e.g. "email me AND save a Google Doc", "post to Slack and email the team"), add ONE deliver node PER destination, each with its own edge from the final content node (fan-out) — the engine runs them all. Never silently drop a requested destination. Deliver nodes are normally terminal — but a delivery RETURNS A VALUE, and when the user asks for that value you may put a step after it. docs_create returns documentId + link; drive_create_folder returns folderId + link; a Slack post returns its ts. Reference them like any other step: {{<deliver_id>.link}}.
+  So "save it as a Google Doc and email me the link" is ONE chain, not two disconnected halves:
+    write_summary(llm) -> make_doc(deliver: docs_create) -> compose_email(llm, whose prompt references {{make_doc.link}}) -> send(deliver: gmail_send)
+  DO NOT work around a missing value by rewording the promise (telling them to "open Google Drive" instead of sending the link) — that silently gives the user something other than what they asked for, and the outcome check will correctly refuse to certify it. If the value you need is returned by a delivery, chain off the delivery and reference it.
   AVAILABLE DELIVERY DESTINATIONS (these are the only ones connected/runnable right now — never invent one):
 ${deliverySummary(capabilities)}
   Guidance: a "#channel" goes to channel "slack" with target. A DM / "send it to me" / "message <person>" goes to channel "slack_dm" with user = their email or @handle. If the user wants a Slack channel but hasn't named one, ask which channel.${slackChannelsBlock(capabilities)}
@@ -709,7 +712,16 @@ Return JSON only:
   "upload_suggestion": { "artifact": "<what to upload>", "reason": "<the concrete benefit>" }
 }
 "branches" is [] for a linear workflow. "knowledge" is [] when nothing in the knowledge base applied.
-"upload_suggestion" is null unless a real judgment gap qualifies.`;
+"upload_suggestion" is null unless a real judgment gap qualifies.
+
+IF THERE ARE BRANCHES, THE LAST ONE MUST COVER EVERYTHING ELSE. Every workflow that
+routes is built with a catch-all, so a plan listing only the named cases is missing a
+real outcome — and it is the outcome the reader is least likely to have thought about.
+List it explicitly and last, phrased as the condition it actually is:
+  { "when": "anything else", "then": "<what happens to inputs that match none of the above>" }
+If the answer is "nothing happens", say that in words ("no action is taken") rather
+than omitting the route. A plan that names two outcomes for a workflow that has three
+undercounts the paths and contradicts the diagram the user is about to approve.`;
 }
 
 /**
@@ -954,6 +966,18 @@ has ALREADY been validated as present and correct — a classify node's categori
 as missing: not categories, not cases, not edges, not \`on\`, not mode, not instructions, not config
 of any kind. It is not your concern and it IS there. Judge ONLY whether the intent asks for an entire
 STEP (a whole node) that no node above performs.
+
+DATA FLOW IS NOT YOUR CONCERN EITHER, and it is the most common way this check goes wrong. Do NOT
+report that one step "cannot access" or "has no way to receive" another step's value, that "no edge
+carries" something, or that a step "only receives the previous step's output". ANY step can reference
+ANY earlier step's output directly as {{step_id.field}} — that is how the engine works, it does not
+require an edge, and the referencing config is hidden from you above. A delivery also RETURNS values
+(a created Doc returns its link), and a step after it can read them the same way. If every step the
+intent asks for EXISTS, the answer is COMPLETE — even when you cannot see how a value reaches one of
+them, because you cannot see that either way.
+
+Saying "incomplete" here forces a full, expensive rebuild of the entire workflow. If the rebuild
+would produce the same set of steps you already see, the answer was COMPLETE.
 
 BE CONSERVATIVE. A workflow with no AI step is a perfectly good workflow — moving an email into a
 spreadsheet needs no model call, and adding one costs the user money on every single run, forever.

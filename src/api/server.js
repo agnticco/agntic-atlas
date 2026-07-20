@@ -376,6 +376,41 @@ const CONNECTOR_INJECTORS = [
   },
 ];
 
+// A NODE IS A NODE WHEREVER IT LIVES — INCLUDING INSIDE A `foreach` (2026-07-19).
+//
+// Every injector below walked `spec.nodes` with `.some(pred)` / `.map(pred)`, i.e. the
+// TOP LEVEL ONLY. A connector write inside a `foreach` therefore received nothing:
+// `nodes.some(isAirtableNode)` was false, the injector short-circuited, and the sub-step
+// failed at run time with **"airtable: not connected — authorize via …"** for a connector
+// that was connected and healthy. That message sends the user to re-authorize a working
+// connector; nothing points at the loop.
+//
+// It was not one injector. All four had the identical shape, so inside a `foreach`:
+//   · injectTenantTokens          → no credentials      (every connector: airtable/google/slack)
+//   · injectInboxContext          → no _tenantId/_userId (inbox delivery silently misrouted)
+//   · injectInboxCapabilityContext→ no _tenantId
+//   · injectFilesystemContext     → no _tenantId        (sandbox check cannot resolve)
+// So the canonical bulk-write shape — the one Increment F exists to enable and its own
+// prompt teaches ("create a record for every row") — could not run at all.
+//
+// This is the FIFTH site to get this wrong: the validator (F#3), the outcome oracle (F#4),
+// `isWriteNode` (D#4) and `CONTROL_SUBSTEP_TYPES` (E#1) each had to learn it separately.
+// CLAUDE.md's own rule is "a check on a node's config is a check on EVERY node's config,
+// wherever the node lives" — these are injections rather than checks, which is presumably
+// how they escaped every sweep, but they traverse the node list exactly like the checks do.
+// Hence ONE pair of helpers, used by all four, rather than four more private fixes.
+const someNodeDeep = (nodes, pred) => (nodes ?? []).some((n) =>
+  pred(n) || (n?.type === 'foreach' && Array.isArray(n?.config?.steps) && someNodeDeep(n.config.steps, pred)));
+
+const mapNodesDeep = (nodes, fn) => (nodes ?? []).map((n) => {
+  const mapped = fn(n);
+  // Recurse AFTER `fn` so a foreach node still gets its own turn (it is never a connector
+  // node, so this is a no-op for it) and its steps are then mapped with the same function.
+  return (mapped?.type === 'foreach' && Array.isArray(mapped?.config?.steps))
+    ? { ...mapped, config: { ...mapped.config, steps: mapNodesDeep(mapped.config.steps, fn) } }
+    : mapped;
+});
+
 // Inject the owning tenant's credentials into every connector node of a workflow/
 // spec, so the run acts as that tenant — never a shared/operator token. Used by
 // EVERY run path (run-test, event dispatch, scheduler). Connector-agnostic.
@@ -384,10 +419,11 @@ async function injectTenantTokens(obj, tenantId, deps) {
   let nodes = obj.nodes;
   let changed = false;
   for (const c of CONNECTOR_INJECTORS) {
-    if (!nodes.some(c.ownsNode)) continue;
+    if (!someNodeDeep(nodes, c.ownsNode)) continue;
     const tok = await c.resolveToken(tenantId, deps);
     if (!tok) continue;
-    nodes = nodes.map((n) => (c.ownsNode(n) && n?.config?.[c.field] == null) ? { ...n, config: { ...n.config, [c.field]: tok } } : n);
+    nodes = mapNodesDeep(nodes, (n) => (c.ownsNode(n) && n?.config?.[c.field] == null)
+      ? { ...n, config: { ...n.config, [c.field]: tok } } : n);
     changed = true;
   }
   return changed ? { ...obj, nodes } : obj;
@@ -404,8 +440,8 @@ function injectInboxContext(spec, tenantId, userId, extras = {}) {
   // the real inbox_deliver capability: normalize the channel + inject tenant/user so the
   // message actually lands in the operator's inbox. Fixes existing AND new workflows.
   const isInbox = (n) => n?.type === 'deliver' && ['inbox_deliver', 'in_app', 'inbox'].includes(n?.config?.channel);
-  if (!spec.nodes.some(isInbox)) return spec;
-  const nodes = spec.nodes.map((n) => isInbox(n)
+  if (!someNodeDeep(spec.nodes, isInbox)) return spec;   // deep: an inbox delivery inside a foreach counts
+  const nodes = mapNodesDeep(spec.nodes, (n) => isInbox(n)
     ? { ...n, config: { ...n.config, channel: 'inbox_deliver', subject: n.config.subject ?? n.config.title, _tenantId: tenantId, _userId: userId, ...extras } }
     : n);
   return { ...spec, nodes };
@@ -415,8 +451,8 @@ function injectInboxContext(spec, tenantId, userId, extras = {}) {
 function injectInboxCapabilityContext(spec, tenantId) {
   if (!tenantId || !(spec?.nodes?.length)) return spec;
   const isInboxCap = (n) => n?.type === 'connector-action' && INBOX_CAPABILITY_IDS.has(n?.config?.action);
-  if (!spec.nodes.some(isInboxCap)) return spec;
-  const nodes = spec.nodes.map((n) => isInboxCap(n)
+  if (!someNodeDeep(spec.nodes, isInboxCap)) return spec;
+  const nodes = mapNodesDeep(spec.nodes, (n) => isInboxCap(n)
     ? { ...n, config: { ...n.config, _tenantId: tenantId } }
     : n);
   return { ...spec, nodes };
@@ -427,8 +463,8 @@ function injectInboxCapabilityContext(spec, tenantId) {
 function injectFilesystemContext(spec, tenantId) {
   if (!tenantId || !(spec?.nodes?.length)) return spec;
   const isFs = (n) => n?.type === 'connector-action' && FILESYSTEM_CAPABILITY_IDS.has(n?.config?.action);
-  if (!spec.nodes.some(isFs)) return spec;
-  const nodes = spec.nodes.map((n) => isFs(n)
+  if (!someNodeDeep(spec.nodes, isFs)) return spec;
+  const nodes = mapNodesDeep(spec.nodes, (n) => isFs(n)
     ? { ...n, config: { ...n.config, _tenantId: tenantId } }
     : n);
   return { ...spec, nodes };

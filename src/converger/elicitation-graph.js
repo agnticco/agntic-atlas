@@ -40,7 +40,7 @@ import { SystemMessage, HumanMessage } from '../core/message.js';
 import { scoreGap, unansweredGaps } from './gap-scorer.js';
 import { applyProposal, assembleSpec, wireEdges } from './spec-assembler.js';
 import { materialiseEscalations } from './escalation.js';
-import { nodeForAssertion, assertableConnectors, splitTarget } from '../workflows/outcome-oracle.js';
+import { nodeForAssertion, assertableConnectors, splitTarget, canonicalConnector } from '../workflows/outcome-oracle.js';
 import { analyzeTable } from '../workflows/decision-analysis.js';
 import { tableOf, valuesOf, HIT_POLICIES, HIT_POLICY_LABELS, DECISION_MAX_INPUTS } from '../workflows/node-types/decision.js';
 import {
@@ -306,8 +306,24 @@ function applyResourcePick(draft, nodeId, kind, value) {
   // must follow the deliver node to the picked channel. Left stale, the oracle sees the
   // outcome promise a delivery no step makes (UNSATISFIED_ASSERTION) and raises a
   // confusing follow-on gap that re-suggests the very resource we just replaced. Only
-  // slack channels carry a channel-in-the-locator target; airtable/base assertions key
-  // on kind, not the id, so they need no rewrite here.
+  // slack channels carry a channel-in-the-locator target here.
+  //
+  // ⚠️ The previous version of this comment claimed "airtable/base assertions key on
+  // kind, not the id, so they need no rewrite here." THAT IS FALSE (2026-07-19). An
+  // Airtable assertion is `record_exists → airtable:Sheet1` — connector:locator, with
+  // the TABLE NAME as the locator — and `satisfiesAssertion` does compare that locator.
+  // Verified by direct call: `airtable:Sheet1` vs a node carrying `tableId:'tbl…'`
+  // returns false, while `airtable:tbl…` returns true. Believing the locator did not
+  // matter for Airtable is exactly why a correct write was reported missing and its
+  // workflow became unrunnable.
+  //
+  // Repointing an airtable table still needs no rewrite HERE, but for a different and
+  // narrower reason: `fillDestination` writes the table's NAME into `config.tableId`
+  // (see its callers, which pass `table.name`), so the node's locator already matches
+  // a name-based assertion. The mismatch arises when something else — the MODEL, using
+  // the ids it learned from `airtable_describe_base` — writes a raw provider id
+  // instead. That case is handled in `outcome-oracle.js` (`isOpaqueId`), because it
+  // occurs on specs this function never touches.
   let outcome = draft?.outcome;
   if (kind === 'slack_channel' && oldTarget != null && oldTarget !== newTarget
       && outcome && Array.isArray(outcome.assertions)) {
@@ -778,7 +794,18 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
       if (!canPromise.size) return true;             // unknown catalog — nothing to check against
       const bad = (c.assertions ?? []).filter(a => {
         const { connector } = splitTarget(a?.target);
-        return connector && !canPromise.has(connector);
+        if (!connector) return false;
+        // CANONICALISE BEFORE JUDGING. `canPromise` is a set of connector aliases
+        // built from the live catalog; a model writes what a person would say
+        // ("google_docs:My Digest"), which is neither a connector id nor a
+        // capability id. Compared raw it matches nothing and the build is REFUSED
+        // for a connector that is connected and available — verified live: the
+        // catalog reported docs_create available:true while the converger said
+        // "I can't include google_docs — that connector is not connected".
+        // One canonicaliser, shared with the oracle, so the two cannot disagree
+        // about what a target name refers to.
+        const canon = canonicalConnector(connector);
+        return !canPromise.has(connector) && !canPromise.has(canon);
       });
       for (const a of bad) unreachable.add(splitTarget(a.target).connector);
       return bad.length === 0;
@@ -1075,8 +1102,34 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
 
     if ((state.proposeRounds ?? 0) >= MAX_PROPOSE_ROUNDS) return { phase: 'gapping' };
 
+    // WHAT IS WRONG TRAVELS WITH THE REBUILD.
+    //
+    // Everything below routes back to `generate`, which rebuilds the WHOLE spec —
+    // one Opus pass each. It rebuilds from `intent` + `clarifications`, so if the
+    // reason for the rejection is not in one of those, generate re-runs on
+    // byte-identical input and deterministically reproduces the same defect. The
+    // loop cannot converge; it can only hit its cap.
+    //
+    // That was live: a build looped generate→analyze FOUR times on an unchanging
+    // 10-node draft, burning three whole-spec regenerations (the bulk of a
+    // 13-minute build), because two `assemble` steps were missing a `sections`
+    // list and nothing ever said so. `generate` already folds `_missingNote` into
+    // its clarifications for the SUFFICIENCY route, and the comment there asserts
+    // "the blocking-gap route already arrives via `clarifications`" — it does not.
+    // This is that missing half.
+    //
+    // Naming the defects is also what makes the loop worth running at all: these
+    // are precise, machine-generated messages ("X needs a sections list"), which is
+    // exactly the correction a model can act on in one pass.
+    const gapNote = blockers.length
+      ? 'The previous build was rejected for these specific problems — fix each one:\n'
+        + blockers.map(g => `- ${g.message}${g.hint ? ` (${g.hint})` : ''}`).join('\n')
+      : null;
+
     const clarificationCount = (state.clarifications ?? []).length;
-    if (clarificationCount >= MAX_CLARIFICATIONS) return { phase: 'proposing' };
+    if (clarificationCount >= MAX_CLARIFICATIONS) {
+      return { phase: 'proposing', ...(gapNote ? { _missingNote: gapNote } : {}) };
+    }
 
     const sysmsg = new SystemMessage(buildSystemPrompt(state.capabilities));
     const usermsg = new HumanMessage(buildAnalyzePrompt({
@@ -1092,7 +1145,11 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
     // analyze runs before every propose, so counting here counts propose rounds
     // exactly once each — without threading a counter through propose's five
     // return paths, where the next person to add a sixth would forget it.
-    return { phase: 'proposing', proposeRounds: (state.proposeRounds ?? 0) + 1 };
+    return {
+      phase: 'proposing',
+      proposeRounds: (state.proposeRounds ?? 0) + 1,
+      ...(gapNote ? { _missingNote: gapNote } : {}),
+    };
   });
 
   // ── clarify ────────────────────────────────────────────────────────────────
@@ -1420,12 +1477,19 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
       };
     }
 
-    // A regenerate driven by the sufficiency check names a concrete MISSING
-    // component (`_missingNote`, set by `analyze`). Fold it into the clarifications
-    // so the rebuild actually adds it — otherwise generate re-runs on identical
-    // input, produces the same still-incomplete spec, and the sufficiency "name the
-    // missing piece" step (P12 Increment C) becomes a no-op that just burns Opus
-    // calls. The blocking-gap route already arrives via `clarifications`.
+    // WHY THE REBUILD IS DIFFERENT FROM THE LAST ONE.
+    //
+    // `_missingNote` carries the reason the previous draft was rejected — either a
+    // concrete missing component named by the sufficiency check, or the list of
+    // blocking gaps that failed the floor. Fold it into the clarifications so the
+    // rebuild actually acts on it; without it generate re-runs on identical input,
+    // produces the same still-incomplete spec, and the loop just burns Opus calls
+    // until it hits its cap.
+    //
+    // (This comment previously claimed "the blocking-gap route already arrives via
+    // `clarifications`". It did not — that route sent no reason at all, which is
+    // exactly the failure the rest of this comment describes. Both routes now set
+    // `_missingNote`.)
     const clarifications = state._missingNote
       ? [...(state.clarifications ?? []), { q: '(still missing)', a: String(state._missingNote) }]
       : state.clarifications;

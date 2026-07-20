@@ -62,6 +62,12 @@ import { normalizeSteps } from './node-types/foreach.js';
 // is SAFE: every cross-module reference on both sides is inside a function body, never
 // at module-init, so the live bindings are resolved only when first called.
 import { closedDomainOf, onRefId } from './workflow-validator.js';
+// The SAME case parser the engine, the validator and the SOP use. Lane coverage
+// must not re-derive "what lanes does this branch have" — `decision-analysis.js`
+// held one rule in two functions and they disagreed twice (case-sensitivity, then
+// undeclared enum literals), each time producing a proof about a program nobody
+// was running. One parser, one answer.
+import { normalizeCases, CATCH_ALL } from './node-types/branch.js';
 
 /** The closed set. An assertion outside it is MALFORMED, never "assumed fine". */
 export const ASSERTION_KINDS = ['message_sent', 'record_exists', 'document_exists'];
@@ -337,10 +343,37 @@ export function satisfiesAssertion(assertion, node) {
   // address — any delivery to the connector satisfies the assertion.
   if (isLocatorFree(connector)) return true;
 
+  // AN OPAQUE PROVIDER ID IS UNDECIDABLE HERE, NOT A MISMATCH (2026-07-19).
+  //
+  // A contract is written in the words a PERSON used — `airtable:Sheet1`. A node may
+  // carry the same destination as the id the PROVIDER uses — `tblVbidmBZuBt1Tkf`.
+  // Both name one table; only a network call to Airtable can say so. Comparing them
+  // as strings therefore answers a question this function cannot answer, and it
+  // answered it "mismatch", which is the one answer that is never safe.
+  //
+  // The cost was total: a correct `foreach` write with fully-resolved ids was reported
+  // as *"no step in this workflow does that"*, the suggested remedy was a no-op, the
+  // run was rejected (`run.invalid: UNSATISFIED_ASSERTION`) before the engine started,
+  // and no "Go live" control was rendered. A workflow the product had itself built
+  // correctly could be neither run nor published, with no path forward.
+  //
+  // This is the SAME judgement the line below already makes for a template locator —
+  // "resolved at run time, undecidable here, so not a mismatch". An id is undecidable
+  // for the same reason. It does NOT widen the check: kind, connector and fields are
+  // all still enforced, and a human-readable locator is still compared exactly as
+  // before. It only stops the oracle from failing a spec on a comparison it is not
+  // equipped to make.
+  //
+  // Deliberately NARROW: only the documented Airtable id prefixes with their exact
+  // 14-char body. `Sheet1`, `#general`, `ops@acme.com` are all unaffected, so a
+  // genuinely wrong human-named destination still fails.
+  const isOpaqueId = (s) => /^(app|tbl|rec|fld|viw)[A-Za-z0-9]{14}$/.test(String(s ?? '').trim());
+
   if (locator && !isTemplate(locator)) {
     const want = normLocator(locator);
     const hit = eff.locators.some((l) => {
       if (isTemplate(l)) return true;          // resolved at run time — undecidable here, so not a mismatch
+      if (isOpaqueId(l)) return true;          // a provider id — undecidable here, same reason (see below)
       const have = normLocator(l);
       return have === want || have.includes(want) || want.includes(have);
     });
@@ -510,11 +543,27 @@ export function nodeForAssertion(assertion, { capabilities = {} } = {}) {
  * `gmail_send` delivery compare equal without either side having to know the
  * other's spelling.
  */
-function canonicalConnector(name) {
+export function canonicalConnector(name) {
   const n = String(name ?? '').toLowerCase();
   if (CONNECTOR_ALIASES[n]) return n;                       // already a key
   for (const [key, aliases] of Object.entries(CONNECTOR_ALIASES)) {
     if (aliases.includes(n)) return key;
+  }
+  // COMPOUND VENDOR NAMES. A model writes what a person would say — "google_docs",
+  // "google_sheets" — and neither is a connector id (`google`) or a capability id
+  // (`docs_create`). Unresolved, the candidate filter in the converger reads it as
+  // an unconnected connector and REFUSES TO BUILD: "I can't include google_docs —
+  // that connector is not connected", for a connector the live catalog reports as
+  // available. Try the parts before giving up, most specific first, so
+  // `google_docs` resolves to `docs` rather than to the vaguer `google`.
+  const parts = n.split(/[_\-.]/).filter(Boolean);
+  if (parts.length > 1) {
+    for (const part of parts.slice().reverse()) {
+      if (CONNECTOR_ALIASES[part]) return part;
+      for (const [key, aliases] of Object.entries(CONNECTOR_ALIASES)) {
+        if (aliases.includes(part)) return key;
+      }
+    }
   }
   return n;
 }
@@ -776,6 +825,124 @@ export function runRouteInfo(spec, runResult) {
 }
 
 /**
+ * Which LANE each branch actually sent this run down.
+ *
+ * Read from the branch node's OWN output (`{value, matched, to, viaCatchAll}`) —
+ * the engine's own record of the decision it made — rather than by re-matching the
+ * routed-on value against the cases here. Re-deriving it would be a second
+ * implementation of `branch.run()`'s selection rule (first explicit match, else the
+ * catch-all), and the day the two disagree the coverage report describes a program
+ * nobody is running. That is not hypothetical: `decision-analysis.js` held the
+ * condition grammar in two functions and they diverged twice.
+ *
+ * @returns {Array<{branch: string, to: string, matched: string, viaCatchAll: boolean}>}
+ */
+export function lanesTakenBy(spec, runResult) {
+  const nodes = Array.isArray(spec?.nodes) ? spec.nodes : [];
+  const branchIds = new Set(nodes.filter(n => n?.type === 'branch').map(n => n.id));
+  const out = [];
+  for (const s of (runResult?.steps ?? [])) {
+    if (!branchIds.has(s?.nodeId)) continue;
+    let o = s?.output;
+    if (typeof o === 'string') { try { o = JSON.parse(o); } catch { continue; } }
+    if (o && typeof o === 'object' && o.to) {
+      out.push({ branch: s.nodeId, to: String(o.to), matched: String(o.matched ?? ''), viaCatchAll: !!o.viaCatchAll });
+    }
+  }
+  return out;
+}
+
+/**
+ * LANE COVERAGE ACROSS A WHOLE SAMPLE SET (F16 invariant 1).
+ *
+ * A router's entire value is the routing, and ONE sample can only ever prove ONE
+ * lane. The live test suite built a 3-lane router — urgent→Slack, billing→inbox,
+ * general→do nothing — ran a single sample that classified `general`, executed no
+ * delivery node whatsoever, and certified "every promise held". Both delivery
+ * promises were reported kept without either ever having run.
+ *
+ * Per-example verdicts cannot see this: each example is individually honest. It is
+ * a property of the SET, so it is computed over the set.
+ *
+ * A lane is a distinct branch TARGET, not a distinct route VALUE. Values are
+ * grouped by the node they route to, because covering a lane is what proves the
+ * behaviour behind it — a decision table mapping P2 and P3 to the same "stay
+ * quiet" step has one lane there, not two, and demanding a sample per value would
+ * make coverage unreachable on exactly the tables that need it most.
+ *
+ * @param {object} spec
+ * @param {Array<object>} results — per-example results carrying `lanes` (from
+ *                                  `evaluateExampleRun`)
+ * @returns {{applicable: boolean, total: number, covered: number,
+ *            uncovered: Array<{branch: string, to: string, label: string}>}}
+ */
+export function laneCoverage(spec, results) {
+  const inventory = laneInventoryOf(spec);
+  if (!inventory.length) return { applicable: false, total: 0, covered: 0, uncovered: [] };
+
+  // Every lane actually taken, across every example.
+  const hit = new Set();
+  for (const r of (results ?? [])) {
+    for (const l of (r?.lanes ?? [])) hit.add(laneKey(l.branch, l.to));
+  }
+  const uncovered = inventory.filter(l => !hit.has(laneKey(l.branch, l.to)));
+  return { applicable: true, total: inventory.length, covered: inventory.length - uncovered.length, uncovered };
+}
+
+/**
+ * Stable identity for a lane. One definition, so producer and consumer agree.
+ *
+ * JSON, not a delimiter. A separator can COLLIDE (a node id containing it splits
+ * the key in the wrong place), and CLAUDE.md's standing rule -- earned when a
+ * NUL-separated branch/edge key silently matched nothing and made an entire
+ * feature unpublishable -- is that an unprintable separator is never acceptable:
+ * it is invisible in an editor, in a diff, and in the debugger where you would
+ * finally catch it. This is unambiguous for any id and prints as itself.
+ */
+export function laneKey(branch, to) { return JSON.stringify([branch, to]); }
+
+/**
+ * EVERY lane this spec has, named the way the USER wrote it.
+ *
+ * Shipped to the client with each example result so the browser never has to
+ * re-derive "what lanes exist" — that rule (group cases by target, name them by
+ * their `when` values, fall back to the target's label) lives HERE, once. The
+ * client does set subtraction over data this produced; it holds no copy of the
+ * rule, so the two cannot drift. Same reason `outcome-oracle` is the single
+ * satisfaction oracle for the validator and the gap scorer.
+ *
+ * @returns {Array<{branch: string, to: string, label: string}>}
+ */
+export function laneInventoryOf(spec) {
+  const nodes = Array.isArray(spec?.nodes) ? spec.nodes : [];
+  const byId = new Map(nodes.map(n => [n?.id, n]));
+  const out = [];
+  for (const b of nodes) {
+    if (b?.type !== 'branch') continue;
+    // Group this branch's cases by target — the values that share a lane.
+    const byTarget = new Map();
+    for (const c of normalizeCases(b.config?.cases)) {
+      if (!c?.to) continue;
+      if (!byTarget.has(c.to)) byTarget.set(c.to, []);
+      byTarget.get(c.to).push(String(c.when));
+    }
+    for (const [to, whens] of byTarget) {
+      // Name it as the user wrote it ("urgent", "billing"), falling back to the
+      // target node's own label. A lane reported as `deliver_slack_a1` tells
+      // them nothing about which case went unproven.
+      const named = whens.filter(w => w.trim() !== CATCH_ALL);
+      const target = byId.get(to);
+      out.push({
+        branch: b.id, to,
+        label: named.length ? named.join(' or ')
+                            : (target?.label || target?.description || 'anything else'),
+      });
+    }
+  }
+  return out;
+}
+
+/**
  * Does this assertion apply to a run that took `routeInfo.taken`?
  *
  *   { conditional:false, applies:true }                     — unconditional: always enforced
@@ -897,6 +1064,54 @@ export function evaluateExampleRun(spec, example, runResult) {
   const ran = runResult?.completed === true && !runResult?.error;
   const contractPassed = ran && !broken && contract.every(c => c.ok);
 
+  // ── THE THIRD VERDICT: "not exercised" ──────────────────────────────────────
+  //
+  // `contract.every(c => c.ok)` is TRUE over an empty set, and it is true over a
+  // set that is ENTIRELY skips. Both were rendered to the user as "every promise
+  // held — it's cleared to go live", which is a vacuous truth presented as a
+  // verification. Three live shapes reached it:
+  //
+  //   · a spec with no assertions at all         → `contract` is []          (F12)
+  //   · an edit that cleared `outcome.examples`  → zero runs, zero results   (F12)
+  //   · a 3-lane router whose one sample took the do-nothing lane → every
+  //     assertion `skipped:true, ok:true`, and NO delivery node ever executed (F16)
+  //
+  // The honest verdict in all three is "not verified", never "kept". `enforced`
+  // counts the assertions this run actually CHECKED (a skipped lane is not a
+  // check), and it is the floor: a promise is kept only if something was proved.
+  //
+  // `contractPassed` is DELIBERATELY LEFT UNCHANGED. The converger's self-test
+  // (`verify`) reads it to decide whether to regenerate, and a spec whose sample
+  // simply didn't reach the asserted lane must NOT trigger a rebuild — resolving
+  // "unexercised" pessimistically is what makes a valid 12-node draft get thrown
+  // away and rebuilt until the build gives up (F17). The two failures are the two
+  // wrong answers to the same question, so the fix adds the missing answer rather
+  // than flipping the existing one from one wrong sign to the other.
+  const enforced = contract.filter(c => c.applicable !== false).length;
+
+  // A BLANK PROMISE CANNOT BE KEPT (F12 invariant 1b).
+  //
+  // The assertions are the machine-checkable half of the contract; `statement` is
+  // the half the PERSON reads, and it is what the panel renders as "THE DEAL"
+  // directly above the words "every promise held". A spec can reach here with
+  // `{ statement: '', assertions: [one] }` — `spec-assembler.js` defaults the
+  // statement to `''` when a model turn omits it, and the validator only ever
+  // requires `assertions.length` — so the run satisfies its one assertion and the
+  // UI certifies a blank deal. That is the same vacuous truth as certifying zero
+  // examples, through a second door, and it is NOT closed by persisting the
+  // contract (F11): that fixed a contract lost on the way to the database, not
+  // one that was empty when it was written.
+  //
+  // Deliberately NOT a fourth verdict: the vocabulary stays at three, and
+  // `contractIncomplete` tells the UI to say "this contract has no statement"
+  // rather than the misleading "nothing was exercised".
+  const contractIncomplete = contract.length > 0
+    && !String(spec?.outcome?.statement ?? '').trim();
+
+  const verdict = !ran || broken || !contract.every(c => c.ok)
+    ? 'broken'
+    : (enforced > 0 && !contractIncomplete ? 'kept' : 'not_exercised');
+
   return {
     exampleId: example?.id ?? null,
     label:     example?.label ?? null,
@@ -904,6 +1119,22 @@ export function evaluateExampleRun(spec, example, runResult) {
     ran,
     error:     runResult?.error ?? null,
     contractPassed,
+    // How many assertions this run actually checked. Zero means nothing was
+    // proved — neither a pass nor a failure.
+    enforced,
+    // 'kept' | 'broken' | 'not_exercised'. What the USER-FACING surface must
+    // certify on; `contractPassed` alone cannot distinguish proof from silence.
+    verdict,
+    // The contract has assertions but no statement — there is no promise in words
+    // to have kept, so it is not certifiable however well the run went.
+    contractIncomplete,
+    // Which branch lane(s) this run went down. Per-example it is only a fact;
+    // aggregated across the sample set by `laneCoverage` it is what stops a router
+    // being certified on lanes no sample ever took (F16).
+    lanes: lanesTakenBy(spec, runResult),
+    // The full lane inventory rides along so the CLIENT never re-derives "what
+    // lanes exist" — it subtracts `lanes` from this and holds no copy of the rule.
+    laneInventory: laneInventoryOf(spec),
     // TRUE when the ONLY reason this failed is a content node emitting the error
     // sentinel — i.e. the delivery STRUCTURALLY happened but an llm step judged its
     // (present) input unusable on this run. This is a per-run CONTENT flake, not a
