@@ -967,6 +967,18 @@ as missing: not categories, not cases, not edges, not \`on\`, not mode, not inst
 of any kind. It is not your concern and it IS there. Judge ONLY whether the intent asks for an entire
 STEP (a whole node) that no node above performs.
 
+DATA FLOW IS NOT YOUR CONCERN EITHER, and it is the most common way this check goes wrong. Do NOT
+report that one step "cannot access" or "has no way to receive" another step's value, that "no edge
+carries" something, or that a step "only receives the previous step's output". ANY step can reference
+ANY earlier step's output directly as {{step_id.field}} — that is how the engine works, it does not
+require an edge, and the referencing config is hidden from you above. A delivery also RETURNS values
+(a created Doc returns its link), and a step after it can read them the same way. If every step the
+intent asks for EXISTS, the answer is COMPLETE — even when you cannot see how a value reaches one of
+them, because you cannot see that either way.
+
+Saying "incomplete" here forces a full, expensive rebuild of the entire workflow. If the rebuild
+would produce the same set of steps you already see, the answer was COMPLETE.
+
 BE CONSERVATIVE. A workflow with no AI step is a perfectly good workflow — moving an email into a
 spreadsheet needs no model call, and adding one costs the user money on every single run, forever.
 Only say it is incomplete if the intent explicitly asks for a WHOLE STEP no node does: a summary
