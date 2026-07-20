@@ -1,5 +1,15 @@
 [
   {
+    "version": "1.6.2",
+    "date": "2026-07-20",
+    "title": "Broader workflow shapes & keyboard access",
+    "notes": [
+      "Workflows that chain through a delivery — save a Google Doc, then email its link — now build correctly.",
+      "The builder no longer gets stuck rebuilding a workflow that was already valid.",
+      "Approval steps and the workflow list are now fully keyboard-operable."
+    ]
+  },
+  {
     "version": "1.6.1",
     "date": "2026-07-20",
     "title": "Health numbers now count real runs only",
