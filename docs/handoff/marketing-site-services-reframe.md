@@ -92,14 +92,20 @@ Replace the redirect stub with a real page, **assembled mostly from
 
 ---
 
-## OPEN — must resolve before shipping
-- **How does agntic.co actually deploy?** No `wrangler.toml` / `_headers` / `_redirects` / Pages
-  config was found inside `landing/` (only `atlas-landing/` has `_headers`). The local preview runs
-  a plain `python3 -m http.server`. The production deploy path for **agntic.co specifically** is not
-  captured in the repo — the executing session MUST establish it (Cloudflare Pages project name?
-  something else?) before it can ship, and record it in operator memory `marketing-site-deploy`
-  (which today only documents the atlas-by-agntic project).
-- **atlasbyagntic.com redirect target** — `agntic.co` or `agntic.co/atlas`? (Recommend `/atlas`.)
+## Deploy paths (CONFIRMED 2026-07-20 via `wrangler pages project list`)
+Both are Cloudflare **Pages**, **direct-upload** (Git Provider: No → manual `wrangler pages deploy`):
+- **agntic.co** = Pages project **`web`** (`web-5jv.pages.dev`). Deploy the company site with:
+  `npx wrangler pages deploy landing --project-name web` (run from `/Users/crepps/Desktop/AGNTIC/website`).
+- **atlasbyagntic.com** = Pages project **`atlas-by-agntic`** (`atlas-by-agntic.pages.dev`). This is
+  the site being retired.
+- The Cloudflare MCP does NOT expose Pages (only D1/KV/R2/Workers/Hyperdrive) — use `wrangler`
+  (via `npx`, v4.x present) or the dashboard for Pages work.
+
+## OPEN — decide before shipping
+- **How to retire atlasbyagntic.com.** It's the direct-upload project `atlas-by-agntic`. Cleanest
+  options: (a) deploy a tiny `_redirects` into that project — `/* https://agntic.co/atlas 301` — so
+  the domain 301s everywhere; or (b) a Cloudflare Bulk Redirect / redirect rule at the zone. Recommend
+  (a) — one file, same deploy tool. **Redirect target: `agntic.co/atlas` (recommend).**
 
 ## Acceptance (fast reframe is "done" when)
 - `atlasbyagntic.com` no longer serves a product site — it redirects to agntic.co (or /atlas).
