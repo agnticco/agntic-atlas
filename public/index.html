@@ -5611,7 +5611,7 @@ class Component extends DCLogic {
       this.setState({
         testState: "paused", runSteps: d.steps || [], deliveries: d.deliveries || [],
         runOutput: d.output || null, runDurationMs: runDurationMs, outcomeResults: [],
-        pausedAsk: d.awaiting || null, pausedNote: d.note || null,
+        pausedAsk: d.awaiting || null, pausedNote: d.note || null, laneCoverage: null,
       });
       return;
     }
@@ -5622,24 +5622,46 @@ class Component extends DCLogic {
     const anyBroken = outcomeResults.some(function(o) { return vOf(o) === "broken"; });
     const anyKept   = outcomeResults.some(function(o) { return vOf(o) === "kept"; });
     const structural = (r.ok && d.completed && issues.length === 0);
+    // ── LANE COVERAGE (F16 invariant 1) ───────────────────────────────────
+    // A router's value IS the routing, and one sample proves one lane. The live
+    // 3-lane router (urgent→Slack, billing→inbox, general→nothing) was certified
+    // "every promise held" on a single sample that classified `general`, ran no
+    // delivery node at all, and left both delivery promises unexercised.
+    // Per-example verdicts cannot see it — each example is individually honest —
+    // so it is judged over the SET, and an uncovered lane blocks certification
+    // exactly as an unexercised promise does.
+    // Pure set subtraction over data the SERVER produced. `laneInventory` (what
+    // lanes exist, and what to call them) and `lanes` (which were taken) both come
+    // from outcome-oracle.js — the client holds no copy of either rule, so the
+    // browser and the engine cannot drift about what a lane is.
+    const laneInv = (outcomeResults.find(function(o) { return o.laneInventory; }) || {}).laneInventory || [];
+    const laneHit = {};
+    outcomeResults.forEach(function(o) {
+      (o.lanes || []).forEach(function(l) { laneHit[JSON.stringify([l.branch, l.to])] = true; });
+    });
+    const coverage = laneInv.length
+      ? { applicable: true, total: laneInv.length,
+          uncovered: laneInv.filter(function(l) { return !laneHit[JSON.stringify([l.branch, l.to])]; }) }
+      : { applicable: false, total: 0, uncovered: [] };
+    const lanesMissing = coverage.applicable && coverage.uncovered.length > 0;
     const passed = hasContract
-      ? (!anyBroken && anyKept)
-      : (outcomeResults.length ? !anyBroken : structural);
+      ? (!anyBroken && anyKept && !lanesMissing)
+      : (outcomeResults.length ? (!anyBroken && !lanesMissing) : structural);
     // Nothing broke, but nothing was proved either — say so instead of certifying.
-    const unverified = hasContract && !anyBroken && !anyKept;
+    const unverified = !anyBroken && (lanesMissing || (hasContract && !anyKept));
     const self = this;
     // R8: capture the real wall-clock test duration so the persisted test run
     // records true timing, not the ~1ms gap between back-to-back DB writes.
     const runDurationMs = this._testStartMs ? (Date.now() - this._testStartMs) : null;
 
     if (passed) {
-      this.setState({ testState: "passed", runSteps: d.steps || [], deliveries: d.deliveries || [], runOutput: d.output, runDurationMs: runDurationMs, outcomeResults: outcomeResults });
+      this.setState({ testState: "passed", runSteps: d.steps || [], deliveries: d.deliveries || [], runOutput: d.output, runDurationMs: runDurationMs, outcomeResults: outcomeResults, laneCoverage: coverage });
     } else if (unverified) {
       // NOT a failure — the run was clean, it simply proved nothing. Marking it
       // "error" would be as dishonest in the other direction (and would flip a
       // live workflow's status on a test that broke nothing). Go live stays
       // locked because `reviewDraft` requires testState === "passed".
-      this.setState({ testState: "unverified", runSteps: d.steps || [], deliveries: d.deliveries || [], runOutput: d.output, runDurationMs: runDurationMs, outcomeResults: outcomeResults });
+      this.setState({ testState: "unverified", runSteps: d.steps || [], deliveries: d.deliveries || [], runOutput: d.output, runDurationMs: runDurationMs, outcomeResults: outcomeResults, laneCoverage: coverage });
     } else {
       const steps = d.steps || [];
       let failIndex = steps.length;
@@ -7322,6 +7344,7 @@ class Component extends DCLogic {
       const failed = TS === "failed";
       const notVerified = TS === "unverified";
       const results = S.outcomeResults || [];
+      const uncoveredLanes = ((S.laneCoverage || {}).uncovered) || [];
       // A row's mark reads the THIRD VERDICT, not a boolean. "Not exercised" is
       // its own outcome: the example ran, nothing broke, and nothing was proved
       // — most often because the sample took a lane the promise doesn't cover.
@@ -7353,7 +7376,16 @@ class Component extends DCLogic {
       verdictNote = failed
         ? ("We ran " + total + " real example" + (total === 1 ? "" : "s") + " through your workflow. " + broke + " of " + total + " promise" + (broke === 1 ? "" : "s") + " fell short — nothing goes live until the contract holds.")
         : notVerified
-          ? (results.some(function(o) { return o.contractIncomplete; })
+          ? (uncoveredLanes.length
+              // NAME the lanes nothing exercised. "We couldn't verify it" invites
+              // the user to shrug; "nothing tested the billing path" tells them
+              // exactly which example to give us.
+              ? ("We ran " + total + " real example" + (total === 1 ? "" : "s") + ", but nothing went down "
+                 + (uncoveredLanes.length === 1 ? "one path: " : (uncoveredLanes.length + " paths: "))
+                 + uncoveredLanes.map(function(l) { return "\u201c" + l.label + "\u201d"; }).join(", ")
+                 + ". A workflow that routes is only proved on the routes you test, so give me an example that takes "
+                 + (uncoveredLanes.length === 1 ? "it" : "each of them") + " and I'll check the rest.")
+              : results.some(function(o) { return o.contractIncomplete; })
               // A blank THE DEAL. Don't say "nothing was exercised" — the steps may
               // well have run; what's missing is the promise itself.
               ? "This workflow has no stated outcome — there's no promise recorded for it to keep, so there's nothing to check it against. Tell Atlas what it should deliver and I'll hold it to that."

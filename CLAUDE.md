@@ -963,6 +963,40 @@ refactor them without an explicit decision recorded here:
     executing agent's fresh grounding") is about a brief's *conclusions* — it never
     licenses discarding a brief's *measurements*.
 
+- **LANE COVERAGE — a router is only proved on the routes you test (2026-07-19, F16).** The
+  per-example verdict cannot catch an unexercised lane, because each example is individually
+  honest; it is a property of the SAMPLE SET. `laneCoverage` / `laneInventoryOf`
+  (`outcome-oracle.js`) subtract the lanes any run actually took from every lane the spec
+  has, and an uncovered lane BLOCKS certification and is named in the user's own case words.
+  The live 3-lane router was certified "every promise held" on one sample that took the
+  do-nothing lane and executed no delivery node at all.
+  - **A lane is a `(branch, target)` pair — not a target, and not a route value.** Keyed on
+    the target alone, two branches with a same-named target conflate and covering one
+    silently marks the other covered (the approval shape has exactly two branches). Keyed
+    per VALUE, a decision table mapping P2 and P3 to one "stay quiet" step would demand a
+    sample per enum member — unreachable on the tables that most need it. **Found by
+    mutation: dropping the branch from the key SURVIVED the first version of the suite,
+    because every fixture in it had a single branch.**
+  - **The lane a run took is read from the branch's OWN `{value, matched, to}` output.**
+    Re-matching the routed value against the cases here would be a second implementation of
+    `branch.run()`'s selection rule, and `decision-analysis.js` held one rule in two
+    functions and diverged twice. A test asserts the engine's record wins even when it
+    contradicts the classifier's output.
+  - **The client holds no copy of the rule.** The lane inventory (what lanes exist and what
+    to call them) ships with each example result; the browser does set subtraction only. A
+    `_laneCoverage` helper in `public/index.html` would have been a second definition of
+    "what is a lane" in a file nothing type-checks.
+  - **`decision-analysis.js` box subtraction was considered and REJECTED as the primitive.**
+    It answers a build-time question ("which input combinations do these rules fail to
+    cover"), not the run-time one ("which lanes did the samples fail to exercise"). Forcing
+    one to serve the other is the fit-forcing that CAUSES drift, not the cure for it. The
+    genuinely shared primitives are `closedDomainOf` and `normalizeCases`, which the oracle,
+    the validator's moat and the SOP already share.
+  - **Never use an unprintable character as a separator — second occurrence.** `laneKey` was
+    first written with `\u0001` between the ids. Same class as the NUL that made a whole
+    feature unpublishable in increment B. It is `JSON.stringify([branch, to])` now: no
+    collision is possible for any id, and it prints as itself in a debugger.
+
 - **Multiple destinations — a delivery's return value is a RECEIPT, not the work product
   (2026-07-14).** Surfaced by a load-bearing test and reported as *"the workflow only did the Slack
   send"*. The report's premise was wrong in an instructive way, and re-grounding it before writing the

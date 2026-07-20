@@ -699,12 +699,34 @@ floor flips both the zero-assertion case and the do-nothing-lane router back to 
 the defect restored verbatim — while a genuinely delivering run still reads `kept` and a
 genuine miss still reads `broken`. So the guard is load-bearing and narrow.
 
-**STILL OPEN — the coverage requirement.** Nothing yet *requires* the sample set to reach
-every lane; a router is simply no longer certified on the lane it didn't take. Invariant 1
-("samples must collectively reach every lane, or the uncovered lanes are named") is
-**half** met: uncovered lanes are now named, but sample *selection* is unchanged. That —
-plus **F3**'s fixture generation — is the remaining design work, and per the synthesis it
-is now safe to do, because the third verdict exists.
+**✅ THE COVERAGE REQUIREMENT IS NOW CLOSED TOO (2026-07-19).** `laneCoverage` /
+`laneInventoryOf` in `outcome-oracle.js` judge the SAMPLE SET, not each example: a lane is
+a distinct `(branch, target)` pair, a run's lane is read from the branch's OWN recorded
+output, and any lane no sample reached BLOCKS certification and is **named in the user's
+own case words** ("nothing went down 'urgent' or 'billing'"). The F16 router now reports
+1/3 lanes covered instead of "every promise held".
+
+Three design choices, each load-bearing:
+- **A lane is a TARGET, not a route VALUE.** A decision table sending P2 and P3 to the same
+  "stay quiet" step has one lane there. Per-value coverage would demand a sample per enum
+  member and be unreachable on exactly the tables that most need it.
+- **The lane taken is read from the branch's own `{value, matched, to}` output**, never
+  re-matched here. Re-deriving it would be a second copy of `branch.run()`'s selection
+  rule, and `decision-analysis.js` proved twice that two copies of one rule diverge.
+- **The client holds NO copy of the rule.** The lane inventory ships with each result and
+  the browser does set subtraction, so the page and the engine cannot disagree about what a
+  lane is.
+
+*(Note on the approach: reusing `decision-analysis.js`'s box subtraction — the obvious
+"don't invent a second notion of coverage" move — was considered and rejected. It answers a
+BUILD-TIME question, "which input combinations do these rules fail to cover," which is not
+the run-time question "which lanes did the samples fail to exercise." The correct shared
+primitive was `closedDomainOf`/`normalizeCases`, which the oracle and the validator's moat
+already share.)*
+
+**Still open:** **F3**'s fixture generation — for a schedule-triggered workflow whose first
+step is a connector read, no seeded `given` can reach the workflow at all, so lane coverage
+can report the gap but example generation still cannot close it.
 
 ### F17 — 🔴 The human-approval shape fails on natural phrasing: a valid 12-node spec is discarded and the user is asked to re-explain
 
