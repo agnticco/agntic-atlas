@@ -777,7 +777,8 @@ refactor them without an explicit decision recorded here:
     gate and the sweep. **A green suite is evidence of nothing until a second pair of eyes has watched
     it go red.**
 
-  **⚠️ OPERATIONAL HAZARD, learned the hard way (TWICE): mutation-testing eats uncommitted work.**
+  **⚠️ OPERATIONAL HAZARD (HISTORICAL — the sweep was removed 2026-07-19; kept because the lesson
+  generalises to any tool that rewrites `src/` in place): mutation-testing eats uncommitted work.**
   - `mutation-sweep.mjs` **rewrites files under `src/` in place** and restores them between mutants.
     Run in the background while you are editing, it will clobber your work — or, if it is killed
     mid-mutant, leave a **live mutant in your source tree** (`if (!fetcher)` → `if (false)`; a `throw`
@@ -1388,10 +1389,10 @@ phase, not just this one.
    file exists, that it passes, and grepped the validator for symbol names. **A suite of 70 tests
    that cannot fail satisfies that perfectly.** So "gate green" and "code correct" were only weakly
    correlated — which is exactly what seven rounds demonstrated.
-   → **Fixed:** `scripts/checks/mutation-guard.mjs` re-introduces each historical defect and
-   requires the suite to FAIL. It runs **inside the gate**. A guard whose mutation survives is a
-   guard nothing pins, and the next person can delete it with the gate still smiling. It earned
-   its keep on its first run, immediately finding a survivor.
+   → **Was fixed by `scripts/checks/mutation-guard.mjs`, which is REMOVED (2026-07-19) — see
+   "Mutation testing was removed" below.** The hole it covered is real and is now covered by
+   PRACTICE, not by a gate step: when you add a guard, re-introduce the bug by hand and watch the
+   test go red. A guard whose mutation survives is a guard nothing pins.
 
 2. **The tests exercised a configuration production never uses.** Every idempotency test
    constructed `FlowTester` directly and hand-passed a `workflowId` that **no production caller
@@ -1410,17 +1411,13 @@ phase, not just this one.
    self-authored mutation score is a tautology**: you can only mutate what you already thought of,
    which is exactly what you already wrote tests for.
    → **Fixed, both halves:**
-   - *Mechanically* — `scripts/checks/mutation-sweep.mjs` **generates** mutants across the engine
-     (every `if` → `true`/`false`, every `??` → no default, every `throw` → swallowed). The builder
-     is out of the loop: you cannot omit a mutation you did not think of when you are not choosing
-     them. It found real holes the curated list never touched — an untested `escalate` flag, the
-     untested branch/`foreach` throws, untested JSON-string paths. It runs **in the gate** with a
-     kill-rate **ratchet** (raise it, never lower it). The **survivor list is the coverage report**.
-   - *In process* — the new **`test-adversary`** agent (`.claude/agents/test-adversary.md`) writes
-     the pinning tests. It may write `tests/` and `scripts/checks/` and **must not touch `src/`**:
-     if a test cannot pass without a source change, that is a finding, reported and left failing.
-     **Spawn it after every Builder increment, before the verifier.** The Builder no longer grades
-     his own homework.
+   → **Both halves are REMOVED (2026-07-19) — `mutation-sweep.mjs` and the `test-adversary`
+   agent. See "Mutation testing was removed" below.** This hole is the one that is now genuinely
+   UNCOVERED, and it should be named honestly rather than papered over: the Builder writes both
+   the code and the tests again. What still stands against it is the **independent `verifier`**,
+   which is retained, did not write the code, and may still FAIL a merge — and which caught
+   exactly this class on the very increment the apparatus was removed during (both guards in the
+   `not_exercised` fix survived deletion with the whole suite green).
 
 **The one-line lesson: a green suite is evidence of nothing until you have watched it go red.**
 
@@ -1502,8 +1499,8 @@ phase, not just this one.
   Confirmed by the test-adversary and the verifier independently, on a clean tree. They also flake
   (one run showed 6). Someone should own these; they are a broken window in the E2E suite.
 
-**⚠️ PROCESS HAZARD, found by the verifier (2026-07-14): do NOT run the test-adversary and the verifier
-in parallel if BOTH are told to run `mutation-sweep`.** The sweep rewrites `src/` in place, so one
+**⚠️ PROCESS HAZARD (HISTORICAL — resolved by removing the sweep, 2026-07-19): do NOT run the
+test-adversary and the verifier in parallel if BOTH are told to run `mutation-sweep`.** The sweep rewrites `src/` in place, so one
 agent's sweep corrupts the other's results **in both directions** — the verifier caught a live mutant
 (`const cfg = node.config};`) in its working tree mid-run and had to discard and re-derive every
 finding on a clean tree. CLAUDE.md already says "run it in the FOREGROUND"; that is necessary and not
@@ -1556,8 +1553,10 @@ the test — **the Builder overriding the adversary's scope call is itself the a
 
 ## Agents & gate enforcement
 
-The build runs with four roles. **Builder is this main session** (you), governed
-by this file — not a subagent. The other three are subagents in `.claude/agents/`:
+The build runs with three roles. **Builder is this main session** (you), governed
+by this file — not a subagent. The other two are subagents in `.claude/agents/`:
+*(The `test-adversary` was a fourth; it was removed 2026-07-19 — see "Mutation
+testing was removed".)*
 
 - **`scout`** — read-only explorer; fan out for "where does X live", returns
   conclusions with `file:line`, never edits.
@@ -1620,24 +1619,61 @@ that SHA** and that the log shows the expected stop point — not to recompute a
   fake), plus an independent attempt to **break the increment's stated
   invariants**. That is where every real finding in this phase came from — not
   from re-running the suite.
-- **The full `mutation-sweep` is the Builder's to run, not the verifier's.** The
-  verifier reads its **survivor list** — which is the honest coverage report — and
-  says whether the Builder read past something. *(In P12-C the sweep named the
-  exact line of the blocker as a survivor, and the Builder read past it.)*
+- *(The `mutation-sweep` clause here is void — the sweep was removed 2026-07-19.
+  The verifier's targeted hand-mutation of the increment's NEW guards is retained
+  and is now the only mutation step that runs at all. It stays because it is
+  cheap, it is the one thing a log cannot fake, and it is where the findings come
+  from.)*
 
-**3. `test-adversary` and `verifier` run in PARALLEL, not in series.**
-Both are read-only with respect to `src/`, so they cannot race. Spawn them
-together after the build.
-- If the adversary finds a defect the Builder then fixes in `src/`, the verifier
-  gets **the fix diff as a delta message** — it does not restart. (`SendMessage`
-  resumes it with its context intact.)
-- The Builder still **fixes** what the adversary finds. The adversary never
-  touches `src/`; the verifier never touches `src/`.
+**3. Only the `verifier` runs after a build.** *(Amended 2026-07-19 — the
+`test-adversary` was removed; see "Mutation testing was removed" below.)* Spawn it
+after the build; it is read-only with respect to `src/` and may still FAIL the
+merge.
+- If the Builder then fixes something in `src/`, the verifier gets **the fix diff
+  as a delta message** — it does not restart. (`SendMessage` resumes it with its
+  context intact.)
+- The Builder **fixes**; the verifier never touches `src/`.
 
 **What did NOT change, and must not:** the verifier is fresh, independent, and did
 not write the code; it may still FAIL the merge; and a gate still closes only
 through its check. Velocity is bought by removing *duplication*, never by removing
 *the second pair of eyes*.
+
+## Mutation testing was removed (2026-07-19, operator's explicit direction)
+
+**Removed:** `scripts/checks/mutation-sweep.mjs`, `scripts/checks/mutation-guard.mjs`,
+the `test-adversary` agent (`.claude/agents/test-adversary.md`), and the two gate
+steps in `scripts/gates/p12.sh` that ran them. **Recorded loudly and deliberately**
+— this file states that a diff against `scripts/` is how a verifier detects a
+builder quietly weakening their own gate, so a removal must never be silent. This
+was the operator's call, not the Builder's, and the Builder must not re-introduce
+it unasked.
+
+**Why.** Both scripts rewrite files under `src/` **in place**. That makes them
+unrunnable alongside any other work, and the failure is not theoretical: a sweep
+left a live mutant in the working tree (`if (allowed === false)` → `if (true)`,
+which disables the monthly run cap for every scheduled run), and it produced a
+false "resume is broken" finding that was one step from being reported as fact.
+Add ~10-minute runtimes and a mandated agent round-trip per increment, and the
+apparatus cost more than it returned. Its 78% floor was also, at the time of
+removal, the **only** thing failing the P12 gate.
+
+**What was KEPT, and why it is not a compromise.** Every `*-adversarial.test.js`
+suite the apparatus produced stays in the tree and in the gate — ~70 tests that
+run in **0.44s** inside a 2.67s suite. They pin real defects that reached `main`
+behind a green suite. Measured: the tests were never the cost; the machinery was.
+**Do not delete them to "finish the cleanup" — that trades protection for nothing.**
+
+**What this costs, stated honestly.** Architectural flaw #3 above — *the Builder
+writes both the code and the tests, so they share blind spots* — is now
+**uncovered**. The independent `verifier` is the remaining defence, and it is not
+a full substitute. The discipline survives as a **practice, not a gate step**:
+
+> **When you add a guard, re-introduce the bug by hand and watch the test go red.**
+> A green suite is evidence of nothing until you have watched it go red.
+
+This is not a licence to skip it. It is the same rule with the enforcement removed,
+which means it now depends on the person doing it.
 
 ## Phase status
 
@@ -1655,7 +1691,7 @@ Update as gates close. `git log --grep "^Gate:"` is the authoritative ledger.
 - [x] **P9** — value tracking: time-saved metrics per run, all-up ROI summary, customer-facing report
 - [x] **P10** — admin observability: standalone admin app, per-tenant usage + cost monitoring *(merged `601760c`; carries `Gate: P10` trailer + passing `scripts/gates/p10.sh`. Ledger backfilled by independent verifier: `docs/gates/p10.md`.)*
 - [x] **P11** — E2E validation + production hardening + VPS migration. **Closed 2026-07-13** (`b711b44`, `Gate: P11`, ledger `docs/gates/p11.md`). Built & merged long before (`d73b813`…`75891b7` + artifacts `2106f71`); the gate was un-closeable only because `scripts/gates/p11.sh` fail-closes when `PROD_HOST` is unset — it cannot smoke-test a VPS that doesn't exist. Prod went live, so `PROD_HOST=atlas.agntic.co bash scripts/gate.sh 11` finally runs. **Note for anyone re-running it:** the E2E suite *self-skips the converger test* without `ANTHROPIC_API_KEY` (`tests/e2e/full-journey.test.js`), so a bare run reports "6 pass / 1 skip" and the skipped one is Done-when #1. Run it with a key (7/7) or you are passing a gate you haven't proven.
-- [~] **P12** — **converger v2**: outcome contracts + BPMN/DMN shape (decisions, gap analysis) + the elicitation UI + the human approval gate. Build spec: [`docs/architecture/converger-v2.md`](docs/architecture/converger-v2.md) (theory: [`bpmn-dmn-foundations.md`](docs/architecture/bpmn-dmn-foundations.md)). Gate `scripts/gates/p12.sh` is **progressive** — it runs increments A–G in order and stops at the first unbuilt one, so `bash scripts/gate.sh 12` answers both *"is the phase closed?"* and *"which increment next?"*. **Increments A (validator hardening + node re-cut), B (engine control flow), C (converger v2 core + the outcome contract), D (the human approval gate), E (the `decision` node + DMN gap analysis + the table review UI), F (schema-aware connectors + the example picker + `foreach` turned on) and G (the test-panel outcome oracle + the SOP sections + the zero-typing path) are all BUILT and merged to `main`.** **⚠️ P12 is NOT gate-closed.** The code shipped to prod (2026-07-14) at the operator's explicit direction *ahead of a passing gate*: `scripts/gates/p12.sh` currently **FAILS** because the **mutation sweep is below its 78% floor (76.2%)**. This is a **test-coverage gap, not a functional defect** — G's own runtime-oracle suite (`tests/workflows/example-oracle.test.js`) was written but **never added to `mutation-sweep.mjs`'s SUITES list**, so the whole runtime oracle (`checkAssertionAtRuntime` / `evaluateExampleRun` / `normalizeDelivery` / `isDeliveryNode`) is unkillable by construction (the recurring "a mutant is only killable by a suite the sweep RUNS" lesson — D and F both hit and fixed it for their suites). The sweep has been below floor **since G was built** — the earlier "gate-green at `0df0bfb` / 94.6%" note was inaccurate (that figure predates F widening the sweep TARGETS to `elicitation-graph.js` (42 survivors), `workflow-validator.js` (31), `flow-tester.js` (24), `workflow-scheduler.js` (18)). **To actually close P12:** wire `example-oracle.test.js` (+ any other G suites that exercise a target) into the sweep SUITES and strengthen the `normalizeDelivery` NULLISH-default tests — expected to kill ~15–20 of the 26 `outcome-oracle.js` survivors and clear the floor; if marginal, pin more of the pre-existing engine survivors. **Do NOT lower the floor.** Increments do NOT carry a `Gate:` trailer; only the phase's close does — and this phase has NOT been closed. Two invariants are load-bearing and must never be weakened: **`LLM_INPUT_NOT_ENUM`** (an LLM-evaluated decision input must classify into a *closed enum* — without it there is no completeness proof, and the completeness proof is the moat) and **`EMAIL_REPLY_APPROVAL`** (an approval parsed out of an email reply body authenticates *nothing*: `From:` is spoofable, and SPF/DKIM authenticate a sending domain, not a human intent — use a signed, hashed, single-use magic link).
+- [~] **P12** — **converger v2**: outcome contracts + BPMN/DMN shape (decisions, gap analysis) + the elicitation UI + the human approval gate. Build spec: [`docs/architecture/converger-v2.md`](docs/architecture/converger-v2.md) (theory: [`bpmn-dmn-foundations.md`](docs/architecture/bpmn-dmn-foundations.md)). Gate `scripts/gates/p12.sh` is **progressive** — it runs increments A–G in order and stops at the first unbuilt one, so `bash scripts/gate.sh 12` answers both *"is the phase closed?"* and *"which increment next?"*. **Increments A (validator hardening + node re-cut), B (engine control flow), C (converger v2 core + the outcome contract), D (the human approval gate), E (the `decision` node + DMN gap analysis + the table review UI), F (schema-aware connectors + the example picker + `foreach` turned on) and G (the test-panel outcome oracle + the SOP sections + the zero-typing path) are all BUILT and merged to `main`.** **⚠️ P12 is NOT gate-closed.** The code shipped to prod (2026-07-14) at the operator's explicit direction *ahead of a passing gate*. It previously failed on the **mutation sweep's 78% floor (76.2%)** — **that blocker is GONE as of 2026-07-19, because the sweep itself was removed** (see "Mutation testing was removed"); re-run `bash scripts/gate.sh 12` to find the real current stop point rather than assuming this note is still accurate. This is a **test-coverage gap, not a functional defect** — G's own runtime-oracle suite (`tests/workflows/example-oracle.test.js`) was written but **never added to `mutation-sweep.mjs`'s SUITES list**, so the whole runtime oracle (`checkAssertionAtRuntime` / `evaluateExampleRun` / `normalizeDelivery` / `isDeliveryNode`) is unkillable by construction (the recurring "a mutant is only killable by a suite the sweep RUNS" lesson — D and F both hit and fixed it for their suites). The sweep has been below floor **since G was built** — the earlier "gate-green at `0df0bfb` / 94.6%" note was inaccurate (that figure predates F widening the sweep TARGETS to `elicitation-graph.js` (42 survivors), `workflow-validator.js` (31), `flow-tester.js` (24), `workflow-scheduler.js` (18)). *(The former "to close P12" instruction — wire `example-oracle.test.js` into the sweep SUITES and clear the floor — is **void**: there is no sweep to wire it into. `example-oracle.test.js` remains a real suite and still runs.)* Increments do NOT carry a `Gate:` trailer; only the phase's close does — and this phase has NOT been closed. Two invariants are load-bearing and must never be weakened: **`LLM_INPUT_NOT_ENUM`** (an LLM-evaluated decision input must classify into a *closed enum* — without it there is no completeness proof, and the completeness proof is the moat) and **`EMAIL_REPLY_APPROVAL`** (an approval parsed out of an email reply body authenticates *nothing*: `From:` is spoofable, and SPF/DKIM authenticate a sending domain, not a human intent — use a signed, hashed, single-use magic link).
 - [ ] **P13** — **connector breadth**: OpenAPI-autogen (**primary**) + MCP adapter (**fallback**),
   both projecting into the existing `CapabilityRegistry` (one internal contract, two thin adapters).
   Triggers stay hand-built. Design: [`docs/architecture/mcp-capability-adapter.md`](docs/architecture/mcp-capability-adapter.md);
