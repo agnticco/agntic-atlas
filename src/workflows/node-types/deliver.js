@@ -40,19 +40,19 @@ export const deliverNodeType = {
     // from the previous step, or from `body` — never from `message`.
     { key: 'target', label: 'Channel / recipient', type: 'text', optional: true,
       placeholder: 'e.g. #social',
-      hint: 'Slack: the channel to post to. (src/connectors/slack/index.js:256 — config.target)' },
+      hint: 'Slack: the channel to post to.' },   // consumed at src/connectors/slack/index.js:256 (config.target)
     { key: 'user', label: 'Direct-message recipient', type: 'text', optional: true,
       placeholder: 'e.g. someone@company.com or @handle',
-      hint: 'slack_dm: who to DM. (src/connectors/slack/index.js:278 — config.user)' },
+      hint: 'Slack DM: who to send it to.' },     // consumed at src/connectors/slack/index.js:278 (config.user)
     { key: 'to', label: 'Email recipient', type: 'text', optional: true,
-      hint: 'gmail_send: the To: address. (src/connectors/google/index.js:591 — config.to)' },
+      hint: 'Email: the address it goes to.' },   // consumed at src/connectors/google/index.js:591 (config.to)
     { key: 'subject', label: 'Subject', type: 'text', optional: true,
-      hint: 'gmail_send: the email subject. Also used as the delivery title when no title is set. (src/connectors/google/index.js:591 — config.subject)' },
+      hint: 'Email: the subject line. Also used as the title if none is set.' },   // consumed at src/connectors/google/index.js:591 (config.subject)
     { key: 'username', label: 'Post as (bot name)', type: 'text', optional: true, advanced: true,
-      hint: 'Slack: overrides the bot display name. (src/connectors/slack/index.js:259 — config.username)' },
+      hint: 'Slack: overrides the bot display name.' },   // consumed at src/connectors/slack/index.js:259 (config.username)
     { key: 'icon_emoji', label: 'Post as (bot icon)', type: 'text', optional: true, advanced: true,
       placeholder: 'e.g. :package:',
-      hint: 'Slack: overrides the bot avatar. (src/connectors/slack/index.js:260 — config.icon_emoji)' },
+      hint: 'Slack: overrides the bot avatar.' },   // consumed at src/connectors/slack/index.js:260 (config.icon_emoji)
   ],
   previewTemplate: 'Sends the result to {channel}{title? with title "{title}"}.',
   run: async (cfg, ctx, services) => {
