@@ -6661,11 +6661,61 @@ class Component extends DCLogic {
   // The whole graph then drew as one flat line: the branch present but not fanning out,
   // its lanes gone, and the P1 / silent outcomes jammed together with overlapping labels
   // (2026-07-19). A decision produces a VALUE; the branch downstream of it is what routes.
-  _laneSourceOf(nodes) {
-    return (nodes || []).find(n => n?.type === 'branch' && (n.config?.cases?.length > 0)) || null;
+  // A SPLIT IS ANY NODE WITH TWO OR MORE OUTGOING EDGES. It is NOT "a branch".
+  //
+  // This has now been the root cause three separate times, each patched at the
+  // symptom: a nested branch drawn as a straight run; a `decision` sitting before
+  // the branch collapsing the whole graph flat; and — the one that exposed the
+  // real rule — a plain FAN-OUT (one step feeding two deliveries) not being
+  // recognised as a split at all, so two simultaneous deliveries rendered as a
+  // run-on with their labels overlapping by 29px.
+  //
+  // The renderer used to know exactly one shape of split, `branch` + `cases`, and
+  // any workflow that split some other way fell through to a flat line. Out-degree
+  // is the honest definition: a `branch` is simply the split that also carries
+  // case labels. `rowsFrom` below has ALWAYS forked on out-degree — only this
+  // entry point insisted on a router, which is why the inner recursion was general
+  // and the top level was not.
+  //
+  // Order matters and is unchanged in effect: a `decision` feeds its branch through
+  // ONE edge, so the first node with 2+ targets is still the branch, never the
+  // decision.
+  _laneSourceOf(nodes, edges) {
+    const list = nodes || [];
+    const es = Array.isArray(edges) ? edges : [];
+    for (const n of list) {
+      if (!n || !n.id) continue;
+      const targets = new Set(es.filter(e => e && e.from === n.id).map(e => e.to).filter(Boolean));
+      if (targets.size >= 2) return n;
+    }
+    return null;
+  }
+  // Does this split mean "one of these" or "all of these"?
+  //
+  // A `branch`/`decision` ROUTES — exactly one lane runs, and the lanes are
+  // alternatives that must be labelled with the case that selects them. Anything
+  // else that splits BROADCASTS — every lane runs, every time. Drawing them the
+  // same way makes "post to Slack AND save to the inbox" indistinguishable from
+  // "post to Slack OR save to the inbox", and either/or is a worse lie than a
+  // run-on, because the user believes only one destination gets it.
+  _isExclusiveSplit(node) {
+    if (!node) return false;
+    if (node.type === 'branch' || node.type === 'decision') return true;
+    return (node.config && Array.isArray(node.config.cases) && node.config.cases.length > 0) || false;
+  }
+  // The distinct targets of a split, in edge order, deduped — several cases often
+  // route to the SAME node and that is ONE lane, not several.
+  _splitTargetsOf(node, edges) {
+    const out = [];
+    const seen = new Set();
+    for (const e of (edges || [])) {
+      if (!e || e.from !== (node && node.id) || !e.to || seen.has(e.to)) continue;
+      seen.add(e.to); out.push(e.to);
+    }
+    return out;
   }
   _liveTrunkOf(spec, nodes, confirmed, flashIdx, explaining, ready, revealed) {
-    const br = this._laneSourceOf(spec?.nodes);
+    const br = this._laneSourceOf(spec?.nodes, spec?.edges);
     if (!br) return nodes.map((n, i) => this._liveCardFor(n, i, confirmed, flashIdx, explaining, ready, revealed));
     const cut = nodes.findIndex(n => n.id === br.id);
     const upto = cut < 0 ? nodes.length - 1 : cut;
@@ -6674,11 +6724,15 @@ class Component extends DCLogic {
   // One lane per branch case: walk the spec's edges from each case target, collecting the
   // chain until it ends. Any number of lanes, any depth — nothing about shape is assumed.
   _liveLanes(spec, nodes, confirmed, flashIdx, explaining, ready, revealed) {
-    const br = this._laneSourceOf(spec?.nodes);
+    const edges = spec?.edges || [];
+    const br = this._laneSourceOf(spec?.nodes, edges);
     if (!br) return null;
     const cases = (br.config && br.config.cases) || [];
-    if (!cases.length) return null;
-    const edges = spec?.edges || [];
+    // Lanes come from the split's EDGE TARGETS, not from `cases`. A fan-out has no
+    // cases at all and still has lanes; a router's cases only supply their labels.
+    const exclusive = this._isExclusiveSplit(br);
+    const laneTargets = this._splitTargetsOf(br, edges);
+    if (laneTargets.length < 2) return null;
     const byId = new Map((spec?.nodes || []).map(n => [n.id, n]));
     const idxOf = (id) => nodes.findIndex(n => n.id === id);
     // EVERY LIVE NODE MUST RENDER. The approval queue walks `nodes` by INDEX and shows a
@@ -6747,15 +6801,16 @@ class Component extends DCLogic {
       return out;
     };
     const lanes = [];
-    const usedTargets = new Set();
-    cases.forEach((c, i) => {
-      if (!c || !c.to || usedTargets.has(c.to)) return;   // collapse duplicate targets
-      usedTargets.add(c.to);
-      const rawRows = rowsFrom(c.to, null, 0).filter(r => r.ids.length);
+    laneTargets.forEach((to, i) => {
+      const rawRows = rowsFrom(to, null, 0).filter(r => r.ids.length);
       if (!rawRows.length) return;
-      const firstGi = idxOf(c.to);
+      const firstGi = idxOf(to);
+      // An exclusive split's lanes are ALTERNATIVES and must say which case picks
+      // them. A parallel split's lanes all run, so a case label would be a lie —
+      // they get no label, and the fan-out marker below says "all of these".
+      const ci = cases.findIndex(c => c && c.to === to);
       lanes.push({
-        label: this._laneLabelFor(c.when, i),
+        label: exclusive ? this._laneLabelFor(ci >= 0 ? cases[ci].when : null, ci >= 0 ? ci : i) : '',
         // The lane's italic label fades in WITH its first node during the reveal, so a lane
         // header never floats above an empty lane. `revealed == null` (settled) ⇒ shown.
         labelO: (revealed == null || (firstGi >= 0 && firstGi < revealed)) ? 1 : 0,
@@ -6768,6 +6823,7 @@ class Component extends DCLogic {
         }),
       });
     });
+    if (lanes.length) lanes[0]._parallel = !exclusive;
     // SWEEP: anything the trunk and the lane walks did not claim. The walk above should
     // cover every edge-connected node, so this is normally empty — but an orphan (a node
     // with no incoming edge, or one reachable only through a shape not modelled here) must
@@ -7445,21 +7501,41 @@ class Component extends DCLogic {
     // from a `decision` (which has `rules`). Matching on `decision` here cut the step
     // count short at the decision and reported 0 paths for a workflow that visibly has
     // several — the panel and the graph then disagreed on the same spec.
-    const src = this._laneSourceOf(nodes);
+    const edges = (spec && Array.isArray(spec.edges)) ? spec.edges : [];
+    const src = this._laneSourceOf(nodes, edges);
     const brIdx = src ? nodes.indexOf(src) : -1;
-    if (brIdx < 0) return { steps: nodes.length, paths: 0 };
-    const cases = (nodes[brIdx].config && nodes[brIdx].config.cases) || [];
-    // Count DISTINCT lane targets, not raw cases — several cases (incl. the catch-all) often
-    // route to the SAME node, so the raw count (e.g. 5) overstates the lanes the user sees
-    // (3). This mirrors `_liveLanes`, which dedupes by target, and the plan's `branches`.
-    const targets = new Set(cases.map(c => c && c.to).filter(Boolean));
-    return { steps: brIdx + 1, paths: targets.size };
+    if (brIdx < 0) return { steps: nodes.length, paths: 0, parallel: false };
+    // Count DISTINCT lane targets from the EDGES, mirroring `_liveLanes`, so the panel
+    // and the graph cannot disagree about the same spec. Reading `cases` here instead
+    // would report 0 paths for a fan-out, which HAS lanes and no cases — and several
+    // cases (including the catch-all) routing to one node is ONE lane, not several.
+    const targets = this._splitTargetsOf(src, edges);
+    const parallel = !this._isExclusiveSplit(src);
+    // "paths" only means alternatives. A fan-out's lanes ALL run, so calling them
+    // paths tells the user a choice is being made when nothing is choosing.
+    //
+    // And STEPS differ by split kind. After a router only ONE lane runs, so the
+    // lane nodes are not steps this workflow always takes and the count stops at
+    // the branch. After a fan-out EVERY lane runs, so they are all steps — counting
+    // only the trunk would report "1 step" for a workflow the plan card correctly
+    // calls "3 STEPS", widening the very step-count disagreement that is already on
+    // record as a defect.
+    return {
+      steps: parallel ? nodes.length : brIdx + 1,
+      paths: targets.length,
+      parallel,
+    };
   }
   _stepShapeLabel(spec) {
     const s = this._stepShape(spec);
     if (!s) return null;
     return s.steps + ' step' + (s.steps === 1 ? '' : 's')
-         + (s.paths ? (' · ' + s.paths + ' path' + (s.paths === 1 ? '' : 's')) : '');
+         + (s.paths
+             ? (s.parallel
+                 // Both destinations get it, every time — not one of two.
+                 ? (' · ' + s.paths + ' at once')
+                 : (' · ' + s.paths + ' path' + (s.paths === 1 ? '' : 's')))
+             : '');
   }
   // Adaptive "What starts it" card — replaces the hardcoded UPS email mock.
   _sampleTriggerView(trg) {
