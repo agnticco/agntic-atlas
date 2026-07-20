@@ -3779,10 +3779,7 @@ class Component extends DCLogic {
       // Rebuild liveNodes from the spec if they weren't persisted (older slices), and keep
       // the approval surface up. The Run test panel reads `spec`/`outcome`, both restored.
       if (!(slice.liveNodes && slice.liveNodes.length)) {
-        overrides.liveNodes = slice.spec.nodes.map(n => ({
-          id: n.id, type: n.type, label: n.label ?? null,
-          mode: (n.config && n.config.mode) || null, description: n.description ?? null,
-        }));
+        overrides.liveNodes = this._liveNodesFromSpec(slice.spec);
       }
       // A restored graph has NO live converger session — the build-reveal animation is a
       // build-time flourish only, so on restore we skip it: show the graph FULLY (liveRevealed
@@ -3792,6 +3789,24 @@ class Component extends DCLogic {
       overrides.awaitingGraphApproval = true;
       overrides.liveRevealed = null;
       overrides.inputMode = 'locked';
+    }
+    // A slice can carry a spec and its nodes and STILL have no graph card — every
+    // draft saved before the graph was mounted on reopen is in exactly that state,
+    // and would keep showing a blank canvas forever. Rebuild the nodes from the
+    // blueprint if they are missing, then make sure something draws them.
+    if (hasSpec) {
+      const live = (overrides.liveNodes && overrides.liveNodes.length)
+        ? overrides.liveNodes
+        : (slice.liveNodes && slice.liveNodes.length ? slice.liveNodes : this._liveNodesFromSpec(slice.spec));
+      overrides.liveNodes = live;
+      const msgs = Array.isArray(slice.msgs) ? slice.msgs.slice() : [];
+      if (!msgs.some(m => m && m.isLiveGraph)) {
+        msgs.push({ isLiveGraph: true, _id: 'lg_restore_' + (slice.workflowId || 'x') });
+        overrides.msgs = msgs;
+        // Nothing is mid-reveal on a restore, so show the whole graph at once.
+        overrides.liveRevealed = null;
+        if (overrides.liveConfirmed == null && !(slice.liveConfirmed > 0)) overrides.liveConfirmed = live.length;
+      }
     }
     this.setState(Object.assign({}, slice, overrides));
   }
@@ -4234,8 +4249,30 @@ class Component extends DCLogic {
         this.setState({
           view: 'build', connectionsOpen: false, accountOpen: false, profileOpen: false,
           workflowId: wf.id, isDraftBuild: true, phase: "proposed", spec,
+          // RENDER THE SAVED WORKFLOW. Without these the canvas is blank while
+          // "Run test" is enabled — the user is invited to review something the
+          // page never draws.
+          //
+          // Shown as fully confirmed, deliberately: this route ALREADY treats the
+          // draft as testable (`testUnlocked` is spec && !awaitingGraphApproval &&
+          // phase === 'proposed', all true here), so drawing the nodes as
+          // unapproved would contradict the enabled button beside them. Per-node
+          // approval is build-session state and is not persisted server-side, so
+          // there is no stored answer to restore — this reflects the state the app
+          // is already in rather than asserting a new one.
+          liveNodes: this._liveNodesFromSpec(spec),
+          liveConfirmed: this._liveNodesFromSpec(spec).length,
+          liveRevealed: null, awaitingGraphApproval: false, liveFlashIdx: -1,
           intent: wf.user_intent || wf.name || null, threadId: null, inputMode: "change",
-          msgs: [{ isAtlas: true, text: "Here's your saved draft — review it and publish when you're ready, or tell me what to change.", hasReason: false }],
+          // THE GRAPH IS A CHAT MESSAGE, so a reopened session must mount one.
+          // `liveNodes` alone renders nothing: the live graph is drawn by a card in
+          // `msgs` (`isLiveGraph`), which only ever existed because the BUILD pushed
+          // it. Reopening restored the spec and the nodes and still showed a blank
+          // canvas — the nodes had nowhere to be drawn.
+          msgs: [
+            { isAtlas: true, text: "Here's your saved draft — here's how it works. Review it and publish when you're ready, or tell me what to change.", hasReason: false },
+            { isLiveGraph: true, _id: 'lg_reopen_' + wf.id },
+          ],
           inputValue: "", thinking: false, testState: "idle",
           runSteps: [], runStepIndex: 0, failIndex: -1, deliveries: [], runOutput: null, runError: "",
           isEditing: false, editingIntro: null,
@@ -4980,11 +5017,7 @@ class Component extends DCLogic {
       // The TRIGGER is a real node the user approves like any other (operator 2026-07-17):
       // every node is addressed during the build. It lives in spec.triggers[], so it is
       // prepended to the approvable node list as the entry node.
-      const trigNode = this._triggerNodeFrom(sp);
-      const specNodes = (trigNode ? [trigNode] : []).concat((sp.nodes || []).map(n => ({
-        id: n.id, type: n.type, label: n.label ?? null,
-        mode: (n.config && n.config.mode) || null, description: n.description ?? null,
-      })));
+      const specNodes = this._liveNodesFromSpec(sp);
       // THE GRAPH IS BUILT ONCE, FROM THE COMPLETE SPEC, THEN ANIMATED (operator 2026-07-17).
       // The full spec has edges, so the laned layout is correct from the first frame; the
       // node-by-node reveal (`_animateReveal`) makes it read as a live build without ever
@@ -6632,6 +6665,31 @@ class Component extends DCLogic {
   // approves (operator 2026-07-17: every node is addressed during the build). It lives in
   // spec.triggers[], so build a node record for it here (id '__trigger__'). Falls back to
   // the plan's trigger while the spec is still streaming.
+  // THE APPROVABLE NODE LIST FOR A SPEC — one definition, three callers.
+  //
+  // The graph renders from `liveNodes`, which was BUILD-SESSION state: it existed
+  // only while a converger session was streaming. So reopening a saved workflow
+  // rendered NOTHING — an empty canvas, no diagram, while the panel offered "Run
+  // test" and the chat said "review it and publish when you're ready". There was
+  // nothing to review. That is the edit entry point, the surface a person returns
+  // to in order to check a live automation.
+  //
+  // A second, quieter defect sat next to it: the one existing rebuild (in
+  // `_applyBuildSlice`) mapped `spec.nodes` and OMITTED THE TRIGGER, while the
+  // build path prepends it. The same workflow would therefore show 3 nodes on one
+  // route and 4 on the other, and the approval counter would disagree with itself.
+  // Deriving it in one place is what stops that drifting again.
+  //
+  // The trigger is a real, approvable node (operator 2026-07-17): it is the "when",
+  // and every node is addressed during a build. It lives in `spec.triggers[]`, so
+  // `_triggerNodeFrom` synthesises the record.
+  _liveNodesFromSpec(spec) {
+    const trig = this._triggerNodeFrom(spec);
+    return (trig ? [trig] : []).concat(((spec && spec.nodes) || []).map(n => ({
+      id: n.id, type: n.type, label: n.label ?? null,
+      mode: (n.config && n.config.mode) || null, description: n.description ?? null,
+    })));
+  }
   _triggerNodeFrom(spec) {
     const t = (spec?.triggers && spec.triggers[0])
       || (this.state._approvedPlanCache && this.state._approvedPlanCache.trigger
