@@ -1818,40 +1818,144 @@ a full substitute. The discipline survives as a **practice, not a gate step**:
 This is not a licence to skip it. It is the same rule with the enforcement removed,
 which means it now depends on the person doing it.
 
-## Phase status
+## Where things stand, and what's next
 
-Update as gates close. `git log --grep "^Gate:"` is the authoritative ledger.
+*(Written for the operator. Plain language first; the technical anchors an agent
+needs are in the indented notes. `git log --grep "^Gate:"` is the authoritative
+record of which phases are formally finished.)*
 
-- [x] **P0** — clean spine: engine boots in new repo, UI hits one health route
-- [x] **P1** — Slack connector: clicking "run" posts to Slack
-- [x] **P2** — event triggers + Gmail: hand-authored UPS→Slack fires on real email *(freeze the spec here)*
-- [x] **P3** — converger reproduces the frozen spec, confirmations logged
-- [x] **P4** — builder UI: workflow built entirely by talking *(design-first: Claude generates mockups → approval → build)*
-- [x] **P5** — console UI: inventory, live run monitoring, SOP view + SOP export (PDF + Markdown).
-- [~] **P6** — *(scrapped 2026-06-20)* current sidebar + surface switching is sufficient; floating pill / launcher layer dropped from scope.
-- [x] **P7** — Airtable + Google write + error handling + sub-daily scheduling
-- [x] **P8** — web research (`search_web` native Anthropic tool, already built) + filesystem connector (`filesystem_read`/`filesystem_list`, tenant-sandboxed to Knowledge-page approved folders)
-- [x] **P9** — value tracking: time-saved metrics per run, all-up ROI summary, customer-facing report
-- [x] **P10** — admin observability: standalone admin app, per-tenant usage + cost monitoring *(merged `601760c`; carries `Gate: P10` trailer + passing `scripts/gates/p10.sh`. Ledger backfilled by independent verifier: `docs/gates/p10.md`.)*
-- [x] **P11** — E2E validation + production hardening + VPS migration. **Closed 2026-07-13** (`b711b44`, `Gate: P11`, ledger `docs/gates/p11.md`). Built & merged long before (`d73b813`…`75891b7` + artifacts `2106f71`); the gate was un-closeable only because `scripts/gates/p11.sh` fail-closes when `PROD_HOST` is unset — it cannot smoke-test a VPS that doesn't exist. Prod went live, so `PROD_HOST=atlas.agntic.co bash scripts/gate.sh 11` finally runs. **Note for anyone re-running it:** the E2E suite *self-skips the converger test* without `ANTHROPIC_API_KEY` (`tests/e2e/full-journey.test.js`), so a bare run reports "6 pass / 1 skip" and the skipped one is Done-when #1. Run it with a key (7/7) or you are passing a gate you haven't proven.
-- [~] **P12** — **converger v2**: outcome contracts + BPMN/DMN shape (decisions, gap analysis) + the elicitation UI + the human approval gate. Build spec: [`docs/architecture/converger-v2.md`](docs/architecture/converger-v2.md) (theory: [`bpmn-dmn-foundations.md`](docs/architecture/bpmn-dmn-foundations.md)). Gate `scripts/gates/p12.sh` is **progressive** — it runs increments A–G in order and stops at the first unbuilt one, so `bash scripts/gate.sh 12` answers both *"is the phase closed?"* and *"which increment next?"*. **Increments A (validator hardening + node re-cut), B (engine control flow), C (converger v2 core + the outcome contract), D (the human approval gate), E (the `decision` node + DMN gap analysis + the table review UI), F (schema-aware connectors + the example picker + `foreach` turned on) and G (the test-panel outcome oracle + the SOP sections + the zero-typing path) are all BUILT and merged to `main`.** **⚠️ P12 is NOT gate-closed.** The code shipped to prod (2026-07-14) at the operator's explicit direction *ahead of a passing gate*. It previously failed on the **mutation sweep's 78% floor (76.2%)** — **that blocker is GONE as of 2026-07-19, because the sweep itself was removed** (see "Mutation testing was removed"); re-run `bash scripts/gate.sh 12` to find the real current stop point rather than assuming this note is still accurate. This is a **test-coverage gap, not a functional defect** — G's own runtime-oracle suite (`tests/workflows/example-oracle.test.js`) was written but **never added to `mutation-sweep.mjs`'s SUITES list**, so the whole runtime oracle (`checkAssertionAtRuntime` / `evaluateExampleRun` / `normalizeDelivery` / `isDeliveryNode`) is unkillable by construction (the recurring "a mutant is only killable by a suite the sweep RUNS" lesson — D and F both hit and fixed it for their suites). The sweep has been below floor **since G was built** — the earlier "gate-green at `0df0bfb` / 94.6%" note was inaccurate (that figure predates F widening the sweep TARGETS to `elicitation-graph.js` (42 survivors), `workflow-validator.js` (31), `flow-tester.js` (24), `workflow-scheduler.js` (18)). *(The former "to close P12" instruction — wire `example-oracle.test.js` into the sweep SUITES and clear the floor — is **void**: there is no sweep to wire it into. `example-oracle.test.js` remains a real suite and still runs.)* Increments do NOT carry a `Gate:` trailer; only the phase's close does — and this phase has NOT been closed. Two invariants are load-bearing and must never be weakened: **`LLM_INPUT_NOT_ENUM`** (an LLM-evaluated decision input must classify into a *closed enum* — without it there is no completeness proof, and the completeness proof is the moat) and **`EMAIL_REPLY_APPROVAL`** (an approval parsed out of an email reply body authenticates *nothing*: `From:` is spoofable, and SPF/DKIM authenticate a sending domain, not a human intent — use a signed, hashed, single-use magic link).
-- [ ] **P13** — **connector breadth**: OpenAPI-autogen (**primary**) + MCP adapter (**fallback**),
-  both projecting into the existing `CapabilityRegistry` (one internal contract, two thin adapters).
-  Triggers stay hand-built. Design: [`docs/architecture/mcp-capability-adapter.md`](docs/architecture/mcp-capability-adapter.md);
-  build: [`docs/handoff/p13-implementation-brief.md`](docs/handoff/p13-implementation-brief.md). Planning
-  merged (#22, 2026-07-15); **not started**. Start at **P13-0** — generalize three F-era converger seams
-  (effect-from-**structure** not an id-regex; a `deliver`-node effect fallback; connector-generic
-  destination schema-discovery, which also wires the already-built-but-unwired native `sheets_describe`)
-  — **before** any adapter, or every new connector inherits the silent write-misclassification. Gate
-  `scripts/gates/p13.sh` is **progressive/fail-closed** (`bash scripts/gate.sh 13` names the next
-  increment; `scripts/gate.sh`'s case widened to accept `13`). **Gate calibration (operator,
-  2026-07-15):** the gate proves ONLY (1) **the backend works** — behavioral acceptance tests +
-  cross-tenant isolation — and (2) **the UI/UX works for the phase's expected outcome**: a live,
-  **headed, operator-witnessed** run (connect a service Atlas never hand-built → build a workflow with
-  it → run it → real read/write), attested in `docs/gates/p13.md` with screenshots. **NO aggregate
-  mutation-coverage floor blocks the close** — mutation-testing is an internal per-guard technique
-  (revert the bug, watch the test go red), not a percentage to chase; that chase is what stalled P12.
-  Apply the INCREMENT-loop review calibration (block only on user-reachable silent/destructive defects;
-  everything else is a residual; gate run once by the builder; adversary + verifier in parallel).
-  **Branch-per-increment** off `main` → PR → squash-merge; the phase closes only on the final merge with
-  `Gate: P13` + `Phase:` + `Verified-by:` from a fresh verifier who did not write the code.
+**Atlas is live and in use** at https://atlas.agntic.co. People can build a
+workflow by talking to it, test it, publish it, and watch it run on a schedule.
+Thirteen phases of work got it there; the first eleven are finished and signed
+off.
+
+**The current phase (P12) is built and shipped, but not signed off.** Everything
+in it works and is in production. What is missing is the formal checkpoint —
+and the operator chose to ship ahead of that deliberately, which is recorded
+below rather than glossed over.
+
+**What is being worked on right now:** the defects found by driving the real
+product through six kinds of workflow in a browser, written up in
+[`docs/handoff/ui-test-findings-2026-07-19.md`](docs/handoff/ui-test-findings-2026-07-19.md).
+That document is the live to-do list. The theme of the serious ones was a single
+problem wearing different masks: **the product told people their workflow had
+been checked when it had not been.** Most of those are now fixed.
+
+**Still open, roughly in the order they matter:**
+
+1. **Test examples can't reach some workflows.** If a workflow starts by going
+   and fetching something (say, "read my unread email"), the made-up test cases
+   can't influence what it fetches — so every test case runs against the same
+   live data and proves the same one thing. Filed as F3.
+2. **Editing a workflow may quietly drop its promise.** Suspected, not proven —
+   it needs a live test before anyone acts on it. If real, someone could edit a
+   live workflow and have it marked "verified" against a promise nothing checked.
+3. **Test runs are counted in the live health dashboard**, so a workflow that has
+   never actually fired can show "100% success". Cosmetic, but it is the number
+   an operator trusts. Filed as F14.
+4. The rest of the handoff document — smaller, individually recorded there.
+
+## The phases
+
+- [x] **P0** — the skeleton: the engine starts up in the new codebase and the
+      screen can reach it.
+- [x] **P1** — Slack: pressing "run" actually posts a message.
+- [x] **P2** — workflows that fire on a real event (an email arriving), not just
+      on a button.
+      - *Hand-authored UPS→Slack spec frozen here as the test fixture.*
+- [x] **P3** — the interviewer works: describe a workflow in conversation and it
+      builds the same thing a person would have built by hand.
+- [x] **P4** — the building screen: a workflow made entirely by talking.
+- [x] **P5** — the management screen: see your workflows, watch runs happen, and
+      export a written procedure document (PDF and Markdown).
+- [~] **P6** — *dropped 2026-06-20.* A floating launcher was planned; the sidebar
+      already does the job. Not built, on purpose.
+- [x] **P7** — writing to other systems (Airtable, Google), handling failures,
+      and running more often than daily.
+- [x] **P8** — web research, and reading files from approved folders.
+- [x] **P9** — value tracking: time saved per run, and a report a customer can be
+      shown.
+- [x] **P10** — the admin view: what each customer is using, and what it costs.
+      - *Merged `601760c`, `Gate: P10`, ledger `docs/gates/p10.md`.*
+- [x] **P11** — end-to-end testing, production hardening, and the move onto a
+      real server. **Finished 2026-07-13.**
+      - *`b711b44`, `Gate: P11`, ledger `docs/gates/p11.md`. If you re-run this
+        gate: the end-to-end suite SKIPS its interviewer test when
+        `ANTHROPIC_API_KEY` is unset and still reports "6 pass / 1 skip" — and the
+        skipped one is the first thing the gate is meant to prove. Run it with a
+        key (7/7) or you are passing a gate you have not tested.*
+
+- [~] **P12 — the promise system.** *Built, shipped to production, NOT signed off.*
+
+  This is the phase that made a workflow **state what it will deliver** and then
+  hold itself to that. It added: a written promise attached to every workflow;
+  the ability for a workflow to make decisions and take different paths; a step
+  where it stops and asks a person for approval before doing something serious;
+  and a test panel that runs real examples and reports whether the promise held.
+
+  All seven pieces (A–G) are built and merged. The code has been in production
+  since 2026-07-14, shipped at the operator's explicit direction *before* the
+  checkpoint passed — a deliberate, recorded trade, not an oversight.
+
+  **Why it is still not signed off:** it used to fail on a coverage score from an
+  automated code-breaking tool. **That tool was removed on 2026-07-19** at the
+  operator's direction (see "Mutation testing was removed"), so that particular
+  blocker is gone. **Nobody has re-run the checkpoint since.** Run
+  `bash scripts/gate.sh 12` to find out where it actually stops now, rather than
+  trusting this paragraph.
+
+  - *Build spec: [`docs/architecture/converger-v2.md`](docs/architecture/converger-v2.md);
+    theory: [`bpmn-dmn-foundations.md`](docs/architecture/bpmn-dmn-foundations.md).
+    The gate is progressive — it walks increments A–G and stops at the first
+    unbuilt one, so it answers both "is this finished?" and "what is next?".
+    Increments never carry a `Gate:` trailer; only the phase's close does, and
+    this phase has not been closed.*
+
+  **Two rules in here must never be weakened.** Both look like technicalities and
+  are not:
+  - **A workflow may only branch on a value from a fixed, known list**
+    (`LLM_INPUT_NOT_ENUM`). If the AI can answer a routing question in free prose,
+    nothing can prove the workflow handles every case — and the whole promise
+    system rests on being able to prove that.
+  - **An approval must never be accepted from a reply email**
+    (`EMAIL_REPLY_APPROVAL`). Anyone can forge a "From" address, and a forwarded
+    thread is full of the word "yes". Approvals go through a signed, single-use
+    link.
+
+- [ ] **P13 — many more connectors.** *Planned, not started.*
+
+  Today each new service Atlas can talk to is hand-built, which is why there are
+  only a handful. This phase makes Atlas able to pick up a service's own published
+  description and generate the connection automatically — with a second, fallback
+  method for services that don't publish one. Triggers ("when this happens…") stay
+  hand-built either way.
+
+  **Start with the groundwork, not the connectors.** Three things in the existing
+  code assume the connectors we happen to have; if new ones are added first, every
+  one of them inherits the same silent bug (Atlas mistaking which steps write data,
+  which is how a workflow ends up not doing the thing it promised).
+
+  **How this phase gets signed off** — decided by the operator, 2026-07-15, and
+  deliberately narrower than P12's:
+  1. **The backend works** — behavioural tests, plus proof that one customer's
+     data can never reach another's.
+  2. **The product works for a real person** — a live, operator-witnessed run in a
+     visible browser: connect a service Atlas has never hand-built, build a
+     workflow with it, run it, see real data read and written. Recorded in
+     `docs/gates/p13.md` with screenshots.
+
+  **No coverage percentage blocks this phase.** Re-breaking the code to check a
+  test notices is a per-fix technique, not a score to chase — chasing the score is
+  what stalled P12.
+
+  - *Design: [`docs/architecture/mcp-capability-adapter.md`](docs/architecture/mcp-capability-adapter.md);
+    build: [`docs/handoff/p13-implementation-brief.md`](docs/handoff/p13-implementation-brief.md).
+    Planning merged (#22, 2026-07-15). Start at **P13-0** — generalize three F-era
+    seams (effect-from-STRUCTURE not an id-regex; a `deliver`-node effect fallback;
+    connector-generic destination schema discovery, which also wires the built-but-
+    unwired `sheets_describe`). Gate `scripts/gates/p13.sh` is progressive and
+    fail-closed. Apply the increment-loop review calibration: block only on defects
+    a real user can hit that either look like success or destroy something;
+    everything else is recorded and carried. Branch per increment off `main` → PR →
+    squash-merge; the phase closes only on the final merge carrying `Gate: P13` +
+    `Phase:` + `Verified-by:` from a fresh verifier who did not write the code.*
