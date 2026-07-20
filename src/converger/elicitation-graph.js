@@ -1091,8 +1091,34 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
 
     if ((state.proposeRounds ?? 0) >= MAX_PROPOSE_ROUNDS) return { phase: 'gapping' };
 
+    // WHAT IS WRONG TRAVELS WITH THE REBUILD.
+    //
+    // Everything below routes back to `generate`, which rebuilds the WHOLE spec —
+    // one Opus pass each. It rebuilds from `intent` + `clarifications`, so if the
+    // reason for the rejection is not in one of those, generate re-runs on
+    // byte-identical input and deterministically reproduces the same defect. The
+    // loop cannot converge; it can only hit its cap.
+    //
+    // That was live: a build looped generate→analyze FOUR times on an unchanging
+    // 10-node draft, burning three whole-spec regenerations (the bulk of a
+    // 13-minute build), because two `assemble` steps were missing a `sections`
+    // list and nothing ever said so. `generate` already folds `_missingNote` into
+    // its clarifications for the SUFFICIENCY route, and the comment there asserts
+    // "the blocking-gap route already arrives via `clarifications`" — it does not.
+    // This is that missing half.
+    //
+    // Naming the defects is also what makes the loop worth running at all: these
+    // are precise, machine-generated messages ("X needs a sections list"), which is
+    // exactly the correction a model can act on in one pass.
+    const gapNote = blockers.length
+      ? 'The previous build was rejected for these specific problems — fix each one:\n'
+        + blockers.map(g => `- ${g.message}${g.hint ? ` (${g.hint})` : ''}`).join('\n')
+      : null;
+
     const clarificationCount = (state.clarifications ?? []).length;
-    if (clarificationCount >= MAX_CLARIFICATIONS) return { phase: 'proposing' };
+    if (clarificationCount >= MAX_CLARIFICATIONS) {
+      return { phase: 'proposing', ...(gapNote ? { _missingNote: gapNote } : {}) };
+    }
 
     const sysmsg = new SystemMessage(buildSystemPrompt(state.capabilities));
     const usermsg = new HumanMessage(buildAnalyzePrompt({
@@ -1108,7 +1134,11 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
     // analyze runs before every propose, so counting here counts propose rounds
     // exactly once each — without threading a counter through propose's five
     // return paths, where the next person to add a sixth would forget it.
-    return { phase: 'proposing', proposeRounds: (state.proposeRounds ?? 0) + 1 };
+    return {
+      phase: 'proposing',
+      proposeRounds: (state.proposeRounds ?? 0) + 1,
+      ...(gapNote ? { _missingNote: gapNote } : {}),
+    };
   });
 
   // ── clarify ────────────────────────────────────────────────────────────────
@@ -1436,12 +1466,19 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
       };
     }
 
-    // A regenerate driven by the sufficiency check names a concrete MISSING
-    // component (`_missingNote`, set by `analyze`). Fold it into the clarifications
-    // so the rebuild actually adds it — otherwise generate re-runs on identical
-    // input, produces the same still-incomplete spec, and the sufficiency "name the
-    // missing piece" step (P12 Increment C) becomes a no-op that just burns Opus
-    // calls. The blocking-gap route already arrives via `clarifications`.
+    // WHY THE REBUILD IS DIFFERENT FROM THE LAST ONE.
+    //
+    // `_missingNote` carries the reason the previous draft was rejected — either a
+    // concrete missing component named by the sufficiency check, or the list of
+    // blocking gaps that failed the floor. Fold it into the clarifications so the
+    // rebuild actually acts on it; without it generate re-runs on identical input,
+    // produces the same still-incomplete spec, and the loop just burns Opus calls
+    // until it hits its cap.
+    //
+    // (This comment previously claimed "the blocking-gap route already arrives via
+    // `clarifications`". It did not — that route sent no reason at all, which is
+    // exactly the failure the rest of this comment describes. Both routes now set
+    // `_missingNote`.)
     const clarifications = state._missingNote
       ? [...(state.clarifications ?? []), { q: '(still missing)', a: String(state._missingNote) }]
       : state.clarifications;

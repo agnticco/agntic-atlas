@@ -709,7 +709,16 @@ Return JSON only:
   "upload_suggestion": { "artifact": "<what to upload>", "reason": "<the concrete benefit>" }
 }
 "branches" is [] for a linear workflow. "knowledge" is [] when nothing in the knowledge base applied.
-"upload_suggestion" is null unless a real judgment gap qualifies.`;
+"upload_suggestion" is null unless a real judgment gap qualifies.
+
+IF THERE ARE BRANCHES, THE LAST ONE MUST COVER EVERYTHING ELSE. Every workflow that
+routes is built with a catch-all, so a plan listing only the named cases is missing a
+real outcome — and it is the outcome the reader is least likely to have thought about.
+List it explicitly and last, phrased as the condition it actually is:
+  { "when": "anything else", "then": "<what happens to inputs that match none of the above>" }
+If the answer is "nothing happens", say that in words ("no action is taken") rather
+than omitting the route. A plan that names two outcomes for a workflow that has three
+undercounts the paths and contradicts the diagram the user is about to approve.`;
 }
 
 /**

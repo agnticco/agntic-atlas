@@ -106,7 +106,7 @@
   @keyframes nodePop{0%{transform:scale(.5);opacity:0}60%{transform:scale(1.08)}100%{transform:scale(1);opacity:1}}
   /* Live Graph — the proposed node reveals its confirm/reject controls on hover. */
   .nodewrap .nctrl{opacity:0;pointer-events:none;transition:opacity .15s}
-  .nodewrap:hover .nctrl{opacity:1;pointer-events:auto}
+  .nodewrap:hover .nctrl,.nodewrap:focus-within .nctrl{opacity:1;pointer-events:auto}.nctrl button:focus-visible{outline:2px solid #9fd6a8;outline-offset:2px}
   @keyframes liveRing{0%,100%{box-shadow:0 0 0 rgba(127,194,138,0)}50%{box-shadow:0 0 30px rgba(127,194,138,.22)}}
   .wf-item-inactive:hover { color: rgba(255,255,255,.8) !important; }
   @keyframes modalExpand { from { opacity:0; transform:scale(.2); } to { opacity:1; transform:none; } }
@@ -179,7 +179,7 @@
             </div>
             <div class="ab-scroll" style="display:flex;flex-direction:column;gap:1px;flex:1;min-height:0;overflow-y:auto;margin:0 -6px 6px 0;padding-right:4px">
               <sc-for list="{{ sidebarWorkflows }}" as="w" hint-placeholder-count="4">
-                <div class="{{ w.itemClass }} wf-item-row" onClick="{{ w.onClick }}" style="position:relative;display:flex;align-items:center;gap:10px;padding:10px;border-radius:9px;background:{{ w.bg }};border:1px solid {{ w.border }};cursor:pointer;color:{{ w.nameColor }};transition:color .15s" style-hover="background:rgba(255,255,255,.06)">
+                <div class="{{ w.itemClass }} wf-item-row" onClick="{{ w.onClick }}" onKeyDown="{{ w.onClickKey }}" role="button" tabindex="0" aria-label="Open workflow {{ w.name }}" style="position:relative;display:flex;align-items:center;gap:10px;padding:10px;border-radius:9px;background:{{ w.bg }};border:1px solid {{ w.border }};cursor:pointer;color:{{ w.nameColor }};transition:color .15s" style-hover="background:rgba(255,255,255,.06)">
                   <span style="flex:none;width:8px;height:8px;{{ w.radius }};background:{{ w.dot }};filter:{{ w.glow }}"></span>
 
                   <sc-if value="{{ w.isRenaming }}">
@@ -309,7 +309,7 @@
             </sc-if>
             <div style="display:flex;align-items:center;gap:12px;border-radius:26px;padding:16px 14px 16px 22px;background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.14);backdrop-filter:blur(24px) saturate(180%);-webkit-backdrop-filter:blur(24px) saturate(180%);box-shadow:inset 0 1px 0 rgba(255,255,255,.06),0 8px 28px rgba(0,0,0,.32)">
               <span style="flex:none;color:rgba(255,255,255,.42);font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:0.9em;user-select:none;line-height:1">›</span>
-              <div ref="{{ chatInputRef }}" contenteditable="true" onInput="{{ onIntentInput }}" onKeyDown="{{ onNewStateKey }}" class="chat-input" data-ph="Describe what you want to automate…" style="flex:1;min-width:0;outline:none;color:#fff;font-family:'Inter Tight',-apple-system,BlinkMacSystemFont,'Helvetica Neue',sans-serif;font-size:17px;letter-spacing:-0.005em;line-height:1.5;cursor:text;word-break:break-word"></div>
+              <div ref="{{ chatInputRef }}" contenteditable="true" role="textbox" aria-multiline="true" aria-label="Describe what you want to automate" onInput="{{ onIntentInput }}" onKeyDown="{{ onNewStateKey }}" class="chat-input" data-ph="Describe what you want to automate…" style="flex:1;min-width:0;outline:none;color:#fff;font-family:'Inter Tight',-apple-system,BlinkMacSystemFont,'Helvetica Neue',sans-serif;font-size:17px;letter-spacing:-0.005em;line-height:1.5;cursor:text;word-break:break-word"></div>
             </div>
           </div>
         </div>
@@ -519,11 +519,20 @@
                         <div style="display:flex;align-items:flex-end;justify-content:flex-end;margin-top:24px">
                           <div style="text-align:right"><div style="font-family:ui-monospace,monospace;font-size:8px;letter-spacing:.14em;color:rgba(255,255,255,.3);margin-bottom:5px">PREPARED BY</div><div style="font-family:'Dancing Script','Instrument Serif',cursive;font-weight:600;font-size:30px;color:rgba(255,255,255,.9);line-height:1;padding-right:6px">Atlas</div><div style="width:128px;height:1px;background:rgba(255,255,255,.28);margin:7px 0 0 auto"></div></div>
                         </div>
-                        <!-- actions -->
-                        <div style="display:flex;gap:10px;align-items:center;margin-top:20px">
-                          <button onClick="{{ item.onBuild }}" style="border:none;background:#efc892;color:#0a0a0a;font-family:inherit;font-size:14px;font-weight:600;padding:11px 24px;border-radius:999px;cursor:pointer" style-hover="background:#f3cd86">Approve &amp; build →</button>
-                          <button onClick="{{ item.onChange }}" style="border:1px solid rgba(255,255,255,.16);background:transparent;color:rgba(255,255,255,.65);font-family:inherit;font-size:14px;padding:11px 20px;border-radius:999px;cursor:pointer" style-hover="color:#fff">Request a change</button>
-                        </div>
+                        <!-- actions · an ACTED-UPON plan is a record, not a control.
+                             Leaving these live meant a user scrolling up to re-read the
+                             plan could re-fire a build that had already happened. -->
+                        <sc-if value="{{ item.acted }}" hint-placeholder-val="{{ false }}">
+                          <div style="display:flex;gap:10px;align-items:center;margin-top:20px">
+                            <div style="font-family:ui-monospace,monospace;font-size:9px;letter-spacing:.14em;color:rgba(127,194,138,.75)">✓ APPROVED — BUILT BELOW</div>
+                          </div>
+                        </sc-if>
+                        <sc-if value="{{ item.pending }}" hint-placeholder-val="{{ true }}">
+                          <div style="display:flex;gap:10px;align-items:center;margin-top:20px">
+                            <button onClick="{{ item.onBuild }}" style="border:none;background:#efc892;color:#0a0a0a;font-family:inherit;font-size:14px;font-weight:600;padding:11px 24px;border-radius:999px;cursor:pointer" style-hover="background:#f3cd86">Approve &amp; build →</button>
+                            <button onClick="{{ item.onChange }}" style="border:1px solid rgba(255,255,255,.16);background:transparent;color:rgba(255,255,255,.65);font-family:inherit;font-size:14px;padding:11px 20px;border-radius:999px;cursor:pointer" style-hover="color:#fff">Request a change</button>
+                          </div>
+                        </sc-if>
                       </div>
                     </div>
                   </div>
@@ -597,11 +606,11 @@
                                 <sc-if value="{{ an.icoStop }}" hint-placeholder-val="{{ false }}"><svg viewBox="0 0 24 24" width="15" height="15" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="2.5"></rect></svg></sc-if>
                               </span>
                             </div>
-                            <sc-if value="{{ an.check }}" hint-placeholder-val="{{ false }}"><span style="position:absolute;right:{{ an.checkR }};bottom:{{ an.checkB }};width:17px;height:17px;border-radius:50%;background:#5fc78a;border:2px solid #0A0A0A;display:flex;align-items:center;justify-content:center"><svg viewBox="0 0 24 24" width="9" height="9" fill="none" stroke="#06210d" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4 4 9-10"></path></svg></span></sc-if>
+                            <sc-if value="{{ an.check }}" hint-placeholder-val="{{ false }}"><span style="position:absolute;right:{{ an.checkR }};bottom:{{ an.checkB }};width:17px;height:17px;border-radius:50%;background:#5fc78a;border:2px solid #0A0A0A;display:flex;align-items:center;justify-content:center"><svg viewBox="0 0 24 24" width="9" height="9" fill="none" stroke="#06210d" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4 4 9-10"></path></svg></button></sc-if>
                             <sc-if value="{{ an.decide }}" hint-placeholder-val="{{ false }}">
                               <span class="nctrl" style="position:absolute;right:{{ an.checkR }};bottom:{{ an.checkB }};display:flex;gap:5px">
-                                <span onClick="{{ an.onApprove }}" title="Confirm" style="width:19px;height:19px;border-radius:50%;background:#0A0A0A;border:2px solid #5fc78a;cursor:pointer;display:flex;align-items:center;justify-content:center"><svg viewBox="0 0 24 24" width="9" height="9" fill="none" stroke="#5fc78a" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4 4 9-10"></path></svg></span>
-                                <span onClick="{{ an.onReject }}" title="Reject" style="width:19px;height:19px;border-radius:50%;background:#0A0A0A;border:2px solid #e87878;cursor:pointer;display:flex;align-items:center;justify-content:center"><svg viewBox="0 0 24 24" width="9" height="9" fill="none" stroke="#e87878" stroke-width="4" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"></path></svg></span>
+                                <button onClick="{{ an.onApprove }}" type="button" title="Confirm" aria-label="Confirm this step: {{ an.title }}" style="width:19px;height:19px;padding:0;border-radius:50%;background:#0A0A0A;border:2px solid #5fc78a;cursor:pointer;display:flex;align-items:center;justify-content:center"><svg viewBox="0 0 24 24" width="9" height="9" fill="none" stroke="#5fc78a" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4 4 9-10"></path></svg></button>
+                                <button onClick="{{ an.onReject }}" type="button" title="Reject" aria-label="Reject this step: {{ an.title }}" style="width:19px;height:19px;padding:0;border-radius:50%;background:#0A0A0A;border:2px solid #e87878;cursor:pointer;display:flex;align-items:center;justify-content:center"><svg viewBox="0 0 24 24" width="9" height="9" fill="none" stroke="#e87878" stroke-width="4" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"></path></svg></button>
                               </span>
                             </sc-if>
                             <span style="position:absolute;top:calc(100% + 8px);left:50%;transform:translateX(-50%);width:92px;display:flex;flex-direction:column;gap:2px;text-align:center;pointer-events:none">
@@ -661,11 +670,11 @@
                                 <sc-if value="{{ an.icoStop }}" hint-placeholder-val="{{ false }}"><svg viewBox="0 0 24 24" width="15" height="15" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="2.5"></rect></svg></sc-if>
                               </span>
                             </div>
-                            <sc-if value="{{ an.check }}" hint-placeholder-val="{{ false }}"><span style="position:absolute;right:{{ an.checkR }};bottom:{{ an.checkB }};width:17px;height:17px;border-radius:50%;background:#5fc78a;border:2px solid #0A0A0A;display:flex;align-items:center;justify-content:center"><svg viewBox="0 0 24 24" width="9" height="9" fill="none" stroke="#06210d" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4 4 9-10"></path></svg></span></sc-if>
+                            <sc-if value="{{ an.check }}" hint-placeholder-val="{{ false }}"><span style="position:absolute;right:{{ an.checkR }};bottom:{{ an.checkB }};width:17px;height:17px;border-radius:50%;background:#5fc78a;border:2px solid #0A0A0A;display:flex;align-items:center;justify-content:center"><svg viewBox="0 0 24 24" width="9" height="9" fill="none" stroke="#06210d" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4 4 9-10"></path></svg></button></sc-if>
                             <sc-if value="{{ an.decide }}" hint-placeholder-val="{{ false }}">
                               <span class="nctrl" style="position:absolute;right:{{ an.checkR }};bottom:{{ an.checkB }};display:flex;gap:5px">
-                                <span onClick="{{ an.onApprove }}" title="Confirm" style="width:19px;height:19px;border-radius:50%;background:#0A0A0A;border:2px solid #5fc78a;cursor:pointer;display:flex;align-items:center;justify-content:center"><svg viewBox="0 0 24 24" width="9" height="9" fill="none" stroke="#5fc78a" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4 4 9-10"></path></svg></span>
-                                <span onClick="{{ an.onReject }}" title="Reject" style="width:19px;height:19px;border-radius:50%;background:#0A0A0A;border:2px solid #e87878;cursor:pointer;display:flex;align-items:center;justify-content:center"><svg viewBox="0 0 24 24" width="9" height="9" fill="none" stroke="#e87878" stroke-width="4" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"></path></svg></span>
+                                <button onClick="{{ an.onApprove }}" type="button" title="Confirm" aria-label="Confirm this step: {{ an.title }}" style="width:19px;height:19px;padding:0;border-radius:50%;background:#0A0A0A;border:2px solid #5fc78a;cursor:pointer;display:flex;align-items:center;justify-content:center"><svg viewBox="0 0 24 24" width="9" height="9" fill="none" stroke="#5fc78a" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4 4 9-10"></path></svg></button>
+                                <button onClick="{{ an.onReject }}" type="button" title="Reject" aria-label="Reject this step: {{ an.title }}" style="width:19px;height:19px;padding:0;border-radius:50%;background:#0A0A0A;border:2px solid #e87878;cursor:pointer;display:flex;align-items:center;justify-content:center"><svg viewBox="0 0 24 24" width="9" height="9" fill="none" stroke="#e87878" stroke-width="4" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"></path></svg></button>
                               </span>
                             </sc-if>
                             <span style="position:absolute;top:calc(100% + 8px);left:50%;transform:translateX(-50%);width:92px;display:flex;flex-direction:column;gap:2px;text-align:center;pointer-events:none">
@@ -808,7 +817,7 @@
 
             <div onDragOver="{{ onChatDragOver }}" onDrop="{{ onChatDrop }}" style="display:flex;align-items:center;gap:10px;border-radius:22px;padding:13px 10px 13px 18px;background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.14);backdrop-filter:blur(24px) saturate(180%);-webkit-backdrop-filter:blur(24px) saturate(180%);box-shadow:inset 0 1px 0 rgba(255,255,255,.06),0 8px 28px rgba(0,0,0,.32)">
               <span style="flex:none;color:rgba(255,255,255,.42);font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:0.86em;user-select:none;line-height:1">›</span>
-              <div ref="{{ chatInputRef }}" contenteditable="{{ chatInputEditable }}" onInput="{{ onIntentInput }}" onKeyDown="{{ onIntentKey }}" class="chat-input" data-ph="{{ inputPlaceholder }}" style="flex:1;min-width:0;outline:none;color:#fff;font-family:'Inter Tight',-apple-system,BlinkMacSystemFont,'Helvetica Neue',sans-serif;font-size:15px;letter-spacing:-0.005em;line-height:1.5;cursor:text;word-break:break-word"></div>
+              <div ref="{{ chatInputRef }}" contenteditable="{{ chatInputEditable }}" role="textbox" aria-multiline="true" aria-label="{{ inputPlaceholder }}" onInput="{{ onIntentInput }}" onKeyDown="{{ onIntentKey }}" class="chat-input" data-ph="{{ inputPlaceholder }}" style="flex:1;min-width:0;outline:none;color:#fff;font-family:'Inter Tight',-apple-system,BlinkMacSystemFont,'Helvetica Neue',sans-serif;font-size:15px;letter-spacing:-0.005em;line-height:1.5;cursor:text;word-break:break-word"></div>
               <sc-if value="{{ chatFolderIndexing }}">
                 <span style="flex:none;display:flex;align-items:center;padding:4px 6px"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="rgba(255,255,255,.35)" stroke-width="2" stroke-linecap="round"><path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"/></svg></span>
               </sc-if>
@@ -1246,7 +1255,7 @@
                       <div style="display:flex;flex-direction:column;gap:8px">
                         <sc-for list="{{ hmOverdueWfs }}" as="ow" hint-placeholder-count="1">
                           <div style="display:flex;align-items:center;gap:12px;padding:10px 14px;border:1px solid rgba(240,191,107,.2);background:rgba(240,191,107,.05);border-radius:12px">
-                            <div onClick="{{ ow.onOpen }}" style="flex:1;min-width:0;cursor:pointer">
+                            <div onClick="{{ ow.onOpen }}" onKeyDown="{{ ow.onOpenKey }}" role="button" tabindex="0" aria-label="Open workflow {{ ow.name }}" style="flex:1;min-width:0;cursor:pointer">
                               <div style="font-size:14px;font-weight:500;color:rgba(var(--fg),.9);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ ow.name }}</div>
                               <div style="font-size:12px;color:rgba(var(--fg),.4);margin-top:1px">{{ ow.schedule }}</div>
                             </div>
@@ -1419,7 +1428,7 @@
                       <div style="display:flex;flex-wrap:wrap;gap:8px">
                         <sc-for list="{{ hmQrWfs }}" as="qw" hint-placeholder-count="2">
                           <div style="display:flex;align-items:center;border:1px solid rgba(var(--fg),.1);border-radius:12px;overflow:hidden">
-                            <div onClick="{{ qw.onOpen }}" style="font-size:13.5px;font-weight:500;color:rgba(var(--fg),.75);padding:11px 16px;cursor:pointer">{{ qw.name }}</div>
+                            <div onClick="{{ qw.onOpen }}" onKeyDown="{{ qw.onOpenKey }}" role="button" tabindex="0" aria-label="Open workflow {{ qw.name }}" style="font-size:13.5px;font-weight:500;color:rgba(var(--fg),.75);padding:11px 16px;cursor:pointer">{{ qw.name }}</div>
                             <div onClick="{{ qw.onRun }}" style="border-left:1px solid rgba(var(--fg),.1);padding:11px 14px;cursor:pointer;color:var(--green);font-size:14px">▶</div>
                           </div>
                         </sc-for>
@@ -4821,7 +4830,14 @@ class Component extends DCLogic {
               // from the conversation via _deriveBuildIntent, so the CTA is never a
               // dead end. Gate on readyToBuild alone (Q10).
               const buildIntent = twDone.buildIntent || null;
-              newMsgs.push({ isCta: true, ctaAction: "build", buildIntent, text: "", btn: "Build it →", btnBg: "#7fc28a", btnFg: "#06210d", onClick: () => self.startBuild(buildIntent) });
+              newMsgs.push({ isCta: true, ctaAction: "build", buildIntent, text: "", btn: "Build it →", btnBg: "#7fc28a", btnFg: "#06210d",
+                onClick: () => {
+                  // Consume it: retire every prior build CTA before starting, so a
+                  // second click (or a click on an older one further up) cannot kick
+                  // off a duplicate build over the top of this one.
+                  self.setState({ msgs: self.state.msgs.map(m => (m && m.isCta && m.ctaAction === 'build') ? { ...m, isCta: false, isNote: true, text: '✓ Building this now.' } : m) });
+                  self.startBuild(buildIntent);
+                } });
             }
             // Outward-facing actions the chat proposed are HELD for confirmation —
             // nothing was sent. Render a confirm card; the action runs only on click.
@@ -5161,7 +5177,10 @@ class Component extends DCLogic {
         // The CoT block mounts HERE — AFTER the plan (operator 2026-07-17): the user
         // approves the plan, THEN watches the model think through the build below it.
         self.setState({
-          msgs: [...self.state.msgs,
+          // The plan has been acted on: retire its controls (see the markup's
+          // `acted`/`pending` pair) so the transcript records the decision instead
+          // of offering to make it again.
+          msgs: [...self.state.msgs.map(m => (m && m.isPlan) ? { ...m, acted: true } : m),
                  { isOperator: true, text: "Build it" },
                  // Narration (operator 2026-07-17): tell the user what is about to happen so the
                  // streaming reasoning + assembling graph read as a deliberate process, not noise.
@@ -5509,7 +5528,19 @@ class Component extends DCLogic {
       const c = node.config || {};
       const ch = c.channel || c.action || '';
       if (node.type === 'deliver' || (node.type === 'connector-action' && /_(create|send|append|update|write|post)/.test(String(ch)))) {
-        const where = c.target || c.to || c.tableId || c.spreadsheetId || ch;
+        // NAME IT THE WAY THE USER WOULD. The fallback used to be the raw channel
+        // id, so the warning read "3 examples × #agntic-x-slack, inbox_deliver" —
+        // a code name in the one sentence whose whole job is telling someone what
+        // is about to be sent for real. `_deliverySentence` already owns this
+        // mapping for the contract chips; reuse it rather than keeping a second,
+        // divergent copy.
+        const loc = c.target || c.to || c.tableId || c.spreadsheetId || '';
+        // A destination in a LIST wants a noun ("your Atlas inbox"), not the
+        // sentence the contract chips use ("Saves it to your Atlas inbox") — the
+        // sentence reads as a clause spliced into the middle of another one.
+        const where = loc || this._deliverySentence({ target: String(ch) })
+          .replace(/^(Saves it to|Posts it to|Sends it to|Emails it to|Adds a record to|Adds a row to|Creates a[n]? [a-z ]+ in|Creates a[n]? )/i, '')
+          .trim() || String(ch);
         if (where && dests.indexOf(String(where)) < 0) dests.push(String(where));
       }
     });
@@ -6654,12 +6685,32 @@ class Component extends DCLogic {
   // Plain-language label for a branch case. The PLAN already phrased each route in the
   // user's words ("if it's a lead" / "otherwise"), so prefer that; fall back to the raw
   // case value, and render the catch-all as "otherwise" rather than "*".
+  // Enter / Space on a role="button" element. A div with an onClick is invisible to
+  // the keyboard: it cannot be tabbed to and cannot be activated. The sidebar's
+  // workflow list was exactly that, so there was no keyboard route to open a
+  // workflow at all.
+  _activateKey(fn) {
+    return (e) => {
+      if (!e) return;
+      if (e.key === 'Enter' || e.key === ' ' || e.key === 'Spacebar') {
+        if (e.preventDefault) e.preventDefault();
+        fn();
+      }
+    };
+  }
   _laneLabelFor(caseWhen, idx) {
     const plan = this.state._approvedPlanCache || null;
     const b = plan && Array.isArray(plan.branches) ? plan.branches[idx] : null;
     if (b && b.when) return this._clip(String(b.when), 34);
-    if (!caseWhen || caseWhen === '*') return 'otherwise';
-    return this._clip(String(caseWhen), 34);
+    if (!caseWhen || caseWhen === '*') return 'anything else';
+    // A CASE VALUE IS AN ENUM MEMBER, NOT ENGLISH. The classifier's own vocabulary
+    // leaks straight onto the diagram: a lane labelled "none" or "not_support"
+    // tells a non-technical reader nothing, and "none" in particular reads as
+    // "there is no label here" rather than "this is the leftover case".
+    const raw = String(caseWhen).trim();
+    const NEITHER = new Set(['none', 'other', 'others', 'neither', 'default', 'unknown', 'n/a', 'na', 'null']);
+    if (NEITHER.has(raw.toLowerCase())) return 'anything else';
+    return this._clip(raw.replace(/[_-]+/g, ' '), 34);
   }
   // The TRIGGER as a real node — it starts the workflow, so it is the first node the user
   // approves (operator 2026-07-17: every node is addressed during the build). It lives in
@@ -6949,7 +7000,15 @@ class Component extends DCLogic {
   _fitLiveGraph() {
     const o = this._lgOuter, i = this._lgInner;
     if (!o || !i) return;
-    const k = Math.min(1, o.clientWidth / (i.scrollWidth || 1));
+    // FIT BOTH AXES. Scaling on width alone let a deep graph grow unboundedly tall
+    // — the nested fan-out shape ran to ~860px and the chat auto-scroll then left
+    // its first lane above the viewport, so the user's first sight of their
+    // workflow was its middle. Cap the height too and take whichever scale is
+    // tighter. Never scales UP (max 1), so small graphs are untouched.
+    const maxH = Math.max(320, Math.round(window.innerHeight * 0.62));
+    const kW = o.clientWidth / (i.scrollWidth || 1);
+    const kH = maxH / (i.scrollHeight || 1);
+    const k = Math.min(1, kW, kH);
     i.style.transform = 'scale(' + k + ')';
     o.style.height = (i.scrollHeight * k) + 'px';
   }
@@ -7091,7 +7150,9 @@ class Component extends DCLogic {
       if (S.editingIntro === null) out.push({ isLoading: true });
       else out.push(this._withParts({ isAtlas: true, text: S.editingIntro, hasReason: false }));
     }
-    for (const m of S.msgs) out.push(this._withParts(m));
+    // `pending` drives the plan card's live controls; `acted` its receipt. Computed
+    // here so a message only ever carries one source of truth for "has this fired".
+    for (const m of S.msgs) out.push(this._withParts(m && m.isPlan ? { ...m, pending: !m.acted } : m));
     if (S.phase === "proposed") {
       const TS = S.testState;
       if (S.isEditing) {
@@ -7779,7 +7840,10 @@ class Component extends DCLogic {
       : TS === "paused" ? { show: true, icon: "⏸", color: "#f3cd86", border: "rgba(240,191,107,.3)", bg: "rgba(240,191,107,.06)", iconBg: "rgba(240,191,107,.14)", text: (S.pausedNote || "This workflow stops here and asks a person. In a real run it would wait for their answer before going on.") }
       : { show: false };
 
-    const wfName = (S.spec && S.spec.name) || S.draftName || (S.phase === "chat" ? "New workflow" : "Untitled workflow");
+    // ONE placeholder, everywhere. The sidebar said "New workflow" while this panel
+    // said "Untitled workflow" — two names for one unnamed thing, visible on the
+    // same screen at the same time.
+    const wfName = (S.spec && S.spec.name) || S.draftName || "New workflow";
     const accent = published ? SVG_PLAY : "#f0bf6b";
     const accentGlow = published ? "drop-shadow(0 0 5px rgba(127,194,138,.85))" : "drop-shadow(0 0 5px rgba(240,191,107,.7))";
     const accentRadius = published ? "border-radius:2px" : "border-radius:50%";
@@ -7825,7 +7889,7 @@ class Component extends DCLogic {
             ? () => this.setState({ view: 'build', connectionsOpen: false, accountOpen: false, profileOpen: false })
             : () => this.openConsole(wf.id);
           const isRenaming = S.renamingWfId === wf.id;
-          return { name: this._wfDisplayName(wf), dot, glow, radius, bg: "transparent", border: "transparent", nameColor: isHighlighted ? "#fff" : "rgba(255,255,255,.5)", itemClass: isHighlighted ? "" : "wf-item-inactive", onClick, onDelete: (e) => { e.stopPropagation(); this.softDeleteWorkflow(wf.id); }, isRenaming, renameValue: isRenaming ? S.renamingValue : "", onEditClick: (e) => { e.stopPropagation(); this.startRename(wf.id, this._wfDisplayName(wf)); }, onRenameInput: (e) => this.setState({ renamingValue: e.target.value }), onRenameKeydown: (e) => { if (e.key === "Enter") { e.preventDefault(); this.commitRename(wf.id); } if (e.key === "Escape") { e.preventDefault(); this.cancelRename(); } }, onRenameBlur: () => this.commitRename(wf.id), onRenameInputClick: (e) => e.stopPropagation(), showRun: isPublished && !isRunning, onRun: (e) => { e.stopPropagation(); this.runWorkflowFromSidebar(wf.id); } };
+          return { name: this._wfDisplayName(wf), onClickKey: this._activateKey(onClick), dot, glow, radius, bg: "transparent", border: "transparent", nameColor: isHighlighted ? "#fff" : "rgba(255,255,255,.5)", itemClass: isHighlighted ? "" : "wf-item-inactive", onClick, onDelete: (e) => { e.stopPropagation(); this.softDeleteWorkflow(wf.id); }, isRenaming, renameValue: isRenaming ? S.renamingValue : "", onEditClick: (e) => { e.stopPropagation(); this.startRename(wf.id, this._wfDisplayName(wf)); }, onRenameInput: (e) => this.setState({ renamingValue: e.target.value }), onRenameKeydown: (e) => { if (e.key === "Enter") { e.preventDefault(); this.commitRename(wf.id); } if (e.key === "Escape") { e.preventDefault(); this.cancelRename(); } }, onRenameBlur: () => this.commitRename(wf.id), onRenameInputClick: (e) => e.stopPropagation(), showRun: isPublished && !isRunning, onRun: (e) => { e.stopPropagation(); this.runWorkflowFromSidebar(wf.id); } };
         });
         // Show in-progress build entry when builder is the active view OR when a session with content exists
         // (so navigating to home/console/inbox doesn't lose the entry while a build is in flight)
@@ -7839,7 +7903,7 @@ class Component extends DCLogic {
           if (!alreadyInList && matchesSearch) {
             const wfIdForDel = S.workflowId;
             const onDelBuilder = (e) => { e.stopPropagation(); if (wfIdForDel) { this.softDeleteWorkflow(wfIdForDel); } else { this.reset(); } };
-            list.unshift({ name: label, dot: "#f3cd86", glow: "drop-shadow(0 0 5px rgba(240,191,107,.7))", radius: "border-radius:50%", bg: "transparent", border: "transparent", nameColor: "#fff", itemClass: "", onClick: () => this.setState({ view: 'build', connectionsOpen: false, accountOpen: false, profileOpen: false }), onDelete: onDelBuilder, showRun: false, onRun: null });
+            list.unshift({ name: label, dot: "#f3cd86", glow: "drop-shadow(0 0 5px rgba(240,191,107,.7))", radius: "border-radius:50%", bg: "transparent", border: "transparent", nameColor: "#fff", itemClass: "", onClick: () => this.setState({ view: 'build', connectionsOpen: false, accountOpen: false, profileOpen: false }), onClickKey: this._activateKey(() => this.setState({ view: 'build', connectionsOpen: false, accountOpen: false, profileOpen: false })), onDelete: onDelBuilder, showRun: false, onRun: null });
           }
         }
         // Only show a placeholder when actively searching with no results
@@ -8033,11 +8097,24 @@ class Component extends DCLogic {
       // above the reasoning stream. Shown during build + review; nulled once a
       // test run starts (!testStarted) so the testing UI takes the panel, the
       // same swap the CoT does.
+      // DEDUPED. Two assertions can render the SAME sentence — a workflow that
+      // saves to the inbox on two different branches promises the inbox twice, and
+      // the panel listed "Saves it to your Atlas inbox" twice in a row, which reads
+      // as a mistake rather than as two lanes sharing a destination. The contract
+      // keeps both assertions (they are checked per lane); the SUMMARY shows each
+      // distinct promise once.
       outcomePin: (S.outcome && S.outcome.statement && !testStarted) ? {
         statement: S.outcome.statement,
-        assertions: (S.outcome.assertions || []).map((a) => ({
-          label: this._deliverySentence(a),
-        })),
+        assertions: (function (self) {
+          const seen = {}, out = [];
+          (S.outcome.assertions || []).forEach(function (a) {
+            const label = self._deliverySentence(a);
+            if (seen[label]) return;
+            seen[label] = true;
+            out.push({ label: label });
+          });
+          return out;
+        })(this),
       } : null,
       chatInputRef: (el) => {
         this._chatInputEl = el;
@@ -8097,7 +8174,7 @@ class Component extends DCLogic {
         : (S.phase === "chat" ? "Message Atlas — chat, or tell me what to automate…"
         : (S.inputMode === "clarify" ? "Type your answer…"
         : (S.inputMode === "change" ? "Tell Atlas what to change…"
-        : (S.inputMode === "planchange" ? "Tell Atlas what to change — or click Build it ↑"
+        : (S.inputMode === "planchange" ? "Tell Atlas what to change — or click Approve & build ↑"
         : "Atlas is building — respond on the cards above ↑"))))),
       // @-mention autocomplete
       mentionOpen: S.mentionOpen && this._mentionList().length > 0,
@@ -8856,6 +8933,8 @@ class Component extends DCLogic {
       hmQrWfs:    (S.homeData?.modules?.quick_run || []).map(w => ({
         name: w.name,
         onOpen: () => this.openConsole(w.id),
+        // Keyboard equivalent for the role="button" row (see the sidebar markup).
+        onOpenKey: this._activateKey(() => this.openConsole(w.id)),
         onRun:  () => this._quickRunWorkflow(w.id),
       })),
       hmSched:    (S.homeData?.modules?.next_scheduled || []).map(w => ({
@@ -8877,6 +8956,8 @@ class Component extends DCLogic {
       hmOverdueWfs: (S.homeData?.modules?.overdue?.workflows || []).map(w => ({
         name: w.name, schedule: w.schedule,
         onOpen: () => this.openConsole(w.id),
+        // Keyboard equivalent for the role="button" row (see the sidebar markup).
+        onOpenKey: this._activateKey(() => this.openConsole(w.id)),
         onRun: () => this.runOverdue(w.id),
         onDefer: () => this.deferOverdue(w.id),
       })),
