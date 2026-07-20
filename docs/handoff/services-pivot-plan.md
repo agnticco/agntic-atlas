@@ -84,17 +84,46 @@ the self-serve tier ladder. Site is Cloudflare Pages (`atlas-by-agntic`; see ope
 
 ---
 
+### 7. Fresh-start DATA WIPE (operator, 2026-07-20) — DESTRUCTIVE, do not run un-scoped
+Scope confirmed **production DATA only**: clear existing tenants, workflows, users, runs,
+OAuth tokens, RAG datastores, tickets, cost logs — a clean client slate for the services
+era. **The codebase STAYS and is refactored in place** (this is not a codebase rebuild).
+- **Not yet executed. It is a planned step, gated on the pre-wipe checklist below.**
+- Databases in scope (all under `./memory/` on the box): `auth.sqlite` (users/tenants/
+  sessions), `workflows/workflows.sqlite` + `idempotency.sqlite`, `oauth.sqlite`, per-tenant
+  RAG stores, `sources.sqlite`, `interactions.sqlite`, `inbox.sqlite`, `tickets/`, the
+  `llm_cost_log`. Confirm the full list against `src/api/server.js` DB path constants at
+  wipe time (they may have moved).
+- **Pre-wipe checklist (MUST, in order):**
+  1. **Confirm who is live.** The operator flagged, and accepted, that any real pilot user on
+     atlas.agntic.co loses access and their running automations stop. Before the wipe:
+     enumerate live tenants/users and either notify/offboard them or confirm none remain.
+  2. **Take a full, dated backup off-box** and verify it restores — a wipe with no proven
+     restore is a one-way door. (A pre-purge 148-row backup already exists per the handoff
+     findings; do not rely on it as the current backup.)
+  3. **Preserve the operator's own admin/platform account + tenant**, or have a re-bootstrap
+     path ready (`ensureBootstrap` mints a setup token on an empty auth DB) — otherwise the
+     operator is locked out of the app they just reset.
+  4. Decide whether the grant model (#1) + tenant plan columns (#4) need any seed rows after
+     the wipe, or start truly empty.
+- **Sequencing:** the wipe should come AFTER the grant/tenant/Stripe refactor lands, not
+  before — otherwise it's wiped twice, and a wipe onto old gating code re-creates the
+  problem being removed. Treat it as a near-final step of the pivot, not the first.
+
 ## Open questions for the next session
 1. **Tenant selector UX** — a picker on the create path only, or does the operator also need
    to *view/edit an existing* workflow under a given tenant? (Operator said "select at
    creation time"; confirm whether post-creation cross-tenant editing is also needed.)
 2. **Confirm: no caps on granted accounts, ever** (recorded as intent, needs a definite yes).
-3. **Grant/onboard flow** — how does a new client tenant get created and its connectors
-   authorized? (Operator sets up client's Slack/Google via client admin creds at onboarding?
-   Whose consent screen?)
+3. **Grant/onboard flow — REQUIRES RESEARCH (operator, 2026-07-20).** How does a new client
+   tenant get created and its connectors authorized in a SERVICES shape (operator delivering)
+   rather than a PRODUCT shape (user self-connecting)? Undetermined; the operator wants the
+   best operational pattern researched before it's designed — e.g. onboard on the client's
+   own admin consent screen vs. a delegated setup the operator performs. This is a genuine
+   open design/research task, not a decision waiting to be written down.
 4. **Build order** — proposed: (1) small/unblocking = kill the paywall + grant model;
    (2) tenant-at-creation + role-gated split; (3) Stripe surface removal; the marketing site
-   in parallel, independent. Confirm.
+   in parallel, independent; (4) the data wipe as a near-FINAL step (see #7). Confirm.
 
 ## What must NOT be weakened
 - Tenant isolation stays fail-closed and structural. The operator's reach is an explicit,
