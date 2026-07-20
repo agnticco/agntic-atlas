@@ -76,11 +76,13 @@ Make it a **permission**, not a sales convention.
 reads `llm_cost_log`) and is the operator's cost view. Keep it. UI design may be upgraded;
 functionally it already does what the operator needs.
 
-### 6. Marketing site rewrite — AFTER this plan is written
-Independent of all product work; could ship on its own to unblock outbound. Different buyer,
-promise, CTA. Positioning: complex multi-system workflows with judgment; never "AI"; never
-the self-serve tier ladder. Site is Cloudflare Pages (`atlas-by-agntic`; see operator memory
-`marketing-site-deploy`). Its own sub-plan.
+### 6. Marketing site reframe — SUB-PLAN WRITTEN, ready to execute
+Independent of all product work; ships on its own to unblock outbound. Full sub-plan:
+[`marketing-site-services-reframe.md`](./marketing-site-services-reframe.md). Decisions locked
+2026-07-20: Agntic-firm framing (Atlas as engine, keep `atlasbyagntic.com`); no public pricing
+(book-a-call); no waitlist; **fast reframe first**, not a redesign. Repo is separate:
+`/Users/crepps/Desktop/AGNTIC/website/atlas-landing`. The July-30 self-serve pricing flip is
+now **obsolete**.
 
 ---
 
