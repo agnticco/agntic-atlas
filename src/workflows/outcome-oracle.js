@@ -948,9 +948,29 @@ export function evaluateExampleRun(spec, example, runResult) {
   // wrong answers to the same question, so the fix adds the missing answer rather
   // than flipping the existing one from one wrong sign to the other.
   const enforced = contract.filter(c => c.applicable !== false).length;
+
+  // A BLANK PROMISE CANNOT BE KEPT (F12 invariant 1b).
+  //
+  // The assertions are the machine-checkable half of the contract; `statement` is
+  // the half the PERSON reads, and it is what the panel renders as "THE DEAL"
+  // directly above the words "every promise held". A spec can reach here with
+  // `{ statement: '', assertions: [one] }` — `spec-assembler.js` defaults the
+  // statement to `''` when a model turn omits it, and the validator only ever
+  // requires `assertions.length` — so the run satisfies its one assertion and the
+  // UI certifies a blank deal. That is the same vacuous truth as certifying zero
+  // examples, through a second door, and it is NOT closed by persisting the
+  // contract (F11): that fixed a contract lost on the way to the database, not
+  // one that was empty when it was written.
+  //
+  // Deliberately NOT a fourth verdict: the vocabulary stays at three, and
+  // `contractIncomplete` tells the UI to say "this contract has no statement"
+  // rather than the misleading "nothing was exercised".
+  const contractIncomplete = contract.length > 0
+    && !String(spec?.outcome?.statement ?? '').trim();
+
   const verdict = !ran || broken || !contract.every(c => c.ok)
     ? 'broken'
-    : (enforced > 0 ? 'kept' : 'not_exercised');
+    : (enforced > 0 && !contractIncomplete ? 'kept' : 'not_exercised');
 
   return {
     exampleId: example?.id ?? null,
@@ -965,6 +985,9 @@ export function evaluateExampleRun(spec, example, runResult) {
     // 'kept' | 'broken' | 'not_exercised'. What the USER-FACING surface must
     // certify on; `contractPassed` alone cannot distinguish proof from silence.
     verdict,
+    // The contract has assertions but no statement — there is no promise in words
+    // to have kept, so it is not certifiable however well the run went.
+    contractIncomplete,
     // TRUE when the ONLY reason this failed is a content node emitting the error
     // sentinel — i.e. the delivery STRUCTURALLY happened but an llm step judged its
     // (present) input unusable on this run. This is a per-run CONTENT flake, not a
