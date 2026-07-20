@@ -5539,10 +5539,37 @@ class Component extends DCLogic {
     // sample input. "It completed" is no longer the bar; "it did what it said"
     // is. With no examples the old structural check stands (v1, unchanged).
     const outcomeResults = d.outcomeResults || [];
-    const contractPassed = outcomeResults.length
-      ? outcomeResults.every(function(o) { return o.contractPassed; })
-      : (r.ok && d.completed && issues.length === 0);
-    const passed = contractPassed;
+    // ── ZERO EVIDENCE IS NOT A PASS ───────────────────────────────────────
+    // "Every promise held" over an empty set is a vacuous truth, and it was
+    // being rendered as a verification on the control that gates Go live:
+    // an ordinary edit could clear `outcome.examples` to 0 and the panel then
+    // certified "We ran 0 real examples … it's cleared to go live" (F12). The
+    // same vacuum arrives via a router whose only sample took the do-nothing
+    // lane, so every assertion is skipped and no delivery ever runs (F16).
+    //
+    // The distinction that makes this decidable is `verdict` (outcome-oracle):
+    // 'kept' means something was actually PROVED, 'not_exercised' means nothing
+    // was — neither a pass nor a failure. A workflow is cleared only if at least
+    // one example proved a promise and none broke one.
+    //
+    // The structural fallback is kept ONLY for a spec that carries no contract
+    // at all. There is nothing to certify there, so "it ran cleanly" is the
+    // honest bar and v1 workflows publish exactly as before. A spec that DOES
+    // promise something and proved none of it is `unverified` — which leaves
+    // Go live locked (reviewDraft requires testState === "passed") rather than
+    // presenting a green verdict over no evidence.
+    const hasContract = !!(spec && spec.outcome && Array.isArray(spec.outcome.assertions) && spec.outcome.assertions.length);
+    // `verdict` is absent on results from an older server — fall back to the
+    // boolean rather than silently reading undefined as "not broken".
+    const vOf = function(o) { return o.verdict || (o.contractPassed ? "kept" : "broken"); };
+    const anyBroken = outcomeResults.some(function(o) { return vOf(o) === "broken"; });
+    const anyKept   = outcomeResults.some(function(o) { return vOf(o) === "kept"; });
+    const structural = (r.ok && d.completed && issues.length === 0);
+    const passed = hasContract
+      ? (!anyBroken && anyKept)
+      : (outcomeResults.length ? !anyBroken : structural);
+    // Nothing broke, but nothing was proved either — say so instead of certifying.
+    const unverified = hasContract && !anyBroken && !anyKept;
     const self = this;
     // R8: capture the real wall-clock test duration so the persisted test run
     // records true timing, not the ~1ms gap between back-to-back DB writes.
@@ -5550,6 +5577,12 @@ class Component extends DCLogic {
 
     if (passed) {
       this.setState({ testState: "passed", runSteps: d.steps || [], deliveries: d.deliveries || [], runOutput: d.output, runDurationMs: runDurationMs, outcomeResults: outcomeResults });
+    } else if (unverified) {
+      // NOT a failure — the run was clean, it simply proved nothing. Marking it
+      // "error" would be as dishonest in the other direction (and would flip a
+      // live workflow's status on a test that broke nothing). Go live stays
+      // locked because `reviewDraft` requires testState === "passed".
+      this.setState({ testState: "unverified", runSteps: d.steps || [], deliveries: d.deliveries || [], runOutput: d.output, runDurationMs: runDurationMs, outcomeResults: outcomeResults });
     } else {
       const steps = d.steps || [];
       let failIndex = steps.length;
@@ -6862,6 +6895,9 @@ class Component extends DCLogic {
       } else {
         if (TS === "running") out.push(this._withParts({ isAtlas: true, text: "Testing each step end-to-end — watch them fire on the right →", hasReason: false }));
         else if (TS === "failed") out.push(this._withParts({ isAtlas: true, text: "A step broke during the test — see the break on the right. Tell me what to change below and I'll fix it.", hasReason: false }));
+        // Nothing broke and nothing was proved. Say so plainly and ask for what
+        // would actually settle it — a silent panel here reads as a pass.
+        else if (TS === "unverified") out.push(this._withParts({ isAtlas: true, text: "The test ran cleanly, but it didn't exercise what this workflow promises — so I can't call it verified yet. Describe a real case that should trigger it and I'll test against that.", hasReason: false }));
       }
     }
     return out;
@@ -7220,32 +7256,53 @@ class Component extends DCLogic {
     // `footRunTest` button (gated on `!contract.show`), not the contract footer.
     if (TS === "idle") return { show: false, building: false };
     // Not yet proposed (still building in chat / incomplete) — no contract to show.
-    if (!testUnlocked && TS !== "passed" && TS !== "failed") return { show: false, building: TS === "running" };
+    if (!testUnlocked && TS !== "passed" && TS !== "failed" && TS !== "unverified") return { show: false, building: TS === "running" };
 
     let state, accent, verdictWord, verdictNote, evidenceLabel, evidenceNote, rows, secondaryCta, cta;
 
-    if (TS === "passed" || TS === "failed") {
+    if (TS === "passed" || TS === "failed" || TS === "unverified") {
       const failed = TS === "failed";
+      const notVerified = TS === "unverified";
       const results = S.outcomeResults || [];
+      // A row's mark reads the THIRD VERDICT, not a boolean. "Not exercised" is
+      // its own outcome: the example ran, nothing broke, and nothing was proved
+      // — most often because the sample took a lane the promise doesn't cover.
+      // Showing that as ✓ is what let a 3-lane router certify two deliveries it
+      // never performed (F16); showing it as ✗ would be the opposite lie.
       rows = results.map((o, i) => {
-        const kept = !!o.contractPassed;
+        const v = o.verdict || (o.contractPassed ? "kept" : "broken");
         const brokeReason = (o.contract || []).find(c => !c.ok);
-        const detail = kept
+        const skipped = (o.contract || []).filter(c => c.applicable === false);
+        const detail = v === "kept"
           ? ("What came back matched the deal — " + (this._clip(this._stringify(o.produced && (o.produced.summary || o.produced.text || o.produced)), 140) || "delivered as promised") + ".")
-          : ("This one fell short — " + ((brokeReason && (brokeReason.reason || ("nothing reached " + brokeReason.target))) || (o.error || "a promise wasn't kept")) + ". Fix it and re-test.");
-        return rowFrom(i, kept ? "✓" : "!", kept ? SAGE : CLAY, o.label || ("Example " + (i + 1)), detail);
+          : v === "not_exercised"
+            ? ("This example ran cleanly, but it didn't exercise anything the deal promises"
+               + (skipped.length ? " — it took a path that doesn't cover " + skipped.map(c => c.target).join(", ") : "")
+               + ". Nothing was proved either way.")
+            : ("This one fell short — " + ((brokeReason && (brokeReason.reason || ("nothing reached " + brokeReason.target))) || (o.error || "a promise wasn't kept")) + ". Fix it and re-test.");
+        return rowFrom(i, v === "kept" ? "✓" : v === "not_exercised" ? "○" : "!",
+                       v === "kept" ? SAGE : v === "not_exercised" ? DIM : CLAY,
+                       o.label || ("Example " + (i + 1)), detail);
       });
       const total = rows.length, broke = rows.filter(r => r.mark === "!").length;
-      state = failed ? "failed" : "passed";
-      accent = failed ? CLAY : SAGE;
-      verdictWord = failed ? "not met." : "kept.";
+      const proved = rows.filter(r => r.mark === "✓").length;
+      state = failed ? "failed" : notVerified ? "unverified" : "passed";
+      accent = failed ? CLAY : notVerified ? DIM : SAGE;
+      verdictWord = failed ? "not met." : notVerified ? "not verified." : "kept.";
+      // NEVER claim a promise held on evidence that does not exist. `total` can be
+      // zero (an edit that cleared the examples), and "we ran 0 real examples —
+      // every promise held" was being rendered over a green Go live button.
       verdictNote = failed
         ? ("We ran " + total + " real example" + (total === 1 ? "" : "s") + " through your workflow. " + broke + " of " + total + " promise" + (broke === 1 ? "" : "s") + " fell short — nothing goes live until the contract holds.")
-        : ("We ran " + total + " real example" + (total === 1 ? "" : "s") + " through your workflow. Every promise held — it's cleared to go live.");
+        : notVerified
+          ? (total === 0
+              ? "We couldn't check this workflow — there are no worked examples to run it against, so none of its promises have been tested. Ask Atlas for examples, or describe a real case to try."
+              : ("We ran " + total + " real example" + (total === 1 ? "" : "s") + ", and none of them exercised what this workflow promises. Nothing broke — but nothing is proved either, so it isn't cleared to go live yet."))
+          : ("We ran " + total + " real example" + (total === 1 ? "" : "s") + " through your workflow" + (proved === total ? "" : " (" + proved + " of them exercised the deal)") + ". Every promise held — it's cleared to go live.");
       evidenceLabel = "The evidence · " + total + " real example" + (total === 1 ? "" : "s");
       evidenceNote = "Kept means what came back matched the deal above — checked automatically, shown here so you can see it yourself.";
       secondaryCta = "Try again";
-      cta = failed ? "Fix & re-test" : "Go live";
+      cta = failed ? "Fix & re-test" : notVerified ? "Try a real example" : "Go live";
     } else {
       // proposed — the checks are the worked examples the run will be tested against.
       // These live on the SPEC's outcome (S.spec.outcome.examples); S.outcome is only
@@ -7474,6 +7531,9 @@ class Component extends DCLogic {
       TS === "running" ? { show: true, icon: "◐", color: "#f3cd86", border: "rgba(240,191,107,.3)", bg: "rgba(240,191,107,.06)", iconBg: "rgba(240,191,107,.14)", text: "Running the workflow end-to-end through the engine…" }
       : TS === "passed" ? { show: true, icon: "✓", color: "#9fd6a8", border: "rgba(127,194,138,.32)", bg: "rgba(127,194,138,.07)", iconBg: "rgba(127,194,138,.16)", text: "No breaks — every step ran. Safe to publish." }
       : TS === "failed" ? { show: true, icon: "✕", color: "#f0a896", border: "rgba(232,116,97,.4)", bg: "rgba(232,116,97,.08)", iconBg: "rgba(232,116,97,.16)", text: "Break: " + (S.runError || "a step failed") + ". Tell Atlas what to change." }
+      // Neither green nor red. "Safe to publish" over an unexercised contract is
+      // the claim this whole verdict exists to stop making.
+      : TS === "unverified" ? { show: true, icon: "○", color: "rgba(255,255,255,.55)", border: "rgba(255,255,255,.14)", bg: "rgba(255,255,255,.03)", iconBg: "rgba(255,255,255,.06)", text: "Ran cleanly, but nothing the workflow promises was exercised — not verified yet." }
       : { show: false };
 
     const wfName = (S.spec && S.spec.name) || S.draftName || (S.phase === "chat" ? "New workflow" : "Untitled workflow");
@@ -7808,7 +7868,7 @@ class Component extends DCLogic {
       onBuilderRenameInput: (e) => this.setState({ renamingValue: e.target.value }),
       onBuilderRenameKeydown: (e) => { if (e.key === 'Enter') { e.preventDefault(); this.commitRename(S.workflowId); } if (e.key === 'Escape') { e.preventDefault(); this.cancelRename(); } },
       onBuilderRenameBlur: () => { if (S.workflowId) this.commitRename(S.workflowId); },
-      testStatusLabel: published ? "Live" : (S.phase === "chat" ? "Not started" : (!testUnlocked ? (this._stepShapeLabel(S.spec) ? ("Building · " + this._stepShapeLabel(S.spec)) : "Incomplete") : (TS === "running" ? "Testing…" : (TS === "passed" ? "All steps passed" : (TS === "failed" ? "Break found" : "Ready to test"))))),
+      testStatusLabel: published ? "Live" : (S.phase === "chat" ? "Not started" : (!testUnlocked ? (this._stepShapeLabel(S.spec) ? ("Building · " + this._stepShapeLabel(S.spec)) : "Incomplete") : (TS === "running" ? "Testing…" : (TS === "passed" ? "All steps passed" : (TS === "failed" ? "Break found" : (TS === "unverified" ? "Not verified" : "Ready to test")))))),
       testStatusColor: (TS === "passed" || published) ? "#9fd6a8" : (TS === "failed" ? "#f0a896" : (TS === "running" ? "#f3cd86" : "rgba(255,255,255,.45)")),
       testStatusGlow: (TS === "passed" || published) ? "rgba(127,194,138,.55)" : (TS === "failed" ? "rgba(232,116,97,.5)" : (TS === "running" ? "rgba(240,191,107,.5)" : "rgba(255,255,255,0)")),
       testCaption: S.phase === "chat" ? "Your workflow takes shape here once you're ready to build — just say the word in the chat."

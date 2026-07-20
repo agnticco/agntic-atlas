@@ -924,6 +924,34 @@ export function evaluateExampleRun(spec, example, runResult) {
   const ran = runResult?.completed === true && !runResult?.error;
   const contractPassed = ran && !broken && contract.every(c => c.ok);
 
+  // ── THE THIRD VERDICT: "not exercised" ──────────────────────────────────────
+  //
+  // `contract.every(c => c.ok)` is TRUE over an empty set, and it is true over a
+  // set that is ENTIRELY skips. Both were rendered to the user as "every promise
+  // held — it's cleared to go live", which is a vacuous truth presented as a
+  // verification. Three live shapes reached it:
+  //
+  //   · a spec with no assertions at all         → `contract` is []          (F12)
+  //   · an edit that cleared `outcome.examples`  → zero runs, zero results   (F12)
+  //   · a 3-lane router whose one sample took the do-nothing lane → every
+  //     assertion `skipped:true, ok:true`, and NO delivery node ever executed (F16)
+  //
+  // The honest verdict in all three is "not verified", never "kept". `enforced`
+  // counts the assertions this run actually CHECKED (a skipped lane is not a
+  // check), and it is the floor: a promise is kept only if something was proved.
+  //
+  // `contractPassed` is DELIBERATELY LEFT UNCHANGED. The converger's self-test
+  // (`verify`) reads it to decide whether to regenerate, and a spec whose sample
+  // simply didn't reach the asserted lane must NOT trigger a rebuild — resolving
+  // "unexercised" pessimistically is what makes a valid 12-node draft get thrown
+  // away and rebuilt until the build gives up (F17). The two failures are the two
+  // wrong answers to the same question, so the fix adds the missing answer rather
+  // than flipping the existing one from one wrong sign to the other.
+  const enforced = contract.filter(c => c.applicable !== false).length;
+  const verdict = !ran || broken || !contract.every(c => c.ok)
+    ? 'broken'
+    : (enforced > 0 ? 'kept' : 'not_exercised');
+
   return {
     exampleId: example?.id ?? null,
     label:     example?.label ?? null,
@@ -931,6 +959,12 @@ export function evaluateExampleRun(spec, example, runResult) {
     ran,
     error:     runResult?.error ?? null,
     contractPassed,
+    // How many assertions this run actually checked. Zero means nothing was
+    // proved — neither a pass nor a failure.
+    enforced,
+    // 'kept' | 'broken' | 'not_exercised'. What the USER-FACING surface must
+    // certify on; `contractPassed` alone cannot distinguish proof from silence.
+    verdict,
     // TRUE when the ONLY reason this failed is a content node emitting the error
     // sentinel — i.e. the delivery STRUCTURALLY happened but an llm step judged its
     // (present) input unusable on this run. This is a per-run CONTENT flake, not a

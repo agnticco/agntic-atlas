@@ -409,6 +409,38 @@ equals the panel title.
 
 ### F11 — 🔴 The outcome contract is DROPPED on publish. It has never been persisted, for any workflow.
 
+> **✅ FIXED 2026-07-19** (`src/api/builder.js`, the **PUT** handler).
+>
+> **⚠️ Correction, recorded deliberately (fourth in this document). The SYMPTOM was
+> exactly right; the MECHANISM below is WRONG.** The finding blames the POST body
+> (`{ spec, intent, testRun }` omitting `S.outcome`). Re-grounded against current code,
+> that chain does not break: `S.spec` **does** carry `outcome` (`spec-assembler.js`
+> `assembleSpec` sets `{version:2, outcome}`; the `generated_workflow` and `ratify`
+> interrupts both carry it), and the POST handler's `{ ...spec }` spread therefore
+> passes it to `create()`, which stores it. `S.outcome` is a *derived UI pin*, not the
+> transport. Verified by direct call: `assembleSpec` → `version:2, assertions:1`.
+>
+> **The real cause is that the POST branch is nearly unreachable.** `_ensureDraft`
+> (`public/index.html`) creates the backing draft row on the **first message**, so
+> `S.workflowId` is always set by the time the user approves, and `_saveWorkflow`'s
+> `const isUpdate = !!S.workflowId` sends a **PUT**. The PUT handler enumerated its
+> fields and omitted `outcome`, which `workflowService.update` correctly reads as
+> *inherit* — and the inherited value is the draft row's, and a draft row is born
+> without one. So the contract was dropped on every publish, which is why the
+> distribution is 100% NULL rather than merely common.
+>
+> **Fix:** the PUT patch now carries `...(spec.outcome !== undefined ? { outcome: spec.outcome } : {})`.
+> The `undefined`-vs-`null` distinction is preserved: absent still INHERITS (a caller
+> that knows nothing about outcomes cannot wipe one), explicit `null` still RETRACTS.
+> Verified against a real store: a draft row created with `outcome=NULL, spec_version=1`
+> updates to a persisted contract with `spec_version=2` and its assertions intact.
+>
+> **Lesson worth keeping:** the brief's evidence (148/148 NULL) was sound and its
+> reasoning was not, and the two had to be *reconciled* rather than one believed over
+> the other. Had I trusted the mechanism I would have "fixed" a correct POST handler
+> and shipped the bug; had I trusted the fresh grounding alone I would have closed a
+> real defect as a non-bug. Both were necessary.
+
 **Severity: BLOCKS.** Silent, universal, and it disables the central artifact of P12
 Increment C plus two of Increment G's three deliverables.
 
@@ -457,6 +489,11 @@ assert the SOP rendered from that stored row contains the contract. Mutate: stri
 green, which is why this shipped.
 
 ### F12 — 🔴 "Contract kept · every promise held" is certified on ZERO examples
+
+> **✅ FIXED 2026-07-19** — together with **F16**, via the `not_exercised` verdict this
+> document's synthesis asks for ("Add `not_exercised` first"). See the shared note at
+> the end of F16; the two are one fix because they are the two halves of one missing
+> concept.
 
 **Severity: BLOCKS.** Silent, user-reachable in two clicks, and it is the gate on **Go
 live**. This is a vacuous truth rendered as a verification.
@@ -632,6 +669,42 @@ mode produces lane coverage.
 - Assert an assertion whose target delivery node did not appear in the run's executed
   steps is reported unproven. Today the run above satisfies both assertions with zero
   deliveries, so this test currently cannot pass.
+
+**✅ THE REPORTING HALF IS FIXED (2026-07-19) — the coverage half is not. Read both.**
+
+`evaluateExampleRun` (`src/workflows/outcome-oracle.js`) now returns **`verdict`**
+(`'kept' | 'broken' | 'not_exercised'`) and **`enforced`** (how many assertions this run
+actually CHECKED — a skipped lane is not a check). A promise is `kept` only if
+`enforced > 0`; the empty set and the all-skipped set both resolve to `not_exercised`.
+The client certifies on `verdict`, so:
+
+- **F12** — zero examples, or a contract nothing exercised, renders *"not verified"* with
+  a new `testState: "unverified"`. `reviewDraft()` gates on `testState === "passed"`, so
+  **Go live stays locked** rather than presenting green over no evidence. The structural
+  fallback survives **only** for a spec carrying no contract at all — there is nothing to
+  certify there, so "it ran cleanly" is the honest bar and v1 workflows publish unchanged.
+- **F16** — the do-nothing-lane router now reports each unexercised promise by name
+  (*"it took a path that doesn't cover slack:#x"*) instead of ✓.
+
+**`contractPassed` was deliberately LEFT UNCHANGED**, and this is the load-bearing part.
+The converger's `verify` node reads it to decide whether to regenerate; flipping it false
+for an unexercised lane is precisely how a valid draft gets thrown away and rebuilt until
+the build gives up — **F17**. This document's synthesis predicted that exact regression
+("naïvely making the oracle stricter without adding the third verdict will convert false
+passes into F17-style build failures"), and it is why the fix ADDS an answer rather than
+flipping the sign of the existing one.
+
+**Verified with the mutation, per the document's own warning.** Deleting the `enforced > 0`
+floor flips both the zero-assertion case and the do-nothing-lane router back to `kept` —
+the defect restored verbatim — while a genuinely delivering run still reads `kept` and a
+genuine miss still reads `broken`. So the guard is load-bearing and narrow.
+
+**STILL OPEN — the coverage requirement.** Nothing yet *requires* the sample set to reach
+every lane; a router is simply no longer certified on the lane it didn't take. Invariant 1
+("samples must collectively reach every lane, or the uncovered lanes are named") is
+**half** met: uncovered lanes are now named, but sample *selection* is unchanged. That —
+plus **F3**'s fixture generation — is the remaining design work, and per the synthesis it
+is now safe to do, because the third verdict exists.
 
 ### F17 — 🔴 The human-approval shape fails on natural phrasing: a valid 12-node spec is discarded and the user is asked to re-explain
 

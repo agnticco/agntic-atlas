@@ -912,6 +912,56 @@ refactor them without an explicit decision recorded here:
     the whole suite still green. **Mutation-test the guards you add in the fix, not just the ones you
     started with.** Fifth occurrence of that exact lesson; it is now 35 curated mutations, all killed.
 
+- **"Not exercised" is a VERDICT, not a pass and not a failure (2026-07-19, live UI test
+  remediation).** Findings F11/F12/F16 from [`docs/handoff/ui-test-findings-2026-07-19.md`](docs/handoff/ui-test-findings-2026-07-19.md).
+  - **The oracle certified the ABSENCE of evidence as success.** `contract.every(c => c.ok)`
+    is true over an empty set *and* over a set that is entirely skips, and both rendered as
+    *"every promise held — it's cleared to go live"* on the control that gates **Go live**.
+    Three live shapes reached it: a spec with no assertions; an ordinary edit that cleared
+    `outcome.examples` to 0; and a 3-lane router whose one sample took the do-nothing lane,
+    so every assertion was `skipped:true, ok:true` and **no delivery node executed at all**.
+    `evaluateExampleRun` now returns **`verdict`** (`kept | broken | not_exercised`) and
+    **`enforced`** (assertions this run actually CHECKED — a skipped lane is not a check).
+    Kept requires `enforced > 0`. The client certifies on `verdict`, with a new
+    `testState:"unverified"` that leaves Go live locked (`reviewDraft` gates on `"passed"`).
+  - **`contractPassed` was deliberately NOT changed, and that restraint is the fix.** The
+    converger's `verify` node reads it to decide whether to REGENERATE. Resolving
+    "unexercised" pessimistically there is exactly what threw away a valid 12-node draft
+    and rebuilt it until the build gave up, then told the user *"I couldn't assemble the
+    workflow from that"* (F17) — while the reasoning stream visibly concluded *"The
+    workflow looks complete."* **The optimistic reading (false pass) and the pessimistic
+    reading (false failure, expensive rebuild loop) are the two wrong answers to one
+    question the system could not express.** So the fix ADDS the missing answer instead of
+    flipping the sign of the existing one. Anyone tightening this further must keep them
+    separate, or they will trade F12 for F17.
+  - **The structural fallback survives only where there is no contract.** A spec that
+    promises nothing has nothing to certify, so "it ran cleanly" stays the honest bar and
+    v1 workflows publish unchanged. A spec that DOES promise something and proved none of
+    it is `unverified`. **Refusing to certify is always available; certifying without
+    checking is not** (same doctrine as `CHANNELS_UNVERIFIED`, third occurrence).
+  - **THE CONTRACT WAS NEVER PERSISTED — and the brief's diagnosis of why was wrong.**
+    `outcome` was NULL on 100% of stored workflows (148/148 on the pre-purge backup),
+    including rows the builder had just displayed a contract for, silently disabling
+    `UNSATISFIED_ASSERTION` on every later edit and leaving the SOP nothing to render. The
+    handoff brief blamed the **POST** body; re-grounding showed that path is correct
+    (`assembleSpec` emits `{version:2, outcome}`, and `{ ...spec }` carries it through).
+    **The real cause is that POST is nearly unreachable:** `_ensureDraft` creates the draft
+    row on the FIRST MESSAGE, so `S.workflowId` is always set and publish goes through
+    **PUT** — which enumerated its fields and omitted `outcome`. `workflowService.update`
+    correctly read the absent key as *inherit*, and inherited the draft row's `NULL`.
+    Fixed by carrying `...(spec.outcome !== undefined ? { outcome: spec.outcome } : {})`,
+    preserving `undefined`=inherit / `null`=retract.
+    **A route that "updates an existing workflow" may in fact be your PUBLISH path — check
+    which branch production actually takes before trusting either one's field list.** This
+    is architectural flaw #2 in a new costume: the POST branch was correct, tested, and
+    almost never executed.
+  - **Reconciling beat believing, in both directions.** The brief's evidence (148/148 NULL)
+    was sound and its mechanism was false. Trusting the mechanism would have "fixed" a
+    correct handler and shipped the bug; trusting the fresh grounding alone would have
+    closed a real, universal defect as a non-bug. CLAUDE.md's rule 4 ("believe the
+    executing agent's fresh grounding") is about a brief's *conclusions* — it never
+    licenses discarding a brief's *measurements*.
+
 - **Multiple destinations — a delivery's return value is a RECEIPT, not the work product
   (2026-07-14).** Surfaced by a load-bearing test and reported as *"the workflow only did the Slack
   send"*. The report's premise was wrong in an instructive way, and re-grounding it before writing the

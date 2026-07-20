@@ -2151,7 +2151,32 @@ Rules:
     try {
       result = await spine.engine.workflowService.update(
         id,
-        { name: spec.name ?? existing.name, description: spec.description, triggers: spec.triggers, nodes: spec.nodes, edges: spec.edges, errorHandling: spec.errorHandling },
+        {
+          name: spec.name ?? existing.name, description: spec.description, triggers: spec.triggers, nodes: spec.nodes, edges: spec.edges, errorHandling: spec.errorHandling,
+          // THE CONTRACT MUST TRAVEL ON THE PUT, OR IT IS NEVER STORED AT ALL.
+          //
+          // This route is not the "edit an existing workflow" path it reads like —
+          // it is the PUBLISH path for essentially every workflow. `_ensureDraft`
+          // (public/index.html) creates the backing draft row on the FIRST message,
+          // so `S.workflowId` is always set by the time the user approves, and
+          // `_saveWorkflow` therefore sends PUT, not POST. The POST branch below —
+          // which does carry `outcome`, via `{ ...spec }` — is close to unreachable
+          // from the product.
+          //
+          // Omitting the key here meant `patch.outcome === undefined`, which
+          // `workflowService.update` correctly reads as INHERIT; the inherited value
+          // was the draft row's, and a draft row is born with no outcome. So the
+          // contract was dropped on the way in, every time: 100% of stored workflows
+          // had `outcome = NULL` and `spec_version = 1`, including rows the builder
+          // had just displayed a contract for. That silently disabled
+          // `UNSATISFIED_ASSERTION` on every subsequent edit and left the SOP with no
+          // contract to render (P12 Increment C's moat and two of G's deliverables).
+          //
+          // `undefined` vs `null` is load-bearing and preserved: an absent key still
+          // INHERITS the stored contract (so a caller that doesn't know about
+          // outcomes cannot wipe one), while an explicit `null` still RETRACTS it.
+          ...(spec.outcome !== undefined ? { outcome: spec.outcome } : {}),
+        },
         { userId: req.user.id },
       );
     } catch (err) {
