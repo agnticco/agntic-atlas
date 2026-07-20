@@ -40,7 +40,7 @@ import { SystemMessage, HumanMessage } from '../core/message.js';
 import { scoreGap, unansweredGaps } from './gap-scorer.js';
 import { applyProposal, assembleSpec, wireEdges } from './spec-assembler.js';
 import { materialiseEscalations } from './escalation.js';
-import { nodeForAssertion, assertableConnectors, splitTarget } from '../workflows/outcome-oracle.js';
+import { nodeForAssertion, assertableConnectors, splitTarget, canonicalConnector } from '../workflows/outcome-oracle.js';
 import { analyzeTable } from '../workflows/decision-analysis.js';
 import { tableOf, valuesOf, HIT_POLICIES, HIT_POLICY_LABELS, DECISION_MAX_INPUTS } from '../workflows/node-types/decision.js';
 import {
@@ -794,7 +794,18 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
       if (!canPromise.size) return true;             // unknown catalog — nothing to check against
       const bad = (c.assertions ?? []).filter(a => {
         const { connector } = splitTarget(a?.target);
-        return connector && !canPromise.has(connector);
+        if (!connector) return false;
+        // CANONICALISE BEFORE JUDGING. `canPromise` is a set of connector aliases
+        // built from the live catalog; a model writes what a person would say
+        // ("google_docs:My Digest"), which is neither a connector id nor a
+        // capability id. Compared raw it matches nothing and the build is REFUSED
+        // for a connector that is connected and available — verified live: the
+        // catalog reported docs_create available:true while the converger said
+        // "I can't include google_docs — that connector is not connected".
+        // One canonicaliser, shared with the oracle, so the two cannot disagree
+        // about what a target name refers to.
+        const canon = canonicalConnector(connector);
+        return !canPromise.has(connector) && !canPromise.has(canon);
       });
       for (const a of bad) unreachable.add(splitTarget(a.target).connector);
       return bad.length === 0;

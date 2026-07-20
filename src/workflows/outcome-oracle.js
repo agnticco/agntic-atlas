@@ -543,11 +543,27 @@ export function nodeForAssertion(assertion, { capabilities = {} } = {}) {
  * `gmail_send` delivery compare equal without either side having to know the
  * other's spelling.
  */
-function canonicalConnector(name) {
+export function canonicalConnector(name) {
   const n = String(name ?? '').toLowerCase();
   if (CONNECTOR_ALIASES[n]) return n;                       // already a key
   for (const [key, aliases] of Object.entries(CONNECTOR_ALIASES)) {
     if (aliases.includes(n)) return key;
+  }
+  // COMPOUND VENDOR NAMES. A model writes what a person would say — "google_docs",
+  // "google_sheets" — and neither is a connector id (`google`) or a capability id
+  // (`docs_create`). Unresolved, the candidate filter in the converger reads it as
+  // an unconnected connector and REFUSES TO BUILD: "I can't include google_docs —
+  // that connector is not connected", for a connector the live catalog reports as
+  // available. Try the parts before giving up, most specific first, so
+  // `google_docs` resolves to `docs` rather than to the vaguer `google`.
+  const parts = n.split(/[_\-.]/).filter(Boolean);
+  if (parts.length > 1) {
+    for (const part of parts.slice().reverse()) {
+      if (CONNECTOR_ALIASES[part]) return part;
+      for (const [key, aliases] of Object.entries(CONNECTOR_ALIASES)) {
+        if (aliases.includes(part)) return key;
+      }
+    }
   }
   return n;
 }
