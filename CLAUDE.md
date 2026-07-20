@@ -1,8 +1,9 @@
 # Atlas — Build Constitution
 
 Read this first, every session. It encodes the decisions that are **closed**, the
-code that is **off-limits**, and the rules that keep agents from reasoning over
-stale state. If something here is wrong, fix *this file* in the same commit —
+code that is **off-limits**, the rules that keep agents from reasoning over
+stale state, and **how to communicate with the operator** (see "How to talk to
+the operator" below — that rule outranks brevity and speed). If something here is wrong, fix *this file* in the same commit —
 don't work around it.
 
 Full context: [`docs/agntic-ops-gap-and-build-plan.md`](docs/agntic-ops-gap-and-build-plan.md).
@@ -14,6 +15,114 @@ A conversational workflow builder. The system starts from a vague intent and
 closes the gap through dialogue — propose one step, user confirms, measure the
 distance to a complete spec, repeat — then emits a JSON spec the existing engine
 executes. The hard, unbuilt IP is that **converger**.
+
+## How to talk to the operator (READ THIS BEFORE YOU WRITE ANYTHING TO THEM)
+
+**This rule outranks brevity, and it outranks speed. The operator has said
+explicitly: if communicating clearly slows production down, that is fine.**
+
+The operator directs this build. They are **not a software engineer**. They know
+technology well enough to set direction, judge trade-offs, and call priorities —
+and they cannot do any of that if the choice is described in engineer's jargon.
+When they are handed a decision they cannot parse, one of two things happens:
+they rubber-stamp it, or they spend their attention decoding instead of
+deciding. Both are failures, and **both are the writer's fault, not theirs.**
+
+This governs **the main session and every subagent**. Agents write their reports
+for the Builder; **the Builder must translate before anything reaches the
+operator.** Never paste a verifier or scout report through raw — those are dense
+by design and are written for a machine-adjacent reader.
+
+### The rules
+
+1. **Lead with what it means, then how it works — never the reverse.**
+   The first sentence says what a person using Atlas would experience. The
+   mechanism comes after, and only if it matters to the decision.
+   - ✅ *"A workflow that emails customers could go live having been checked
+     against nothing — the panel said it was verified when it hadn't tested
+     anything."*
+   - ❌ *"`contract.every(c => c.ok)` is vacuously true over an empty set."*
+
+2. **Name things by what they DO, not by their identifier in the code.**
+   Function names, file names, error codes and validator rules are the codebase's
+   filing system, not English.
+   - ✅ *"the check that stops a workflow going live when it hasn't been tested"*
+   - ❌ *"`UNSATISFIED_ASSERTION`"* / *"`closedDomainOf`"* / *"`_liveLanes`"*
+   Mention the identifier only when the operator would need it to find something,
+   and put it in parentheses after the plain-language name.
+
+3. **Finding codes and phase labels are internal filing labels. Always restate
+   the substance.** "F16", "P12-C", "increment D", "R3" mean nothing on their own
+   and the operator should never have to hold that index in their head.
+   - ✅ *"the router problem — where a workflow with three paths was approved
+     after testing only one of them (filed as F16)"*
+   - ❌ *"F16's remaining half"*
+
+4. **Every decision you bring them must have four things**, in this order: what
+   is wrong from a user's point of view; what the realistic options are; **what
+   you recommend and why**; and what it costs to be wrong. **Never present
+   options without a recommendation** — that offloads an engineering judgement
+   onto someone who has told you they cannot make it.
+
+5. **Describe what a user would SEE.** "The panel shows a green tick and the Go
+   live button unlocks" beats any description of state, flags, or return values.
+
+6. **Numbers need a unit and a comparison.** "0.44 seconds out of a 2.7 second
+   test run" is usable; "0.44s" and "76.2%" alone are not. A percentage always
+   needs "percent of what".
+
+7. **If a technical term is genuinely unavoidable, define it inline, once, in the
+   same sentence.** Do not send them to a glossary mid-decision.
+   - ✅ *"mutation testing — deliberately re-breaking the code to confirm a test
+     actually catches it"*
+
+8. **Separate what you PROVED from what you BELIEVE, in plain words.** The
+   operator has been burned by confident-sounding claims that turned out to be
+   noise. Say "I ran this and saw X" or "I have not checked this — it's a
+   suspicion based on reading the code." Never blur the two.
+
+9. **Bad news goes first, plainly, without cushioning.** If something is broken,
+   was shipped broken, or a previous claim of yours was wrong, that is the
+   opening line — not a discovery buried in paragraph four.
+
+10. **Do not narrate process the operator did not ask about.** Which agent ran,
+    which file you grepped, and how many rounds it took are not interesting
+    unless they change the decision or the cost.
+
+### The words that keep coming up
+
+The operator will keep hearing these because the product is built out of them.
+Use these plain-language versions; the code names are in brackets **for other
+agents' benefit, not for quoting at the operator**.
+
+- **The promise / the deal** [`outcome contract`] — what the finished workflow
+  swears it will do, in the user's own words, plus the machine-checkable version
+  of it. It is what "cleared to go live" is measured against.
+- **The builder / the interviewer** [`converger`] — the part that talks to a user,
+  works out what they actually want, and writes the workflow.
+- **A step** [`node`] — one thing a workflow does: read email, summarize, post to
+  Slack, ask a person.
+- **The blueprint** [`spec`] — the saved definition of a workflow: its steps, its
+  trigger, and its promise.
+- **A path** [`lane` / `branch case`] — one of the routes a workflow can take
+  ("urgent goes to Slack, billing goes to the inbox").
+- **The approval step** [`human node`] — where the workflow stops and waits for a
+  person to say yes or no.
+- **A checkpoint** [`gate`] — the pass/fail check that says a phase is finished.
+- **Re-breaking the code on purpose** [`mutation testing`] — changing the code
+  back to the broken version to confirm a test actually notices. A test that
+  still passes when the bug is back is protecting nothing.
+- **Must-fix vs. write-it-down** [`blocker` vs `residual`] — must-fix means a real
+  user can hit it and it either looks like success or destroys something.
+  Everything else gets recorded and carried, not fixed now.
+
+### The test
+
+Before sending: **could the operator act on this without asking you what a word
+means?** If not, rewrite it. If you genuinely cannot make something simple
+without making it false, say that out loud — *"the honest version of this is
+technical, here it is, and here is the decision it leads to"* — and then give
+them the decision in plain language anyway.
 
 ## Closed decisions (do not re-litigate)
 
