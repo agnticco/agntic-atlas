@@ -6670,7 +6670,10 @@ class Component extends DCLogic {
       checkB: diamond ? '-2px' : '-6px',
       titleColor: active ? '#efc892' : (ok ? 'rgba(255,255,255,.7)' : 'rgba(255,255,255,.45)'),
       // A terminal has no outgoing connector; every other node links to the next.
-      showConn: !isDeliver && !isStop,
+      // Type default, WIDENED by the real edge list: a `deliver` mid-chain still
+      // connects. Additive only — this can add an arrow the type default omitted,
+      // never remove one — so terminal deliveries and stops are unchanged.
+      showConn: (!isDeliver && !isStop) || !!(this._hasOutEdge && node && this._hasOutEdge.has(node.id)),
       connO: ok ? 1 : (vis ? 0.35 : 0),
       connColor: flash ? '#5fc78a' : (ok ? 'rgba(231,178,94,.5)' : 'rgba(255,255,255,.14)'),
       onApprove: () => this._liveApprove(),
@@ -8010,6 +8013,12 @@ class Component extends DCLogic {
         // and including the first branch is the trunk; each of that branch's cases opens
         // a lane, labelled in the plan's own plain words where we have them. A workflow
         // with no branch has no lanes and simply renders as a trunk. Any lane count.
+        // WHICH NODES ACTUALLY CONTINUE. A connector arrow is a claim about the
+        // EDGES, not about the node's type. `deliver` used to be assumed terminal,
+        // so a delivery that genuinely continues — "save it as a Google Doc, then
+        // email me the link", which the engine runs correctly — drew no outgoing
+        // arrow and the graph showed the chain broken exactly where it carries on.
+        this._hasOutEdge = new Set(((S.spec && S.spec.edges) || []).map(e => e && e.from).filter(Boolean));
         const lanes = this._liveLanes(S.spec, nodes, confirmed, flashIdx, explaining, ready, revealed);
         const hasLanes = !!(lanes && lanes.length);
         // The trigger is already `nodes[0]` (a real approvable node), so the flat row and
