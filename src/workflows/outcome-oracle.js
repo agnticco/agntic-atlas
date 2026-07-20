@@ -337,10 +337,37 @@ export function satisfiesAssertion(assertion, node) {
   // address — any delivery to the connector satisfies the assertion.
   if (isLocatorFree(connector)) return true;
 
+  // AN OPAQUE PROVIDER ID IS UNDECIDABLE HERE, NOT A MISMATCH (2026-07-19).
+  //
+  // A contract is written in the words a PERSON used — `airtable:Sheet1`. A node may
+  // carry the same destination as the id the PROVIDER uses — `tblVbidmBZuBt1Tkf`.
+  // Both name one table; only a network call to Airtable can say so. Comparing them
+  // as strings therefore answers a question this function cannot answer, and it
+  // answered it "mismatch", which is the one answer that is never safe.
+  //
+  // The cost was total: a correct `foreach` write with fully-resolved ids was reported
+  // as *"no step in this workflow does that"*, the suggested remedy was a no-op, the
+  // run was rejected (`run.invalid: UNSATISFIED_ASSERTION`) before the engine started,
+  // and no "Go live" control was rendered. A workflow the product had itself built
+  // correctly could be neither run nor published, with no path forward.
+  //
+  // This is the SAME judgement the line below already makes for a template locator —
+  // "resolved at run time, undecidable here, so not a mismatch". An id is undecidable
+  // for the same reason. It does NOT widen the check: kind, connector and fields are
+  // all still enforced, and a human-readable locator is still compared exactly as
+  // before. It only stops the oracle from failing a spec on a comparison it is not
+  // equipped to make.
+  //
+  // Deliberately NARROW: only the documented Airtable id prefixes with their exact
+  // 14-char body. `Sheet1`, `#general`, `ops@acme.com` are all unaffected, so a
+  // genuinely wrong human-named destination still fails.
+  const isOpaqueId = (s) => /^(app|tbl|rec|fld|viw)[A-Za-z0-9]{14}$/.test(String(s ?? '').trim());
+
   if (locator && !isTemplate(locator)) {
     const want = normLocator(locator);
     const hit = eff.locators.some((l) => {
       if (isTemplate(l)) return true;          // resolved at run time — undecidable here, so not a mismatch
+      if (isOpaqueId(l)) return true;          // a provider id — undecidable here, same reason (see below)
       const have = normLocator(l);
       return have === want || have.includes(want) || want.includes(have);
     });

@@ -306,8 +306,24 @@ function applyResourcePick(draft, nodeId, kind, value) {
   // must follow the deliver node to the picked channel. Left stale, the oracle sees the
   // outcome promise a delivery no step makes (UNSATISFIED_ASSERTION) and raises a
   // confusing follow-on gap that re-suggests the very resource we just replaced. Only
-  // slack channels carry a channel-in-the-locator target; airtable/base assertions key
-  // on kind, not the id, so they need no rewrite here.
+  // slack channels carry a channel-in-the-locator target here.
+  //
+  // ⚠️ The previous version of this comment claimed "airtable/base assertions key on
+  // kind, not the id, so they need no rewrite here." THAT IS FALSE (2026-07-19). An
+  // Airtable assertion is `record_exists → airtable:Sheet1` — connector:locator, with
+  // the TABLE NAME as the locator — and `satisfiesAssertion` does compare that locator.
+  // Verified by direct call: `airtable:Sheet1` vs a node carrying `tableId:'tbl…'`
+  // returns false, while `airtable:tbl…` returns true. Believing the locator did not
+  // matter for Airtable is exactly why a correct write was reported missing and its
+  // workflow became unrunnable.
+  //
+  // Repointing an airtable table still needs no rewrite HERE, but for a different and
+  // narrower reason: `fillDestination` writes the table's NAME into `config.tableId`
+  // (see its callers, which pass `table.name`), so the node's locator already matches
+  // a name-based assertion. The mismatch arises when something else — the MODEL, using
+  // the ids it learned from `airtable_describe_base` — writes a raw provider id
+  // instead. That case is handled in `outcome-oracle.js` (`isOpaqueId`), because it
+  // occurs on specs this function never touches.
   let outcome = draft?.outcome;
   if (kind === 'slack_channel' && oldTarget != null && oldTarget !== newTarget
       && outcome && Array.isArray(outcome.assertions)) {
