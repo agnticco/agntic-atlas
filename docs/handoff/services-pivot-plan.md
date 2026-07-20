@@ -1,0 +1,104 @@
+# Services pivot — refactor & remarketing plan (SEED)
+
+**Status: SEED, not the plan.** This document captures the decisions and constraints
+locked with the operator on 2026-07-20. The *next session's job is to turn this into the
+full plan* — with the sub-plans and a build order — and then this file becomes that plan.
+Until then, treat everything below "Open questions" as unresolved.
+
+**Point the next agent here.** This is the directable artifact; the operator's private
+session memory mirrors it but is not something another agent can read.
+
+---
+
+## The shift (why any of this)
+
+Agntic is now a **workflow-automation professional-services firm**; Atlas is the
+**internal delivery platform**, not a self-serve SaaS. The operator builds and runs client
+workflows on Atlas; clients see a monitoring surface, never the builder. No self-serve
+signups. Full GTM rationale is in the operator's memory (`gtm-services-first`,
+`gtm-positioning-language`, `gtm-services-pricing`) — the short version: services-first is
+the model that is executable today and funds the option on a product later; do not refactor
+broadly on speculation ahead of real client engagements.
+
+**Guiding caution:** the engine, converger, control flow, promise system and connectors do
+not care whether the driver is a customer or the operator. Most of the product does NOT
+change. Change only what the delivery model actually forces.
+
+---
+
+## Locked decisions (operator, 2026-07-20)
+
+### 1. Tier gating: paywall → operator GRANT
+- Eliminate gating as a **paywall**. Keep the **Solo tier** as the *shape of a granted
+  product account* the operator hands to specific people. No self-serve.
+- The machinery is not deleted — its **trigger inverts**: from "blocked until Stripe says
+  paid" to "off for everyone, ON where the operator grants access."
+- **Granted accounts have NO caps** — not `activeWorkflows` (1 on Solo today), not the
+  monthly run cap. A run cap on a delivered client silently throttles their workflows
+  mid-month — the exact silent-failure class this codebase exists to prevent. Caps remain
+  only as dormant artifacts for a hypothetical future self-serve user.
+- Touch points: `src/entitlements/index.js` (`PLANS`/`entitlementsFor`), the 402
+  `PLAN_LIMIT` at `POST /api/builder/workflows`, `WorkflowScheduler.registerRunBudgetCheck`,
+  `src/auth/tenant-store.js` plan enum.
+
+### 2. Cross-tenant operator access — via tenant-at-creation, NOT a super-view
+The operator's model (this REPLACES the earlier "operator super-view" framing and is much
+smaller/safer):
+- The **builder is operator-facing.** At **workflow creation time the operator selects the
+  tenant.** The workflow is stamped with that `tenant_id`, which routes it into that
+  client's dashboard surface. A "builder client" concept: workflows are tenant-connected at
+  creation and pushed to the client-facing dashboard.
+- Isolation for **workflows, connections, and cost STAYS** (operator requirement). Stores
+  keep throwing on a missing tenant. The privileged capability is narrow: *choosing which
+  tenant a workflow belongs to*, operator-role-gated on the create path.
+- **CATALOG vs GRANTS — do not conflate (credential-leak risk).** The connector *catalog*
+  (which capabilities exist) is app-wide and already is. The connector *grants* (a client's
+  actual OAuth tokens) are **per-tenant and must stay isolated**. A workflow stamped to
+  tenant X must resolve tenant X's grants (`injectTenantTokens` / `CONNECTOR_INJECTORS` /
+  `getSlackToken` et al.), never the operator's. Stamping the wrong tenant = one client's
+  workflow posting into another's Slack.
+- Still needs its own adversarial test (a normal user must never reach the tenant-select or
+  another tenant's data), same rigor the isolation itself got.
+
+### 3. Console/builder split enforced by ROLE
+Clients get monitoring, run history, promise/test panel, SOP. Operator keeps the builder.
+Make it a **permission**, not a sales convention.
+
+### 4. Remove Stripe — in TWO moves, not one
+- Remove the checkout **surface**: `src/billing/stripe.js`, `/api/billing/checkout|portal`,
+  `/webhooks/stripe`. Clean.
+- Do **NOT** in the same swing touch the tenant `plan` / `stripe_*` columns or the
+  grandfather migration — decision #1's grant model likely **reuses the plan column as the
+  grant flag**. Repurpose, don't drop.
+
+### 5. Admin dashboard — KEEP, maybe restyle
+`src/admin/{server.js,index.html}` already shows cross-tenant cost (`_tenantRunMetrics`,
+reads `llm_cost_log`) and is the operator's cost view. Keep it. UI design may be upgraded;
+functionally it already does what the operator needs.
+
+### 6. Marketing site rewrite — AFTER this plan is written
+Independent of all product work; could ship on its own to unblock outbound. Different buyer,
+promise, CTA. Positioning: complex multi-system workflows with judgment; never "AI"; never
+the self-serve tier ladder. Site is Cloudflare Pages (`atlas-by-agntic`; see operator memory
+`marketing-site-deploy`). Its own sub-plan.
+
+---
+
+## Open questions for the next session
+1. **Tenant selector UX** — a picker on the create path only, or does the operator also need
+   to *view/edit an existing* workflow under a given tenant? (Operator said "select at
+   creation time"; confirm whether post-creation cross-tenant editing is also needed.)
+2. **Confirm: no caps on granted accounts, ever** (recorded as intent, needs a definite yes).
+3. **Grant/onboard flow** — how does a new client tenant get created and its connectors
+   authorized? (Operator sets up client's Slack/Google via client admin creds at onboarding?
+   Whose consent screen?)
+4. **Build order** — proposed: (1) small/unblocking = kill the paywall + grant model;
+   (2) tenant-at-creation + role-gated split; (3) Stripe surface removal; the marketing site
+   in parallel, independent. Confirm.
+
+## What must NOT be weakened
+- Tenant isolation stays fail-closed and structural. The operator's reach is an explicit,
+  audited, role-gated layer ABOVE it — never a loosening of it.
+- The promise/test-panel rigor is a SERVICES asset (proves delivery to a paying client). Do
+  not strip it as "self-serve overhead."
+- `LLM_INPUT_NOT_ENUM` and `EMAIL_REPLY_APPROVAL` (CLAUDE.md) are never weakened.
