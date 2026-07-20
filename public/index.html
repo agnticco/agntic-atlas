@@ -625,8 +625,19 @@
                           <sc-for list="{{ liveGraph.lanes }}" as="ln" hint-placeholder-count="2">
                             <div>
                               <div style="font-family:'Instrument Serif',Georgia,serif;font-style:italic;font-size:13px;color:rgba(239,200,146,.8);margin:0 0 8px 2px;white-space:nowrap;opacity:{{ ln.labelO }};transition:opacity .4s">{{ ln.label }}</div>
-                              <div style="display:flex;align-items:flex-start;gap:0">
-                                <sc-for list="{{ ln.nodes }}" as="an" hint-placeholder-count="2">
+                              <sc-for list="{{ ln.rows }}" as="rw" hint-placeholder-count="1">
+                              <sc-if value="{{ rw.hasLabel }}" hint-placeholder-val="{{ false }}">
+                                <div style="font-family:'Instrument Serif',Georgia,serif;font-style:italic;font-size:12px;color:rgba(239,200,146,.62);margin:0 0 8px 2px;white-space:nowrap">↳ {{ rw.label }}</div>
+                              </sc-if>
+                              <!-- A node's TITLE is absolutely positioned under its circle
+                                   (top:calc(100% + 8px)) so it contributes NO layout height.
+                                   Rows must therefore reserve that space themselves, or the
+                                   next row's label lands on top of the previous row's titles
+                                   — which is exactly what happened on first render. 40px ≈
+                                   two lines of title + the 8px offset, matching the 46px the
+                                   trunk reserves via its own padding-bottom. -->
+                              <div style="display:flex;align-items:flex-start;gap:0;padding-bottom:40px">
+                                <sc-for list="{{ rw.nodes }}" as="an" hint-placeholder-count="2">
                         <div style="display:flex;align-items:center;flex:none">
                           <div class="nodewrap" style="flex:none;position:relative;opacity:{{ an.o }};transform:{{ an.tr }};transition:opacity .5s,transform .5s cubic-bezier(.2,.7,.3,1)">
                             <div style="width:{{ an.w }};height:{{ an.h }};border-radius:{{ an.radius }};border:1.5px solid {{ an.border }};background:{{ an.bg }};transform:{{ an.rot }};animation:{{ an.anim }};display:flex;align-items:center;justify-content:center;color:{{ an.fg }};transition:border .25s,color .25s">
@@ -668,6 +679,7 @@
                         </div>
                       </sc-for>
                               </div>
+                              </sc-for>
                             </div>
                           </sc-for>
                         </div>
@@ -6527,8 +6539,21 @@ class Component extends DCLogic {
   // Everything from the entry node up to and INCLUDING the first branch. Derived from the
   // spec's real edges. The trigger is already the first entry in `nodes` (it is a real
   // approvable node now), so no special-casing here — just find the branch by id.
+  // THE NODE THAT OPENS LANES IS THE ONE WITH `cases` — a `branch`. NOT a `decision`.
+  //
+  // These lookups used to be `find(n => n.type === 'branch' || n.type === 'decision')`,
+  // then read `config.cases` off whatever came back. A `decision` has no `cases` — its
+  // shape is `inputs / output / hitPolicy / RULES` — so on the canonical decision shape
+  // (`decision → branch`, which prompts.js teaches and the converger emits), the decision
+  // was found FIRST, `cases` came back empty, and lane rendering bailed out entirely.
+  // The whole graph then drew as one flat line: the branch present but not fanning out,
+  // its lanes gone, and the P1 / silent outcomes jammed together with overlapping labels
+  // (2026-07-19). A decision produces a VALUE; the branch downstream of it is what routes.
+  _laneSourceOf(nodes) {
+    return (nodes || []).find(n => n?.type === 'branch' && (n.config?.cases?.length > 0)) || null;
+  }
   _liveTrunkOf(spec, nodes, confirmed, flashIdx, explaining, ready, revealed) {
-    const br = (spec?.nodes || []).find(n => n.type === 'branch' || n.type === 'decision');
+    const br = this._laneSourceOf(spec?.nodes);
     if (!br) return nodes.map((n, i) => this._liveCardFor(n, i, confirmed, flashIdx, explaining, ready, revealed));
     const cut = nodes.findIndex(n => n.id === br.id);
     const upto = cut < 0 ? nodes.length - 1 : cut;
@@ -6537,43 +6562,116 @@ class Component extends DCLogic {
   // One lane per branch case: walk the spec's edges from each case target, collecting the
   // chain until it ends. Any number of lanes, any depth — nothing about shape is assumed.
   _liveLanes(spec, nodes, confirmed, flashIdx, explaining, ready, revealed) {
-    const br = (spec?.nodes || []).find(n => n.type === 'branch' || n.type === 'decision');
+    const br = this._laneSourceOf(spec?.nodes);
     if (!br) return null;
     const cases = (br.config && br.config.cases) || [];
     if (!cases.length) return null;
     const edges = spec?.edges || [];
     const byId = new Map((spec?.nodes || []).map(n => [n.id, n]));
     const idxOf = (id) => nodes.findIndex(n => n.id === id);
-    const chainFrom = (startId) => {
-      const chain = []; const seen = new Set();
+    // EVERY LIVE NODE MUST RENDER. The approval queue walks `nodes` by INDEX and shows a
+    // confirm control only for the node at `liveConfirmed`; a node that is never drawn has
+    // no control, so the queue stops dead, "Run test" never enables, and the workflow can
+    // be neither tested nor published — with no error (2026-07-19). `claimed` makes the
+    // coverage invariant structural: the trunk claims its nodes, each lane claims what it
+    // walks, and whatever is left is swept up below.
+    const claimed = new Set();
+    const brCut = nodes.findIndex(n => n.id === br.id);
+    nodes.slice(0, (brCut < 0 ? nodes.length - 1 : brCut) + 1).forEach(n => n && n.id && claimed.add(n.id));
+    const cardFor = (id) => {
+      const gi = idxOf(id);
+      const n = gi >= 0 ? nodes[gi] : byId.get(id);
+      return this._liveCardFor(n, gi >= 0 ? gi : 1e9, confirmed, flashIdx, explaining, ready, revealed);
+    };
+    // A LANE IS A LIST OF ROWS, NOT A LIST OF NODES — because a lane can contain another
+    // branch (2026-07-19). Rendering a nested branch's targets as one horizontal run joined
+    // by connector arrows says "these happen in sequence", when they are MUTUALLY EXCLUSIVE
+    // outcomes. On an approval workflow that read as "send the email, THEN mark it not
+    // approved, THEN stop" — the graph asserting the opposite of what the spec does.
+    //
+    // So: walk linearly while each node has ONE successor; the moment a node forks, close
+    // the row and open one row PER target, each labelled with that case's own words. Rows
+    // stack vertically inside the lane, so alternatives read as alternatives.
+    //
+    // Depth: this recurses, so a branch inside a branch inside a lane also gets its own
+    // labelled rows. What it does NOT do is draw sub-fan-out GEOMETRY (the curved connector
+    // per sub-lane) — a nested fork is expressed by the row break and the label, not by a
+    // second set of beziers. That is a deliberate limit, not an oversight: `_liveFanout`
+    // computes one branch point's geometry against the lane stack's height, and nesting it
+    // properly needs a real layout pass. Rows are honest and cheap; sub-beziers are the
+    // next increment if the shape warrants it.
+    const rowsFrom = (startId, label, depth) => {
+      const out = [];
+      let row = [];
       let cur = startId;
-      while (cur && byId.has(cur) && !seen.has(cur)) {
-        seen.add(cur); chain.push(cur);
-        const next = edges.find(e => e.from === cur);
-        cur = next ? next.to : null;
+      let rowLabel = label;
+      while (cur && byId.has(cur) && !claimed.has(cur)) {
+        claimed.add(cur); row.push(cur);
+        const outs = edges.filter(e => e.from === cur);
+        if (outs.length <= 1) { cur = outs.length ? outs[0].to : null; continue; }
+        // FORK. Close this row on the branch node, then one row per distinct target.
+        const forkNode = byId.get(cur);
+        const forkCases = (forkNode && forkNode.config && forkNode.config.cases) || [];
+        out.push({ label: rowLabel, ids: row }); row = []; rowLabel = null;
+        const seenT = new Set();
+        const subs = [];
+        outs.forEach((e) => {
+          if (seenT.has(e.to)) return;             // several cases → one target: one row
+          seenT.add(e.to);
+          const ci = forkCases.findIndex(c => c && c.to === e.to);
+          const sub = this._laneLabelFor(ci >= 0 ? forkCases[ci].when : null, ci >= 0 ? ci : 0);
+          subs.push(rowsFrom(e.to, sub, depth + 1));
+        });
+        // SIBLINGS BEFORE DESCENDANTS. Depth-first order put a fork's second case AFTER the
+        // first case's grandchildren, so on the approval workflow "↳ reject" rendered at the
+        // very bottom, four rows below the "↳ approve" it is the alternative to. The two
+        // outcomes of one decision must sit together or the reader cannot pair them: emit
+        // every sibling's FIRST row, then their remainders.
+        subs.forEach(s => { if (s.length) out.push(s[0]); });
+        subs.forEach(s => { for (let i = 1; i < s.length; i++) out.push(s[i]); });
+        cur = null;
       }
-      return chain;
+      if (row.length) out.push({ label: rowLabel, ids: row });
+      return out;
     };
     const lanes = [];
     const usedTargets = new Set();
     cases.forEach((c, i) => {
       if (!c || !c.to || usedTargets.has(c.to)) return;   // collapse duplicate targets
       usedTargets.add(c.to);
-      const chain = chainFrom(c.to);
-      if (!chain.length) return;
+      const rawRows = rowsFrom(c.to, null, 0).filter(r => r.ids.length);
+      if (!rawRows.length) return;
       const firstGi = idxOf(c.to);
       lanes.push({
         label: this._laneLabelFor(c.when, i),
         // The lane's italic label fades in WITH its first node during the reveal, so a lane
         // header never floats above an empty lane. `revealed == null` (settled) ⇒ shown.
         labelO: (revealed == null || (firstGi >= 0 && firstGi < revealed)) ? 1 : 0,
-        nodes: chain.map(id => {
-          const gi = idxOf(id);
-          const n = gi >= 0 ? nodes[gi] : byId.get(id);
-          return this._liveCardFor(n, gi >= 0 ? gi : 1e9, confirmed, flashIdx, explaining, ready, revealed);
+        rows: rawRows.map(r => {
+          const cards = r.ids.map(cardFor);
+          // No trailing arrow off the end of a row: the next row is an ALTERNATIVE, not a
+          // successor, and a dangling connector is exactly the false-sequence claim above.
+          if (cards.length) cards[cards.length - 1].showConn = false;
+          return { label: r.label || '', hasLabel: !!r.label, nodes: cards };
         }),
       });
     });
+    // SWEEP: anything the trunk and the lane walks did not claim. The walk above should
+    // cover every edge-connected node, so this is normally empty — but an orphan (a node
+    // with no incoming edge, or one reachable only through a shape not modelled here) must
+    // still render, because invisible ⇒ unapprovable ⇒ the build is stranded. Correctness
+    // beats layout: these are appended to the LAST lane rather than given a lane of their
+    // own, because lane count drives the fan-out and a new lane would draw an arrow from
+    // the branch, claiming a routing relationship that does not exist.
+    const orphans = nodes.filter(n => n && n.id && !claimed.has(n.id));
+    if (orphans.length) {
+      orphans.forEach(n => claimed.add(n.id));
+      const cards = orphans.map(n => cardFor(n.id));
+      if (cards.length) cards[cards.length - 1].showConn = false;
+      const row = { label: '', hasLabel: false, nodes: cards };
+      if (lanes.length) lanes[lanes.length - 1].rows.push(row);
+      else lanes.push({ label: '', labelO: 1, rows: [row] });
+    }
     return lanes.length ? lanes : null;
   }
   // The branch fan-out, drawn as the design draws it (curved bezier + arrowhead per lane)
@@ -7192,7 +7290,12 @@ class Component extends DCLogic {
   _stepShape(spec) {
     const nodes = (spec && Array.isArray(spec.nodes)) ? spec.nodes : [];
     if (!nodes.length) return null;
-    const brIdx = nodes.findIndex(n => n && (n.type === 'branch' || n.type === 'decision'));
+    // Same rule as the graph: lanes come from the BRANCH (the node with `cases`), never
+    // from a `decision` (which has `rules`). Matching on `decision` here cut the step
+    // count short at the decision and reported 0 paths for a workflow that visibly has
+    // several — the panel and the graph then disagreed on the same spec.
+    const src = this._laneSourceOf(nodes);
+    const brIdx = src ? nodes.indexOf(src) : -1;
     if (brIdx < 0) return { steps: nodes.length, paths: 0 };
     const cases = (nodes[brIdx].config && nodes[brIdx].config.cases) || [];
     // Count DISTINCT lane targets, not raw cases — several cases (incl. the catch-all) often
