@@ -6836,6 +6836,17 @@ class Component extends DCLogic {
         // FORK. Close this row on the branch node, then one row per distinct target.
         const forkNode = byId.get(cur);
         const forkCases = (forkNode && forkNode.config && forkNode.config.cases) || [];
+        // A NESTED FORK IS LABELLED ONLY IF IT ROUTES. The same rule as the top
+        // level: an exclusive split's rows are alternatives and must say which case
+        // picks them; a PARALLEL fan-out's rows all run, so a case label is a lie.
+        //
+        // Worse than a lie, in practice: `_laneLabelFor` falls back to the approved
+        // plan's branch list BY INDEX, and an unmatched fork passes index 0 — so a
+        // fan-out nested inside a lane borrowed the plan's FIRST branch label and
+        // rendered "↳ Classified as a bug report" over BOTH halves of a broadcast.
+        // The reader is told a routing decision is being made, twice, with the same
+        // condition on each side.
+        const forkExclusive = this._isExclusiveSplit(forkNode);
         out.push({ label: rowLabel, ids: row }); row = []; rowLabel = null;
         const seenT = new Set();
         const subs = [];
@@ -6843,7 +6854,9 @@ class Component extends DCLogic {
           if (seenT.has(e.to)) return;             // several cases → one target: one row
           seenT.add(e.to);
           const ci = forkCases.findIndex(c => c && c.to === e.to);
-          const sub = this._laneLabelFor(ci >= 0 ? forkCases[ci].when : null, ci >= 0 ? ci : 0);
+          const sub = forkExclusive
+            ? this._laneLabelFor(ci >= 0 ? forkCases[ci].when : null, ci >= 0 ? ci : 0)
+            : null;
           subs.push(rowsFrom(e.to, sub, depth + 1));
         });
         // SIBLINGS BEFORE DESCENDANTS. Depth-first order put a fork's second case AFTER the
