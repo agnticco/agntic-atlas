@@ -1334,8 +1334,16 @@ export function createApp(spine) {
   });
 
   // ── First-run setup (creates the platform admin) ──────────────────────────
+  // `selfServe` tells the pre-auth login screen whether "Create an account" is a
+  // real door. Signup is Stripe-Checkout-only (POST /api/signup/checkout → webhook
+  // provisions the tenant), so with no Stripe keys on the box it can only 503. The
+  // flag hides the entry rather than letting someone walk into that error. Workspaces
+  // are then created by hand via POST /admin/tenants (platform-admin gated).
   app.get('/setup/status', (_req, res) => {
-    res.json({ required: spine.auth.userStore.countForTenant(spine.auth.platformTenantId) === 0 });
+    res.json({
+      required: spine.auth.userStore.countForTenant(spine.auth.platformTenantId) === 0,
+      selfServe: isBillingConfigured(),
+    });
   });
   app.post('/setup', async (req, res) => {
     try {

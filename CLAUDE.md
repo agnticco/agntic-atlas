@@ -1309,6 +1309,41 @@ increment in `startRun` non-test, `getRunCount`), `src/workflows/workflow-schedu
 Full design + acceptance tests: [`docs/architecture/tier-gating.md`](docs/architecture/tier-gating.md).
 Stripe env vars in `.env.example`; set them on the box to enable checkout.
 
+### Self-serve is OFF — Atlas is a product you cannot buy yourself (2026-07-21, operator)
+
+**The decision:** Atlas stays exactly the product it is — no services refactor — but nobody
+provisions themselves. Workspaces are created by hand (`POST /admin/tenants`, platform-admin
+gated) and plans are **granted**, not bought (`tenantStore.setPlan(id, 'business')` — already
+unlimited everywhere, `entitlements/index.js:45`, and already excluded from `SELF_SERVE_PLANS`
+because an unlimited plan a card can buy is an unbounded cost liability). This deliberately
+**does not** execute
+[`docs/handoff/services-pivot-implementation-plan.md`](docs/handoff/services-pivot-implementation-plan.md),
+which stays on file as the plan for *if* the services pivot is ever committed to.
+
+**The lever is one env var, and NOTHING was deleted.** Self-serve has exactly one door —
+`POST /api/signup/checkout` → Stripe Checkout → the webhook provisions the tenant
+(`server.js:2537`, `:2595`) — and every billing path opens with `if (!isBillingConfigured())`,
+which is just "is `STRIPE_SECRET_KEY` set" (`billing/stripe.js:47`). **Unset it on the box and
+self-serve is off; set it and self-serve is back.** The Stripe module, routes and columns are
+KEPT and dormant. Deleting them (increment 4 of the pivot plan) is the one irreversible step and
+is exactly what would foreclose going back to product — **do not do it unasked.**
+
+**What the UI change was** (the only code in this decision): the login screen's "Create an
+account" entry and the in-app Upgrade entry are now **gated on that same server fact**, so nobody
+walks into a door that can only 503. `/setup/status` gained `selfServe: isBillingConfigured()`
+(pre-auth, so the login screen can read it); `#signup-entry` is `display:none` in the HTML and
+revealed only when that flag is true — **fail-closed, because if the status call fails we cannot
+know**, and the `.catch` path no longer opens signup either. A `?plan=<tier>` marketing deep-link
+falls through to ordinary sign-in instead of a form that 503s. In-app, `showUpgradeEntry` requires
+`billingConfigured` (the usage payload already carried it, `builder.js:793` — it was simply never
+read), and with checkout off every non-current plan card degrades to **"Request a consult"**
+rather than rendering with no way to act on it.
+
+**Verified in a headed browser, both directions** (the operator's standing rule): with the key
+unset the entry is gone and `/?plan=solo` lands on sign-in; restarted **with** the key, "Create an
+account" is back. Proving it comes back is the point — it is what distinguishes a gated feature
+from a deleted one.
+
 ## The frozen canonical spec
 
 Phase 3's correctness criterion is "the converger reproduces *this exact*

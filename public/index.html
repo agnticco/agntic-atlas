@@ -8522,7 +8522,10 @@ class Component extends DCLogic {
           usageRunsBarWidth: rnPct + "%",
           usageRunsBarColor: rnAtLimit ? "#e0705a" : "rgba(255,255,255,.55)",
           usageRunsResetLabel: (rn && rn.resetsOn) ? ("Resets " + rn.resetsOn) : "",
-          showUpgradeEntry: !!upTo,
+          // No upgrade entry when the server has no Stripe configured — every path
+          // out of the modal is a checkout that can only 503. Plans are granted by
+          // hand then (admin → set plan), not bought.
+          showUpgradeEntry: !!upTo && billingOn,
           manageBilling: !!(U && U.manageable),
           upgradeEntryLabel: "Upgrade",
           upgradeEntryColor: wfAtLimit ? "#e8b56a" : "rgba(255,255,255,.85)",
@@ -8530,7 +8533,11 @@ class Component extends DCLogic {
           upgradeOpen: !!S.upgradeOpen,
           upgradeReason: S.upgradeReason || "",
           upgradeErr: S.upgradeErr || "",
-          upgradeBillingNote: (U && !billingOn) ? "Card checkout is being set up — you'll be able to upgrade in-app shortly." : "",
+          // With Stripe off, plans are not bought — they're granted. The modal is
+          // then only reachable from a 402 PLAN_LIMIT, and every card degrades to
+          // "Request a consult" (btnShow requires billingOn). Say so honestly
+          // rather than promising a checkout that isn't coming.
+          upgradeBillingNote: (U && !billingOn) ? "Plans are set up with you directly — get in touch and we'll lift your limits." : "",
           upgradePlans: catalog.map((p, i) => ({
             id: p.id, label: p.label, price: p.price, tagline: p.tagline,
             workflows: p.workflows, runs: p.runs, users: p.users,
@@ -8543,7 +8550,10 @@ class Component extends DCLogic {
             // rejects it with 409 CONSULTATIVE_PLAN, this is just the matching UI.
             btnShow: p.selfServe && i > curIdx && billingOn,
             btnLabel: S.upgradeBusy === p.id ? "Starting…" : ("Upgrade to " + p.label),
-            consultShow: !p.selfServe && p.id !== curPlan,
+            // Consultative plans always; and with checkout off, EVERY other plan
+            // becomes consultative too — otherwise those cards render with no way
+            // to act on them at all.
+            consultShow: p.id !== curPlan && (!p.selfServe || !billingOn),
             borderColor: p.id === curPlan ? "rgba(127,194,138,.45)" : "rgba(255,255,255,.1)",
             onSelect: () => this.startCheckout(p.id),
             onConsult: () => {
@@ -9026,7 +9036,10 @@ class Component extends DCLogic {
       <div id="login-err" style="display:none;color:#e87461;font-size:12.5px;margin:6px 2px 0"></div>
       <button type="submit" style="margin-top:14px;width:100%;border:none;cursor:pointer;background:#fff;color:#0a0a0a;font-family:inherit;font-weight:500;font-size:14.5px;padding:13px;border-radius:999px">Sign in</button>
       <div style="text-align:center;margin-top:14px"><span id="forgot-link" style="font-size:12.5px;color:rgba(255,255,255,.5);cursor:pointer;text-decoration:underline;text-decoration-color:rgba(255,255,255,.22);text-underline-offset:2px">Forgot password?</span></div>
-      <div style="text-align:center;margin-top:9px"><span id="signup-link" style="font-size:12.5px;color:rgba(255,255,255,.55);cursor:pointer">New to Atlas? <span style="color:#fff;text-decoration:underline;text-decoration-color:rgba(255,255,255,.3);text-underline-offset:2px">Create an account</span></span></div>
+      <!-- Hidden by default and revealed ONLY when /setup/status reports selfServe.
+           Fail-closed: if that call fails we cannot know, and offering a door that
+           can only 503 is worse than not offering it. -->
+      <div id="signup-entry" style="text-align:center;margin-top:9px;display:none"><span id="signup-link" style="font-size:12.5px;color:rgba(255,255,255,.55);cursor:pointer">New to Atlas? <span style="color:#fff;text-decoration:underline;text-decoration-color:rgba(255,255,255,.3);text-underline-offset:2px">Create an account</span></span></div>
     </form>
 
     <form id="forgot-form" style="display:none">
@@ -9165,10 +9178,16 @@ class Component extends DCLogic {
     function _afterLogin() { if (_rmsg) { loginErr.style.color = _rgood ? "rgba(159,214,168,.95)" : "#e87461"; err(loginErr, _rmsg); } }
     function _openSignup() { try { document.getElementById("signup-plan").value = _signupPlan; } catch (e) {} showSignup(); show(); }
     fetch("/setup/status").then(function (r) { return r.ok ? r.json() : {}; }).then(function (s) {
+      // Self-serve signup exists only while Stripe is configured on the server.
+      // With it off, the entry link stays hidden and a ?plan= deep-link falls
+      // through to the ordinary sign-in screen instead of a form that 503s.
+      var selfServe = !!(s && s.selfServe);
+      if (!selfServe) _signupPlan = null;
+      else { try { document.getElementById("signup-entry").style.display = "block"; } catch (e) {} }
       if (s && s.required) { showSetup(); show(); }
       else if (_rmsg) { showLogin(); show(); _afterLogin(); }
       else { var saved = null; try { saved = localStorage.getItem(TOKEN_KEY); } catch (e) {} if (saved) { showLogin(); applyToken(saved); } else if (_signupPlan) { _openSignup(); } else { showLogin(); show(); } }
-    }).catch(function () { var saved = null; try { saved = localStorage.getItem(TOKEN_KEY); } catch (e) {} if (saved) { showLogin(); applyToken(saved); } else if (_signupPlan) { _openSignup(); } else { showLogin(); show(); } });
+    }).catch(function () { var saved = null; try { saved = localStorage.getItem(TOKEN_KEY); } catch (e) {} if (saved) { showLogin(); applyToken(saved); } else { showLogin(); show(); } });
   }
 
   loginForm.addEventListener("submit", function (e) {
