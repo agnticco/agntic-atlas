@@ -16,6 +16,9 @@
 import { log } from '../utils/logger.js';
 import { translateError } from './error-translator.js';
 import { validateRunOutput } from './output-validator.js';
+// The SAME sentinel detector the test panel gates on — see the note at the
+// completion check below for why a scheduled run must gate on it too.
+import { runProducedContentError } from './outcome-oracle.js';
 import { deadlineFrom } from './duration.js';
 import { normalizeDecisions, TIMEOUT_DECISION } from './node-types/human.js';
 import { timeoutAuthorizesWrite } from './workflow-validator.js';
@@ -468,6 +471,40 @@ export class WorkflowScheduler {
       } else {
         const finalRun = this.workflowStore.getRun(run.id);
         const probeRun = { ...finalRun, output: typeof lastOutput === 'string' ? lastOutput : JSON.stringify(lastOutput), steps: finalRun?.steps ?? [] };
+
+        // ── A RUN THAT DELIVERED "I COULDN'T DO MY JOB" IS NOT A SUCCESS ───────
+        //
+        // Every content llm node carries a guard the converger writes into it: if
+        // its input is missing, output EXACTLY "ERROR: required data not found".
+        // The step does not THROW, so nothing here failed — the string flowed on
+        // to the delivery and was emailed verbatim, and the run was recorded
+        // `success` with a green tick in the console.
+        //
+        // Observed in production: a daily briefing delivered that sentinel to its
+        // owner, and because it delivered INTO the same inbox it reads, the next
+        // run picked up its own error mail as input, produced the sentinel again,
+        // and sent it on — a self-feeding loop in which every single run reported
+        // success. The console's health numbers said 100%.
+        //
+        // The TEST panel has gated on this since Increment G (server.js R14); the
+        // SCHEDULER never did, which is precisely backwards — a test run is watched
+        // by a person, a 5am run is not. Same detector, so the two cannot drift.
+        const contentError = runProducedContentError({ steps: finalRun?.steps ?? [] });
+        if (contentError) {
+          const err = new Error(
+            `"${contentError.step}" could not find the data it needed, so the workflow delivered an error message instead of real content.`,
+          );
+          const explanation = translateError(err, { workflow });
+          this.workflowStore.failRun(run.id, err, runCost, explanation);
+          this.emitWorkflowRun({
+            workflow, run, trigger, sessionId, startedAt, runCost,
+            status: 'error', stepCount, failedStep: contentError.step,
+            error: err, errorClass: this._classifyError(err),
+          });
+          log.error(`[workflow-scheduler] flow "${workflow.slug}" delivered the content-error sentinel from "${contentError.step}"`);
+          return err;
+        }
+
         const warnings = validateRunOutput(probeRun, workflow);
         const baselineS = workflow.baseline_duration_s ?? 0;
         const timeSavedMinutes = baselineS > 0 ? Math.max(0, (baselineS - actualDurationS) / 60) : null;

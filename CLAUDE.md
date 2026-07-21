@@ -1106,6 +1106,52 @@ refactor them without an explicit decision recorded here:
     feature unpublishable in increment B. It is `JSON.stringify([branch, to])` now: no
     collision is possible for any id, and it prints as itself in a debugger.
 
+- **THE PRODUCT CERTIFIED A CASE IT HAD JUST DISPROVED (2026-07-21).** A generated sample set
+  routinely carries a NEGATIVE example — *"Email without ATLASTEST in subject — should not
+  trigger"*, `expect: null`. The test panel never fires the TRIGGER: it seeds the workflow with
+  `given` and runs the steps. So the negative case ran like any other, **DELIVERED** like any
+  other, satisfied the delivery assertion, and came back **`kept`** — a green tick reading *"should
+  not trigger"* directly under *"every promise held"*, moments after a real Slack DM had gone out
+  for that exact input. Confirmed against the live run table: the delivered body was the negative
+  example's own data. **The one row a reader would take as proof the workflow stays quiet was proof
+  of the opposite.**
+  - Fixed in `evaluateExampleRun`: an example that explicitly declares `expect: null` is
+    **`not_exercised`**, and carries `negative: true` so the panel can say *why* ("testing runs the
+    steps directly without checking the trigger").
+  - **Deliberately NOT `broken`.** The delivery happened because the harness bypassed the trigger,
+    not because the spec is wrong; resolving that pessimistically is what throws a valid spec into a
+    rebuild loop (F17). `not_exercised` neither certifies nor blocks, so the POSITIVE examples still
+    carry the workflow to a pass — **pinned by a test, because a fix that quietly made every
+    workflow with a negative sample unpublishable would be worse than the bug.**
+  - Absent ≠ explicitly null: an example that merely omits `expect` is judged exactly as before.
+  - **Residual:** the generated examples' `expect` now says `Date: <arrival date>` while their
+    `given` carries only `from`/`subject`/`body` — no date. The live workflow therefore delivered
+    `*Date:*` with nothing after it and the panel still said the contract held. The real trigger
+    does supply a date, so production is likely fine; the EXAMPLE GENERATOR is what needs to put a
+    field in `given` whenever the contract names it. (Increment G's recorded residual, now with a
+    reproduction.)
+
+- **A SCHEDULED RUN THAT DELIVERED "I COULDN'T DO MY JOB" WAS RECORDED AS SUCCESS (2026-07-21).**
+  Every content `llm` node carries the guard the converger writes into it: if its input is missing,
+  output EXACTLY `ERROR: required data not found`. The step does not THROW, so the string flows to
+  the delivery and is sent verbatim, and the run is stored `success`.
+  - **Found in production data, and it had formed a LOOP.** A daily briefing delivered the sentinel
+    to its owner — and because it delivers INTO the same inbox it reads, the next run picked up its
+    own error mail as input, produced the sentinel again, and sent it on. The run at 21:33:25
+    delivered message `19f48ccd106eb4ba`; the run at 21:33:31 **fetched `19f48ccd106eb4ba`**. Every
+    run in the loop is stored `success`, so the console's health score read **100%**.
+  - **The TEST panel has gated on this sentinel since Increment G (`server.js` R14); the SCHEDULER
+    never did — which is exactly backwards. A test run is watched by a person; a 5am run is not.**
+    `runProducedContentError` is now exported from `outcome-oracle.js` and consulted at the
+    scheduler's completion point, so the two paths cannot drift.
+  - The match stays **deliberately exact** (`ERROR: required data not found`): a digest that merely
+    reports somebody else's error must not fail the run. False alarms are how people learn to ignore
+    the console. Pinned by a test and mutation-killed (detector disabled; match broadened to any
+    `ERROR:`).
+  - **NOT fixed — carried:** a workflow can still read its own output when it delivers into the
+    inbox it reads. The loop now fails loudly instead of silently, but the cycle is still
+    constructible. A generic fix (exclude mail this workflow itself sent) is the follow-up.
+
 - **THE 100s PROXY CEILING IS A SILENCE LIMIT, NOT A TIME LIMIT (2026-07-21).** An approval-gate
   build died `524` three times running, each death discarding the whole build and telling the user
   to start over from "+ New workflow".

@@ -803,7 +803,7 @@ const CONTENT_ERROR_SENTINEL = /\bERROR:\s*required data not found\b/i;
  * common content fields of an object) so a broken content node is caught wherever
  * it sits on the path to a delivery.
  */
-function runProducedContentError(runResult) {
+export function runProducedContentError(runResult) {
   for (const s of (runResult?.steps ?? [])) {
     let o = s.output;
     const text = typeof o === 'string' ? o
