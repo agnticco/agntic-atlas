@@ -4981,7 +4981,11 @@ class Component extends DCLogic {
     fetch("/api/builder/sessions", { method: "POST", headers: this._H(), body: JSON.stringify({ intent }) })
       .then(r => this._readJson(r))
       .then(r => {
-        if (!r.ok) return self._apiError(r.data.error);
+        // A build held open past the proxy's silence limit has already sent its 200,
+        // so a failure arrives in the BODY. Status alone would read it as success and
+        // hand `{error}` to the interrupt handler, which does nothing with it — a
+        // silent dead end. Treat a body-level error as an error whatever the status.
+        if (!r.ok || (r.data && r.data.error)) return self._apiError(r.data.error);
         self.setState({ threadId: r.data.threadId });
         // Subscribe to the build's reasoning stream. The endpoint replays any beats
         // already emitted during this first synchronous pass, then streams new ones.
@@ -5004,7 +5008,7 @@ class Component extends DCLogic {
     if (!tid) return;
     fetch("/api/builder/sessions/" + tid + "/respond", { method: "POST", headers: this._H(), body: JSON.stringify(resp) })
       .then(r => this._readJson(r))
-      .then(r => { if (!r.ok) return self._apiError(r.data.error); self._handleInterrupt(r.data); })
+      .then(r => { if (!r.ok || (r.data && r.data.error)) return self._apiError(r.data.error); self._handleInterrupt(r.data); })
       .catch(e => self._apiError(String(e)));
   }
 

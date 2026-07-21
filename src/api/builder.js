@@ -38,6 +38,8 @@ import { seatLimit, entitlement, entitlementsFor, nextPlan, PLAN_META, BUILD_RUN
 import { isBillingConfigured } from '../billing/stripe.js';
 import { randomBytes } from 'node:crypto';
 import { EventEmitter } from 'node:events';
+// Drips whitespace so a >100s build isn't cut by the proxy (524). See the module.
+import { keepAlive } from './keep-alive.js';
 
 // Retry an LLM call up to maxRetries times on transient provider errors (500/529/503).
 async function withLLMRetry(fn, maxRetries = 2) {
@@ -1304,6 +1306,9 @@ Rules:
     const { intent } = req.body ?? {};
     if (!intent?.trim()) return res.status(400).json({ error: 'intent is required' });
 
+    // Slow builds must not be cut by the proxy — see keepAlive() below.
+    const alive = keepAlive(res);
+
     // Operator identity lets the converger resolve "me"/"DM me" to a real target.
     let capabilities = { operator: { name: req.user?.display_name ?? null, email: req.user?.email ?? null } };
     try {
@@ -1489,7 +1494,7 @@ Rules:
         logEvent('session.error', { tenant: req.tenant?.id ?? null, threadId, phase: 'start', ...errFields(err) });
         sessions.delete(threadId);
         closeReasoningHub(threadId);
-        return res.status(500).json({ error: err.message ?? String(err) });
+        return alive.send({ error: err.message ?? String(err) }, 500);
       }
     }
     logEvent('session.start', { tenant: req.tenant?.id ?? null, threadId, interrupt: interrupt?.type });
@@ -1501,7 +1506,7 @@ Rules:
       interrupt.intro = intro;
     }
 
-    res.json({ threadId, interrupt });
+    alive.send({ threadId, interrupt });
   });
 
   // ── GET /api/builder/mentions ────────────────────────────────────────────────
@@ -1548,6 +1553,7 @@ Rules:
     const { threadId } = req.params;
     if (!sessions.get(threadId)) return res.status(404).json({ error: 'session not found or already complete' });
 
+    const alive = keepAlive(res);
     let result;
     try {
       // Serialize: a concurrent /respond for this thread waits for the in-flight one,
@@ -1563,16 +1569,16 @@ Rules:
       // client ignores, and NEVER surface the raw `CompiledGraph.resume()…` text.
       if (err?._stale || isStaleResumeError(err)) {
         logEvent('respond.duplicate', { tenant: req.tenant?.id ?? null, threadId, sent: req.body?.type });
-        return res.json({ type: 'noop', reason: 'already_handled' });
+        return alive.send({ type: 'noop', reason: 'already_handled' });
       }
-      logEvent('respond.error', { tenant: req.tenant?.id ?? null, threadId, sent: req.body?.type, ...errFields(err) });
+      logEvent('respond.error', { tenant: req.tenant?.id ?? null, threadId, sent: req.body?.type, ...errFields(err), committed: alive.committed() });
       // A genuine failure gets a plain, human message — not a stack trace in the chat.
-      return res.status(500).json({ error: 'Atlas hit a snag finishing that step. Try again, or start over from “+ New workflow”.' });
+      return alive.send({ error: 'Atlas hit a snag finishing that step. Try again, or start over from “+ New workflow”.' }, 500);
     }
 
-    logEvent('respond.ok', { tenant: req.tenant?.id ?? null, threadId, sent: req.body?.type, interrupt: result?.type });
+    logEvent('respond.ok', { tenant: req.tenant?.id ?? null, threadId, sent: req.body?.type, interrupt: result?.type, heldOpen: alive.committed() });
     if (result?.type === 'done') { sessions.delete(threadId); closeReasoningHub(threadId); }
-    res.json(result);
+    alive.send(result);
   });
 
   // ── POST /api/builder/sessions/:threadId/setup ───────────────────────────────
