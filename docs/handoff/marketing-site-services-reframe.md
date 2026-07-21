@@ -1,5 +1,33 @@
 # Marketing-site reframe — retire the product site, fold Atlas into agntic.co (SUB-PLAN)
 
+> **⚠️ REVERSED IN PART, 2026-07-21 (operator).** **atlasbyagntic.com is NOT retired — it is
+> live again.** The operator decided not to commit to the services pivot: Atlas stays a
+> product in its current state, it simply cannot be bought self-serve, and consulting
+> engagements are an option alongside it rather than a replacement for it. So the
+> redirect-only bundle was replaced by a redeploy of `AGNTIC/website/atlas-landing/`, with the
+> July-30 countdown, the four priced tiers and the whole `PRICING_MODE` flip **deleted** (the
+> countdown flips itself to "We're live — sign-up is open" once the launch instant passes, so
+> leaving it would have started lying on a timer). The pricing section is now one static
+> "Atlas is set up with you" block: no prices, no dates, CTA opens the enquiry modal.
+> In the app, self-serve signup is gated on Stripe being configured (see CLAUDE.md,
+> "Self-serve is OFF"). **Everything below about agntic.co itself still stands** — only the
+> retirement of the product site is reversed.
+
+> **SHIPPED 2026-07-21.** agntic.co (Pages project `web`, source `AGNTIC/website/landing/`)
+> is live with the reframed site and diverged from this plan in ways the operator directed
+> live: the homepage is an **all-black, full-viewport, snap-scrolling** page = hero → a
+> **founder story** ("I've been on both sides of this," with the operator's photo,
+> `assets/charles-crepps.jpg`) → a centered book-a-call closer. Hero copy is now
+> "save money and scale by automating…". **Our Work** shipped with FIVE entries: a
+> first-person client story (`work/online-sales-scorecard.html`, with an anonymized real-UI
+> screenshot — the online-sales dashboard rendered on fully scrubbed data) + four
+> "Capability" cards linking the softened legacy showcase pages. Atlas page sunset (redirects
+> to `/`); operations.html + our-tech.html sunset. **atlasbyagntic.com RETIRED 2026-07-21** —
+> a redirect-only bundle (`AGNTIC/website/_atlas-retire/`: `_redirects` `/*  https://agntic.co/
+> 301` + meta-refresh index) deployed to project `atlas-by-agntic`; every path now 301s to
+> agntic.co (verified). Pre-deploy `.bak` backups moved to `AGNTIC/website/_predeploy-backups/`.
+
+
 **Sub-plan of** [`services-pivot-plan.md`](./services-pivot-plan.md). **Independent of all
 product refactor work — ships first, on its own, to unblock outbound.**
 
@@ -15,16 +43,49 @@ copy before editing.
 
 ---
 
-## The decision (operator, 2026-07-20, revised)
-**Do not keep a product website.** Kill `atlasbyagntic.com`. Make Atlas a single modest **page on
-agntic.co**, framed as *the client-facing observability dashboard clients get during a consulting
-engagement* — a detail of working with Agntic, not a product to buy. This supersedes the earlier
-"keep atlasbyagntic.com with Agntic framing" fork. Rationale: foregrounding Atlas as a product is
-exactly what invites "why pay you if I can use the tool?"; as an engagement deliverable it does the
-opposite — it's proof the firm's work is watchable and accountable.
+## The decision (operator, 2026-07-20, REVISION 2 — supersedes below)
+**Positioning (the anchor for everything):** Agntic is an **operations consulting firm that uses AI
+but is NOT AI-forward.** AI is behind the curtain; the work and the business outcomes are in front.
+Never lead with "AI"; lead with the operational problem solved and the result.
 
-Still in force from the earlier forks: **no public pricing**, **no waitlist**, **fast reframe
-first (not a redesign)**.
+Concrete direction:
+1. **Retire the product site** `atlasbyagntic.com` (301 → agntic.co). Unchanged.
+2. **SUNSET the Atlas page entirely** (`landing/atlas.html`) — the marketing agent's earlier rebuild
+   of it is discarded. There is no Atlas page in the nav. (Reverses REVISION 1's "fold Atlas in".)
+3. **The nav slot where "project atlas" pointed becomes "Our Work"** → a new blog-style section at
+   `/work` where the operator posts things the firm builds.
+4. **Our Work posts are OUTCOME-LED** (operator decision): each reads *problem → what we built →
+   result*, with the technology (incl. AI) as supporting detail lower down. NOT AI deep-dives.
+5. **Posting model = "describe it, I publish"** (operator decision): static HTML, no CMS, no build
+   step, no login. A post is a page in the house style; the operator describes a build and an agent
+   writes it up in the Our Work format and deploys. Build a reusable POST TEMPLATE + an index page +
+   document the workflow.
+6. **Homepage becomes the main content page (this is where the substance lives + the SEO).** Today
+   it's a near-text-free wordmark hero — invisible to search. Add real, indexable sections with
+   headings (operator, 2026-07-20):
+   - **What Agntic is** — an operations consulting firm that uses AI but isn't AI-forward.
+   - **What we do** — build the complex, multi-system operational processes that stay manual.
+   - **Who we do it for** — the target buyer (operator to confirm the specifics; agent drafts from the
+     positioning + the GTM notes).
+   - **Observability section** — the old Atlas/observability-platform story lives HERE, not on its own
+     page: *every automation from an Agntic engagement comes with a control panel — you see every run,
+     and hear about a problem before your customer does.* Reuse the observability showcase's dashboard
+     visual if it fits the homepage.
+   - Keep the hero + the "Help us build" (book a call) CTA. Nav: "project atlas" → "Our Work".
+   - **SEO:** real `<h1>/<h2>` copy, a truthful `<title>` + meta description with the what/who, so the
+     page is actually indexable. This is the biggest available SEO win. Agent drafts 2–3 copy
+     directions; operator picks/edits (do NOT invent facts about clients or results).
+7. **The 4 AI-technical showcases** (`built-in-observability-platform`, `cross-session-memory-engine`,
+   `multi-signal-vault-search`, `runnable-model-pool`) are **off-message as-is** (AI-forward, about
+   internal tech not client outcomes). **Do not publish them as posts.** REUSE their visual design as
+   the Our Work post template; leave their copy behind; hold the files as a style reference. `agntic-
+   voice.html`: operator's call, same treatment by default. `operations.html`: **sunset** (self-serve
+   product framing). `our-tech.html`: sunset or repurpose as the Our Work index shell.
+
+Still in force: **no public pricing**, **no waitlist**. This is now a small BUILD (Our Work section +
+homepage expansion + positioning pass), no longer just the "fast reframe".
+
+--- REVISION 1 (2026-07-20, SUPERSEDED by the above — kept for history) ---
 
 ## What the ground truth already gives you (less work than it looks)
 - agntic.co is **already services-framed** — hero "agntic / moving business into *now*", primary
