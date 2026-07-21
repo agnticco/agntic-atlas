@@ -1068,6 +1068,8 @@ Rules:
       // is discarded and re-run), so the client must clear it — otherwise the re-run's
       // reply is APPENDED to it and the message renders twice (found in live testing).
       let clientHasPartial = false;
+      // One prose-instead-of-JSON retry per request, never a loop.
+      let envelopeRetried = false;
 
       const processStreamChar = (ch) => {
         if (escapeNext) {
@@ -1163,7 +1165,44 @@ Rules:
           continue;
         }
 
-        // If the model skipped the JSON envelope, stream the raw text directly.
+        let parsedMeta = null;
+        try { parsedMeta = JSON.parse(extractJsonLoose(streamedText)); } catch {}
+
+        // ── The model answered in PROSE instead of the JSON envelope ────────────
+        //
+        // Known behaviour when tools are in play (CLAUDE.md, Known gotchas): the
+        // words are fine, but `ready_to_build` is unreadable — so the BUILD BUTTON
+        // never renders and the conversation dead-ends on a reply that reads like it
+        // is about to build. Observed TWICE in one live session; both times the user
+        // had to type "build it" to move on, and once the prose was cut mid-sentence.
+        //
+        // Asking the model to try again is already the proven recovery for the
+        // tool-budget case below, so use it here too: ONCE, with tools DISABLED so
+        // it cannot start another tool round, and with the format spelled out. The
+        // partial prose is withdrawn first (`reset`) so the retry replaces it rather
+        // than appending — the same care the mid-stream tool path takes.
+        if (!parsedMeta?.reply && !envelopeRetried) {
+          envelopeRetried = true;
+          logEvent('chat.envelope.retry', { tenant: req.tenant?.id ?? null, turns: messages.length });
+          if (clientHasPartial && !closed) { sseWrite({ type: 'reset' }); clientHasPartial = false; }
+          msgArray.push(new AIMessage(streamedText));
+          msgArray.push({ role: 'user', content: 'Send that same message again, formatted EXACTLY as this JSON and nothing else: {"reply":"<your message>","ready_to_build":<true or false>,"build_intent":<a string or null>}' });
+          extractState = 'searching'; searchBuf = ''; replyBuf = ''; streamedText = ''; escapeNext = false;
+          try {
+            for await (const chunk of llm.stream(msgArray, { configurable: invokeConfig.configurable })) {
+              processToken(typeof chunk.content === 'string' ? chunk.content : '');
+              if (replyBuf && !closed) { sseWrite({ type: 'chunk', text: replyBuf }); replyBuf = ''; clientHasPartial = true; }
+            }
+            try { parsedMeta = JSON.parse(extractJsonLoose(streamedText)); } catch { parsedMeta = null; }
+          } catch (err) {
+            // The retry is a BONUS, never a new way to fail: on any error fall through
+            // and show whatever the first answer said.
+            logEvent('chat.envelope.retry.failed', { tenant: req.tenant?.id ?? null, ...errFields(err) });
+          }
+        }
+
+        // Envelope still missing — show the raw text so the user is never left with
+        // an empty reply. They lose the button, not the answer.
         if (extractState === 'searching' && streamedText && !closed) {
           const CHUNK = 40;
           for (let i = 0; i < streamedText.length; i += CHUNK) {
@@ -1171,12 +1210,10 @@ Rules:
           }
         }
 
-        let parsedMeta = null;
-        try { parsedMeta = JSON.parse(extractJsonLoose(streamedText)); } catch {}
         const readyToBuild = parsedMeta ? !!parsedMeta.ready_to_build : false;
         const buildIntent  = (parsedMeta && typeof parsedMeta.build_intent === 'string' && parsedMeta.build_intent.trim()) ? parsedMeta.build_intent.trim() : null;
 
-        logEvent('chat.reply', { tenant: req.tenant?.id ?? null, turns: messages.length, readyToBuild, parsed: !!parsedMeta?.reply, pending: pendingActions.length });
+        logEvent('chat.reply', { tenant: req.tenant?.id ?? null, turns: messages.length, readyToBuild, parsed: !!parsedMeta?.reply, retried: envelopeRetried, pending: pendingActions.length });
         sseWrite({ type: 'done', readyToBuild, buildIntent, pendingActions });
         clearInterval(heartbeat);
         res.end();

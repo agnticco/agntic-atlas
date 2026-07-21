@@ -44,7 +44,8 @@ import { ConnectorDemandStore, REQUESTABLE_CONNECTORS, isRequestable } from '../
 import { APP_VERSION } from '../version.js';
 import { LlamaCppLLM, ModelPool, ChatModel, CostTracker } from '../llm/index.js';
 import { EmbeddingModel, TextSplitter, VectorStore, DocumentLoader } from '../rag/index.js';
-import { registerSlackChannel, registerSlackTriggers, createSlackCapabilityProvider } from '../connectors/slack/index.js';
+import { registerSlackChannel, registerSlackTriggers, createSlackCapabilityProvider,
+         makeSlackApi, resolveUser, resolveChannel } from '../connectors/slack/index.js';
 import {
   createSlackOAuthFlow, storeSlackToken, getSlackToken, getSlackGrant, disconnectSlack, isOAuthConfigured,
 } from '../connectors/slack/oauth.js';
@@ -1083,6 +1084,19 @@ export async function bootSpine() {
       catch { /* no grant */ }
       token ??= process.env.SLACK_BOT_TOKEN;
       if (!token) throw new Error('Slack is not connected for this workspace');
+
+      // RESOLVE THE TARGET FIRST. chat.postMessage takes a channel id, a user id or
+      // "#name" — never an EMAIL. A human node asked over `slack: someone@corp.com`
+      // therefore failed with channel_not_found and the run paused forever waiting
+      // for a question nobody was ever sent, while the SAME email resolved fine for a
+      // slack_dm delivery. Same resolvers the delivery path uses (see the note in
+      // src/connectors/slack/index.js) — one definition, so they cannot disagree.
+      const slackApi = makeSlackApi({ token });
+      let target = String(channel ?? '').trim();
+      if (target.includes('@'))      target = await resolveUser(slackApi, target);
+      else if (target.startsWith('#')) target = await resolveChannel(slackApi, target);
+      channel = target;
+
       const r = await fetch('https://slack.com/api/chat.postMessage', {
         method: 'POST',
         headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },

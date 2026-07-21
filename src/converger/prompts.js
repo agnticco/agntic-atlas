@@ -259,6 +259,12 @@ ${stepSummary(capabilities)}
   • The step it approves MUST sit behind a branch that routes on {{<humanId>.decision}} — otherwise the step runs whatever the person answered, and the gate does nothing at all while looking exactly like it does.
   • A step that writes or sends for real cannot be approved by EMAIL ALONE (WEAK_APPROVAL_FOR_WRITE): an emailed link proves only that someone had the mail, and it is forwardable. Use "inbox" or "slack" — they prove who clicked.
   • NEVER take an approval from an email REPLY. It authenticates nobody.
+  • A SLACK ask renders as a real message with an APPROVE / REJECT BUTTON per decision (Block Kit), and the
+    click is verified as coming from Slack before it is accepted. Never tell the user buttons are unavailable
+    or offer a "reply with the word approve" alternative — that is the email-reply anti-pattern above.
+  • A Slack \`target\` may be a channel ("#ops"), a Slack user id, OR AN EMAIL ("sam@acme.com") — an email is
+    resolved to that person's Slack account and asked as a DM. Prefer the email when the user says "ask me"
+    or "DM me"; use a #channel when they name one or when anyone on a team may answer.
 - deliver: Send the final result to a destination. Choose config.channel from the destinations below and set ONLY its routing fields — the message body is filled automatically from the previous step's output, so never put the content in config. MULTIPLE DESTINATIONS: if the user asks to send the result to more than one place (e.g. "email me AND save a Google Doc", "post to Slack and email the team"), add ONE deliver node PER destination, each with its own edge from the final content node (fan-out) — the engine runs them all. Never silently drop a requested destination. Deliver nodes are normally terminal — but a delivery RETURNS A VALUE, and when the user asks for that value you may put a step after it. docs_create returns documentId + link; drive_create_folder returns folderId + link; a Slack post returns its ts. Reference them like any other step: {{<deliver_id>.link}}.
   So "save it as a Google Doc and email me the link" is ONE chain, not two disconnected halves:
     write_summary(llm) -> make_doc(deliver: docs_create) -> compose_email(llm, whose prompt references {{make_doc.link}}) -> send(deliver: gmail_send)

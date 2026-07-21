@@ -1106,6 +1106,61 @@ refactor them without an explicit decision recorded here:
     feature unpublishable in increment B. It is `JSON.stringify([branch, to])` now: no
     collision is possible for any id, and it prints as itself in a debugger.
 
+- **THE 100s PROXY CEILING IS A SILENCE LIMIT, NOT A TIME LIMIT (2026-07-21).** An approval-gate
+  build died `524` three times running, each death discarding the whole build and telling the user
+  to start over from "+ New workflow".
+  - **The evidence was already in the codebase and had been read past twice.** The reasoning stream
+    (`GET /api/builder/sessions/:id/reasoning`) heartbeats every 15s (`builder.js`) and was observed
+    in the event log at **`ms: 227214`, status 200** — 227 seconds through the same tunnel. So
+    Cloudflare is not cutting LONG requests; it cuts SILENT ones. The build POST sent nothing at all
+    until it finished. **A log line that contradicts your model of the failure is the finding.**
+  - **`src/api/keep-alive.js` (new)** — the two long POSTs (`/api/builder/sessions` and
+    `…/:threadId/respond`) now DRIP WHITESPACE while they work. Leading whitespace before a JSON body
+    is insignificant (`JSON.parse` / `Response.json()` skip it), so the client is unchanged.
+    **Verified live: the same build that died three times returned `respond.ok` with `heldOpen:true`
+    at ~140s and produced the workflow.**
+  - **The first drip is DELAYED 15s, and that delay is the safety property.** Writing commits the
+    headers and locks the status at 200 — a later `res.status(500)` is silently ignored. Almost every
+    response is fast and must keep its real status code, so an untouched fast path is proven by
+    `heldOpen:false` in the log. Only a request already heading for a 524 is affected.
+  - **Once committed, a failure travels in the BODY as `{error}` with a 200 — so BOTH client call
+    sites now treat a body-level error as an error whatever the status says.** Status alone would
+    read the failure as a successful build and hand `{error}` to the interrupt handler, which ignores
+    an object with no `type`: the build would appear to hang forever. Same doctrine as
+    `/workflows/run` returning application errors as 2xx (Known gotchas, 2026-06-18).
+  - **The first test defined its OWN copy of `keepAlive`** — architectural flaw #2 verbatim, a test of
+    a program nobody runs. It is a module now, imported by both. Four hand-mutations killed; **two
+    initially SURVIVED** (the default window, because every test passed `after` explicitly; and the
+    post-end guard, because `send()` always clears the timer). A mutation run also **timed out and left
+    a live mutant in the tree** — restored from a `cp` backup, never `git checkout`.
+  - **Residual:** a build still dies if the browser is closed or refreshed. Background jobs + polling
+    remain the better long-term answer; this removes the ceiling, not the fragility.
+
+- **AN APPROVAL ASKED OVER SLACK BY EMAIL REACHED NOBODY (2026-07-21).** `chat.postMessage` takes a
+  channel id, a user id or `#name` — **never an email**. `postSlack` in `server.js` passed its target
+  through raw, so a `human` node asked over `slack: charles@agntic.co` failed `channel_not_found` and
+  **the run paused forever waiting for a question that was never sent** — while the identical email
+  resolved fine for a `slack_dm` DELIVERY, which does look it up. The resolvers (`resolveUser` /
+  `resolveChannel` / `makeSlackApi`) were private to `registerSlackChannel`, so the approval path
+  could not reach them. Lifted to module scope **unchanged** and exported; `registerSlackChannel`
+  rebinds them to its injected `fetchImpl` so test doubles still work. One definition — a second copy
+  drifts, and the day it drifts is the day an approval reaches nobody.
+  - **`prompts.js` was also under-selling the feature:** it never said what a Slack ask LOOKS like, so
+    the builder told the operator *"the human node does NOT support interactive buttons"* and offered a
+    reply-with-a-word alternative — which is the `EMAIL_REPLY_APPROVAL` anti-pattern in a new costume.
+    Slack asks render real **Approve/Reject Block Kit buttons**, HMAC-verified (Increment D). The
+    prompt now says so, and that a Slack target may be a channel, a user id, **or an email**.
+
+- **THE CHAT DROPPED ITS OWN BUILD BUTTON, TWICE IN ONE SESSION (2026-07-21).** The documented
+  prose-instead-of-JSON drift (Known gotchas, 2026-06-25) is mitigated by a format reminder, and it
+  still happens: `chat.reply parsed:false`, so `ready_to_build` is unreadable, **the Build button never
+  renders**, and the conversation dead-ends on a reply that reads like it is about to build. Once the
+  prose was cut mid-sentence. The user's only escape is to type "build it".
+  The recovery already existed for the tool-budget case (ask again with tools DISABLED and the format
+  spelled out) and is now used here too — **ONCE** per request, with the partial prose withdrawn via
+  the existing `reset` event so the retry replaces it rather than appending. The retry is a bonus and
+  never a new way to fail: on any error it falls through and shows the original answer.
+
 - **AN APPROVAL STEP'S QUESTION IS A MESSAGE, AND THE PROMISE CHECKER COULD NOT SEE IT
   (2026-07-21).** Found by driving a real build in the browser: an approval-gate workflow
   **could not be built at all** — the build ran past Cloudflare's 100-second ceiling and died

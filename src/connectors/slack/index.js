@@ -165,79 +165,100 @@ export function createSlackCapabilityProvider({ oauthTokenStore = null, token = 
  * @param {import('../../workflows/channel-registry.js').ChannelRegistry} registry
  * @param {{ fetchImpl?: typeof fetch }} [opts] — injectable fetch (tests/stub)
  */
+
+/**
+ * ── Slack target resolution lives HERE, once ────────────────────────────────
+ *
+ * These were private to `registerSlackChannel`, so the APPROVAL path in
+ * server.js (`postSlack`) had no way to reach them and passed its target
+ * straight to `chat.postMessage`. Slack accepts a channel id, a user id or
+ * `#name` there — never an EMAIL. So an approval asked over
+ * `slack: charles@agntic.co` failed with `channel_not_found` at run time, while
+ * the identical email worked for a `slack_dm` DELIVERY, which does resolve it.
+ * A human node whose ask never arrives is a workflow that pauses forever.
+ *
+ * Lifted to module scope unchanged (a pure move) and exported so both paths
+ * share ONE definition. A second copy would drift, and the day it drifts is the
+ * day an approval reaches nobody.
+ */
+// Shared helper — resolves the token, builds typed Slack API callers.
+// postApi: for methods that accept JSON body (most write APIs).
+// getApi:  for methods that require query-string params (reactions.get, pins.list,
+//          files.getUploadURLExternal, etc.) — Slack's read APIs often use GET.
+export function makeSlackApi(config, fetchImpl = fetch) {
+  const token = config.token ?? process.env.SLACK_BOT_TOKEN;
+  if (!token) throw new Error('slack: no token — this tenant has not connected Slack');
+  const apiBase = process.env.SLACK_API_URL ?? DEFAULT_API_BASE;
+
+  async function call(method, payload, useGet = false) {
+    let url = `${apiBase}/${method}`;
+    const opts = { headers: { authorization: `Bearer ${token}` } };
+    if (useGet) {
+      const qs = new URLSearchParams(
+        Object.fromEntries(Object.entries(payload ?? {}).filter(([, v]) => v !== undefined && v !== null))
+      ).toString();
+      if (qs) url += `?${qs}`;
+      opts.method = 'GET';
+    } else {
+      opts.method = 'POST';
+      opts.headers['content-type'] = 'application/json; charset=utf-8';
+      opts.body = JSON.stringify(payload);
+    }
+    const r = await fetchImpl(url, opts);
+    let d; try { d = await r.json(); } catch { d = { ok: false, error: 'invalid_json_response' }; }
+    if (!d.ok) throw new Error(`slack ${method} failed: ${d.error ?? `HTTP ${r.status}`}`);
+    return d;
+  }
+
+  const api = (method, payload) => call(method, payload, false);
+  api.get = (method, payload) => call(method, payload, true);
+  return api;
+}
+
+// User-token API helper: uses SLACK_USER_TOKEN (xoxp-) instead of the bot token.
+function makeUserApi(config, fetchImpl = fetch) {
+  const token = config.token ?? process.env.SLACK_USER_TOKEN;
+  if (!token) throw new Error('slack: this action requires a user OAuth token (xoxp-) — set SLACK_USER_TOKEN or wire per-user OAuth');
+  return makeSlackApi({ ...config, token }, fetchImpl);
+}
+
+// Resolve a channel arg (#name or ID) to a Slack channel ID.
+// Most Slack APIs require an ID; chat.postMessage is the exception that accepts #name.
+export async function resolveChannel(api, target) {
+  if (!target) throw new Error('slack: channel target is required');
+  if (/^[CGDW][A-Z0-9]+$/i.test(target)) return target; // already an ID
+  const name = target.startsWith('#') ? target.slice(1) : target;
+  const d = await api('conversations.list', { exclude_archived: true, limit: 200, types: 'public_channel,private_channel' });
+  const ch = (d.channels ?? []).find((c) => c.name === name || c.name_normalized === name);
+  if (!ch) throw new Error(`slack: channel "${target}" not found — pass a channel ID (C…) or verify the name`);
+  return ch.id;
+}
+
+// Resolve a user arg (Slack ID or email) to a Slack user ID.
+// Uses users.list scan — users.lookupByEmail is unreliable (invalid_arguments even
+// with valid emails and users:read.email scope).
+export async function resolveUser(api, user) {
+  if (!user) throw new Error('slack: user (ID or email) is required');
+  if (!user.includes('@')) return user;
+  const target = user.toLowerCase().trim();
+  const d = await api.get('users.list', { limit: 200 });
+  const match = (d.members ?? []).find((u) =>
+    !u.deleted && (u.profile?.email?.toLowerCase() === target || u.name?.toLowerCase() === target)
+  );
+  if (!match) throw new Error(`slack: no user found with email "${user}"`);
+  return match.id;
+}
+
+
 export function registerSlackChannel(registry, { fetchImpl = fetch } = {}) {
+  // Bind the module-scope helpers to THIS registration's fetch, so an injected
+  // test double is still honoured after the lift to module scope.
+  const makeApi     = (config) => makeSlackApi(config, fetchImpl);
+  const makeUserApiL = (config) => makeUserApi(config, fetchImpl);
   const ready = () => isOAuthConfigured() || !!process.env.SLACK_BOT_TOKEN;
   // User-token actions require an xoxp- token (per-user OAuth). Ready when SLACK_USER_TOKEN
   // is set. Per-user OAuth wiring lands in a later phase; for now, set via env for testing.
   const userReady = () => !!process.env.SLACK_USER_TOKEN;
-
-  // Shared helper — resolves the token, builds typed Slack API callers.
-  // postApi: for methods that accept JSON body (most write APIs).
-  // getApi:  for methods that require query-string params (reactions.get, pins.list,
-  //          files.getUploadURLExternal, etc.) — Slack's read APIs often use GET.
-  function makeApi(config) {
-    const token = config.token ?? process.env.SLACK_BOT_TOKEN;
-    if (!token) throw new Error('slack: no token — this tenant has not connected Slack');
-    const apiBase = process.env.SLACK_API_URL ?? DEFAULT_API_BASE;
-
-    async function call(method, payload, useGet = false) {
-      let url = `${apiBase}/${method}`;
-      const opts = { headers: { authorization: `Bearer ${token}` } };
-      if (useGet) {
-        const qs = new URLSearchParams(
-          Object.fromEntries(Object.entries(payload ?? {}).filter(([, v]) => v !== undefined && v !== null))
-        ).toString();
-        if (qs) url += `?${qs}`;
-        opts.method = 'GET';
-      } else {
-        opts.method = 'POST';
-        opts.headers['content-type'] = 'application/json; charset=utf-8';
-        opts.body = JSON.stringify(payload);
-      }
-      const r = await fetchImpl(url, opts);
-      let d; try { d = await r.json(); } catch { d = { ok: false, error: 'invalid_json_response' }; }
-      if (!d.ok) throw new Error(`slack ${method} failed: ${d.error ?? `HTTP ${r.status}`}`);
-      return d;
-    }
-
-    const api = (method, payload) => call(method, payload, false);
-    api.get = (method, payload) => call(method, payload, true);
-    return api;
-  }
-
-  // User-token API helper: uses SLACK_USER_TOKEN (xoxp-) instead of the bot token.
-  function makeUserApi(config) {
-    const token = config.token ?? process.env.SLACK_USER_TOKEN;
-    if (!token) throw new Error('slack: this action requires a user OAuth token (xoxp-) — set SLACK_USER_TOKEN or wire per-user OAuth');
-    return makeApi({ ...config, token });
-  }
-
-  // Resolve a channel arg (#name or ID) to a Slack channel ID.
-  // Most Slack APIs require an ID; chat.postMessage is the exception that accepts #name.
-  async function resolveChannel(api, target) {
-    if (!target) throw new Error('slack: channel target is required');
-    if (/^[CGDW][A-Z0-9]+$/i.test(target)) return target; // already an ID
-    const name = target.startsWith('#') ? target.slice(1) : target;
-    const d = await api('conversations.list', { exclude_archived: true, limit: 200, types: 'public_channel,private_channel' });
-    const ch = (d.channels ?? []).find((c) => c.name === name || c.name_normalized === name);
-    if (!ch) throw new Error(`slack: channel "${target}" not found — pass a channel ID (C…) or verify the name`);
-    return ch.id;
-  }
-
-  // Resolve a user arg (Slack ID or email) to a Slack user ID.
-  // Uses users.list scan — users.lookupByEmail is unreliable (invalid_arguments even
-  // with valid emails and users:read.email scope).
-  async function resolveUser(api, user) {
-    if (!user) throw new Error('slack: user (ID or email) is required');
-    if (!user.includes('@')) return user;
-    const target = user.toLowerCase().trim();
-    const d = await api.get('users.list', { limit: 200 });
-    const match = (d.members ?? []).find((u) =>
-      !u.deleted && (u.profile?.email?.toLowerCase() === target || u.name?.toLowerCase() === target)
-    );
-    if (!match) throw new Error(`slack: no user found with email "${user}"`);
-    return match.id;
-  }
 
   // ── post_message ───────────────────────────────────────────────────────────
   registry.register({
@@ -789,7 +810,7 @@ export function registerSlackChannel(registry, { fetchImpl = fetch } = {}) {
     ],
     isReady: userReady,
     deliver: async ({ config, body, title }) => {
-      const api = makeUserApi(config);
+      const api = makeUserApiL(config);
       if (!config.target) throw new Error('slack_send_as_user: target is required');
       const channelId = await resolveChannel(api, config.target);
       const text = title ? `*${title}*\n${body}` : body;
@@ -810,7 +831,7 @@ export function registerSlackChannel(registry, { fetchImpl = fetch } = {}) {
     ],
     isReady: userReady,
     deliver: async ({ config, body, title }) => {
-      const api = makeUserApi(config);
+      const api = makeUserApiL(config);
       const userId = await resolveUser(api, config.user);
       const conv = await api('conversations.open', { users: userId });
       const dmChannel = conv.channel?.id;
@@ -832,7 +853,7 @@ export function registerSlackChannel(registry, { fetchImpl = fetch } = {}) {
     ],
     isReady: userReady,
     deliver: async ({ config, body }) => {
-      const api = makeUserApi(config);
+      const api = makeUserApiL(config);
       const text = config.text ?? body;
       if (!text || !config.time) throw new Error('slack_reminder: text and time are required');
       const payload = { text, time: config.time };
@@ -849,7 +870,7 @@ export function registerSlackChannel(registry, { fetchImpl = fetch } = {}) {
     configSchema: [],
     isReady: userReady,
     deliver: async ({ config }) => {
-      const api = makeUserApi(config);
+      const api = makeUserApiL(config);
       const d = await api.get('reminders.list', {});
       const reminders = (d.reminders ?? []).map((r) => ({ id: r.id, text: r.text, time: r.time, complete: !!r.complete_ts }));
       return { delivered: true, channel: 'slack_list_reminders', reminders };
@@ -866,7 +887,7 @@ export function registerSlackChannel(registry, { fetchImpl = fetch } = {}) {
     ],
     isReady: userReady,
     deliver: async ({ config }) => {
-      const api = makeUserApi(config);
+      const api = makeUserApiL(config);
       if (!config.query) throw new Error('slack_search: query is required');
       const d = await api.get('search.messages', { query: config.query, count: config.limit ?? 10 });
       const messages = (d.messages?.matches ?? []).map((m) => ({ ts: m.ts, channel: m.channel?.name, text: m.text, permalink: m.permalink }));
@@ -884,7 +905,7 @@ export function registerSlackChannel(registry, { fetchImpl = fetch } = {}) {
     ],
     isReady: userReady,
     deliver: async ({ config }) => {
-      const api = makeUserApi(config);
+      const api = makeUserApiL(config);
       if (!config.query) throw new Error('slack_search_files: query is required');
       const d = await api.get('search.files', { query: config.query, count: config.limit ?? 10 });
       const files = (d.files?.matches ?? []).map((f) => ({ id: f.id, name: f.name, title: f.title, permalink: f.permalink }));
@@ -903,7 +924,7 @@ export function registerSlackChannel(registry, { fetchImpl = fetch } = {}) {
     ],
     isReady: userReady,
     deliver: async ({ config }) => {
-      const api = makeUserApi(config);
+      const api = makeUserApiL(config);
       const profile = {
         status_text: config.status_text ?? '',
         status_emoji: config.status_emoji ?? '',
@@ -923,7 +944,7 @@ export function registerSlackChannel(registry, { fetchImpl = fetch } = {}) {
     ],
     isReady: userReady,
     deliver: async ({ config }) => {
-      const api = makeUserApi(config);
+      const api = makeUserApiL(config);
       const mins = config.num_minutes ?? 0;
       if (mins > 0) {
         const d = await api('dnd.setSnooze', { num_minutes: mins });
@@ -945,7 +966,7 @@ export function registerSlackChannel(registry, { fetchImpl = fetch } = {}) {
     ],
     isReady: userReady,
     deliver: async ({ config }) => {
-      const api = makeUserApi(config);
+      const api = makeUserApiL(config);
       if (!config.target || !config.timestamp) throw new Error('slack_star_message: target and timestamp are required');
       const channelId = await resolveChannel(api, config.target);
       await api('stars.add', { channel: channelId, timestamp: config.timestamp });
@@ -962,7 +983,7 @@ export function registerSlackChannel(registry, { fetchImpl = fetch } = {}) {
     ],
     isReady: userReady,
     deliver: async ({ config }) => {
-      const api = makeUserApi(config);
+      const api = makeUserApiL(config);
       const d = await api.get('stars.list', { count: config.limit ?? 20 });
       const items = (d.items ?? []).map((i) => ({ type: i.type, ts: i.message?.ts ?? null, text: i.message?.text ?? i.file?.name ?? null }));
       return { delivered: true, channel: 'slack_list_stars', items };
