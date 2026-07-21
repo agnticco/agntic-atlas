@@ -3762,7 +3762,34 @@ class Component extends DCLogic {
       if (!this._persistable(slice)) return;
       this._lastBuildStr = raw;
       this._applyBuildSlice(slice);
+      // A RESTORED "live" SCREEN MUST RE-CHECK THAT IT IS STILL LIVE.
+      //
+      // `published` is pure client state (phase === "published"), set when YOU
+      // published in that session — and then persisted. Nothing re-checked it, so
+      // opening Atlas showed "Workflow is live · Running automatically", with a
+      // pulsing green dot, for a workflow that had since been PAUSED. The console
+      // told the truth ("paused", with a Resume button); the builder did not, and
+      // the builder is what loads first. An operator reads that badge to know
+      // whether work is happening.
+      if (slice.phase === 'published' && slice.workflowId) this._verifyStillLive(slice.workflowId);
     } catch (e) { /* corrupt / unavailable — ignore */ }
+  }
+  // Confirm a restored "live" workflow is genuinely still active. Anything other
+  // than a definite non-active answer is left alone: a transient network failure
+  // must not bounce the user out of a screen that may well be correct.
+  _verifyStillLive(wfId) {
+    const self = this;
+    fetch('/api/console/workflows/' + wfId, { headers: this._H() })
+      .then(r => self._readJson(r))
+      .then(r => {
+        if (!r.ok) return;
+        const wf = r.data && r.data.workflow;
+        if (!wf || !wf.status || wf.status === 'active') return;
+        // The dashboard states the real status and offers Resume — send them there
+        // rather than inventing a second place that reports status.
+        self.openConsole(wfId);
+      })
+      .catch(() => { /* offline — leave the restored view as-is */ });
   }
   // Apply a persisted build slice into state with the right transient overrides.
   // Shared by boot restore (_restoreBuild) and resuming a draft (openConsole).
