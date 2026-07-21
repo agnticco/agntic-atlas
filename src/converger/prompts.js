@@ -784,6 +784,13 @@ ${prior ? `\nCLARIFICATIONS:\n${prior}\n` : ''}${setupResultsSummary(setupResult
 ALREADY DERIVED (reuse these exact ids and triggers where present — do not contradict them):
 ${existing}
 
+A derived "deliver" step is a PLACEHOLDER for a promise, not a fixed part of the design: keep its id
+when a delivery is genuinely what that promise needs, but you may REPLACE it with a different step that
+keeps the SAME promise. The case that matters: when the promise is the approval QUESTION itself
+("DM me asking to approve"), the "human" step's own ask keeps it — its channels are where the question
+goes. Do NOT also add a deliver step for that promise, or the person is messaged twice: once by a
+pointless delivery and again by the real question. Delete the placeholder and let the human step carry it.
+
 Use the node-type vocabulary, the llm modes, the decision-table rules, the closed-enum routing rule
 and the delivery channels EXACTLY as defined in your system prompt. This is the SAME grammar — emitted
 all at once instead of one component per turn.

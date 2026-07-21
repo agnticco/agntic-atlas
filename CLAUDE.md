@@ -1106,6 +1106,50 @@ refactor them without an explicit decision recorded here:
     feature unpublishable in increment B. It is `JSON.stringify([branch, to])` now: no
     collision is possible for any id, and it prints as itself in a debugger.
 
+- **AN APPROVAL STEP'S QUESTION IS A MESSAGE, AND THE PROMISE CHECKER COULD NOT SEE IT
+  (2026-07-21).** Found by driving a real build in the browser: an approval-gate workflow
+  **could not be built at all** — the build ran past Cloudflare's 100-second ceiling and died
+  `524` with nothing saved.
+  - **The cause was a BIND, not slowness.** `process` backward-chains one `deliver` node per
+    assertion (`nodeForAssertion` → `deliver_<connector>_<assertionId>`), so *"DM me asking to
+    approve"* became a **plain delivery node**. But that message is the `human` node's own ask.
+    `satisfiesAssertion` went through `nodeEffect()`, which returns `null` for `human` — so
+    folding the ask into the approval step left the promise pointing at a node that no longer
+    existed (`UNSATISFIED_ASSERTION`, **won't publish**), while keeping both **DMs the person
+    twice**. The model correctly identified the trap and spent its entire budget negotiating it
+    (*"deliver_slack_a1 is typed as a 'deliver' node in the contract, so I need to keep it
+    separate"*). Every approval workflow was unbuildable-or-double-messaged, by construction.
+  - **Fixed in `satisfiesAssertion`, NOT in `nodeEffect` — and that placement is the fix.**
+    `nodeEffect` feeds `isWriteNode`, which is what decides whether a forwardable email approval
+    may stand in front of a write (`WEAK_APPROVAL_FOR_WRITE`). Teaching it about `human` would
+    make an approval step count as a write and **gate approvals behind approvals**. So the ask is
+    recognised in the promise checker and nowhere else; `nodeEffect(human)` stays `null` and a
+    test pins it.
+  - **This WIDENS the go-live gate, so the narrowing is the load-bearing half.** Only `inbox` and
+    `slack` asks can keep a promise: an `email` ask is a signed magic link from the **platform
+    mailer**, not the tenant's Gmail connector, so letting it satisfy `gmail:…` would claim a send
+    nobody made. Each channel matches **whole** — its own connector against its **own** target —
+    because pooling targets lets a locator-free `inbox` ask wave through a promise about a Slack
+    channel the spec never posts to.
+  - **A GREEN TEST PROVED NOTHING UNTIL IT WAS MUTATED.** The first "channels match WHOLE" test
+    paired `slack` with `email` and **passed against a deliberately pooled implementation** —
+    `email` is dropped *before* the match runs, so the test never exercised the property it was
+    named after. Re-written to pair `inbox` with `slack` (both survive filtering), and the mutant
+    then died. Four hand-mutations, all killed: kind-check deleted, email-as-gmail, pooled
+    locators, empty-target accepted. **Nth occurrence of the same lesson — verify the mutation
+    APPLIED (`diff`), then verify it FAILS.**
+  - `prompts.js` — the whole-spec prompt said *"ALREADY DERIVED (reuse these exact ids … do not
+    contradict them)"*, which is what made the placeholder feel binding. It now states a derived
+    `deliver` is a **placeholder for a promise** that may be replaced by a step keeping the same
+    promise, and that the approval step's own ask keeps the question-promise — delete the
+    placeholder rather than message twice. **The bind is removed deterministically by the oracle;
+    avoiding the second DM is prompt-level and therefore model-dependent.** A deterministic repair
+    pass is the honest follow-up.
+  - **Residual, NOT fixed:** builds still hold one long HTTP request open, so any build over ~100s
+    dies at the proxy with everything lost and the user told to start over. This fix removes the
+    largest known time sink; it does not raise the ceiling. Background builds + polling is the
+    real cure.
+
 - **Multiple destinations — a delivery's return value is a RECEIPT, not the work product
   (2026-07-14).** Surfaced by a load-bearing test and reported as *"the workflow only did the Slack
   send"*. The report's premise was wrong in an instructive way, and re-grounding it before writing the

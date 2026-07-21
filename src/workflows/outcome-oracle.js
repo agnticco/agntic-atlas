@@ -68,6 +68,12 @@ import { closedDomainOf, onRefId } from './workflow-validator.js';
 // undeclared enum literals), each time producing a proof about a program nobody
 // was running. One parser, one answer.
 import { normalizeCases, CATCH_ALL } from './node-types/branch.js';
+// A `human` node's ask IS a message, and `normalizeChannels` is the one parser of
+// where it goes — the same one `buildAsk()` hands to the approval service. Reading
+// `config.channels` by hand here would be a second definition of "where the question
+// is sent", and the day the two disagree the oracle certifies a question that never
+// reaches anybody.
+import { normalizeChannels } from './node-types/human.js';
 
 /** The closed set. An assertion outside it is MALFORMED, never "assumed fine". */
 export const ASSERTION_KINDS = ['message_sent', 'record_exists', 'document_exists'];
@@ -331,7 +337,83 @@ export function assertionDefect(assertion) {
  * Satisfaction is: same effect kind, a connector the node actually writes to,
  * and — where the assertion named a locator — a locator the node actually uses.
  */
+/**
+ * Where a `human` node's QUESTION is sent — one entry per approval channel.
+ *
+ * ── Why an ask has to count, and why it is NOT a delivery ────────────────────
+ *
+ * A `human` node sends a message: that is what an approval step IS. It posts the
+ * question and waits. But `nodeEffect()` returns null for it, and deliberately so
+ * — that function answers "does this step WRITE to the world", and its answer
+ * feeds `isWriteNode`, which is what decides whether a forwardable email approval
+ * is allowed to stand in front of a write (WEAK_APPROVAL_FOR_WRITE). Teaching
+ * `nodeEffect` about `human` would make an approval step count as a write and
+ * gate approvals behind approvals. So the ask is recognised HERE, in the promise
+ * checker, and nowhere else.
+ *
+ * Without this, a promise like *"DM me asking to approve"* could only be kept by a
+ * SEPARATE `deliver` node duplicating the question — because folding it into the
+ * approval step left the promise pointing at a step that no longer existed, and
+ * the spec then refused to publish (UNSATISFIED_ASSERTION). The generated shape was
+ * therefore either unpublishable or double-messaged, and the model burned its whole
+ * build budget negotiating between the two until the proxy killed the request.
+ *
+ * ── The narrowing, and why it is drawn here ──────────────────────────────────
+ *
+ * Only `inbox` and `slack` asks can satisfy a promise. An `email` ask is a signed
+ * magic link sent by the PLATFORM mailer — it is not the tenant's Gmail connector,
+ * so letting it satisfy a `gmail:…` promise would claim a send this deployment
+ * never made through that connector. It fails closed instead.
+ *
+ * Each channel is matched WHOLE — its own connector against its own target. Pooling
+ * every channel's target into one list would let a node asking over `slack:#ops` and
+ * `email:bob@x.com` satisfy `slack:bob@x.com`, which nothing sends.
+ */
+function humanAskTargets(node) {
+  if (node?.type !== 'human') return [];
+  const out = [];
+  for (const ch of normalizeChannels(node.config?.channels)) {
+    const type = String(ch?.type ?? '').trim().toLowerCase();
+    // email is deliberately absent — see above.
+    const connector = type === 'slack' ? 'slack' : type === 'inbox' ? 'inbox' : null;
+    if (!connector) continue;
+    const locator = typeof ch.target === 'string' ? ch.target.trim() : '';
+    out.push({ connector, locator });
+  }
+  return out;
+}
+
+/**
+ * Does this `human` node's ask satisfy the assertion?
+ *
+ * A question is a `message_sent` and nothing else: it creates no record and no
+ * document, so those kinds are refused outright rather than falling through to a
+ * looser check.
+ */
+function askSatisfiesAssertion(assertion, node) {
+  if (!assertion || typeof assertion !== 'object') return false;
+  if (assertion.kind !== 'message_sent') return false;
+  const targets = humanAskTargets(node);
+  if (!targets.length) return false;
+
+  const { connector, locator } = splitTarget(assertion.target);
+
+  return targets.some((t) => {
+    if (connector && !aliasesFor(t.connector).has(connector)) return false;
+    if (isLocatorFree(t.connector)) return true;          // the inbox: its locator is a label
+    if (!locator || isTemplate(locator)) return true;     // nothing to contradict / resolved at run time
+    if (!t.locator) return false;                         // a slack ask with no target sends nowhere
+    const want = normLocator(locator);
+    const have = normLocator(t.locator);
+    return have === want || have.includes(want) || want.includes(have);
+  });
+}
+
 export function satisfiesAssertion(assertion, node) {
+  // An approval step's QUESTION is a real message, but it is not a "write" and must
+  // never be mistaken for one — hence its own path, before nodeEffect() is consulted.
+  if (node?.type === 'human') return askSatisfiesAssertion(assertion, node);
+
   const eff = nodeEffect(node);
   if (!eff) return false;
   if (!kindSatisfies(eff.kind, assertion.kind, eff.connectors)) return false;
