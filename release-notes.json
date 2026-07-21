@@ -1,5 +1,13 @@
 [
   {
+    "version": "1.6.12",
+    "date": "2026-07-21",
+    "title": "Approval workflows can be tested again",
+    "notes": [
+      "Testing a workflow with an approval step no longer hangs — the panel now stops at the approval and says so, instead of spinning forever."
+    ]
+  },
+  {
     "version": "1.6.2",
     "date": "2026-07-20",
     "title": "Broader workflow shapes & keyboard access",

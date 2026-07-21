@@ -5655,6 +5655,17 @@ class Component extends DCLogic {
 
     const outcomeResults = [];
     let lastData = {};
+    // ── A PAUSED EXAMPLE IS AN OUTCOME, NOT "STILL GOING" ─────────────────
+    // A spec with an approval step stops at the gate on every example, and the
+    // server says so (`paused:true`). The loop used to carry only the LAST
+    // example's data forward, so a pause was reported only if it happened to be
+    // the final one — and the honest verdict for a mixed set is the same as for
+    // an all-paused one: the steps after the gate were never exercised, so
+    // nothing past it can be certified. First pause wins and is what the panel
+    // reports. `testState: "paused"` leaves Go live locked (`reviewDraft`
+    // requires "passed"), which is the point: an unexercised promise must never
+    // certify.
+    let pausedData = null;
 
     // Run them one at a time — live deliveries should not be fired in a burst.
     const runOne = function(i) {
@@ -5662,7 +5673,7 @@ class Component extends DCLogic {
         // Every example has run. The verdict is the CONTRACT: a workflow passes
         // only if it kept its outcome's promises on every example. With no
         // examples, `outcomeResults` is empty and the old structural check stands.
-        const r = { ok: true, data: Object.assign({}, lastData, { outcomeResults: outcomeResults }) };
+        const r = { ok: true, data: Object.assign({}, pausedData || lastData, { outcomeResults: outcomeResults }) };
         if (self._testInterval) { pendingResult = { r: r, d: r.data }; }
         else { self._applyTestResult(r, r.data); }
         return;
@@ -5673,6 +5684,7 @@ class Component extends DCLogic {
         .then(function(res) {
           const d = res.data || {};
           lastData = d;   // keep the last run's steps for the pipeline animation
+          if (d.paused && !pausedData) pausedData = d;
           if (d.outcomeCheck) outcomeResults.push(d.outcomeCheck);
           runOne(i + 1);
         })
@@ -5691,6 +5703,16 @@ class Component extends DCLogic {
 
   _applyTestResult(r, d) {
     const spec = this.state.spec;
+    // R8: capture the real wall-clock test duration so the persisted test run
+    // records true timing, not the ~1ms gap between back-to-back DB writes.
+    // DECLARED AT THE TOP, and it must stay here: this was a `const` further down
+    // the function while the `d.paused` branch above it already read it, so EVERY
+    // paused run threw `ReferenceError: Cannot access 'runDurationMs' before
+    // initialization` — from inside the animation interval, after it had been
+    // cleared. Nothing caught it, so the panel sat on "Testing…" forever with a
+    // frozen timer and a body still reading "not yet run". A `const` read before
+    // its declaration is not a lint nit; it is a silent, total hang.
+    const runDurationMs = this._testStartMs ? (Date.now() - this._testStartMs) : null;
     // R14: "completed" only means no step threw. A step can complete yet emit the
     // ERROR sentinel (required upstream data missing) and deliver it as content —
     // the backend flags those in d.issues. A run with issues is NOT safe to publish.
@@ -5776,9 +5798,6 @@ class Component extends DCLogic {
     // Nothing broke, but nothing was proved either — say so instead of certifying.
     const unverified = !anyBroken && (lanesMissing || (hasContract && !anyKept));
     const self = this;
-    // R8: capture the real wall-clock test duration so the persisted test run
-    // records true timing, not the ~1ms gap between back-to-back DB writes.
-    const runDurationMs = this._testStartMs ? (Date.now() - this._testStartMs) : null;
 
     if (passed) {
       this.setState({ testState: "passed", runSteps: d.steps || [], deliveries: d.deliveries || [], runOutput: d.output, runDurationMs: runDurationMs, outcomeResults: outcomeResults, laneCoverage: coverage });
@@ -8271,7 +8290,16 @@ class Component extends DCLogic {
         : !testUnlocked ? "Finish building the workflow in the conversation, then test it end-to-end here before it goes live."
         : (TS === "idle" ? "Run the workflow once against the real engine to catch breaks before publishing."
         : (TS === "running" ? ("Running against the real engine — this can take a few minutes for web search or multi-source steps." + (S.runElapsed ? "  ·  " + S.runElapsed + "s elapsed" : ""))
-        : (TS === "passed" ? "Every step ran cleanly — no breaks." : "One step failed — review the break below."))),
+        // A PAUSE AND AN UNPROVEN RUN ARE NOT FAILURES. This caption used to fall
+        // through to "One step failed" for every state that wasn't idle/running/
+        // passed — so a run that stopped correctly at an approval step, and a run
+        // that broke nothing but proved nothing, both accused the workflow of a
+        // failure that never happened. Seen live: the header read "Waiting on a
+        // person" while the line under it read "One step failed".
+        : (TS === "passed"   ? "Every step ran cleanly — no breaks."
+        : (TS === "paused"   ? "The test stopped at your approval step — that's correct. It can't answer for you, so the steps after it aren't covered."
+        : (TS === "unverified" ? "Nothing broke, but nothing was proved either — see below."
+        : "One step failed — review the break below."))))),
       rsn,
       testSteps: contract.show ? [] : testSteps, slackChannel: this._slackChannel(), deliveryTarget: this._deliveryMeta().header, summaryText: this._summaryText(),
       outcomeCards: this._outcomeCards(), showOutcomes: (S.outcomeResults || []).length > 0 && (TS === "passed" || TS === "failed") && !contract.show,

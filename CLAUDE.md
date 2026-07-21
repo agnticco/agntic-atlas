@@ -1152,6 +1152,41 @@ refactor them without an explicit decision recorded here:
     inbox it reads. The loop now fails loudly instead of silently, but the cycle is still
     constructible. A generic fix (exclude mail this workflow itself sent) is the follow-up.
 
+- **NO WORKFLOW WITH AN APPROVAL STEP COULD BE PUBLISHED — one variable read too early
+  (2026-07-21).** Press **Run test** on a spec with an approval step and the panel hung on
+  "Testing…" forever: no timeout, no error, no escape but a reload, and Go live never unlocked.
+  The engine was correct throughout — pausing at the gate is the deliberate design, and the server
+  returned `paused:true` cleanly in ~1s per run.
+  - **The cause was a temporal dead zone.** `_applyTestResult`'s `if (d.paused)` branch read
+    `runDurationMs`, a **`const` declared ~40 lines below it in the same function**. Every paused
+    run therefore threw `ReferenceError: Cannot access 'runDurationMs' before initialization` —
+    **from inside the animation interval, after that interval had been cleared**, so nothing caught
+    it and no `setState` ever landed. Fixed by hoisting the declaration to the top of the function.
+  - **ONE UNCAUGHT THROW IN A STATE MACHINE PRESENTS AS FOUR UNRELATED COSMETIC BUGS.** The
+    handoff filed the frozen timer, the contradictory body copy ("4 SAMPLES, NOT YET RUN" under a
+    "Testing…" header), the overlapping pill and the hang as four findings. They are one. The timer
+    froze at the instant of the throw; the body and the CTA kept their pre-run values because the
+    state never moved. **Chasing them individually would have found none of them** — the tell was
+    that they all stopped at the same moment.
+  - **The written diagnosis was confidently wrong, and re-grounding is the only reason the right
+    thing got fixed.** The brief said the single-run path *"already handles this properly"* and
+    located the defect in the example loop. That path was in fact the broken one — it had simply
+    never been exercised, because an approval workflow always carries worked examples. The loop
+    defect it named was real but **secondary** (only the LAST example's data was carried forward,
+    so a pause on an earlier example was silently dropped; first pause now wins). Fixing only what
+    the brief described would have left the blocker exactly where it was. *(CLAUDE.md, rule 1:
+    re-ground every brief against current code at the moment it is executed.)*
+  - **A `grep` would have passed against the broken code.** The `d.paused` branch was present, the
+    copy was written, the label existed — every symbol a check could look for was there, and the
+    feature was totally dead. Pinned by `tests/api/test-panel-paused.test.js`, which **executes the
+    real method source** against a paused payload (the file has no module boundary to import), and
+    which was **watched go red** against the pre-fix file and restored from a `cp` backup.
+  - **NOT fixed — carried:** the tester still cannot answer Approve/Reject in the panel, so the
+    steps after the gate are exercised by no test. `testState: "paused"` correctly leaves Go live
+    locked, so an approval workflow is now testable and honest but **not publishable through the
+    panel**. Per `outcome-oracle.js` doctrine an unexercised promise must never certify — **do not
+    make a paused run count as a pass to unblock publishing.**
+
 - **THE 100s PROXY CEILING IS A SILENCE LIMIT, NOT A TIME LIMIT (2026-07-21).** An approval-gate
   build died `524` three times running, each death discarding the whole build and telling the user
   to start over from "+ New workflow".

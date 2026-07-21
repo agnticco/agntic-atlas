@@ -12,7 +12,37 @@ code. None of them had a failing test. That is the pattern worth carrying forwar
 
 ---
 
-## 1. THE OPEN BLOCKER — start here
+## 1. ~~THE OPEN BLOCKER~~ — FIXED 2026-07-21, and the diagnosis below was wrong
+
+**The cause was not the example loop.** `_applyTestResult`'s paused branch read
+`runDurationMs`, a `const` declared ~40 lines BELOW it in the same function — a
+temporal dead zone. So **every** paused run threw `ReferenceError: Cannot access
+'runDurationMs' before initialization`, from inside the animation interval, after
+that interval had been cleared. Nothing caught it.
+
+That single throw explains **all four** symptoms in §2, not just the hang: the timer
+froze at the moment of the throw (U3), and the body kept its pre-run copy and CTA
+because no `setState` ever landed (U1, U2).
+
+It also means the claim below that *"the SINGLE-run path already handles this
+properly"* was **false** — that path was the broken one. It was never exercised,
+because an approval workflow always carries examples.
+
+Fixed by hoisting the declaration to the top of the function, plus a genuine (if
+secondary) defect the original diagnosis did find: the example loop carried only the
+LAST example's data forward, so a pause on any earlier example was dropped. First
+pause now wins. Pinned by `tests/api/test-panel-paused.test.js`, which executes the
+real method source and was watched go red against the pre-fix file.
+
+**Still not done — §1.2 below (letting the tester answer Approve/Reject in the
+panel).** The panel now tells the truth and stops spinning, but the steps after the
+gate remain unexercised by any test, and `testState: "paused"` correctly leaves Go
+live locked. So an approval workflow is testable and honest, **not yet publishable
+through the panel.** That is the next piece of work.
+
+---
+
+### The original diagnosis, kept for the record
 
 ### You cannot publish any workflow containing an approval step
 
@@ -69,6 +99,11 @@ everything else on the screen.
 | U2 | Overlapping controls | A floating "Testing…" pill renders on top of the "Keep building" / "Run the test" buttons |
 | U3 | Frozen timer | "5s elapsed" never advanced across ~50s of wall clock |
 | U4 | The hang | §1 — no timeout, no error, no escape but reload |
+
+**All four were one bug** — the dead-zone throw in §1. Fixed together. Recorded as
+four because that is how they presented: a single uncaught exception in a state
+machine reads as four unrelated cosmetic faults, and chasing them individually would
+have found none of them.
 
 ---
 
