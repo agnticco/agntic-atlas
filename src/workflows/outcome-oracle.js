@@ -1190,9 +1190,32 @@ export function evaluateExampleRun(spec, example, runResult) {
   const contractIncomplete = contract.length > 0
     && !String(spec?.outcome?.statement ?? '').trim();
 
+  // A "SHOULD NOT HAPPEN" EXAMPLE CANNOT BE PROVED BY THIS HARNESS.
+  //
+  // A generated sample set routinely carries a negative case — "Email without
+  // ATLASTEST in the subject — should not trigger" — with `expect: null`. But the
+  // test panel never fires the TRIGGER: it seeds the workflow with `given` and
+  // runs it. So the negative case runs like any other, DELIVERS like any other,
+  // satisfies the delivery assertion, and was reported `kept` — a green tick
+  // reading "should not trigger" sitting directly above "every promise held",
+  // moments after a real Slack DM had gone out for it. The one row a reader would
+  // take as proof the workflow stays quiet was proof of the opposite.
+  //
+  // Whether it would have fired is a question about the TRIGGER FILTER, which this
+  // harness does not evaluate, so the only honest answer is "not checked".
+  // Deliberately NOT 'broken': the delivery happened because the harness bypassed
+  // the trigger, not because the workflow is wrong, and resolving that
+  // pessimistically is what throws away a valid spec and rebuilds it (F17). It is
+  // `not_exercised`, which neither certifies nor blocks — the positive examples
+  // still carry the workflow to "kept".
+  const negative = !!example
+    && Object.prototype.hasOwnProperty.call(example, 'expect')
+    && example.expect === null;
+
   const verdict = !ran || broken || !contract.every(c => c.ok)
     ? 'broken'
-    : (enforced > 0 && !contractIncomplete ? 'kept' : 'not_exercised');
+    : (negative ? 'not_exercised'
+      : (enforced > 0 && !contractIncomplete ? 'kept' : 'not_exercised'));
 
   return {
     exampleId: example?.id ?? null,
@@ -1210,6 +1233,10 @@ export function evaluateExampleRun(spec, example, runResult) {
     // The contract has assertions but no statement — there is no promise in words
     // to have kept, so it is not certifiable however well the run went.
     contractIncomplete,
+    // This example asserts that NOTHING should happen. Unprovable here (the
+    // harness bypasses the trigger), so the UI must render it as "not checked"
+    // rather than as a pass — see the note above the verdict.
+    negative,
     // Which branch lane(s) this run went down. Per-example it is only a fact;
     // aggregated across the sample set by `laneCoverage` it is what stops a router
     // being certified on lanes no sample ever took (F16).

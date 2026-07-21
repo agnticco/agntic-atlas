@@ -7579,9 +7579,14 @@ class Component extends DCLogic {
         const detail = v === "kept"
           ? ("What came back matched the deal — " + (this._clip(this._stringify(o.produced && (o.produced.summary || o.produced.text || o.produced)), 140) || "delivered as promised") + ".")
           : v === "not_exercised"
-            ? ("This example ran cleanly, but it didn't exercise anything the deal promises"
-               + (skipped.length ? " — it took a path that doesn't cover " + skipped.map(c => c.target).join(", ") : "")
-               + ". Nothing was proved either way.")
+            ? (o.negative
+               // A "should not happen" case: the panel runs the steps directly and
+               // never fires the trigger, so it cannot show that this input would
+               // have been ignored. Saying so beats a tick that means the opposite.
+               ? "This is a 'should not happen' case. Testing runs the steps directly without checking the trigger, so this one can't be proved here — it was not checked."
+               : ("This example ran cleanly, but it didn't exercise anything the deal promises"
+                  + (skipped.length ? " — it took a path that doesn't cover " + skipped.map(c => c.target).join(", ") : "")
+                  + ". Nothing was proved either way."))
             : ("This one fell short — " + ((brokeReason && (brokeReason.reason || ("nothing reached " + brokeReason.target))) || (o.error || "a promise wasn't kept")) + ". Fix it and re-test.");
         return rowFrom(i, v === "kept" ? "✓" : v === "not_exercised" ? "○" : "!",
                        v === "kept" ? SAGE : v === "not_exercised" ? DIM : CLAY,
