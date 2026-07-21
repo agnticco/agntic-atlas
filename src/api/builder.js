@@ -414,7 +414,13 @@ ${connectorBlock}
 
 OUTPUT FORMAT — every response MUST be valid JSON, no exceptions, no markdown fences:
 {"reply":"<your message to the user>","ready_to_build":false,"build_intent":null}
-Everything you want to say goes in "reply". Nothing goes outside the JSON object.`;
+Everything you want to say goes in "reply". Nothing goes outside the JSON object.
+
+NEVER put a plain double-quote character inside the "reply" text. To quote a word, a subject line or a
+phrase the user typed, use SINGLE quotes: 'ATLASGATE', 'APPROVED'. An unescaped double-quote ends the
+JSON string early — the rest of your message is DISCARDED mid-sentence and the reply cannot be read at
+all. This is the single most common way a reply is lost, and it happens exactly when you quote the
+user's own words back to them.`;
 }
 
 // Tolerant JSON extraction: strip code fences, else grab the first {...} block.
@@ -1051,7 +1057,7 @@ Rules:
         if (last?.role === 'user' && typeof last.content === 'string') {
           msgArray[msgArray.length - 1] = {
             ...last,
-            content: last.content + '\n\n[Format: whether or not you call a tool, your text response must be exactly: {"reply":"<your message>","ready_to_build":false,"build_intent":null}]',
+            content: last.content + '\n\n[Format: whether or not you call a tool, your text response must be exactly: {"reply":"<your message>","ready_to_build":<true or false>,"build_intent":<a string or null>} — and inside the reply text use SINGLE quotes only, never a double-quote, which would truncate your message.]',
           };
         }
       }
@@ -1186,7 +1192,7 @@ Rules:
           logEvent('chat.envelope.retry', { tenant: req.tenant?.id ?? null, turns: messages.length });
           if (clientHasPartial && !closed) { sseWrite({ type: 'reset' }); clientHasPartial = false; }
           msgArray.push(new AIMessage(streamedText));
-          msgArray.push({ role: 'user', content: 'Send that same message again, formatted EXACTLY as this JSON and nothing else: {"reply":"<your message>","ready_to_build":<true or false>,"build_intent":<a string or null>}' });
+          msgArray.push({ role: 'user', content: 'Send that same message again, formatted EXACTLY as this JSON and nothing else: {"reply":"<your message>","ready_to_build":<true or false>,"build_intent":<a string or null>} — and inside the reply text use SINGLE quotes only. A double-quote inside it ends the string early and loses the rest of your message, which is what just went wrong.' });
           extractState = 'searching'; searchBuf = ''; replyBuf = ''; streamedText = ''; escapeNext = false;
           try {
             for await (const chunk of llm.stream(msgArray, { configurable: invokeConfig.configurable })) {
