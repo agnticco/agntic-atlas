@@ -213,6 +213,10 @@ Channel name aliases — map user requests to the correct channel id:
 // In-process session map: threadId → converger instance.
 // Sessions are short-lived (one building conversation), so in-memory is correct.
 const sessions = new Map();
+// threadId → the DRAFT workflow row this build belongs to. Lets the server persist
+// a finished build the moment it exists, instead of waiting for the browser to
+// acknowledge it — see the autosave in /respond.
+const sessionDraft = new Map();
 
 // Per-session serialization for /respond. The build graph is a single stateful
 // thread: resuming it twice concurrently is a race — the first resume advances past
@@ -1525,6 +1529,9 @@ Rules:
     });
 
     sessions.set(threadId, converger);
+    if (typeof req.body?.workflowId === 'string' && req.body.workflowId) {
+      sessionDraft.set(threadId, req.body.workflowId);
+    }
 
     let interrupt;
     try {
@@ -1620,7 +1627,49 @@ Rules:
     }
 
     logEvent('respond.ok', { tenant: req.tenant?.id ?? null, threadId, sent: req.body?.type, interrupt: result?.type, heldOpen: alive.committed() });
-    if (result?.type === 'done') { sessions.delete(threadId); closeReasoningHub(threadId); }
+
+    // ── PERSIST A FINISHED BUILD THE MOMENT IT EXISTS ────────────────────────
+    //
+    // A build that took six minutes completed server-side, logged `respond.ok`
+    // with the whole workflow in hand — and the BROWSER never received it
+    // ("TypeError: Failed to fetch"). Nothing was saved, because the only thing
+    // that ever wrote the spec was the client acknowledging it, and the user was
+    // told to start over from "+ New workflow". Minutes of model work, and the
+    // user's place in a long conversation, thrown away because one HTTP response
+    // did not land.
+    //
+    // The server has the spec right here. Write it to the draft row now. If the
+    // response never arrives, opening that draft recovers the finished build
+    // instead of an empty conversation.
+    //
+    // Draft rows ONLY (`status === 'draft'`), so this can never touch a live
+    // workflow, and it is strictly best-effort: a failure here must not turn a
+    // successful build into an error.
+    const spec = result?.spec;
+    const draftId = sessionDraft.get(threadId);
+    if (draftId && spec && Array.isArray(spec.nodes) && spec.nodes.length) {
+      try {
+        const store = spine.engine.workflowStore;
+        const row = store.get(draftId, { userId: req.user.id });
+        if (row && row.tenant_id === req.tenant.id && row.status === 'draft') {
+          const patch = { nodes: spec.nodes };
+          if (Array.isArray(spec.edges))    patch.edges = spec.edges;
+          if (Array.isArray(spec.triggers)) patch.triggers = spec.triggers;
+          if (typeof spec.name === 'string' && spec.name) patch.name = spec.name;
+          // The CONTRACT rides along. The client-driven autosave omits it, which is
+          // the same omission that left `outcome` NULL on every stored workflow
+          // (F11) — a recovered draft with no promise cannot be certified against
+          // anything.
+          if (spec.outcome !== undefined) patch.outcome = spec.outcome;
+          store.update(draftId, patch, { userId: req.user.id, snapshot: false });
+          logEvent('builder.build.autosaved', { tenant: req.tenant?.id ?? null, workflowId: draftId, nodes: spec.nodes.length });
+        }
+      } catch (err) {
+        logEvent('builder.build.autosave.error', { tenant: req.tenant?.id ?? null, workflowId: draftId, ...errFields(err) });
+      }
+    }
+
+    if (result?.type === 'done') { sessions.delete(threadId); sessionDraft.delete(threadId); closeReasoningHub(threadId); }
     alive.send(result);
   });
 
@@ -1740,6 +1789,7 @@ Rules:
 
   // ── DELETE /api/builder/sessions/:threadId ───────────────────────────────────
   app.delete('/api/builder/sessions/:threadId', requireActiveTenant, async (req, res) => {
+    sessionDraft.delete(req.params.threadId);
     const { threadId } = req.params;
     const converger = sessions.get(threadId);
     if (converger) {

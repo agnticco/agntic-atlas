@@ -3809,7 +3809,14 @@ class Component extends DCLogic {
     // awaiting approval. Only a slice with NO spec (still elicitating) drops to chat, since
     // there is nothing to show.
     const hasSpec = slice.spec && Array.isArray(slice.spec.nodes) && slice.spec.nodes.length;
-    if (slice.phase === 'building' && !hasSpec) {
+    // A caller that has already resolved this slice to a FINISHED build (openConsole,
+    // when the server's copy shows the build completed) owns the phase. Without this
+    // the mid-build branch below would clamp it straight back to awaiting-approval,
+    // which is the state that made a finished build permanently untestable.
+    const callerSetPhase = overrides.phase === 'proposed';
+    if (callerSetPhase) {
+      // fall through: keep the caller's phase, spec and unlocked input
+    } else if (slice.phase === 'building' && !hasSpec) {
       overrides.phase = 'chat';
     } else if (slice.phase === 'building' && hasSpec) {
       // Rebuild liveNodes from the spec if they weren't persisted (older slices), and keep
@@ -4276,7 +4283,31 @@ class Component extends DCLogic {
       var slice = null;
       try { var raw = localStorage.getItem(this._buildKeyWf(wf.id)); if (raw) slice = JSON.parse(raw); } catch (e) { slice = null; }
       if (slice && this._persistable(slice) && ((slice.msgs && slice.msgs.length) || slice.spec)) {
-        this._applyBuildSlice(slice, { workflowId: wf.id, isDraftBuild: true, isEditing: false, editingIntro: null, testState: "idle", runSteps: [], runStepIndex: 0, failIndex: -1, deliveries: [], runOutput: null, runError: "" });
+        // A HALF-FINISHED LOCAL CONVERSATION MUST NOT SHADOW A FINISHED BUILD.
+        //
+        // A slice saved mid-build restores as `building` + awaitingGraphApproval,
+        // and testing only unlocks on `phase === 'proposed'` — so if the build
+        // finished on the SERVER but this browser dropped the response, the draft
+        // reopened permanently stuck: every step approvable, nothing testable,
+        // Go live unreachable, and no way forward but to rebuild from scratch.
+        // Observed live: a complete 9-step approval gate that could never be run.
+        //
+        // The server's copy is the authority on whether the build FINISHED. When it
+        // has a spec and the local slice is still mid-build, take the server's spec
+        // and the testable state — and keep the local messages, so the user does
+        // not lose the conversation that produced it.
+        var serverFinished = wf.nodes && wf.nodes.length;
+        var sliceStuck = slice.phase === 'building' || slice.awaitingGraphApproval;
+        var extra = { workflowId: wf.id, isDraftBuild: true, isEditing: false, editingIntro: null, testState: "idle", runSteps: [], runStepIndex: 0, failIndex: -1, deliveries: [], runOutput: null, runError: "" };
+        if (serverFinished && sliceStuck) {
+          extra.phase = "proposed";
+          extra.awaitingGraphApproval = false;
+          extra.inputMode = "change";
+          extra.spec = { name: wf.name, description: wf.description, triggers: wf.triggers || [], nodes: wf.nodes || [], edges: wf.edges || [], outcome: wf.outcome || (slice.spec && slice.spec.outcome) || null, errorHandling: wf.error_handling || {} };
+          extra.liveNodes = this._liveNodesFromSpec(extra.spec);
+          extra.liveRevealed = null;
+        }
+        this._applyBuildSlice(slice, extra);
         return;
       }
       if (wf.nodes && wf.nodes.length) {
@@ -5005,7 +5036,7 @@ class Component extends DCLogic {
       awaitingGraphApproval: false, graphApproved: [], graphSelNode: null, graphReviseOpen: false, graphReviseText: "",
       outcomeResults: [], deliveries: [], runOutput: null, runError: ""
     });
-    fetch("/api/builder/sessions", { method: "POST", headers: this._H(), body: JSON.stringify({ intent }) })
+    fetch("/api/builder/sessions", { method: "POST", headers: this._H(), body: JSON.stringify({ intent: intent, workflowId: this.state.workflowId || null }) })
       .then(r => this._readJson(r))
       .then(r => {
         // A build held open past the proxy's silence limit has already sent its 200,
