@@ -1,5 +1,13 @@
 [
   {
+    "version": "1.6.26",
+    "date": "2026-07-22",
+    "title": "Interrupted builds recover instead of being declared lost",
+    "notes": [
+      "If Atlas restarts while you're building, the page now waits it out and tells you your work is safe — instead of giving up after a few seconds and offering to start over."
+    ]
+  },
+  {
     "version": "1.6.25",
     "date": "2026-07-22",
     "title": "Builds keep running if you close the tab",

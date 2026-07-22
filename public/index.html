@@ -5109,6 +5109,29 @@ class Component extends DCLogic {
       .catch(e => self._apiError(String(e)));
   }
 
+  // ── "YOUR WORK IS SAFE" AND "START OVER" ARE OPPOSITE MESSAGES ─────────────
+  // These went through `_apiError`, which appends "You can start over with + New
+  // workflow" to everything — so the shakedown produced a bubble that read "Your work
+  // is saved — reopen it from the list. You can start over with + New workflow." Told
+  // both at once, a reasonable person picks the destructive one.
+  //
+  // A lost CONNECTION is not a lost build: the spec is autosaved and the graph state is
+  // on disk. So this says exactly one thing, and leaves the user somewhere they can act
+  // from rather than somewhere they have to abandon.
+  _buildLost(message) {
+    this._closeReasoningStream();
+    const cur = this.state.msgs;
+    const last = cur[cur.length - 1];
+    const base = (last && last.isStreaming) ? [...cur.slice(0, -1), (({ isStreaming, ...rest }) => rest)(last)] : cur;
+    const patch = { thinking: false, thinkingLabel: null, threadId: null, inputMode: 'change' };
+    if (this.state.phase === 'building' || this.state.phase === 'chat') {
+      // Only if there is something to stand on; otherwise leave the phase alone.
+      const spec = this.state.spec;
+      if (spec && Array.isArray(spec.nodes) && spec.nodes.length) patch.phase = 'proposed';
+    }
+    this.setState({ ...patch, msgs: [...base, { isAtlas: true, text: '⚠ ' + message, hasReason: false, isError: true }] });
+  }
+
   // ── WAIT FOR A BUILD BY ASKING, NOT BY HOLDING A SOCKET ────────────────────
   // Polls until the server has something to act on. Two things this must not do:
   //   • give up because ONE poll failed — a dropped request while the model is
@@ -5121,8 +5144,10 @@ class Component extends DCLogic {
   _pollBuild(threadId) {
     const self = this;
     let misses = 0;
+    let lastOk = Date.now();          // last time the server answered at all
     const started = Date.now();
     const MAX_MS = 30 * 60 * 1000;
+    const OFFLINE_GRACE_MS = 90 * 1000;   // comfortably longer than a restart or deploy
     if (this._pollTimer) { clearTimeout(this._pollTimer); this._pollTimer = null; }
 
     const tick = () => {
@@ -5131,10 +5156,11 @@ class Component extends DCLogic {
         .then(r => self._readJson(r))
         .then(r => {
           const d = (r && r.data) || {};
+          lastOk = Date.now();   // the server is answering; the offline clock resets
           if (!r.ok && r.status !== 404) throw new Error(d.error || "status unavailable");
           if (d.status === "running") return schedule();
           if (d.status === "unknown") {
-            return self._apiError("That build was interrupted, but your work is saved — tell me what to change and I'll carry on from here.");
+            return self._buildLost("That build was interrupted, but your work is saved — tell me what to change and I'll carry on from here.");
           }
           if (d.status === "error") return self._apiError(d.error);
           if (d.status === "ready") return self._handleInterrupt(d.interrupt);
@@ -5142,13 +5168,20 @@ class Component extends DCLogic {
           return schedule();
         })
         .catch(() => {
-          // A single failed poll is not a failed build.
-          if (++misses > 10) return self._apiError("Lost contact with the build. Your work is saved — reopen it from the list.");
+          // A RESTART IS THE CASE THIS MUST SURVIVE, so patience is measured in TIME,
+          // not in attempts. Ten misses at 1.5s gave up after ~15 seconds — shorter
+          // than a deploy — and abandoned a build that was about to come back. Seen in
+          // the shakedown: the server returned 40s later with the build intact and the
+          // page had already declared it lost.
+          misses++;
+          if (Date.now() - lastOk > OFFLINE_GRACE_MS) {
+            return self._buildLost("I lost contact with the build while the server was away. Your work is saved — reopen this workflow from the list to pick it up.");
+          }
           schedule();
         });
     };
     const schedule = () => {
-      if (Date.now() - started > MAX_MS) return self._apiError("That build is taking unusually long. Your work is saved — reopen it from the list.");
+      if (Date.now() - started > MAX_MS) return self._buildLost("That build is taking unusually long. Your work is saved — reopen this workflow from the list.");
       self._pollTimer = setTimeout(tick, 1500);
     };
     tick();

@@ -1747,7 +1747,7 @@ Rules:
         throw err;   // recorded as `error` by startBuildJob; the poll reports it plainly
       }
 
-      logEvent('respond.ok', { tenant: req.tenant?.id ?? null, threadId, sent: req.body?.type, interrupt: result?.type, heldOpen: alive.committed() });
+      logEvent('respond.ok', { tenant: req.tenant?.id ?? null, threadId, sent: req.body?.type, interrupt: result?.type, background: true });
 
       // ── PERSIST A FINISHED BUILD THE MOMENT IT EXISTS ────────────────────────
       //
@@ -1818,7 +1818,14 @@ Rules:
       return res.json({ threadId, status: row.completed_at ? 'done' : 'unknown' });
     }
     if (job.status === 'running') return res.json({ threadId, status: 'running' });
-    if (job.status === 'error')   return res.json({ threadId, status: 'error', error: job.error });
+    if (job.status === 'error') {
+      // NEVER the raw throw. A detached job's error is a JavaScript message — the one
+      // that reached a user during the shakedown was literally "alive is not defined",
+      // which tells them nothing and reads as the product falling apart. The real text
+      // is already in the log (`builder.job_failed`) where it belongs.
+      return res.json({ threadId, status: 'error',
+        error: 'Atlas hit a snag finishing that step. Your work is saved — tell me what to change and I\'ll carry on.' });
+    }
 
     const interrupt = job.value ?? null;
     // The opener rides along with the first question the user actually sees.
