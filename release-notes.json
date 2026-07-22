@@ -1,5 +1,13 @@
 [
   {
+    "version": "1.6.24",
+    "date": "2026-07-22",
+    "title": "A build in progress survives a restart",
+    "notes": [
+      "Restarting or updating Atlas used to end every build in progress — the next thing you sent came back 'session not found' and the conversation was gone. Builds are now picked back up where they left off."
+    ]
+  },
+  {
     "version": "1.6.23",
     "date": "2026-07-22",
     "title": "Atlas can add a missing Airtable column",

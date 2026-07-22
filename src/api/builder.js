@@ -1349,167 +1349,19 @@ Rules:
       res.status(500).json({ error: cleanLLMError(err) });
     }
   });
-
-  // ── POST /api/builder/sessions ───────────────────────────────────────────────
-  // Start a new converger session from a plain-language intent.
-  // Body: { intent: string }
-  // Returns: { threadId, interrupt }
-  app.post('/api/builder/sessions', requireActiveTenant, async (req, res) => {
-    const { intent } = req.body ?? {};
-    if (!intent?.trim()) return res.status(400).json({ error: 'intent is required' });
-
-    // Slow builds must not be cut by the proxy — see keepAlive() below.
-    const alive = keepAlive(res);
-
-    // Operator identity lets the converger resolve "me"/"DM me" to a real target.
-    let capabilities = { operator: { name: req.user?.display_name ?? null, email: req.user?.email ?? null } };
-    try {
-      const slack    = await spine.slack.resolveForTenant(req.tenant.id);
-      const google   = await spine.google.resolveForTenant(req.tenant.id, req.user.id);
-      const airtable = spine.airtable.resolveForTenant(req.tenant.id);
-      const web      = webConnectionStatus();
-      capabilities.connectors = { slack, google, airtable, web: { connected: web.connected } };
-
-      // Fetch Airtable base + table schema so the converger can propose real
-      // baseId / tableId values instead of placeholder strings.
-      if (airtable.connected) {
-        try {
-          const { getAirtableAccessToken } = await import('../connectors/airtable/oauth.js');
-          const pat = await getAirtableAccessToken({
-            oauthTokenStore: spine.auth.oauthTokenStore,
-            cipher: spine.auth.tokenCipher,
-            tenantId: req.tenant.id,
-          });
-          if (pat) {
-            const headers = { authorization: `Bearer ${pat}` };
-            const basesRes = await fetch('https://api.airtable.com/v0/meta/bases', { headers });
-            if (basesRes.ok) {
-              const { bases = [] } = await basesRes.json();
-              const schema = await Promise.all(bases.map(async (b) => {
-                try {
-                  const tRes = await fetch(`https://api.airtable.com/v0/meta/bases/${b.id}/tables`, { headers });
-                  if (!tRes.ok) return { id: b.id, name: b.name, tables: [] };
-                  const { tables = [] } = await tRes.json();
-                  return {
-                    id: b.id, name: b.name,
-                    tables: tables.map(t => ({
-                      id: t.id, name: t.name,
-                      fields: (t.fields ?? []).map(f => ({ name: f.name, type: f.type })),
-                    })),
-                  };
-                } catch { return { id: b.id, name: b.name, tables: [] }; }
-              }));
-              capabilities.airtableSchema = schema;
-            }
-          }
-        } catch { /* non-fatal */ }
-      }
-      // Existing Slack channels, so the converger can tell whether a named target
-      // already exists — and proactively propose a create_channel setup action for
-      // one that doesn't (S8-3) instead of silently building a workflow that 404s.
-      if (slack) {
-        try {
-          // getSlackToken returns { botToken, scopes } (or null); fall back to the
-          // env bot token (dev escape hatch) so the fetch works however Slack is wired.
-          const grant = getSlackToken({ oauthTokenStore: spine.auth.oauthTokenStore, cipher: spine.auth.tokenCipher, tenantId: req.tenant.id });
-          const botToken = grant?.botToken ?? process.env.SLACK_BOT_TOKEN;
-          if (botToken) {
-            const apiBase = process.env.SLACK_API_URL ?? 'https://slack.com/api';
-            const r = await fetch(`${apiBase}/conversations.list?exclude_archived=true&limit=200&types=public_channel,private_channel`, { headers: { authorization: `Bearer ${botToken}` } });
-            const d = await r.json();
-            if (d?.ok) capabilities.slackChannels = (d.channels ?? []).map(c => c.name).filter(Boolean);
-          }
-        } catch { /* non-fatal */ }
-      }
-      // Scope-aware, position-tagged catalog: only what this tenant can actually run.
-      capabilities.channels   = annotateChannelCatalog(spine.engine.channelRegistry.getAll(), { slack, google, airtable });
-      // Narrow triggers to connected connectors only.
-      const connectedIds = new Set(['slack', 'google'].filter(id => id === 'slack' ? slack : google));
-      if (airtable.connected) connectedIds.add('airtable');
-      if (web.connected)      connectedIds.add('web');
-      capabilities.triggers = spine.engine.capabilityRegistry
-        .list({ position: 'trigger' })
-        .map(t => ({ ...t, available: t.available && (!t.connector || connectedIds.has(t.connector)) }));
-
-      // Filesystem: any source with an absolute path is readable via filesystem_read /
-      // filesystem_list in workflows — this now includes browser-uploaded Knowledge
-      // folders, which are persisted to an app-managed path (S8-9). Expose each folder's
-      // absolute path + file names so the converger can propose a valid filesystem_read.
-      const allSources = readSources?.(req.tenant.id) ?? [];
-      const fsSources    = allSources.filter(s => s.path?.startsWith('/'));
-      const uploadSources = allSources.filter(s => !s.path?.startsWith('/'));
-      capabilities.filesystem = fsSources.map(s => ({
-        name:  s.name || s.path.split('/').pop(),
-        path:  s.path,
-        files: Array.isArray(s.fileNames) ? s.fileNames.slice(0, 40) : [],
-      }));
-      capabilities.knowledgeUploads = uploadSources.map(s => s.name || s.path);
-    } catch { /* non-fatal — converger still works with empty capabilities */ }
-
-    // THE CHANNEL CATALOG IS NOT OPTIONAL.
-    //
-    // Everything above runs inside one try whose catch is "non-fatal" — but it is
-    // network-bound (three connector `resolveForTenant` calls), and the catalog is
-    // assigned near the END of it. So an expired refresh token or a rate limit
-    // left `capabilities.channels` UNSET, which silently switched off the
-    // converger's ability to check that a delivery channel exists at all
-    // (gap-scorer: CHANNELS_UNVERIFIED). The guard disappeared exactly when it was
-    // most needed: with no catalog, the model has none in its prompt either, so it
-    // is at its most likely to invent one.
-    //
-    // The registry is LOCAL and cannot fail for network reasons, so there is
-    // always a catalog to fall back to. An unannotated one is worse than the
-    // scope-aware one above — but it is infinitely better than none, because none
-    // means the check does not run. (Found by the independent verifier.)
-    if (!Array.isArray(capabilities.channels) || !capabilities.channels.length) {
-      try { capabilities.channels = spine.engine.channelRegistry.getAll(); } catch { /* registry itself is down */ }
-    }
-
-    // ── The approval channels (P12 Increment D) ──────────────────────────────
-    // Same reasoning, one door along. A `human` node asks over inbox / slack /
-    // email, and APPROVAL_CHANNEL_NOT_CONNECTED is the check that a question can
-    // actually reach somebody. Publish always runs it (server.js constructs the
-    // validator with this view); the scorer must run it too, or a workflow that
-    // pauses on a Slack workspace nobody connected scores COMPLETE and then
-    // refuses to save — and at run time waits forever for an answer nobody was
-    // ever asked for.
-    //
-    // Derived from the SAME local registry (`inbox` needs no connector, which is
-    // what lets escalation always have somewhere to go), so it cannot be knocked
-    // out by a network failure the way the annotated catalog above could.
-    try {
-      capabilities.approvalChannels = availableApprovalChannels(
-        spine.engine.channelRegistry, { mailer: mailerConfigured() },
-      );
-    } catch { /* registry itself is down — the scorer then refuses to certify */ }
-
-    // Query RAG for knowledge relevant to this intent so the converger's LLM
-    // calls can see what's actually in the knowledge base (not just folder names).
-    if (intent) {
-      try {
-        const rag  = await spine.rag.forTenant(req.tenant.id);
-        const hits = await rag.query(intent, 6);
-        const useful = (hits ?? []).filter(h => (h.score ?? 0) > 0.2).slice(0, 4);
-        if (useful.length) {
-          capabilities.knowledgeContext = useful.map(h => {
-            const label = h.metadata?.subject || h.metadata?.source_path || h.metadata?.source || 'knowledge';
-            return { label, content: (h.pageContent ?? h.content ?? '').slice(0, 600) };
-          });
-        }
-      } catch { /* non-fatal */ }
-    }
-
-    const threadId  = `build-${req.tenant.id}-${Date.now()}`;
-    // Open the reasoning beat hub BEFORE the graph runs, so beats emitted during
-    // this first synchronous pass (outcome → process → examples → analyze → …) are
-    // buffered and replayed to the EventSource the client opens right after it gets
-    // this threadId back. Owner is recorded for the SSE ownership check.
-    openReasoningHub(threadId, { tenantId: req.tenant.id, userId: req.user?.id });
-    // Register user attribution so converger LLM cost records carry tenant_id.
-    spine.costTracker?.setSessionUser?.(threadId, req.user?.id);
-    // Start intro message after threadId exists so it shares the same session attribution.
-    const introP = introMessage(spine, intent, threadId);
-    const converger = createConverger({
+  // ── CAPABILITIES, IN ONE PLACE ─────────────────────────────────────────────
+  // What the converger is allowed to know about this tenant: which connectors are
+  // live, the real Airtable bases/tables/columns, the delivery channel catalog, the
+  // approval channels, and any knowledge context. Extracted from POST /sessions so
+  // a session REHYDRATED after a restart is built from exactly the same picture —
+  // a second, drifting copy is how one path ends up certifying against a catalog the
+  // other never saw (CLAUDE.md: CHANNELS_UNVERIFIED).
+  // ONE definition of a converger. POST /sessions builds one for a new thread;
+  // rehydrateSession() builds an identical one for a thread whose in-memory handle
+  // was lost (a restart, a deploy). Two constructions would drift, and the drift
+  // would be invisible until a resumed build behaved unlike the one that started.
+  function makeConverger({ req, threadId, capabilities }){
+    return createConverger({
       llm:              spine.llm,
       capabilities,
       // The converger reads the tenant's real Airtable bases, tables and columns
@@ -1532,6 +1384,224 @@ Rules:
         ? (spec, given) => dryRunSpecForTenant(spine, spec, { tenantId: req.tenant.id, userId: req.user?.id, initialContext: given })
         : null,
     });
+  }
+
+  // ── A BUILD SURVIVES THE SERVER ────────────────────────────────────────────
+  // `sessions` is an in-memory Map, so a restart or a deploy ended every build in
+  // flight. The next thing the user sent came back "session not found or already
+  // complete", and a conversation they had spent minutes on was gone — observed live,
+  // immediately after a failed build had offered them a retry.
+  //
+  // Nothing about that was necessary. Both halves of a session are ALREADY durable:
+  // the graph's own state is checkpointed to disk by FileCheckpointer
+  // (./memory/converger/<threadId>.jsonl), and who owns the thread is in the
+  // interaction store. Only the JavaScript handle was lost — so rebuild it.
+  //
+  // OWNERSHIP IS ENFORCED BY CONSTRUCTION: getSession() is tenant-scoped, so a thread
+  // belonging to another workspace simply is not found. A threadId is guessable
+  // (`build-<tenant>-<epoch-ms>`), which is exactly why the tenant must come from the
+  // caller's session and never from the id.
+  async function rehydrateSession(threadId, req) {
+    const live = sessions.get(threadId);
+    if (live) return live;
+    let row = null;
+    try { row = spine.interactionStore?.getSession?.(req.tenant.id, threadId) ?? null; } catch { row = null; }
+    if (!row) return null;                 // unknown here, or another tenant's
+    if (row.completed_at) return null;     // finished — resuming is not a thing
+    // No checkpoint on disk ⇒ nothing to resume from; say not-found rather than hand
+    // back a converger that would start the graph over from the beginning.
+    if (!(await hasCheckpoint(threadId))) return null;
+
+    // The SAME intent the build started with, from the stored row — so the knowledge
+    // context a resumed build sees matches the one it was reasoning with.
+    const capabilities = await buildCapabilities(req, row.intent ?? null);
+    const converger = makeConverger({ req, threadId, capabilities });
+    sessions.set(threadId, converger);
+    // The beat hub is in memory too; reopen it so the reasoning panel can attach.
+    openReasoningHub(threadId, { tenantId: req.tenant.id, userId: req.user?.id });
+    spine.costTracker?.setSessionUser?.(threadId, req.user?.id);
+    logEvent('builder.session_rehydrated', { tenant: req.tenant.id, threadId });
+    return converger;
+  }
+
+  // Does the graph have state for this thread? The checkpointer owns the file layout,
+  // so ask it rather than guessing at a path here — a hard-coded filename is a second
+  // definition waiting to drift.
+  async function hasCheckpoint(threadId) {
+    try {
+      const { FileCheckpointer } = await import('../graph/checkpointer/index.js');
+      const cp = new FileCheckpointer({ dir: './memory/converger' });
+      const got = await cp.load(threadId);
+      return !!got;
+    } catch { return false; }
+  }
+
+  async function buildCapabilities(req, intent = null) {
+  // Operator identity lets the converger resolve "me"/"DM me" to a real target.
+  let capabilities = { operator: { name: req.user?.display_name ?? null, email: req.user?.email ?? null } };
+  try {
+    const slack    = await spine.slack.resolveForTenant(req.tenant.id);
+    const google   = await spine.google.resolveForTenant(req.tenant.id, req.user.id);
+    const airtable = spine.airtable.resolveForTenant(req.tenant.id);
+    const web      = webConnectionStatus();
+    capabilities.connectors = { slack, google, airtable, web: { connected: web.connected } };
+
+    // Fetch Airtable base + table schema so the converger can propose real
+    // baseId / tableId values instead of placeholder strings.
+    if (airtable.connected) {
+      try {
+        const { getAirtableAccessToken } = await import('../connectors/airtable/oauth.js');
+        const pat = await getAirtableAccessToken({
+          oauthTokenStore: spine.auth.oauthTokenStore,
+          cipher: spine.auth.tokenCipher,
+          tenantId: req.tenant.id,
+        });
+        if (pat) {
+          const headers = { authorization: `Bearer ${pat}` };
+          const basesRes = await fetch('https://api.airtable.com/v0/meta/bases', { headers });
+          if (basesRes.ok) {
+            const { bases = [] } = await basesRes.json();
+            const schema = await Promise.all(bases.map(async (b) => {
+              try {
+                const tRes = await fetch(`https://api.airtable.com/v0/meta/bases/${b.id}/tables`, { headers });
+                if (!tRes.ok) return { id: b.id, name: b.name, tables: [] };
+                const { tables = [] } = await tRes.json();
+                return {
+                  id: b.id, name: b.name,
+                  tables: tables.map(t => ({
+                    id: t.id, name: t.name,
+                    fields: (t.fields ?? []).map(f => ({ name: f.name, type: f.type })),
+                  })),
+                };
+              } catch { return { id: b.id, name: b.name, tables: [] }; }
+            }));
+            capabilities.airtableSchema = schema;
+          }
+        }
+      } catch { /* non-fatal */ }
+    }
+    // Existing Slack channels, so the converger can tell whether a named target
+    // already exists — and proactively propose a create_channel setup action for
+    // one that doesn't (S8-3) instead of silently building a workflow that 404s.
+    if (slack) {
+      try {
+        // getSlackToken returns { botToken, scopes } (or null); fall back to the
+        // env bot token (dev escape hatch) so the fetch works however Slack is wired.
+        const grant = getSlackToken({ oauthTokenStore: spine.auth.oauthTokenStore, cipher: spine.auth.tokenCipher, tenantId: req.tenant.id });
+        const botToken = grant?.botToken ?? process.env.SLACK_BOT_TOKEN;
+        if (botToken) {
+          const apiBase = process.env.SLACK_API_URL ?? 'https://slack.com/api';
+          const r = await fetch(`${apiBase}/conversations.list?exclude_archived=true&limit=200&types=public_channel,private_channel`, { headers: { authorization: `Bearer ${botToken}` } });
+          const d = await r.json();
+          if (d?.ok) capabilities.slackChannels = (d.channels ?? []).map(c => c.name).filter(Boolean);
+        }
+      } catch { /* non-fatal */ }
+    }
+    // Scope-aware, position-tagged catalog: only what this tenant can actually run.
+    capabilities.channels   = annotateChannelCatalog(spine.engine.channelRegistry.getAll(), { slack, google, airtable });
+    // Narrow triggers to connected connectors only.
+    const connectedIds = new Set(['slack', 'google'].filter(id => id === 'slack' ? slack : google));
+    if (airtable.connected) connectedIds.add('airtable');
+    if (web.connected)      connectedIds.add('web');
+    capabilities.triggers = spine.engine.capabilityRegistry
+      .list({ position: 'trigger' })
+      .map(t => ({ ...t, available: t.available && (!t.connector || connectedIds.has(t.connector)) }));
+
+    // Filesystem: any source with an absolute path is readable via filesystem_read /
+    // filesystem_list in workflows — this now includes browser-uploaded Knowledge
+    // folders, which are persisted to an app-managed path (S8-9). Expose each folder's
+    // absolute path + file names so the converger can propose a valid filesystem_read.
+    const allSources = readSources?.(req.tenant.id) ?? [];
+    const fsSources    = allSources.filter(s => s.path?.startsWith('/'));
+    const uploadSources = allSources.filter(s => !s.path?.startsWith('/'));
+    capabilities.filesystem = fsSources.map(s => ({
+      name:  s.name || s.path.split('/').pop(),
+      path:  s.path,
+      files: Array.isArray(s.fileNames) ? s.fileNames.slice(0, 40) : [],
+    }));
+    capabilities.knowledgeUploads = uploadSources.map(s => s.name || s.path);
+  } catch { /* non-fatal — converger still works with empty capabilities */ }
+
+  // THE CHANNEL CATALOG IS NOT OPTIONAL.
+  //
+  // Everything above runs inside one try whose catch is "non-fatal" — but it is
+  // network-bound (three connector `resolveForTenant` calls), and the catalog is
+  // assigned near the END of it. So an expired refresh token or a rate limit
+  // left `capabilities.channels` UNSET, which silently switched off the
+  // converger's ability to check that a delivery channel exists at all
+  // (gap-scorer: CHANNELS_UNVERIFIED). The guard disappeared exactly when it was
+  // most needed: with no catalog, the model has none in its prompt either, so it
+  // is at its most likely to invent one.
+  //
+  // The registry is LOCAL and cannot fail for network reasons, so there is
+  // always a catalog to fall back to. An unannotated one is worse than the
+  // scope-aware one above — but it is infinitely better than none, because none
+  // means the check does not run. (Found by the independent verifier.)
+  if (!Array.isArray(capabilities.channels) || !capabilities.channels.length) {
+    try { capabilities.channels = spine.engine.channelRegistry.getAll(); } catch { /* registry itself is down */ }
+  }
+
+  // ── The approval channels (P12 Increment D) ──────────────────────────────
+  // Same reasoning, one door along. A `human` node asks over inbox / slack /
+  // email, and APPROVAL_CHANNEL_NOT_CONNECTED is the check that a question can
+  // actually reach somebody. Publish always runs it (server.js constructs the
+  // validator with this view); the scorer must run it too, or a workflow that
+  // pauses on a Slack workspace nobody connected scores COMPLETE and then
+  // refuses to save — and at run time waits forever for an answer nobody was
+  // ever asked for.
+  //
+  // Derived from the SAME local registry (`inbox` needs no connector, which is
+  // what lets escalation always have somewhere to go), so it cannot be knocked
+  // out by a network failure the way the annotated catalog above could.
+  try {
+    capabilities.approvalChannels = availableApprovalChannels(
+      spine.engine.channelRegistry, { mailer: mailerConfigured() },
+    );
+  } catch { /* registry itself is down — the scorer then refuses to certify */ }
+
+  // Query RAG for knowledge relevant to this intent so the converger's LLM
+  // calls can see what's actually in the knowledge base (not just folder names).
+  if (intent) {
+    try {
+      const rag  = await spine.rag.forTenant(req.tenant.id);
+      const hits = await rag.query(intent, 6);
+      const useful = (hits ?? []).filter(h => (h.score ?? 0) > 0.2).slice(0, 4);
+      if (useful.length) {
+        capabilities.knowledgeContext = useful.map(h => {
+          const label = h.metadata?.subject || h.metadata?.source_path || h.metadata?.source || 'knowledge';
+          return { label, content: (h.pageContent ?? h.content ?? '').slice(0, 600) };
+        });
+      }
+    } catch { /* non-fatal */ }
+  }
+    return capabilities;
+  }
+
+
+  // ── POST /api/builder/sessions ───────────────────────────────────────────────
+  // Start a new converger session from a plain-language intent.
+  // Body: { intent: string }
+  // Returns: { threadId, interrupt }
+  app.post('/api/builder/sessions', requireActiveTenant, async (req, res) => {
+    const { intent } = req.body ?? {};
+    if (!intent?.trim()) return res.status(400).json({ error: 'intent is required' });
+
+    // Slow builds must not be cut by the proxy — see keepAlive() below.
+    const alive = keepAlive(res);
+
+    const capabilities = await buildCapabilities(req, intent);
+
+    const threadId  = `build-${req.tenant.id}-${Date.now()}`;
+    // Open the reasoning beat hub BEFORE the graph runs, so beats emitted during
+    // this first synchronous pass (outcome → process → examples → analyze → …) are
+    // buffered and replayed to the EventSource the client opens right after it gets
+    // this threadId back. Owner is recorded for the SSE ownership check.
+    openReasoningHub(threadId, { tenantId: req.tenant.id, userId: req.user?.id });
+    // Register user attribution so converger LLM cost records carry tenant_id.
+    spine.costTracker?.setSessionUser?.(threadId, req.user?.id);
+    // Start intro message after threadId exists so it shares the same session attribution.
+    const introP = introMessage(spine, intent, threadId);
+    const converger = makeConverger({ req, threadId, capabilities });
 
     sessions.set(threadId, converger);
     if (typeof req.body?.workflowId === 'string' && req.body.workflowId) {
@@ -1606,7 +1676,13 @@ Rules:
   // Returns: the next interrupt payload, or { type: 'done', spec, confirmationLog }
   app.post('/api/builder/sessions/:threadId/respond', requireActiveTenant, async (req, res) => {
     const { threadId } = req.params;
-    if (!sessions.get(threadId)) return res.status(404).json({ error: 'session not found or already complete' });
+    // A build in flight when the server restarted is NOT gone: the graph state is on
+    // disk and the thread's owner is in the interaction store, so the handle is rebuilt
+    // on demand. Only a thread this tenant does not own, or one with no checkpoint, is
+    // genuinely not found.
+    if (!(await rehydrateSession(threadId, req))) {
+      return res.status(404).json({ error: 'session not found or already complete' });
+    }
 
     const alive = keepAlive(res);
     let result;
@@ -1614,7 +1690,7 @@ Rules:
       // Serialize: a concurrent /respond for this thread waits for the in-flight one,
       // so two resumes can never race on the same graph checkpoint.
       result = await serializePerThread(threadId, async () => {
-        const converger = sessions.get(threadId);
+        const converger = await rehydrateSession(threadId, req);
         if (!converger) { const e = new Error('session not found or already complete'); e._stale = true; throw e; }
         return converger.resume(threadId, req.body);
       });
