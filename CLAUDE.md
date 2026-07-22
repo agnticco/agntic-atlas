@@ -1960,15 +1960,32 @@ the test — **the Builder overriding the adversary's scope call is itself the a
 
 ## Agents & gate enforcement
 
-The build runs with three roles. **Builder is this main session** (you), governed
-by this file — not a subagent. The other two are subagents in `.claude/agents/`:
-*(The `test-adversary` was a fourth; it was removed 2026-07-19 — see "Mutation
+**Builder is this main session** (you), governed by this file — not a subagent. The
+rest are subagents in `.claude/agents/`:
+*(A `test-adversary` was one of these; it was removed 2026-07-19 — see "Mutation
 testing was removed".)*
 
 - **`scout`** — read-only explorer; fan out for "where does X live", returns
   conclusions with `file:line`, never edits.
 - **`verifier`** — fresh, independent gate checker; did *not* write the code.
 - **`adversary`** — Phase 3 only; tries to break the converger.
+- **`qa-manager`** *(added 2026-07-22, operator's call)* — hands-on product QA. It
+  drives the real app in a **headed** browser like a customer, carries whole jobs end
+  to end, and hands the Builder a grounded findings report. It **never edits `src/`**,
+  never commits and never deploys. Pair it with the **`atlas-product` skill**
+  (`.claude/skills/atlas-product/`), which is the *behavioural* contract — what a
+  person must SEE on each screen — and is the thing to fix when the product's
+  intended behaviour changes.
+  **Why it exists:** every serious defect this codebase has shipped was found by
+  *using* the product, not reading it, with the suite green throughout — and since
+  the mutation apparatus was removed (below), architectural flaw #3 is uncovered.
+  This does not close that hole (it is not a test-designer) but it attacks the same
+  blind spot from the only other side available: a person, in a browser, asking
+  whether the thing actually worked. It is also the standing answer to the operator's
+  rule that a live UI check must be witnessed, not claimed.
+  **Keep the skill true in the same commit as any behaviour change** — it is read as
+  authoritative, so a stale one sends the QA Manager hunting a bug that was fixed, or
+  passing one that was introduced.
 
 **Gates are HARD (fail-closed).** A phase closes only through its check:
 
