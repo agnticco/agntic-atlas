@@ -24,6 +24,7 @@
 import { liftV1Nodes, isRemovedType, REMOVED_TYPES } from './node-types/compat-v1.js';
 import { normalizeCases, CATCH_ALL, ON_REF } from './node-types/branch.js';
 import { normalizeSteps } from './node-types/foreach.js';
+import { NON_CONTENT_TYPES } from './node-types/_node-input.js';
 import { normalizeChannels, normalizeDecisions, allowedDecisions, TIMEOUT_DECISION } from './node-types/human.js';
 import { isStrong, FORBIDDEN_CHANNELS } from './approval-channels.js';
 import { parseDuration } from './duration.js';
@@ -287,7 +288,56 @@ export class WorkflowValidator {
     // ── 10. DMN coverage — the completeness proof (P12 Increment E) ───────
     this._checkDecisionTables(nodes, issues);
 
+    // ── 11. Attach the MECHANICAL fixes that need the edge list ───────────
+    this._attachSectionFixes(nodes, edges, issues);
+
     return this._finalize(issues);
+  }
+
+  /**
+   * A document step with no section list, sitting downstream of exactly one
+   * content step, is not a decision — it is a blank the converger left.
+   *
+   * WHY THIS EXISTS AT ALL. Observed live on a three-lane approval build: the
+   * converger produced an `assemble` step with no `sections`, `analyze` reported
+   * DIGEST_MISSING_SECTIONS, and because it is BLOCKING the answer went back
+   * through a whole-spec rebuild — one Opus pass, 90 seconds — which produced the
+   * same blank again. The user was then asked the identical question a second
+   * time, word for word. That loop is bounded, so it ends in a give-up rather
+   * than a spin, but every round costs a rebuild and the user is asked to judge
+   * the same thing repeatedly with no way to make it stick.
+   *
+   * The suggestion the model itself offered was "one section, headed <title>,
+   * whose content is the previous step's output" — which is not a judgement
+   * call, it is the only thing the graph permits. So we compute it and hand it
+   * over as a `fix`, and `autoRepairStructural` applies it with no model call and
+   * no question, exactly as it already does for a missing route edge.
+   *
+   * DELIBERATELY NARROW. Only when the section list is entirely absent and the
+   * step has EXACTLY ONE upstream content parent, because that is the only case
+   * with one right answer. Two parents is a real question about ordering and
+   * headings, and it stays a question.
+   */
+  _attachSectionFixes(nodes, edges, issues) {
+    const byId = new Map(nodes.map(n => [n.id, n]));
+    for (const issue of issues) {
+      if (issue.code !== 'DIGEST_MISSING_SECTIONS' || issue.fix) continue;
+      const node = byId.get(issue.nodeId);
+      if (!node) continue;
+      // A control step reports a route or a decision, not prose — it can never be
+      // the body of a document, and `_node-input.js` already refuses to feed one in.
+      const parents = edges
+        .filter(e => e.to === node.id)
+        .map(e => byId.get(e.from))
+        .filter(p => p && !NON_CONTENT_TYPES.has(p.type));
+      if (parents.length !== 1) continue;
+      const heading = String(node.config?.title || node.label || 'Summary').trim();
+      issue.fix = {
+        op: 'set_config',
+        nodeId: node.id,
+        config: { sections: JSON.stringify([{ heading, content: `{{${parents[0].id}.output}}` }]) },
+      };
+    }
   }
 
   /**

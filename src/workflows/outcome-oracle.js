@@ -303,6 +303,47 @@ export function splitTarget(target) {
   return { connector: raw.slice(0, i).trim().toLowerCase(), locator: raw.slice(i + 1).trim() };
 }
 
+/**
+ * An assertion target in the words a person would use.
+ *
+ * `target` is a MACHINE locator — "<connector>:<locator>" — and it had been reaching
+ * the user verbatim on two surfaces that matter: the gap question the builder asks
+ * before it will finish ("The outcome says inbox:Email Summary should happen only
+ * when urgent_approved…") and the test panel's failure line ("nothing reached
+ * inbox"). Neither is English, and the first one is a question a non-technical
+ * person is being asked to JUDGE. Identifiers are the codebase's filing system.
+ *
+ * One renderer, here, because this module already owns what a target MEANS
+ * (`splitTarget`, `CHANNEL_EFFECTS`) — a second copy in the gap scorer or in the
+ * browser would drift, and the day it drifts the user is reading a description of
+ * a promise the checker is not checking.
+ */
+export function describeTarget(target) {
+  const { connector, locator } = splitTarget(target);
+  if (!connector) return String(target ?? '').trim() || 'its destination';
+  const place = CONNECTOR_PLACE[connector] ?? connector.replace(/[_-]+/g, ' ');
+  if (!locator) return place;
+  // A Slack locator carries its own decoration ("#ops", "@amy") and reads fine as-is.
+  if (connector === 'slack') return `${locator} on Slack`;
+  return `"${locator}" in ${place}`;
+}
+
+/** How each connector is referred to in conversation, rather than by its id. */
+const CONNECTOR_PLACE = {
+  inbox: 'your Atlas inbox',
+  slack: 'Slack',
+  gmail: 'Gmail',
+  airtable: 'Airtable',
+  sheets: 'Google Sheets',
+  docs: 'Google Docs',
+  drive: 'Google Drive',
+};
+
+/** A route value in the words a person used: "urgent_approved" → "urgent approved". */
+export function describeValue(v) {
+  return String(v ?? '').replace(/[_-]+/g, ' ').replace(/\s+/g, ' ').trim();
+}
+
 /** Strip the decoration people put on destinations: "#ops" / "@amy" / "ops " all compare equal. */
 function normLocator(s) {
   return String(s ?? '').trim().toLowerCase().replace(/^[#@]+/, '');
@@ -780,7 +821,7 @@ export function checkAssertionAtRuntime(assertion, deliveries = []) {
     });
     if (hit) return { ok: true, detail: describeDelivery(d) };
   }
-  return { ok: false, reason: `nothing reached ${assertion.target}` };
+  return { ok: false, reason: `nothing reached ${describeTarget(assertion.target)}` };
 }
 
 /** A one-line, human description of what a delivery did — shown in the test panel. */

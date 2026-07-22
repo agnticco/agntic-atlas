@@ -32,7 +32,8 @@ describe('checkAssertionAtRuntime — did the effect actually happen', () => {
   test('a delivery to the WRONG channel does not', () => {
     const r = checkAssertionAtRuntime(slackToOps, [deliv({ channel: 'slack', target: '#random' })]);
     assert.equal(r.ok, false);
-    assert.match(r.reason, /nothing reached slack:#ops/);
+    assert.match(r.reason, /nothing reached/i);
+    assert.match(r.reason, /#ops/i, 'the reason must still name where it should have gone');
   });
 
   test('decoration is ignored — "#ops", "ops", "@ops" compare equal', () => {
@@ -152,7 +153,8 @@ describe('normalizeDelivery — the real handler shapes reach the oracle (G)', (
     const output = { delivered: true, channel: 'slack', target: '#ops', ts: '1' };
     const r = run(node, output, { kind: 'message_sent', target: 'inbox:Daily Digest' });
     assert.equal(r.ok, false);
-    assert.match(r.reason, /nothing reached inbox:Daily Digest/);
+    assert.match(r.reason, /nothing reached/i);
+    assert.match(r.reason, /Daily Digest/i);
   });
 
   test('a MALFORMED assertion is reported, never silently passed', () => {

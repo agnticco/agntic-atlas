@@ -90,7 +90,8 @@ describe('decision-node source', () => {
     s.outcome.assertions = s.outcome.assertions.filter(a => a.id !== 'a3'); // drop the malformed one
     const r = evaluateExampleRun(s, { given: {} }, decisionRun('P1', null));
     assert.equal(verdict(r, 'a1').ok, false);
-    assert.match(verdict(r, 'a1').reason, /nothing reached slack:#p1/);
+    assert.match(verdict(r, 'a1').reason, /nothing reached/i);
+    assert.match(verdict(r, 'a1').reason, /#p1/i, 'and it must still name the destination');
     assert.equal(r.contractPassed, false);
   });
 });

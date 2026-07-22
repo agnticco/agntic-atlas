@@ -1,5 +1,13 @@
 [
   {
+    "version": "1.6.27",
+    "date": "2026-07-22",
+    "title": "Atlas fills its own blanks instead of asking you twice",
+    "notes": [
+      "When a step was left incomplete, Atlas used to rebuild the whole workflow and then ask you the same question again. It now fills in the obvious answer itself, and questions are written in plain language rather than internal names."
+    ]
+  },
+  {
     "version": "1.6.26",
     "date": "2026-07-22",
     "title": "Interrupted builds recover instead of being declared lost",

@@ -79,7 +79,7 @@ import { WorkflowValidator }       from '../workflows/workflow-validator.js';
 import { NodeTypeRegistry }        from '../workflows/node-type-registry.js';
 import { registerBuiltInNodeTypes } from '../workflows/node-types/index.js';
 import { approvalChannelView }     from '../workflows/approval-channels.js';
-import { routeDomainOf }           from '../workflows/outcome-oracle.js';
+import { routeDomainOf, describeTarget, describeValue } from '../workflows/outcome-oracle.js';
 
 /** Which class an issue belongs to. Anything unlisted is a contract gap. */
 const OUTCOME_CODES  = new Set(['UNSATISFIED_ASSERTION', 'MALFORMED_ASSERTION', 'MISSING_OUTCOME']);
@@ -504,7 +504,7 @@ export function scoreGap(spec = {}, { capabilities = {}, validator = null } = {}
       id: `gap_conditional_${a.id ?? a.target}`.toLowerCase(),
       class: 'coverage', nodeId: null,
       code: 'CONDITIONAL_UNPROVEN', severity: 'warning',
-      message: `The outcome says ${a.target} should happen only when ${a.when} — but nothing in the workflow checks that yet, so it would happen on every run.`,
+      message: `You said this should only reach ${describeTarget(a.target)} when the email is ${describeValue(a.when)} — but nothing in the workflow checks that yet, so it would happen on every run.`,
       hint: 'Add a step that classifies the input, and route on it — or accept that it fires every time.',
       resolution: 'escalated', decidable: false, blocking: false,
     });

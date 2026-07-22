@@ -177,7 +177,11 @@ describe('evaluateExampleRun — a branching workflow self-tests correctly', () 
     const r = evaluateExampleRun(spec, { given: {} }, run);
     assert.equal(r.contractPassed, false, 'the applicable lane delivered nothing');
     assert.equal(byId(r.contract, 'a1').ok, false);
-    assert.match(byId(r.contract, 'a1').reason, /nothing reached slack:#support/);
+    // The destination is named in PLAIN language now ("#support on Slack"), not as the
+    // machine locator. The invariant is unchanged: it must say nothing arrived, and it
+    // must say WHERE — a bare "failed" tells the user nothing actionable.
+    assert.match(byId(r.contract, 'a1').reason, /nothing reached/i);
+    assert.match(byId(r.contract, 'a1').reason, /#support/i);
     // The other lanes are still merely skipped, not counted against the run.
     assert.equal(byId(r.contract, 'a2').skipped, true);
   });

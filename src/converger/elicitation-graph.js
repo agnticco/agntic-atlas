@@ -86,6 +86,19 @@ export function autoRepairStructural(draft, gaps) {
       if (fix.op === 'add_edge' && fix.from && fix.to) {
         d = applyProposal(d, { component: 'edge', spec: { from: fix.from, to: fix.to } });
         applied.push({ gapId: g.id, code: g.code, op: 'add_edge', from: fix.from, to: fix.to });
+      } else if (fix.op === 'set_config' && fix.nodeId && fix.config) {
+        // Fill a blank the converger left in its OWN output. `applyProposal`
+        // replaces a node by id, so the node is re-stated with the filled config
+        // merged over what it already had — never the other way round, or the
+        // repair would quietly revert a value the user had chosen.
+        const cur = (d.nodes ?? []).find(n => n.id === fix.nodeId);
+        if (cur) {
+          d = applyProposal(d, {
+            component: 'node',
+            spec: { ...cur, config: { ...(cur.config ?? {}), ...fix.config } },
+          });
+          applied.push({ gapId: g.id, code: g.code, op: 'set_config', nodeId: fix.nodeId });
+        }
       } else if (fix.op === 'remove_edges' && Array.isArray(fix.edges)) {
         for (const e of fix.edges) {
           if (!e?.from || !e?.to) continue;

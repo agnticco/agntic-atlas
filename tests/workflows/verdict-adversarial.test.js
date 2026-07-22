@@ -171,7 +171,8 @@ describe('kept still means kept, and broken still means broken', () => {
     assert.equal(r.enforced, 1, 'the urgent promise WAS checked');
     assert.equal(r.verdict, 'broken');
     assert.equal(r.contractPassed, false);
-    assert.match(r.contract.find(c => c.id === 'a_urgent').reason, /nothing reached slack:#ops/);
+    assert.match(r.contract.find(c => c.id === 'a_urgent').reason, /nothing reached/i);
+    assert.match(r.contract.find(c => c.id === 'a_urgent').reason, /#ops/i);
   });
 
   test('the asserted lane delivered to the WRONG target → broken', () => {
