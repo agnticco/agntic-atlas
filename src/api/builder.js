@@ -1373,19 +1373,40 @@ Rules:
       const name = spec.name || 'this workflow';
       const triggerLabel = ((spec.triggers || [])[0]?.label) || ((spec.triggers || [])[0]?.type) || 'trigger';
       const nodeList = (spec.nodes || []).map(n => `${n.label || n.type} (${n.type})`).join(' → ');
-      const { completed, steps = [], deliveries = [], output, error } = result;
+      const { completed, steps = [], deliveries = [], output, error, uncoveredLanes = [] } = result;
 
-      let ctx = `Workflow: "${name}"\nTrigger: ${triggerLabel}\nNodes: ${nodeList}\nResult: ${completed ? 'ALL STEPS PASSED' : 'FAILED'}`;
+      // THREE OUTCOMES, NOT TWO. A run can pass, break, or run cleanly while proving
+      // nothing (an untaken lane, no worked examples). This was a boolean, so the
+      // third case arrived as FAILED with no error attached — and the prompt below
+      // asks for "what went wrong", so the model invented a cause, twice, in one
+      // message, directly under a panel saying nothing had broken.
+      // Older clients send no `verdict`; fall back to the boolean so they still work.
+      const verdict = result.verdict ?? (completed ? 'passed' : 'failed');
+
+      let ctx = `Workflow: "${name}"\nTrigger: ${triggerLabel}\nNodes: ${nodeList}\nResult: ${
+        verdict === 'passed'     ? 'ALL STEPS PASSED AND THE WORKFLOW KEPT ITS PROMISES'
+      : verdict === 'unverified' ? 'RAN CLEANLY — NOTHING BROKE — BUT THE TEST DID NOT PROVE THE WORKFLOW WORKS'
+                                 : 'FAILED'}`;
+      if (verdict === 'unverified') {
+        ctx += uncoveredLanes.length
+          ? `\nWhy it proved nothing: the sample runs never went down these paths: ${uncoveredLanes.join(', ')}. A workflow that routes is only proved on the routes actually tested.`
+          : `\nWhy it proved nothing: there was no worked example to check the workflow's promises against.`;
+      }
       if (deliveries.length > 0) {
         const d = deliveries[0];
         ctx += `\nDelivery: message sent to ${d.channel || 'the destination channel'}${d.ts ? ' ✓' : ''}`;
       }
       if (output && typeof output === 'string')   ctx += `\nOutput excerpt: ${output.slice(0, 350)}`;
       if (output && typeof output === 'object')   ctx += `\nOutput: ${JSON.stringify(output).slice(0, 350)}`;
-      if (!completed && error)                    ctx += `\nError: ${String(error).slice(0, 250)}`;
-      if (!completed && steps.length > 0)         ctx += `\nCompleted ${steps.length} step(s) before failure`;
+      if (verdict === 'failed' && error)          ctx += `\nError: ${String(error).slice(0, 250)}`;
+      if (verdict === 'failed' && steps.length > 0) ctx += `\nCompleted ${steps.length} step(s) before failure`;
 
-      const SYSTEM = `You are Atlas, an AI workflow assistant. The user just ran a test of their workflow. Write a 2-3 sentence summary of what happened, in plain language a non-technical person would understand. Be specific — say what the workflow actually did (or what broke), not just "the test passed/failed". Don't use quotes around the workflow name. If it passed, be warm and specific. If it failed, be clear about what went wrong.`;
+      // The last rule is load-bearing. Without it the model is asked to explain a
+      // failure that did not occur, and it complies — inventing a broken step, and
+      // contradicting the panel the user is looking at while it does so.
+      const SYSTEM = `You are Atlas, an AI workflow assistant. The user just ran a test of their workflow. Write a 2-3 sentence summary of what happened, in plain language a non-technical person would understand. Be specific — say what the workflow actually did (or what broke), not just "the test passed/failed". Don't use quotes around the workflow name. If it passed, be warm and specific. If it failed, be clear about what went wrong.
+
+CRITICAL: if the result says the run did NOT prove the workflow works, then NOTHING WENT WRONG. Do not say it failed, do not say a step broke, timed out, was rejected or was cut off, and do not speculate about a cause — there is no failure to explain. Say plainly that the workflow ran without errors but the test could not confirm it does what it promises, and give the reason stated in the result. Suggest testing the paths that were not covered.`;
 
       const raw = await withLLMRetry(() => llm.invoke(
         [{ role: 'system', content: SYSTEM }, { role: 'user', content: `Summarize this test run:\n\n${ctx}` }],
@@ -1393,7 +1414,7 @@ Rules:
       ));
       const summary = (typeof raw === 'string' ? raw : raw?.content ?? '').trim();
 
-      logEvent('test.summary', { tenant: req.tenant?.id ?? null, completed, chars: summary.length });
+      logEvent('test.summary', { tenant: req.tenant?.id ?? null, completed, verdict, chars: summary.length });
       return res.json({ summary });
     } catch (err) {
       logEvent('test.summary.error', { tenant: req.tenant?.id ?? null, ...errFields(err) });

@@ -1,5 +1,13 @@
 [
   {
+    "version": "1.6.29",
+    "date": "2026-07-22",
+    "title": "The test result no longer contradicts itself",
+    "notes": [
+      "When a test ran cleanly but couldn't prove the workflow works, the chat used to claim a step had failed — and invent a reason. It now says plainly that nothing broke and which paths still need testing."
+    ]
+  },
+  {
     "version": "1.6.28",
     "date": "2026-07-22",
     "title": "Atlas no longer promises something it can't check",
