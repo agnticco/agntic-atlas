@@ -1,5 +1,13 @@
 [
   {
+    "version": "1.6.13",
+    "date": "2026-07-21",
+    "title": "The workflow diagram reads left to right",
+    "notes": [
+      "Workflows with an approval step drew their diagram out of order — the first step low and left, later steps above it. The whole graph is now laid out properly and reads start to finish."
+    ]
+  },
+  {
     "version": "1.6.12",
     "date": "2026-07-21",
     "title": "Approval workflows can be tested again",

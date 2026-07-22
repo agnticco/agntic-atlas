@@ -581,9 +581,21 @@
                 <sc-if value="{{ liveGraph }}" hint-placeholder-val="{{ false }}">
                 <div style="animation:msgIn .4s ease both">
                   <div ref="{{ liveGraph.fitRef }}" style="box-sizing:content-box;overflow:hidden;padding:0">
-                    <div ref="{{ liveGraph.fitInnerRef }}" style="display:flex;align-items:center;gap:0;width:max-content;transform-origin:top left;padding:22px 24px 46px 28px;min-height:80px">
-                      <sc-for list="{{ liveGraph.trunk }}" as="an" hint-placeholder-count="3">
-                        <div style="display:flex;align-items:center;flex:none">
+                    <div ref="{{ liveGraph.fitInnerRef }}" style="position:relative;width:{{ liveGraph.canvasW }};height:{{ liveGraph.canvasH }};transform-origin:top left;margin:14px 20px 10px 18px">
+                      <!-- EDGES. One <svg> per edge inside its own absolutely-positioned
+                           <span>, rather than one <svg> with an sc-for inside it: the
+                           template compiler builds plain elements, and a repeat inside an
+                           SVG subtree does not get the SVG namespace. The fan-out block
+                           this replaces used the same shape for the same reason. -->
+                      <sc-for list="{{ liveGraph.edges }}" as="ed" hint-placeholder-count="3">
+                        <span style="position:absolute;left:0;top:0;width:{{ liveGraph.canvasW }};height:{{ liveGraph.canvasH }};display:block;pointer-events:none;opacity:{{ ed.o }};transition:opacity .45s"><svg width="{{ liveGraph.canvasW }}" height="{{ liveGraph.canvasH }}" fill="none" style="display:block;overflow:visible"><path d="{{ ed.d }}" stroke="{{ ed.color }}" stroke-width="2" stroke-linecap="round" fill="none"></path><polygon points="{{ ed.arrowPoints }}" fill="{{ ed.color }}"></polygon></svg></span>
+                      </sc-for>
+                      <!-- A case label rides its own edge (only an exclusive split has them). -->
+                      <sc-for list="{{ liveGraph.edgeLabels }}" as="el" hint-placeholder-count="2">
+                        <span style="position:absolute;left:{{ el.left }};top:{{ el.top }};transform:translateX(-50%);font-family:'Instrument Serif',Georgia,serif;font-style:italic;font-size:12px;color:{{ el.color }};white-space:nowrap;pointer-events:none;opacity:{{ el.o }};transition:opacity .45s">{{ el.text }}</span>
+                      </sc-for>
+                      <sc-for list="{{ liveGraph.nodes }}" as="an" hint-placeholder-count="4">
+                        <div style="position:absolute;left:{{ an.left }};top:{{ an.top }}">
                           <div class="nodewrap" style="flex:none;position:relative;opacity:{{ an.o }};transform:{{ an.tr }};transition:opacity .5s,transform .5s cubic-bezier(.2,.7,.3,1)">
                             <div style="width:{{ an.w }};height:{{ an.h }};border-radius:{{ an.radius }};border:1.5px solid {{ an.border }};background:{{ an.bg }};transform:{{ an.rot }};animation:{{ an.anim }};display:flex;align-items:center;justify-content:center;color:{{ an.fg }};transition:border .25s,color .25s">
                               <span style="transform:{{ an.unrot }};display:flex">
@@ -618,81 +630,8 @@
                               <span style="font-family:ui-monospace,SFMono-Regular,monospace;font-size:7.5px;font-weight:600;letter-spacing:.12em;color:rgba(255,255,255,.3);white-space:nowrap">{{ an.tag }}</span>
                             </span>
                           </div>
-                          <sc-if value="{{ an.showConn }}" hint-placeholder-val="{{ true }}">
-                            <span style="flex:none;display:flex;align-items:center;opacity:{{ an.connO }};transition:opacity .4s"><span style="width:42px;height:2px;background:{{ an.connColor }};transition:background .3s"></span><span style="width:0;height:0;border-top:4px solid transparent;border-bottom:4px solid transparent;border-left:6px solid {{ an.connColor }};transition:border-color .3s"></span></span>
-                          </sc-if>
                         </div>
                       </sc-for>
-                    <sc-if value="{{ liveGraph.hasLanes }}" hint-placeholder-val="{{ false }}">
-                      <div style="flex:none;position:relative;width:{{ liveGraph.fan.wpx }};height:{{ liveGraph.fan.hpx }};margin:0 -3px;opacity:{{ liveGraph.fan.o }};transition:opacity .4s">
-                        <sc-for list="{{ liveGraph.fan.paths }}" as="fp" hint-placeholder-count="2">
-                          <span style="position:absolute;left:0;top:0;width:{{ liveGraph.fan.wpx }};height:{{ liveGraph.fan.hpx }};display:block"><svg viewBox="{{ liveGraph.fan.viewBox }}" width="{{ liveGraph.fan.w }}" height="{{ liveGraph.fan.h }}" fill="none" style="display:block;overflow:visible"><path d="{{ fp.d }}" stroke="{{ fp.color }}" stroke-width="2" stroke-linecap="round" fill="none"></path><polygon points="{{ fp.head }}" fill="{{ fp.color }}"></polygon></svg></span>
-                        </sc-for>
-                        <span style="position:absolute;left:2px;top:{{ liveGraph.fan.dotTop }};width:7px;height:7px;border-radius:50%;background:{{ liveGraph.fan.dotColor }}"></span>
-                      </div>
-                        <div style="display:flex;flex-direction:column;gap:56px;padding-left:0">
-                          <sc-for list="{{ liveGraph.lanes }}" as="ln" hint-placeholder-count="2">
-                            <div>
-                              <div style="font-family:'Instrument Serif',Georgia,serif;font-style:italic;font-size:13px;color:rgba(239,200,146,.8);margin:0 0 8px 2px;white-space:nowrap;opacity:{{ ln.labelO }};transition:opacity .4s">{{ ln.label }}</div>
-                              <sc-for list="{{ ln.rows }}" as="rw" hint-placeholder-count="1">
-                              <sc-if value="{{ rw.hasLabel }}" hint-placeholder-val="{{ false }}">
-                                <div style="font-family:'Instrument Serif',Georgia,serif;font-style:italic;font-size:12px;color:rgba(239,200,146,.62);margin:0 0 8px 2px;white-space:nowrap">↳ {{ rw.label }}</div>
-                              </sc-if>
-                              <!-- A node's TITLE is absolutely positioned under its circle
-                                   (top:calc(100% + 8px)) so it contributes NO layout height.
-                                   Rows must therefore reserve that space themselves, or the
-                                   next row's label lands on top of the previous row's titles
-                                   — which is exactly what happened on first render. 40px ≈
-                                   two lines of title + the 8px offset, matching the 46px the
-                                   trunk reserves via its own padding-bottom. -->
-                              <div style="display:flex;align-items:flex-start;gap:0;padding-bottom:40px">
-                                <sc-for list="{{ rw.nodes }}" as="an" hint-placeholder-count="2">
-                        <div style="display:flex;align-items:center;flex:none">
-                          <div class="nodewrap" style="flex:none;position:relative;opacity:{{ an.o }};transform:{{ an.tr }};transition:opacity .5s,transform .5s cubic-bezier(.2,.7,.3,1)">
-                            <div style="width:{{ an.w }};height:{{ an.h }};border-radius:{{ an.radius }};border:1.5px solid {{ an.border }};background:{{ an.bg }};transform:{{ an.rot }};animation:{{ an.anim }};display:flex;align-items:center;justify-content:center;color:{{ an.fg }};transition:border .25s,color .25s">
-                              <span style="transform:{{ an.unrot }};display:flex">
-                                <sc-if value="{{ an.icoMail }}" hint-placeholder-val="{{ false }}"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="2"></rect><path d="M3 7l9 6 9-6"></path></svg></sc-if>
-                                <sc-if value="{{ an.icoFork }}" hint-placeholder-val="{{ false }}"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12h7"></path><path d="M10 12c4.5 0 4.5-5.5 9-5.5"></path><path d="M10 12c4.5 0 4.5 5.5 9 5.5"></path><circle cx="20.5" cy="6.5" r="1.4"></circle><circle cx="20.5" cy="17.5" r="1.4"></circle></svg></sc-if>
-                                <sc-if value="{{ an.icoDoc }}" hint-placeholder-val="{{ false }}"><svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="8" y1="13" x2="16" y2="13"></line><line x1="8" y1="17" x2="13" y2="17"></line></svg></sc-if>
-                                <sc-if value="{{ an.icoDb }}" hint-placeholder-val="{{ false }}"><svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5" rx="8" ry="3"></ellipse><path d="M4 5v14c0 1.7 3.6 3 8 3s8-1.3 8-3V5"></path><path d="M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3"></path></svg></sc-if>
-                                <sc-if value="{{ an.icoInbox }}" hint-placeholder-val="{{ false }}"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M22 12h-6l-2 3h-4l-2-3H2"></path><path d="M5.5 5h13L22 12v6a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2v-6z"></path></svg></sc-if>
-                                <sc-if value="{{ an.icoGear }}" hint-placeholder-val="{{ false }}"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><circle cx="12" cy="12" r="3.2"></circle><path d="M12 2.5v3M12 18.5v3M2.5 12h3M18.5 12h3M5.2 5.2l2.1 2.1M16.7 16.7l2.1 2.1M18.8 5.2l-2.1 2.1M7.3 16.7l-2.1 2.1"></path></svg></sc-if>
-                                <sc-if value="{{ an.icoSpark }}" hint-placeholder-val="{{ false }}"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"><path d="M12 3l2.1 6.4L20.5 11.5l-6.4 2.1L12 20l-2.1-6.4L3.5 11.5l6.4-2.1z"></path></svg></sc-if>
-                                <sc-if value="{{ an.icoSplit }}" hint-placeholder-val="{{ false }}"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M5 12h6M11 12l5-5M11 12l5 5"></path></svg></sc-if>
-                                <sc-if value="{{ an.icoPerson }}" hint-placeholder-val="{{ false }}"><svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><circle cx="12" cy="8" r="4"></circle><path d="M4 21c0-4 3.6-6.5 8-6.5s8 2.5 8 6.5"></path></svg></sc-if>
-                                <sc-if value="{{ an.icoBolt }}" hint-placeholder-val="{{ false }}"><svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor"><path d="M13 2 4.5 13.5H11L9.5 22 19 10h-6.5z"></path></svg></sc-if>
-                                <sc-if value="{{ an.icoLayers }}" hint-placeholder-val="{{ false }}"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2 2 7.5 12 13l10-5.5z"></path><path d="M2 12.5 12 18l10-5.5"></path><path d="M2 17.5 12 23l10-5.5"></path></svg></sc-if>
-                                <sc-if value="{{ an.icoPlug }}" hint-placeholder-val="{{ false }}"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M9 7V3M15 7V3"></path><path d="M6 7h12v4a6 6 0 0 1-12 0z"></path><path d="M12 17v4"></path></svg></sc-if>
-                                <sc-if value="{{ an.icoGlobe }}" hint-placeholder-val="{{ false }}"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"></circle><path d="M3 12h18M12 3c2.7 2.6 4 5.7 4 9s-1.3 6.4-4 9c-2.7-2.6-4-5.7-4-9s1.3-6.4 4-9z"></path></svg></sc-if>
-                                <sc-if value="{{ an.icoSend }}" hint-placeholder-val="{{ false }}"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M22 2 11 13"></path><path d="M22 2 15 22l-4-9-9-4z"></path></svg></sc-if>
-                                <sc-if value="{{ an.icoLoop }}" hint-placeholder-val="{{ false }}"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M17 2l4 4-4 4"></path><path d="M3 11V9a4 4 0 0 1 4-4h14"></path><path d="M7 22l-4-4 4-4"></path><path d="M21 13v2a4 4 0 0 1-4 4H3"></path></svg></sc-if>
-                                <sc-if value="{{ an.icoGrid }}" hint-placeholder-val="{{ false }}"><svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"></rect><path d="M3 9h18M3 15h18M12 3v18"></path></svg></sc-if>
-                                <sc-if value="{{ an.icoStop }}" hint-placeholder-val="{{ false }}"><svg viewBox="0 0 24 24" width="15" height="15" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="2.5"></rect></svg></sc-if>
-                              </span>
-                            </div>
-                            <sc-if value="{{ an.check }}" hint-placeholder-val="{{ false }}"><span style="position:absolute;right:{{ an.checkR }};bottom:{{ an.checkB }};width:17px;height:17px;border-radius:50%;background:#5fc78a;border:2px solid #0A0A0A;display:flex;align-items:center;justify-content:center"><svg viewBox="0 0 24 24" width="9" height="9" fill="none" stroke="#06210d" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4 4 9-10"></path></svg></button></sc-if>
-                            <sc-if value="{{ an.decide }}" hint-placeholder-val="{{ false }}">
-                              <span class="nctrl" style="position:absolute;right:{{ an.checkR }};bottom:{{ an.checkB }};display:flex;gap:5px">
-                                <button onClick="{{ an.onApprove }}" type="button" title="Confirm" aria-label="Confirm this step: {{ an.title }}" style="width:19px;height:19px;padding:0;border-radius:50%;background:#0A0A0A;border:2px solid #5fc78a;cursor:pointer;display:flex;align-items:center;justify-content:center"><svg viewBox="0 0 24 24" width="9" height="9" fill="none" stroke="#5fc78a" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4 4 9-10"></path></svg></button>
-                                <button onClick="{{ an.onReject }}" type="button" title="Reject" aria-label="Reject this step: {{ an.title }}" style="width:19px;height:19px;padding:0;border-radius:50%;background:#0A0A0A;border:2px solid #e87878;cursor:pointer;display:flex;align-items:center;justify-content:center"><svg viewBox="0 0 24 24" width="9" height="9" fill="none" stroke="#e87878" stroke-width="4" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"></path></svg></button>
-                              </span>
-                            </sc-if>
-                            <span style="position:absolute;top:calc(100% + 8px);left:50%;transform:translateX(-50%);width:92px;display:flex;flex-direction:column;gap:2px;text-align:center;pointer-events:none">
-                              <span style="font-size:10.5px;font-weight:600;line-height:1.25;color:{{ an.titleColor }};overflow:hidden;text-overflow:ellipsis;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical">{{ an.title }}</span>
-                              <span style="font-family:ui-monospace,SFMono-Regular,monospace;font-size:7.5px;font-weight:600;letter-spacing:.12em;color:rgba(255,255,255,.3);white-space:nowrap">{{ an.tag }}</span>
-                            </span>
-                          </div>
-                          <sc-if value="{{ an.showConn }}" hint-placeholder-val="{{ true }}">
-                            <span style="flex:none;display:flex;align-items:center;opacity:{{ an.connO }};transition:opacity .4s"><span style="width:42px;height:2px;background:{{ an.connColor }};transition:background .3s"></span><span style="width:0;height:0;border-top:4px solid transparent;border-bottom:4px solid transparent;border-left:6px solid {{ an.connColor }};transition:border-color .3s"></span></span>
-                          </sc-if>
-                        </div>
-                      </sc-for>
-                              </div>
-                              </sc-for>
-                            </div>
-                          </sc-for>
-                        </div>
-                    </sc-if>
                     </div>
                   </div>
                   <sc-if value="{{ liveGraph.explaining }}" hint-placeholder-val="{{ false }}">
@@ -6907,175 +6846,151 @@ class Component extends DCLogic {
     }
     return out;
   }
-  _liveTrunkOf(spec, nodes, confirmed, flashIdx, explaining, ready, revealed) {
-    const br = this._laneSourceOf(spec?.nodes, spec?.edges);
-    if (!br) return nodes.map((n, i) => this._liveCardFor(n, i, confirmed, flashIdx, explaining, ready, revealed));
-    const cut = nodes.findIndex(n => n.id === br.id);
-    const upto = cut < 0 ? nodes.length - 1 : cut;
-    return nodes.slice(0, upto + 1).map((n, i) => this._liveCardFor(n, i, confirmed, flashIdx, explaining, ready, revealed));
-  }
-  // One lane per branch case: walk the spec's edges from each case target, collecting the
-  // chain until it ends. Any number of lanes, any depth — nothing about shape is assumed.
-  _liveLanes(spec, nodes, confirmed, flashIdx, explaining, ready, revealed) {
-    const edges = spec?.edges || [];
-    const br = this._laneSourceOf(spec?.nodes, edges);
-    if (!br) return null;
-    const cases = (br.config && br.config.cases) || [];
-    // Lanes come from the split's EDGE TARGETS, not from `cases`. A fan-out has no
-    // cases at all and still has lanes; a router's cases only supply their labels.
-    const exclusive = this._isExclusiveSplit(br);
-    const laneTargets = this._splitTargetsOf(br, edges);
-    if (laneTargets.length < 2) return null;
-    const byId = new Map((spec?.nodes || []).map(n => [n.id, n]));
-    const idxOf = (id) => nodes.findIndex(n => n.id === id);
-    // EVERY LIVE NODE MUST RENDER. The approval queue walks `nodes` by INDEX and shows a
-    // confirm control only for the node at `liveConfirmed`; a node that is never drawn has
-    // no control, so the queue stops dead, "Run test" never enables, and the workflow can
-    // be neither tested nor published — with no error (2026-07-19). `claimed` makes the
-    // coverage invariant structural: the trunk claims its nodes, each lane claims what it
-    // walks, and whatever is left is swept up below.
-    const claimed = new Set();
-    const brCut = nodes.findIndex(n => n.id === br.id);
-    nodes.slice(0, (brCut < 0 ? nodes.length - 1 : brCut) + 1).forEach(n => n && n.id && claimed.add(n.id));
-    const cardFor = (id) => {
-      const gi = idxOf(id);
-      const n = gi >= 0 ? nodes[gi] : byId.get(id);
-      return this._liveCardFor(n, gi >= 0 ? gi : 1e9, confirmed, flashIdx, explaining, ready, revealed);
+  // ── THE LIVE GRAPH IS LAID OUT BY DAGRE (2026-07-21) ──────────────────────
+  // It used to be laid out by hand: a trunk, one lane per case of the FIRST split,
+  // and — for any split inside a lane — a row break. That renderer knew how to draw
+  // exactly one branch point's geometry, and its own comment said so ("a nested fork
+  // is expressed by the row break and the label, not by a second set of beziers…
+  // nesting it properly needs a real layout pass").
+  //
+  // An APPROVAL WORKFLOW ALWAYS HAS A SECOND SPLIT — the branch that reads the
+  // person's answer is what makes the gate a gate (CLAUDE.md: "a `human` node alone
+  // is not a gate"). So on the one shape the product most needs to show, the rows
+  // after the approval restarted at the LANE'S LEFT EDGE, far to the left of the
+  // fork they descend from. Seen live on a real 16-node spec: the first step sat
+  // low-left, the steps AFTER the approval were drawn ABOVE it, "Stop — rejected"
+  // landed above the step it is the alternative to, and the eye had to read
+  // bottom-left → top-right → back down. It was not wrong about the EDGES; it was
+  // unreadable, which on a diagram is the same failure.
+  //
+  // That real layout pass already existed in this file (`_layoutGraph`, used by
+  // `_specCanvas`) and dagre is already vendored. On the same spec it produces 13
+  // clean left-to-right ranks with nothing overlapping. This is that pass, applied
+  // to the LIVE cards.
+  //
+  // WHAT IS DELIBERATELY PRESERVED, because each was added to fix a real defect:
+  //   • Cards still come from `_liveCardFor(node, i, …)` with `i` = the node's index
+  //     in `nodes`. The approval queue walks that array BY INDEX and shows a control
+  //     only at `liveConfirmed`; a node that never renders has no control, the queue
+  //     stops dead and the workflow can be neither tested nor published, with no
+  //     error. Laying out every node from the same array keeps that coverage
+  //     structural rather than something the walk has to remember.
+  //   • The reveal animation is untouched — it lives in the card's own `o`/`tr`.
+  //   • Case labels still render, and ONLY for an exclusive split. A parallel
+  //     fan-out's targets all run, so labelling them claims a choice nobody makes.
+  // What is dropped is the inline connector arrow: edges are real paths now.
+  _liveGraphLayout(spec, nodes, confirmed, flashIdx, explaining, ready, revealed) {
+    // WIDTH IS THE BINDING CONSTRAINT, not height. The whole graph is scaled to fit the
+    // chat column, so every px of rank separation costs legibility on a long workflow:
+    // a 13-rank approval spec laid out at ranksep 64 came to 1566px, scaled to 0.70, and
+    // put the node titles at ~7px. Ranks are packed to just clear the 92px title (which
+    // is absolutely positioned and contributes no layout width), and the slack is spent
+    // on NODESEP instead, where it is free — the graph is far shorter than it is wide.
+    const CARD = 58, RANKSEP = 46, NODESEP = 54, TITLE_H = 46;
+    const idxOf = new Map(nodes.map((n, i) => [n.id, i]));
+    const cardOf = (n, i) => {
+      const c = this._liveCardFor(n, i, confirmed, flashIdx, explaining, ready, revealed);
+      c.showConn = false;                 // the SVG overlay draws every edge now
+      return c;
     };
-    // A LANE IS A LIST OF ROWS, NOT A LIST OF NODES — because a lane can contain another
-    // branch (2026-07-19). Rendering a nested branch's targets as one horizontal run joined
-    // by connector arrows says "these happen in sequence", when they are MUTUALLY EXCLUSIVE
-    // outcomes. On an approval workflow that read as "send the email, THEN mark it not
-    // approved, THEN stop" — the graph asserting the opposite of what the spec does.
-    //
-    // So: walk linearly while each node has ONE successor; the moment a node forks, close
-    // the row and open one row PER target, each labelled with that case's own words. Rows
-    // stack vertically inside the lane, so alternatives read as alternatives.
-    //
-    // Depth: this recurses, so a branch inside a branch inside a lane also gets its own
-    // labelled rows. What it does NOT do is draw sub-fan-out GEOMETRY (the curved connector
-    // per sub-lane) — a nested fork is expressed by the row break and the label, not by a
-    // second set of beziers. That is a deliberate limit, not an oversight: `_liveFanout`
-    // computes one branch point's geometry against the lane stack's height, and nesting it
-    // properly needs a real layout pass. Rows are honest and cheap; sub-beziers are the
-    // next increment if the shape warrants it.
-    const rowsFrom = (startId, label, depth) => {
-      const out = [];
-      let row = [];
-      let cur = startId;
-      let rowLabel = label;
-      while (cur && byId.has(cur) && !claimed.has(cur)) {
-        claimed.add(cur); row.push(cur);
-        const outs = edges.filter(e => e.from === cur);
-        if (outs.length <= 1) { cur = outs.length ? outs[0].to : null; continue; }
-        // FORK. Close this row on the branch node, then one row per distinct target.
-        const forkNode = byId.get(cur);
-        const forkCases = (forkNode && forkNode.config && forkNode.config.cases) || [];
-        // A NESTED FORK IS LABELLED ONLY IF IT ROUTES. The same rule as the top
-        // level: an exclusive split's rows are alternatives and must say which case
-        // picks them; a PARALLEL fan-out's rows all run, so a case label is a lie.
-        //
-        // Worse than a lie, in practice: `_laneLabelFor` falls back to the approved
-        // plan's branch list BY INDEX, and an unmatched fork passes index 0 — so a
-        // fan-out nested inside a lane borrowed the plan's FIRST branch label and
-        // rendered "↳ Classified as a bug report" over BOTH halves of a broadcast.
-        // The reader is told a routing decision is being made, twice, with the same
-        // condition on each side.
-        const forkExclusive = this._isExclusiveSplit(forkNode);
-        out.push({ label: rowLabel, ids: row }); row = []; rowLabel = null;
-        const seenT = new Set();
-        const subs = [];
-        outs.forEach((e) => {
-          if (seenT.has(e.to)) return;             // several cases → one target: one row
-          seenT.add(e.to);
-          const ci = forkCases.findIndex(c => c && c.to === e.to);
-          const sub = forkExclusive
-            ? this._laneLabelFor(ci >= 0 ? forkCases[ci].when : null, ci >= 0 ? ci : 0)
-            : null;
-          subs.push(rowsFrom(e.to, sub, depth + 1));
-        });
-        // SIBLINGS BEFORE DESCENDANTS. Depth-first order put a fork's second case AFTER the
-        // first case's grandchildren, so on the approval workflow "↳ reject" rendered at the
-        // very bottom, four rows below the "↳ approve" it is the alternative to. The two
-        // outcomes of one decision must sit together or the reader cannot pair them: emit
-        // every sibling's FIRST row, then their remainders.
-        subs.forEach(s => { if (s.length) out.push(s[0]); });
-        subs.forEach(s => { for (let i = 1; i < s.length; i++) out.push(s[i]); });
-        cur = null;
-      }
-      if (row.length) out.push({ label: rowLabel, ids: row });
-      return out;
+    const rawEdges = (spec && Array.isArray(spec.edges)) ? spec.edges : [];
+    const haveDagre = typeof window !== 'undefined' && window.dagre && window.dagre.graphlib;
+    if (!haveDagre) {
+      // Never crash if the vendor script is missing: fall back to one honest row.
+      const cards = nodes.map((n, i) => {
+        const c = cardOf(n, i);
+        c.left = (20 + i * (CARD + RANKSEP)) + 'px'; c.top = '20px';
+        return c;
+      });
+      return { nodes: cards, edges: [], edgeLabels: [],
+               canvasW: (40 + nodes.length * (CARD + RANKSEP)) + 'px', canvasH: (40 + CARD + TITLE_H) + 'px' };
+    }
+
+    const g = new window.dagre.graphlib.Graph();
+    g.setGraph({ rankdir: 'LR', ranksep: RANKSEP, nodesep: NODESEP, marginx: 22, marginy: 22 });
+    g.setDefaultEdgeLabel(() => ({}));
+    nodes.forEach(n => g.setNode(n.id, { width: CARD, height: CARD }));
+
+    // EDGE KEYS ARE JSON, NOT CONCATENATION. `from + '' + to` cannot distinguish
+    // ("ab","c") from ("a","bc"), and a key that CAN collide is a silently dropped
+    // edge waiting to happen (CLAUDE.md, twice: the NUL separator, then laneKey).
+    const seen = new Set(); const edgeList = [];
+    const addEdge = (from, to) => {
+      if (from == null || to == null || from === to) return;
+      if (!g.hasNode(from) || !g.hasNode(to)) return;
+      const k = JSON.stringify([from, to]);
+      if (seen.has(k)) return;
+      seen.add(k); g.setEdge(from, to); edgeList.push({ from, to, k });
     };
-    const lanes = [];
-    laneTargets.forEach((to, i) => {
-      const rawRows = rowsFrom(to, null, 0).filter(r => r.ids.length);
-      if (!rawRows.length) return;
-      const firstGi = idxOf(to);
-      // An exclusive split's lanes are ALTERNATIVES and must say which case picks
-      // them. A parallel split's lanes all run, so a case label would be a lie —
-      // they get no label, and the fan-out marker below says "all of these".
-      const ci = cases.findIndex(c => c && c.to === to);
-      lanes.push({
-        label: exclusive ? this._laneLabelFor(ci >= 0 ? cases[ci].when : null, ci >= 0 ? ci : i) : '',
-        // The lane's italic label fades in WITH its first node during the reveal, so a lane
-        // header never floats above an empty lane. `revealed == null` (settled) ⇒ shown.
-        labelO: (revealed == null || (firstGi >= 0 && firstGi < revealed)) ? 1 : 0,
-        rows: rawRows.map(r => {
-          const cards = r.ids.map(cardFor);
-          // No trailing arrow off the end of a row: the next row is an ALTERNATIVE, not a
-          // successor, and a dangling connector is exactly the false-sequence claim above.
-          if (cards.length) cards[cards.length - 1].showConn = false;
-          return { label: r.label || '', hasLabel: !!r.label, nodes: cards };
-        }),
+    rawEdges.forEach(e => { if (e) addEdge(e.from, e.to); });
+    // The trigger is `nodes[0]` and is NOT in `spec.edges` — wire it to the real
+    // entry node(s): those with no inbound spec edge.
+    const trig = nodes[0] && String(nodes[0].type).toLowerCase() === 'trigger' ? nodes[0] : null;
+    if (trig) {
+      const indeg = new Map();
+      nodes.forEach(n => { if (n !== trig) indeg.set(n.id, 0); });
+      rawEdges.forEach(e => { if (e && indeg.has(e.to)) indeg.set(e.to, indeg.get(e.to) + 1); });
+      let entries = [...indeg.entries()].filter(([, d]) => d === 0).map(([id]) => id);
+      if (!entries.length && nodes.length > 1) entries = [nodes[1].id];
+      entries.forEach(id => addEdge(trig.id, id));
+    }
+
+    window.dagre.layout(g);
+
+    const shownOf = (id) => revealed == null || (idxOf.get(id) ?? 1e9) < revealed;
+    const okOf    = (id) => (idxOf.get(id) ?? 1e9) < confirmed;
+
+    const cards = nodes.map((n, i) => {
+      const c = cardOf(n, i);
+      const p = g.node(n.id) || { x: CARD / 2, y: CARD / 2 };
+      const w = parseFloat(c.w) || CARD, h = parseFloat(c.h) || CARD;
+      c.left = Math.round(p.x - w / 2) + 'px';
+      c.top  = Math.round(p.y - h / 2) + 'px';
+      return c;
+    });
+
+    // Case labels, exclusive splits only (see the note above).
+    const byId = new Map(((spec && spec.nodes) || []).map(n => [n.id, n]));
+    const label = new Map();
+    byId.forEach((n, id) => {
+      if (!this._isExclusiveSplit(n)) return;
+      const cases = (n.config && n.config.cases) || [];
+      cases.forEach(c => {
+        if (!c || c.to == null) return;
+        const k = JSON.stringify([id, c.to]);
+        if (!label.has(k)) label.set(k, this._laneLabel(c.when));
       });
     });
-    if (lanes.length) lanes[0]._parallel = !exclusive;
-    // SWEEP: anything the trunk and the lane walks did not claim. The walk above should
-    // cover every edge-connected node, so this is normally empty — but an orphan (a node
-    // with no incoming edge, or one reachable only through a shape not modelled here) must
-    // still render, because invisible ⇒ unapprovable ⇒ the build is stranded. Correctness
-    // beats layout: these are appended to the LAST lane rather than given a lane of their
-    // own, because lane count drives the fan-out and a new lane would draw an arrow from
-    // the branch, claiming a routing relationship that does not exist.
-    const orphans = nodes.filter(n => n && n.id && !claimed.has(n.id));
-    if (orphans.length) {
-      orphans.forEach(n => claimed.add(n.id));
-      const cards = orphans.map(n => cardFor(n.id));
-      if (cards.length) cards[cards.length - 1].showConn = false;
-      const row = { label: '', hasLabel: false, nodes: cards };
-      if (lanes.length) lanes[lanes.length - 1].rows.push(row);
-      else lanes.push({ label: '', labelO: 1, rows: [row] });
-    }
-    return lanes.length ? lanes : null;
-  }
-  // The branch fan-out, drawn as the design draws it (curved bezier + arrowhead per lane)
-  // but GENERIC over lane count — the design hard-codes two lanes at a fixed 236px; this
-  // computes the geometry for N lanes so a 2-way, 3-way or 5-way branch all connect. The
-  // constants MUST match the lane markup below (node 58, lane label ~24, inter-lane gap 56),
-  // because the whole row is `align-items:center`: the branch sits at the vertical centre of
-  // the lane stack, and each path lands on the centre of that lane's first node.
-  _liveFanout(laneCount, branchConfirmed, branchFlash) {
-    const NODE_H = 58, LABEL_H = 24, LANE_H = NODE_H + LABEL_H, GAP = 56, W = 48;
-    const n = Math.max(1, laneCount);
-    const blockH = n * LANE_H + (n - 1) * GAP;
-    const cy = blockH / 2;                                   // branch connection Y (centre)
-    const lit = branchFlash ? '#5fc78a' : (branchConfirmed ? 'rgba(231,178,94,.55)' : 'rgba(255,255,255,.14)');
-    const paths = [];
-    for (let i = 0; i < n; i++) {
-      const ly = i * (LANE_H + GAP) + LABEL_H + NODE_H / 2;  // this lane's node centre
-      const x0 = 5, x1 = W - 10, mx = (x0 + x1) / 2;
-      paths.push({
-        d: 'M' + x0 + ' ' + cy + ' C ' + mx + ' ' + cy + ', ' + mx + ' ' + ly + ', ' + x1 + ' ' + ly,
-        head: (x1) + ',' + (ly - 4) + ' ' + (x1 + 6) + ',' + ly + ' ' + (x1) + ',' + (ly + 4),
-        color: lit,
-      });
-    }
-    return { w: W, h: blockH, wpx: W + 'px', hpx: blockH + 'px',
-             viewBox: '0 0 ' + W + ' ' + blockH, dotY: cy, dotTop: (cy - 3.5) + 'px',
-             dotColor: lit, paths };
+
+    const edges = []; const edgeLabels = [];
+    edgeList.forEach(e => {
+      const ge = g.edge(e.from, e.to);
+      const pts = (ge && ge.points) ? ge.points : [];
+      if (pts.length < 2) return;
+      const lit = okOf(e.from) && okOf(e.to);
+      const vis = shownOf(e.from) && shownOf(e.to) ? 1 : 0;
+      edges.push({ d: this._edgePath(pts), arrowPoints: this._edgeArrow(pts),
+                   color: lit ? 'rgba(231,178,94,.5)' : 'rgba(255,255,255,.14)', o: vis });
+      const txt = label.get(e.k);
+      if (txt) {
+        const mid = pts[Math.floor(pts.length / 2)] || pts[0];
+        edgeLabels.push({ text: txt, o: vis,
+          color: lit ? 'rgba(239,200,146,.85)' : 'rgba(255,255,255,.34)',
+          left: Math.round(mid.x) + 'px', top: (Math.round(mid.y) - 21) + 'px' });
+      }
+    });
+
+    const gg = g.graph();
+    return {
+      nodes: cards, edges, edgeLabels,
+      canvasW: Math.max(1, Math.ceil(gg.width || 0)) + 'px',
+      // The title sits under its card via `top:calc(100% + 8px)` and contributes NO
+      // layout height, so the canvas must reserve it or the bottom row is clipped.
+      canvasH: (Math.max(1, Math.ceil(gg.height || 0)) + TITLE_H) + 'px',
+    };
   }
   // SCALE-TO-FIT (the design's own mechanism, 2026-07-17). The graph is laid out at its
-  // NATURAL size (`width:max-content`) and then scaled down with a single transform so it
+  // NATURAL size (dagre's own canvas width/height) and then scaled down with a transform so it
   // always fits the chat column — never horizontal-scrolls, never overflows, and reflows on
   // any window resize. This replaces the fixed-width + `overflow-x:auto` approach, which
   // clipped wide branch graphs and broke on resize. `k` never scales UP (max 1), so a small
@@ -7726,7 +7641,8 @@ class Component extends DCLogic {
     const src = this._laneSourceOf(nodes, edges);
     const brIdx = src ? nodes.indexOf(src) : -1;
     if (brIdx < 0) return { steps: nodes.length, paths: 0, parallel: false };
-    // Count DISTINCT lane targets from the EDGES, mirroring `_liveLanes`, so the panel
+    // Count DISTINCT lane targets from the EDGES, off the same `_splitTargetsOf` the
+    // graph layout uses, so the panel
     // and the graph cannot disagree about the same spec. Reading `cases` here instead
     // would report 0 paths for a fan-out, which HAS lanes and no cases — and several
     // cases (including the catch-all) routing to one node is ONE lane, not several.
@@ -8095,41 +8011,22 @@ class Component extends DCLogic {
         // post-spec reveal animation. `null` ⇒ not animating (a settled or restored build) ⇒
         // everything shown. Clamped to total.
         const revealed = S.liveRevealed == null ? total : Math.min(S.liveRevealed, total);
-        // LANES — derived from the spec's REAL edges (never assumed). Everything up to
-        // and including the first branch is the trunk; each of that branch's cases opens
-        // a lane, labelled in the plan's own plain words where we have them. A workflow
-        // with no branch has no lanes and simply renders as a trunk. Any lane count.
         // WHICH NODES ACTUALLY CONTINUE. A connector arrow is a claim about the
         // EDGES, not about the node's type. `deliver` used to be assumed terminal,
         // so a delivery that genuinely continues — "save it as a Google Doc, then
         // email me the link", which the engine runs correctly — drew no outgoing
         // arrow and the graph showed the chain broken exactly where it carries on.
         this._hasOutEdge = new Set(((S.spec && S.spec.edges) || []).map(e => e && e.from).filter(Boolean));
-        const lanes = this._liveLanes(S.spec, nodes, confirmed, flashIdx, explaining, ready, revealed);
-        const hasLanes = !!(lanes && lanes.length);
-        // The trigger is already `nodes[0]` (a real approvable node), so the flat row and
-        // the trunk render it naturally — no prepend needed.
-        const flat = nodes.map((n, i) => this._liveCardFor(n, i, confirmed, flashIdx, explaining, ready, revealed));
-        const trunk = hasLanes
-          ? this._liveTrunkOf(S.spec, nodes, confirmed, flashIdx, explaining, ready, revealed)
-          : flat;
-        // The branch node is the LAST trunk node when lanes exist — its outgoing arrow is
-        // replaced by the fan-out, so drop its trailing connector (the design's `conn:false`).
-        let fan = null;
-        if (hasLanes) {
-          if (trunk.length) trunk[trunk.length - 1].showConn = false;
-          const brGi = trunk.length - 1;                    // branch is the last trunk node
-          const brConfirmed = confirmed > brGi;
-          const brFlash = flashIdx === brGi;
-          fan = this._liveFanout(lanes.length, brConfirmed, brFlash);
-          // The fan-out fades in only once the branch itself has been revealed, so it never
-          // dangles from a node that has not appeared yet during the build animation.
-          fan.o = revealed > brGi ? 1 : 0;
-        }
+        // ONE LAYOUT PASS, for every shape. The hand-rolled trunk/lane/fan renderer is
+        // gone: it could draw one split correctly and reflowed every later one back to
+        // the lane's left edge, which made every approval workflow unreadable. See
+        // `_liveGraphLayout`. Keeping both would have been the two-renderers trap that
+        // caused this in the first place.
+        const lg = this._liveGraphLayout(S.spec, nodes, confirmed, flashIdx, explaining, ready, revealed);
         return {
-          lanes, hasLanes, fan,
-          trunk,
-          nodes: flat,
+          nodes: lg.nodes, edges: lg.edges, edgeLabels: lg.edgeLabels,
+          canvasW: lg.canvasW, canvasH: lg.canvasH,
+          hasEdges: lg.edges.length > 0, hasEdgeLabels: lg.edgeLabels.length > 0,
           total, confirmed, done,
           building: !S.spec,
           // ONE ResizeObserver watches BOTH boxes: the OUTER for column/window resize, and

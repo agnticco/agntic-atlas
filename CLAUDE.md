@@ -1152,6 +1152,55 @@ refactor them without an explicit decision recorded here:
     inbox it reads. The loop now fails loudly instead of silently, but the cycle is still
     constructible. A generic fix (exclude mail this workflow itself sent) is the follow-up.
 
+- **THE WORKFLOW DIAGRAM WAS UNREADABLE ON EVERY APPROVAL WORKFLOW — and the file already
+  contained the fix (2026-07-21).** Opening a 16-node approval spec drew the FIRST step low
+  and left, the steps AFTER the approval ABOVE it, and "Stop — rejected" above the step it is
+  the alternative to. The eye had to read bottom-left → top-right → back down. The edges were
+  all correct; the picture was not, and on a diagram that is the same failure.
+  - **Cause: the live canvas was laid out BY HAND** (`_liveTrunkOf` / `_liveLanes` /
+    `_liveFanout`) — a trunk, one lane per case of the FIRST split, and for any split *inside*
+    a lane, merely a row break. Its own comment admitted the limit: *"a nested fork is expressed
+    by the row break and the label, not by a second set of beziers… nesting it properly needs a
+    real layout pass."*
+  - **An approval workflow ALWAYS has a second split** — the branch that reads the person's
+    answer is what makes the gate a gate. So the shape the product most needs to show was
+    exactly the shape the renderer could not draw, and every sub-row restarted at the lane's
+    LEFT EDGE, far left of the fork it descends from.
+  - **The real layout pass was already in the file and already vendored.** `_layoutGraph` +
+    dagre produced 13 clean left-to-right ranks on the same spec. **Two renderers for one
+    thing is what caused this**, and the second one (`graphCanvas`, the dagre view-model) was
+    computed on every render and had **no template at all** — dead code that nothing drew.
+    The hand-rolled trunk/lane/fan renderer is now DELETED (~167 lines) rather than left
+    beside the new one. `_laneSourceOf` / `_splitTargetsOf` / `_isExclusiveSplit` are kept —
+    the step/path counter shares them, so the panel and the graph cannot disagree.
+  - **What was deliberately PRESERVED, because each fixed a real defect:** cards still come
+    from `_liveCardFor(node, i, …)` with `i` = the node's index in `liveNodes`, because **the
+    approval queue walks that array BY INDEX and a node that never renders has no confirm
+    control — the queue stops dead and the workflow can be neither tested nor published, with
+    no error.** Laying out every node from that one array makes the coverage invariant
+    structural instead of something a walk has to remember (the old renderer needed a
+    `claimed` set plus a sweep). Verified live: 16 cards for 16 nodes, 4 for 4. The reveal
+    animation is untouched (it lives in the card's own opacity/transform). Case labels still
+    render and still **only** for an exclusive split — a parallel fan-out's targets all run,
+    so labelling them claims a choice nobody makes (verified live on a 2-delivery fan-out:
+    two curved edges, no labels).
+  - **Edge keys are `JSON.stringify([from, to])`, never `from + '' + to`.** Concatenation
+    cannot distinguish `("ab","c")` from `("a","bc")`, and a key that CAN collide is a
+    silently dropped edge waiting to happen — third occurrence of this exact lesson (the NUL
+    separator in increment B, then `laneKey`). **`_layoutGraph` still uses the concatenated
+    form in two places** (its edge key and its `caseLabel` key) — carried, not fixed here.
+  - **Width is the binding constraint, not height**, because the whole graph is scaled to fit
+    the chat column: at ranksep 64 the spec came to 1566px, scaled to 0.70, and put the node
+    titles at ~7px. Ranks are packed to just clear the 92px title (absolutely positioned, so
+    it contributes no layout width) and the slack spent on vertical separation, which is free.
+  - **VERIFIED ON A FRESH BUILD, not just on restored specs.** A 9-node, 3-lane email-triage
+    workflow was built from scratch in a headed browser: the reveal ran, the graph drew
+    left-to-right with the three lanes labelled *if urgent* / *if routine* / *else*, and the
+    per-node approval queue was walked to **9 / 9 APPROVED** with **zero** confirm controls
+    left over — including the nodes inside every lane, which is the case that would strand the
+    queue. "Run test" then unlocked. That is the failure this renderer must never cause, so it
+    is the one thing worth re-checking by hand after any change here.
+
 - **NO WORKFLOW WITH AN APPROVAL STEP COULD BE PUBLISHED — one variable read too early
   (2026-07-21).** Press **Run test** on a spec with an approval step and the panel hung on
   "Testing…" forever: no timeout, no error, no escape but a reload, and Go live never unlocked.
