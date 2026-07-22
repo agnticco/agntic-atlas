@@ -1014,6 +1014,20 @@
                     <span style="font-size:12.5px;color:{{ verdictColor }};line-height:1.4;font-weight:500">{{ verdictText }}</span>
                   </div>
                 </sc-if>
+
+                <!-- ANSWER THE GATE. One button per answer the step declares — no
+                     Approve/Reject anywhere in this markup. -->
+                <sc-if value="{{ showPauseAnswers }}" hint-placeholder-val="{{ false }}">
+                  <div style="margin-top:10px;border-radius:13px;border:1px solid rgba(240,191,107,.22);background:rgba(240,191,107,.04);padding:13px 15px">
+                    <div style="font-size:12.5px;color:rgba(255,255,255,.78);line-height:1.45;margin-bottom:11px">{{ pauseQuestion }}</div>
+                    <div style="display:flex;flex-wrap:wrap;gap:8px">
+                      <sc-for list="{{ pauseAnswers }}" as="pa" hint-placeholder-count="2">
+                        <button onClick="{{ pa.onPick }}" type="button" style="font-family:inherit;font-size:12.5px;font-weight:600;padding:8px 15px;border-radius:999px;cursor:pointer;color:rgba(255,255,255,.85);background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.16)">{{ pa.label }}</button>
+                      </sc-for>
+                    </div>
+                    <div style="font-size:11px;color:rgba(255,255,255,.38);line-height:1.45;margin-top:10px">{{ pauseAnswerNote }}</div>
+                  </div>
+                </sc-if>
               </div>
 
               <!-- footer -->
@@ -3024,7 +3038,7 @@ class Component extends DCLogic {
       phase: "chat", intent: null, threadId: null, msgs: [], inputMode: "chat",
       inputValue: "", thinking: false, spec: null, outcome: null, testState: "idle", runSteps: [], contractOpenRow: null,
       awaitingGraphApproval: false, graphApproved: [], graphSelNode: null, graphReviseOpen: false, graphReviseText: "",
-      runStepIndex: 0, failIndex: -1, deliveries: [], runOutput: null, runError: "", outcomeResults: [], pausedAsk: null, pausedNote: null, workflowId: null, isEditing: false, isDraftBuild: false, editingIntro: null,
+      runStepIndex: 0, failIndex: -1, deliveries: [], runOutput: null, runError: "", outcomeResults: [], pausedAsk: null, pausedNote: null, pausedRunId: null, pausedAnswering: false, workflowId: null, isEditing: false, isDraftBuild: false, editingIntro: null,
       renamingWfId: null, renamingValue: "", draftName: null,
       connectionsOpen: false, accountOpen: false, profileOpen: false, connectionsClosing: false, accountClosing: false,
       mentionOpen: false, mentionQuery: "", mentionAt: -1,
@@ -5640,6 +5654,34 @@ class Component extends DCLogic {
     runOne(0);
   }
 
+  // ── ANSWERING AN APPROVAL IN THE TEST PANEL (2026-07-22) ──────────────────
+  // The buttons are the STEP'S OWN declared answers, never a hardcoded
+  // Approve/Reject: a gate worded ship/hold works with no change here. They come
+  // from `ask.decisions`, which is what a PERSON may answer — deliberately NOT the
+  // engine's full domain, which also contains `timeout` ("never one a person can
+  // give"). Rendering a timeout button would let a tester manufacture silence and
+  // call it an answer, which is the exact thing "silence is not consent" forbids.
+  _answerPause(decision) {
+    const S = this.state;
+    if (!S.pausedRunId || S.pausedAnswering) return;
+    const self = this;
+    this.setState({ pausedAnswering: true, testState: "running", runElapsed: 0 });
+    this._testStartMs = this._testStartMs || Date.now();
+    fetch("/workflows/run", { method: "POST", headers: this._H(),
+      body: JSON.stringify({ resumeRunId: S.pausedRunId, decision: decision }) })
+      .then(function(res) { return self._readJson(res); })
+      .then(function(res) {
+        const d = res.data || {};
+        // A resumed run can stop at ANOTHER gate — a workflow may have several.
+        // `_applyTestResult` already handles a pause, so a second one simply lands
+        // back in this same state with the next question. Nothing here counts them.
+        self.setState({ pausedAnswering: false });
+        self._applyTestResult({ ok: true, data: d }, d);
+      })
+      .catch(function(e) {
+        self.setState({ pausedAnswering: false, testState: "failed", runError: String(e) });
+      });
+  }
   _applyTestResult(r, d) {
     const spec = this.state.spec;
     // R8: capture the real wall-clock test duration so the persisted test run
@@ -5699,6 +5741,10 @@ class Component extends DCLogic {
         testState: "paused", runSteps: d.steps || [], deliveries: d.deliveries || [],
         runOutput: d.output || null, runDurationMs: runDurationMs, outcomeResults: [],
         pausedAsk: d.awaiting || null, pausedNote: d.note || null, laneCoverage: null,
+        // Answerable only if the SERVER says so. It holds the resume state, so it
+        // is the only thing that knows whether this pause can be continued; a
+        // client-side guess would offer buttons that then fail.
+        pausedRunId: d.answerable ? (d.runId || null) : null, pausedAnswering: false,
       });
       return;
     }
@@ -8201,6 +8247,26 @@ class Component extends DCLogic {
       testSteps: contract.show ? [] : testSteps, slackChannel: this._slackChannel(), deliveryTarget: this._deliveryMeta().header, summaryText: this._summaryText(),
       outcomeCards: this._outcomeCards(), showOutcomes: (S.outcomeResults || []).length > 0 && (TS === "passed" || TS === "failed") && !contract.show,
       contract,
+      // ANSWERING THE GATE. One button per answer the step itself declares, in the
+      // step's own words — nothing here knows what "approve" means. The safe answer
+      // is listed first and styled plainly, because a gate that only ever gets
+      // approved proves nothing: `isWrite` marks the answers whose route performs a
+      // real send or write, so the tester sees which button has consequences.
+      showPauseAnswers: TS === "paused" && !!S.pausedRunId && !S.pausedAnswering,
+      pauseQuestion: (S.pausedAsk && S.pausedAsk.ask && S.pausedAsk.ask.prompt) || "Approve this step?",
+      pauseAnswers: ((S.pausedAsk && S.pausedAsk.ask && S.pausedAsk.ask.decisions) || []).map((dec) => ({
+        label: this._titleCase(String(dec).replace(/[_-]+/g, " ")),
+        // The panel renders the step's PROMPT, never the channel `preview` — the
+        // preview is Slack-formatted, so it would show raw *asterisks* here.
+        onPick: () => this._answerPause(dec),
+      })),
+      // A channel is an OBJECT ({type, target}), not a string. Joining the raw list
+      // rendered "[object Object], [object Object]" to the user — caught only by
+      // looking at the actual screen.
+      pauseAnswerNote: "Answering here tests what happens next. It does not test that the question reaches anyone — in a real run it is asked over " +
+        (((S.pausedAsk && S.pausedAsk.ask && S.pausedAsk.ask.channels) || [])
+          .map((c) => c && c.type ? (c.type === "inbox" ? "your Atlas inbox" : String(c.type)) : null)
+          .filter(Boolean).join(" and ") || "its own channel") + ".",
       showVerdict: verdict.show && !contract.show, verdictText: verdict.text, verdictIcon: verdict.icon, verdictColor: verdict.color,
       verdictBorder: verdict.border, verdictBg: verdict.bg, verdictIconBg: verdict.iconBg,
       isPublished: published,

@@ -2130,13 +2130,95 @@ export function createApp(spine) {
     } catch (err) { res.status(500).json({ error: err.message }); }
   });
 
+  // ── ANSWERING AN APPROVAL DURING A TEST (2026-07-22) ──────────────────────
+  // A `human` step stops a test run, and until now that was the end of it: the
+  // panel could REPORT the pause but never answer it, so the half of an approval
+  // workflow that matters most — what actually happens on approve versus reject —
+  // was exercised by nothing, and "Go live" stayed locked with no way to unlock it.
+  //
+  // THE RESUME STATE NEVER LEAVES THE SERVER. The engine's checkpoint carries every
+  // step's full, un-truncated output. Anything the browser holds, the browser can
+  // edit — round-tripping it would let a client hand the engine the very content it
+  // claims to have approved. So it is held here, keyed by run, scoped to the tenant
+  // AND the user who started it, and it expires.
+  //
+  // NOTHING IS PARKED IN THE DATABASE. A paused test is not an `awaiting_human` row,
+  // so the timeout sweeper can never find one and later fire the steps after the
+  // approval — the customer email, the record — for real, out of a run somebody
+  // pressed "test" on with nobody watching. That hazard is closed by construction,
+  // not by remembering to exclude test runs from the sweep.
+  const PENDING_TEST_PAUSES = new Map();
+  const PENDING_PAUSE_TTL_MS = 15 * 60 * 1000;
+  const sweepPendingPauses = () => {
+    const now = Date.now();
+    for (const [k, v] of PENDING_TEST_PAUSES) if (v.expiresAt <= now) PENDING_TEST_PAUSES.delete(k);
+  };
+
   // Run a hand-authored spec through the engine — the "click run" path (no UI yet).
-  // Body: { spec } where spec is the proprietary { name, nodes[], edges[], … } shape.
+  // Body: { spec } where spec is the proprietary { name, nodes[], edges[], … } shape,
+  // OR { resumeRunId, decision } to answer a `human` step this route stopped at.
   app.post('/workflows/run', optionalAuth, tenantGuard, async (req, res) => {
+    // ── Answering a pause ───────────────────────────────────────────────────
+    // Fails closed on every dimension: the pause must still exist, it must belong
+    // to THIS workspace and THIS signed-in user (a session-proven answer is the
+    // entire reason the panel is allowed to answer at all — there is one door into
+    // the engine and it authenticates nothing, so each channel proves its answerer
+    // first), and the answer must be one the step itself declared.
+    let resumeState = null;
+    if (req.body?.resumeRunId != null) {
+      sweepPendingPauses();
+      const key = String(req.body.resumeRunId);
+      const pend = PENDING_TEST_PAUSES.get(key);
+      if (!pend) {
+        return res.json({ runId: null, completed: false, steps: [],
+          error: 'That question has expired or was already answered — run the test again.' });
+      }
+      if (pend.tenantId !== (req.tenant?.id ?? null) || pend.userId !== (req.user?.id ?? null)) {
+        return res.status(403).json({ error: 'that question belongs to a different session' });
+      }
+      const decision = String(req.body?.decision ?? '');
+      // `ask.decisions` is what a PERSON may answer. It deliberately EXCLUDES the
+      // engine's own `timeout` — "never one a person can give" — so the panel can
+      // never manufacture silence and call it an answer. Reading the step's own
+      // declared answers is also what makes this generic: a gate worded
+      // ship/hold works with no change here.
+      if (!Array.isArray(pend.ask?.decisions) || !pend.ask.decisions.includes(decision)) {
+        return res.status(400).json({
+          error: `"${decision}" is not one of the answers this step accepts (${(pend.ask?.decisions ?? []).join(', ') || 'none declared'})`,
+        });
+      }
+      // ONE ANSWER, ONCE — delete before resuming, so a double-click cannot run the
+      // steps after the gate twice (the same rule the real resume path enforces
+      // with its conditional status flip).
+      PENDING_TEST_PAUSES.delete(key);
+      resumeState = {
+        runId: pend.runId,
+        checkpoint: pend.checkpoint,
+        priorSteps: pend.steps,
+        // Answers ACCUMULATE across pauses: a run with two gates stops twice, and
+        // the executor skips any gate that already has an answer. This is what
+        // makes N gates work without the route knowing how many there are.
+        decisions: {
+          ...pend.decisions,
+          [pend.nodeId]: {
+            decision,
+            by: req.user?.id ? `user:${req.user.id}` : 'test',
+            at: new Date().toISOString(),
+            channel: 'test_panel',
+          },
+        },
+      };
+      // Restore the request to the shape the rest of this route expects. The spec
+      // stored is the RAW one, pre-token-injection: re-injecting below is both
+      // fresher and keeps decrypted tokens out of a 15-minute cache.
+      req.body = { ...req.body, spec: pend.spec, initialContext: pend.initialContext, example: pend.example };
+    }
+
     let spec = req.body?.spec;
     if (!spec || !Array.isArray(spec.nodes)) {
       return res.status(400).json({ error: 'body.spec with a nodes[] array is required' });
     }
+    const rawSpec = spec;   // pre-injection; what a pause stores
     // A test run has no real inbound event, so the entry node (e.g. summarize)
     // would have no upstream content. Let callers seed a representative sample
     // event as `initialContext` — the same mechanism the P3 runnability check
@@ -2195,8 +2277,10 @@ export function createApp(spine) {
       // console can track test-run cost. Non-test (scheduled) runs are handled
       // by WorkflowScheduler.  startRun() also resolves tenant/user from the
       // workflow row — no risk of cross-tenant attribution.
+      // Not on a resume: the row for this test run was opened (and closed) on the
+      // leg that paused. Opening a second one would report one test as two runs.
       let dbRun = null;
-      if (spec.id) {
+      if (spec.id && !resumeState) {
         try { dbRun = spine.engine.workflowStore.startRun(spec.id, { isTest: true }); } catch { /* best-effort */ }
       }
       // Pre-register userId when dbRun is available — ensures cost records
@@ -2204,8 +2288,12 @@ export function createApp(spine) {
       if (dbRun && req.user?.id) {
         spine.costTracker?.setSessionUser?.(`flow-run-${dbRun.id}`, req.user.id);
       }
-      let runId = null, completed = false, output = null;
-      const steps = [];
+      // On a resume the steps from before the pause are carried forward, so the
+      // panel and the contract oracle judge the WHOLE run, not just the tail after
+      // the answer. (An assertion satisfied by a delivery that happened before the
+      // gate would otherwise read as unmet.)
+      let runId = resumeState?.runId ?? null, completed = false, output = null;
+      const steps = resumeState ? [...resumeState.priorSteps] : [];
       // tenantId/workflowId are LOAD-BEARING: they scope the idempotency keys.
       // Omitting them used to collapse every tenant into one shared namespace
       // (`unscoped:<nodeId>`), so one tenant's step could be handed another
@@ -2222,6 +2310,11 @@ export function createApp(spine) {
         // engine without spamming real deliveries on every fix-retry. Default OFF:
         // absent the flag, deliveries fire for real, exactly as before.
         ...(req.body?.dryRunDeliveries === true ? { dryRunDeliveries: true } : {}),
+        // RESUMING: the executor takes the checkpoint plus the answers given so
+        // far. Replayed steps are restored, never re-run, so nothing that already
+        // sent happens twice. Keeping the ORIGINAL runId means cost stays attached
+        // to one session and the client keeps answering against a stable id.
+        ...(resumeState ? { checkpoint: resumeState.checkpoint, decisions: resumeState.decisions, runId: resumeState.runId } : {}),
       };
       for await (const ev of spine.engine.flowTester.run(spec, flowOpts)) {
         if (ev.type === 'run_started') {
@@ -2251,8 +2344,31 @@ export function createApp(spine) {
             try { spine.engine.workflowStore.completeRun(dbRun.id, `paused at "${ev.nodeId}" — awaiting a person`, spine.costTracker?.getSessionCost?.(`flow-run-${runId}`) ?? null); }
             catch { /* best-effort */ }
           }
+          // Hold the resume state server-side so the tester can answer (see the
+          // note above the route). Without a checkpoint there is nothing to resume
+          // from, so the pause is reported exactly as it was before — not answered
+          // on a guess.
+          const answerable = !!(ev.checkpoint && Array.isArray(ev.ask?.decisions) && ev.ask.decisions.length);
+          if (answerable) {
+            sweepPendingPauses();
+            PENDING_TEST_PAUSES.set(String(runId), {
+              runId,
+              nodeId: ev.nodeId,
+              ask: ev.ask,
+              checkpoint: ev.checkpoint,
+              steps: [...steps],
+              decisions: resumeState?.decisions ?? {},
+              spec: rawSpec,
+              initialContext,
+              example: req.body?.example ?? null,
+              tenantId: req.tenant?.id ?? null,
+              userId: req.user?.id ?? null,
+              expiresAt: Date.now() + PENDING_PAUSE_TTL_MS,
+            });
+          }
           return res.json({
             runId, completed: false, clean: true, paused: true,
+            answerable,
             awaiting: { nodeId: ev.nodeId, ask: ev.ask },
             steps,
             note: `This workflow stops here and asks a person ("${ev.ask?.prompt ?? 'approve this step'}"). In a real run it would wait for their answer before going on.`,

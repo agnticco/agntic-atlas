@@ -1,5 +1,13 @@
 [
   {
+    "version": "1.6.14",
+    "date": "2026-07-21",
+    "title": "Test an approval step's approve and reject routes",
+    "notes": [
+      "When a test stops at an approval step you can now answer it in the panel, and the run carries on down whichever route you chose — so both halves of an approval workflow get tested."
+    ]
+  },
+  {
     "version": "1.6.13",
     "date": "2026-07-21",
     "title": "The workflow diagram reads left to right",
