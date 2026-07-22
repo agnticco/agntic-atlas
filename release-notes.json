@@ -1,5 +1,13 @@
 [
   {
+    "version": "1.6.15",
+    "date": "2026-07-21",
+    "title": "A diagram that can't be right is no longer drawn",
+    "notes": [
+      "If a workflow's steps and its connections don't match, Atlas now says so instead of drawing a tidy diagram of a workflow that doesn't exist."
+    ]
+  },
+  {
     "version": "1.6.14",
     "date": "2026-07-21",
     "title": "Test an approval step's approve and reject routes",

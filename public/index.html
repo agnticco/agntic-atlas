@@ -6969,9 +6969,26 @@ class Component extends DCLogic {
       seen.add(k); g.setEdge(from, to); edgeList.push({ from, to, k });
     };
     rawEdges.forEach(e => { if (e) addEdge(e.from, e.to); });
+
+    // ── A DIAGRAM THAT CANNOT BE TRUE MUST NOT BE DRAWN AS IF IT WERE ────────
+    // If the spec DECLARES connections but not one of them names a step we were
+    // given, the two halves describe different workflows. Left alone, every node
+    // then looks like an entry point, the trigger gets wired to all of them, and
+    // the result is a confident, neat fan-out — a picture of a workflow that does
+    // not exist. That is exactly what happened when the builder showed one
+    // workflow's steps under another's name (2026-07-22): 9 steps, 9 edges, every
+    // one of them starting at the trigger.
+    //
+    // Silently inventing a shape is the worst option available here, so it is
+    // refused: no edges are drawn, and the caller is told the diagram is not
+    // trustworthy. This does NOT fix the mix-up that produces the mismatch — it
+    // makes it impossible for that mix-up to look like a working workflow.
+    const declared = rawEdges.filter(e => e && e.from != null && e.to != null).length;
+    const mismatch = declared > 0 && edgeList.length === 0;
+
     // The trigger is `nodes[0]` and is NOT in `spec.edges` — wire it to the real
     // entry node(s): those with no inbound spec edge.
-    const trig = nodes[0] && String(nodes[0].type).toLowerCase() === 'trigger' ? nodes[0] : null;
+    const trig = !mismatch && nodes[0] && String(nodes[0].type).toLowerCase() === 'trigger' ? nodes[0] : null;
     if (trig) {
       const indeg = new Map();
       nodes.forEach(n => { if (n !== trig) indeg.set(n.id, 0); });
@@ -7028,7 +7045,7 @@ class Component extends DCLogic {
 
     const gg = g.graph();
     return {
-      nodes: cards, edges, edgeLabels,
+      nodes: cards, edges, edgeLabels, mismatch,
       canvasW: Math.max(1, Math.ceil(gg.width || 0)) + 'px',
       // The title sits under its card via `top:calc(100% + 8px)` and contributes NO
       // layout height, so the canvas must reserve it or the bottom row is clipped.
@@ -8094,7 +8111,11 @@ class Component extends DCLogic {
             }
           },
           stepCounter: confirmed + ' / ' + total + ' APPROVED',
-          hint: done ? 'every step approved' : (ready ? 'hover a node to confirm or reject' : 'building…'),
+          // A mismatch outranks every other status line: the picture above is not
+          // this workflow, so "every step approved" would be reassurance about the
+          // wrong thing.
+          hint: lg.mismatch ? "this diagram doesn't match this workflow — reopen it from the list"
+              : (done ? 'every step approved' : (ready ? 'hover a node to confirm or reject' : 'building…')),
           progressW: total ? Math.round((confirmed / total) * 100) + '%' : '0%',
           explaining,
           explainValue: S.liveExplainText || '',
