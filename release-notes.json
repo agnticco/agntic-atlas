@@ -1,5 +1,13 @@
 [
   {
+    "version": "1.6.17",
+    "date": "2026-07-21",
+    "title": "A custom AI step now uses the input you gave it",
+    "notes": [
+      "A custom AI step was ignoring its configured input and reading the previous step instead. After a routing step that meant it received the routing decision rather than the data, and delivered an error message."
+    ]
+  },
+  {
     "version": "1.6.16",
     "date": "2026-07-21",
     "title": "Opening a workflow shows that workflow",

@@ -260,7 +260,23 @@ function buildMessages(mode, cfg, ctx) {
     const rawPrompt = cfg.prompt ?? 'Summarize the prior output.';
     // Auto-inject prior output if the prompt references no templates.
     const referencesInput = /\{\{\s*(prev|[a-z0-9_-]+\.output)\s*\}\}/i.test(rawPrompt);
-    const priorOutput = stringify(ctx.lastOutput);
+    // ── `input` IS HONOURED HERE TOO (2026-07-22) ──────────────────────────
+    // Every other mode resolves its input through `resolveTransformInput`, which
+    // respects an explicit `input` override. `freeform` ignored it and always
+    // injected `lastOutput` — so the key was declared on the node, accepted by
+    // the validator, set by the converger, and silently dropped at run time.
+    //
+    // Found by running a real workflow: a 3-way triage whose urgent lane was
+    // `classify → branch → freeform llm`. `input` said `{{extract_email.output}}`
+    // (the email), but freeform injected `lastOutput`, which after a classifier is
+    // the single word "urgent". With no subject and no body the node hit the guard
+    // the converger writes into it and emitted `ERROR: required data not found` —
+    // and that was DELIVERED, as a real Slack DM. The routine lane, identical but
+    // in `summarize` mode, worked. A key one mode reads and another ignores is the
+    // "schema that lies" failure this codebase keeps paying for.
+    const priorOutput = (cfg.input != null && String(cfg.input).trim().length)
+      ? String(cfg.input)
+      : stringify(ctx.lastOutput);
     let prompt = rawPrompt;
     if (!referencesInput && priorOutput) prompt = `${prompt}\n\n---\nInput:\n${priorOutput}`;
     if (fmt) prompt = `${prompt}\n\nOutput format: ${fmt}`;
