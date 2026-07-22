@@ -86,6 +86,18 @@ export function autoRepairStructural(draft, gaps) {
       if (fix.op === 'add_edge' && fix.from && fix.to) {
         d = applyProposal(d, { component: 'edge', spec: { from: fix.from, to: fix.to } });
         applied.push({ gapId: g.id, code: g.code, op: 'add_edge', from: fix.from, to: fix.to });
+      } else if (fix.op === 'set_assertion_when' && Number.isInteger(fix.index) && fix.when) {
+        // Say a promise's condition in the workflow's own vocabulary. The user's
+        // WORDS are untouched — only the machine-checkable `when` is restated, from
+        // an invented compound ("urgent_approved") to the route that actually gates
+        // the step. Rewriting the statement instead would be editing what they asked
+        // for; this only changes how we CHECK it.
+        const as = Array.isArray(d.outcome?.assertions) ? d.outcome.assertions : null;
+        if (as && as[fix.index]) {
+          const next = as.map((a, i) => (i === fix.index ? { ...a, when: fix.when } : a));
+          d = { ...d, outcome: { ...d.outcome, assertions: next } };
+          applied.push({ gapId: g.id, code: g.code, op: 'set_assertion_when', when: fix.when });
+        }
       } else if (fix.op === 'set_config' && fix.nodeId && fix.config) {
         // Fill a blank the converger left in its OWN output. `applyProposal`
         // replaces a node by id, so the node is re-stated with the filled config

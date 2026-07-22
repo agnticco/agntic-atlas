@@ -1,5 +1,13 @@
 [
   {
+    "version": "1.6.28",
+    "date": "2026-07-22",
+    "title": "Atlas no longer promises something it can't check",
+    "notes": [
+      "When a workflow's promise depended on two things at once — say 'urgent AND approved' — Atlas wrote it in a way nothing could ever verify, then rebuilt the workflow over and over trying to satisfy it. It now states the condition in the workflow's own words and moves on."
+    ]
+  },
+  {
     "version": "1.6.27",
     "date": "2026-07-22",
     "title": "Atlas fills its own blanks instead of asking you twice",

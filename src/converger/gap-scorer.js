@@ -79,7 +79,8 @@ import { WorkflowValidator }       from '../workflows/workflow-validator.js';
 import { NodeTypeRegistry }        from '../workflows/node-type-registry.js';
 import { registerBuiltInNodeTypes } from '../workflows/node-types/index.js';
 import { approvalChannelView }     from '../workflows/approval-channels.js';
-import { routeDomainOf, describeTarget, describeValue } from '../workflows/outcome-oracle.js';
+import { routeDomainOf, describeTarget, describeValue,
+         gatingRouteFor, satisfiesAssertion } from '../workflows/outcome-oracle.js';
 
 /** Which class an issue belongs to. Anything unlisted is a contract gap. */
 const OUTCOME_CODES  = new Set(['UNSATISFIED_ASSERTION', 'MALFORMED_ASSERTION', 'MISSING_OUTCOME']);
@@ -496,10 +497,33 @@ export function scoreGap(spec = {}, { capabilities = {}, validator = null } = {}
   // while pinging #sales-urgent for every lead, not just the big ones. Never imply
   // a completeness proof you cannot make (converger-v2 §3).
   const routeDomain = routeDomainOf(spec);
-  for (const a of (Array.isArray(spec.outcome?.assertions) ? spec.outcome.assertions : [])) {
+  const specNodes = Array.isArray(spec.nodes) ? spec.nodes : [];
+  for (const [i, a] of (Array.isArray(spec.outcome?.assertions) ? spec.outcome.assertions : []).entries()) {
     if (!a?.when) continue;
     const gated = routeDomain.has(String(a.when).trim().toLowerCase());
     if (gated) continue;   // a branch routes on this value — the condition is checked
+
+    // A `when` outside the route vocabulary is USUALLY a conjunction the field
+    // cannot hold — "urgent AND approved" written as the invented word
+    // `urgent_approved`. The workflow really does gate that delivery; the contract
+    // just names the gate in a language no node speaks, and the result is a promise
+    // that can never be checked while the panel shows it as the contract.
+    //
+    // So before calling it unproven, ASK THE GRAPH what actually gates the step this
+    // assertion is about. When exactly one route value does, that value is the same
+    // condition said in the workflow's own words, and it is a mechanical rewrite —
+    // no model call, no question, no rebuild. (Rewriting to the DEEPEST gate is what
+    // makes it exact; see `gatingRouteFor`.)
+    //
+    // Everything else still raises the gap honestly: guessing between two candidate
+    // gates would silently narrow a promise the user made, which is worse than
+    // saying we cannot prove it.
+    const owner = specNodes.find(n => satisfiesAssertion(a, n));
+    const gate  = owner ? gatingRouteFor(spec, owner.id) : null;
+    const fix   = (gate && gate.values.length === 1 && routeDomain.has(String(gate.values[0]).trim().toLowerCase()))
+      ? { op: 'set_assertion_when', index: i, when: gate.values[0] }
+      : null;
+
     gaps.push({
       id: `gap_conditional_${a.id ?? a.target}`.toLowerCase(),
       class: 'coverage', nodeId: null,
@@ -507,6 +531,7 @@ export function scoreGap(spec = {}, { capabilities = {}, validator = null } = {}
       message: `You said this should only reach ${describeTarget(a.target)} when the email is ${describeValue(a.when)} — but nothing in the workflow checks that yet, so it would happen on every run.`,
       hint: 'Add a step that classifies the input, and route on it — or accept that it fires every time.',
       resolution: 'escalated', decidable: false, blocking: false,
+      fix,
     });
   }
 

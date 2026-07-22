@@ -907,6 +907,87 @@ export function routeDomainOf(spec) {
 }
 
 /**
+ * Which route value actually gates a step — the condition under which it runs.
+ *
+ * WHY THIS EXISTS. `assertion.when` holds ONE route value, but a real promise is
+ * often a CONJUNCTION: "file it only when the email is urgent AND I approved it".
+ * The model writes that as a single invented word — `urgent_approved` — which no
+ * node can ever produce. Observed live: the contract carried it, `routeDomainOf`
+ * reported the real vocabulary as `urgent, routine, junk, none, approve, reject,
+ * timeout`, and the workflow's central promise became permanently uncheckable
+ * while the panel showed it to the user as the contract. That unprovable promise
+ * then drove rebuild after rebuild, each leaving another escalation gate behind.
+ *
+ * The conjunction does not need to be expressible, because the DEEPEST gate on a
+ * path already implies every gate above it: the approval branch is only reachable
+ * from the urgent lane, so "approved" and "urgent AND approved" select exactly the
+ * same runs. So we walk the graph and take the NEAREST branch case that gates the
+ * step.
+ *
+ * NEAREST, not any — and that is the whole correctness argument. Picking the outer
+ * gate (`urgent`) would enforce the promise on runs that went urgent and were
+ * REJECTED, i.e. a false failure on a workflow behaving exactly as designed.
+ *
+ * A branch only counts as a gate if at least one of its cases does NOT reach the
+ * step: a branch all of whose lanes converge on it decides nothing about whether
+ * it runs, and treating it as a condition would invent a gate the user never made.
+ *
+ * @returns {{ branch: string, values: string[] } | null} — null when nothing gates
+ *          it (it runs on every path), which is not a failure: it means the promise
+ *          is unconditional and `when` should simply be dropped.
+ */
+export function gatingRouteFor(spec, nodeId) {
+  const nodes = Array.isArray(spec?.nodes) ? spec.nodes : [];
+  const edges = Array.isArray(spec?.edges) ? spec.edges : [];
+  if (!nodeId || !nodes.some(n => n?.id === nodeId)) return null;
+
+  const fwd = new Map();
+  for (const e of edges) {
+    if (!e?.from || !e?.to) continue;
+    if (!fwd.has(e.from)) fwd.set(e.from, []);
+    fwd.get(e.from).push(e.to);
+  }
+  /** Hops from `start` to `nodeId`, or -1. Breadth-first, so the count is the shortest. */
+  const distTo = (start) => {
+    if (start === nodeId) return 0;
+    const seen = new Set([start]);
+    let frontier = [start], d = 0;
+    while (frontier.length) {
+      d++;
+      const next = [];
+      for (const id of frontier) {
+        for (const to of (fwd.get(id) ?? [])) {
+          if (to === nodeId) return d;
+          if (seen.has(to)) continue;
+          seen.add(to); next.push(to);
+        }
+      }
+      frontier = next;
+    }
+    return -1;
+  };
+
+  let best = null;
+  for (const b of nodes) {
+    if (b?.type !== 'branch') continue;
+    const cases = normalizeCases(b.config?.cases).filter(c => c?.to);
+    if (!cases.length) continue;
+
+    const reaching = cases.filter(c => distTo(c.to) >= 0);
+    // Reached by every lane (or by none) ⇒ this branch does not decide it.
+    if (!reaching.length || reaching.length === cases.length) continue;
+
+    const dist = Math.min(...reaching.map(c => distTo(c.to)));
+    const values = reaching
+      .map(c => String(c.when).trim())
+      .filter(w => w && w !== CATCH_ALL);
+    if (!values.length) continue;   // gated only by the catch-all: no value names it
+    if (!best || dist < best.dist) best = { branch: b.id, values, dist };
+  }
+  return best ? { branch: best.branch, values: best.values } : null;
+}
+
+/**
  * What a run needs to reason about conditional assertions: whether it branches at
  * all, the closed domain of route values, and the routes this particular run
  * actually took (read from the branch's SOURCE node's output in the run steps).
