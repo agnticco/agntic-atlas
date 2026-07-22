@@ -1159,6 +1159,42 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
       return { phase: 'gapping' };
     }
 
+    // ── A BLOCKER THAT SURVIVED A REBUILD IS NOT A REBUILD'S TO FIX ──────────
+    // The rule above is right and too narrow. It hard-codes TWO codes as
+    // "regenerating cannot fix this", when the property is general: some blockers are
+    // about the world, not the wiring, and no amount of rewriting resolves them —
+    // only a person can. Everything else falls through to a whole-spec Opus pass.
+    //
+    // Rather than guess which codes those are, OBSERVE. A blocker gets one rebuild to
+    // prove itself; if it is still there afterwards, rewriting has demonstrably failed
+    // on it and the cheap move is the conversational one — `gaps` states it in plain
+    // words and offers a fix the user can accept in a click.
+    //
+    // Seen live, and this is what it costs: the outcome promised a `Notes` column and
+    // the model believed the real table had `Message`. It wrote `Notes` (rejected — the
+    // column was never set), then `Message` (rejected — the promise said Notes), then
+    // `Notes` again. Two Opus rebuilds, 425s + 237s, oscillating between two spellings
+    // of the same intent — when the question "your table has no Notes column; add one,
+    // or use Message?" is one sentence and one click.
+    //
+    // WHY IT BITES HARDEST ON THE BUILDS THAT MATTER: every extra connector and route
+    // adds blockers, so the chance that AT LEAST ONE is unfixable approaches certainty —
+    // and one unfixable blocker rebuilds all 26 steps. Simple builds rarely have one;
+    // complex builds always do.
+    //
+    // Deliberately AFTER the first rebuild, never before it: a blocker the model can
+    // fix usually is fixed on that pass, and asking the user about something the system
+    // could have sorted itself is its own kind of rude.
+    const priorKeys = new Set(String(state._lastBlockerKey ?? '').split('|').filter(Boolean));
+    const survivors = blockers.filter(g => priorKeys.has(`${g.code}:${g.nodeId ?? ''}`));
+    if (state._generated && survivors.length) {
+      logEvent('converger.blocker_to_chat', {
+        survivors: survivors.length,
+        codes: [...new Set(survivors.map(g => g.code))].join(','),
+      });
+      return { phase: 'gapping' };
+    }
+
     // BOUND THE WHOLE-SPEC REGENERATE LOOP (converger rearchitecture).
     // Once `generate` has run, a still-incomplete draft routes back to `generate`
     // (one Opus pass), not to the retired `propose` drip. That is correct but

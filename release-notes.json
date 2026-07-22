@@ -1,5 +1,13 @@
 [
   {
+    "version": "1.6.22",
+    "date": "2026-07-22",
+    "title": "A problem the builder can't fix is brought to you, not retried",
+    "notes": [
+      "When the builder hits something only you can settle — a column that doesn't exist, a base it can't find — it now asks, instead of rebuilding the whole workflow to try again."
+    ]
+  },
+  {
     "version": "1.6.21",
     "date": "2026-07-22",
     "title": "Builds stop paying for rebuilds that change nothing",

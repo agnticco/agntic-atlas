@@ -64,3 +64,57 @@ describe('the regenerate loop stops when a rebuild changes nothing', () => {
     assert.equal(k([]), '', 'an empty key is falsy, so the guard cannot fire on a clean spec');
   });
 });
+
+/**
+ * A BLOCKER THAT SURVIVED A REBUILD GOES TO THE CONVERSATION, NOT TO ANOTHER REBUILD.
+ *
+ * Some blockers are about the world, not the wiring — a column that doesn't exist, a
+ * base the tenant doesn't have — and no amount of rewriting resolves them. The
+ * converger already knew this for two resource codes; the property is general, and the
+ * cheap way to detect it is to OBSERVE rather than guess: give a blocker one rebuild,
+ * and if it is still there, ask the user instead of buying another Opus pass.
+ *
+ * Live cost of not doing this: the outcome promised a `Notes` column while the model
+ * believed the table had `Message`. It wrote Notes (rejected), then Message (rejected),
+ * then Notes again — 425s + 237s of rebuilds oscillating between two spellings, when
+ * the question "add a Notes column, or use Message?" is one sentence and one click.
+ */
+describe('a blocker that a rebuild could not fix is taken to the user', () => {
+  const survivorsOf = (() => {
+    const src = readFileSync(SRC, 'utf8');
+    const a = src.indexOf('const priorKeys = new Set(');
+    const b = src.indexOf('if (state._generated && survivors.length)');
+    assert.ok(a > 0 && b > a, 'the survivor rule is gone from elicitation-graph.js — re-point this test, do not delete it');
+    const body = src.slice(a, b);
+    // eslint-disable-next-line no-new-func
+    return new Function('state', 'blockers', `${body}\nreturn survivors;`);
+  })();
+
+  const gap = (code, nodeId) => ({ code, nodeId });
+  const keyOf = (gs) => gs.map(g => `${g.code}:${g.nodeId ?? ''}`).sort().join('|');
+
+  test('a blocker present before AND after the rebuild is a survivor', () => {
+    const before = [gap('UNSATISFIED_ASSERTION', 'airtable_row')];
+    const now    = [gap('UNSATISFIED_ASSERTION', 'airtable_row')];
+    assert.equal(survivorsOf({ _lastBlockerKey: keyOf(before) }, now).length, 1);
+  });
+
+  test('a blocker the rebuild FIXED is not a survivor — the loop keeps its value', () => {
+    const before = [gap('DELIVER_NO_INPUT', 'send'), gap('MISSING_NAME', '')];
+    const now    = [gap('MISSING_NAME', '')];   // one closed, one new-ish
+    const s = survivorsOf({ _lastBlockerKey: keyOf(before) }, now);
+    assert.deepEqual(s.map(g => g.code), ['MISSING_NAME'],
+      'only the one that persisted counts — a rebuild that closed a blocker has earned its next pass');
+  });
+
+  test('a brand-new blocker is never a survivor (nothing has been tried on it yet)', () => {
+    const before = [gap('DELIVER_NO_INPUT', 'send')];
+    const now    = [gap('UNKNOWN_CHANNEL', 'post')];
+    assert.equal(survivorsOf({ _lastBlockerKey: keyOf(before) }, now).length, 0);
+  });
+
+  test('the FIRST pass has no history, so nothing is a survivor', () => {
+    assert.equal(survivorsOf({ _lastBlockerKey: null }, [gap('MISSING_NAME', '')]).length, 0,
+      'asking the user about something the very first rebuild would have fixed is its own kind of rude');
+  });
+});
