@@ -213,6 +213,57 @@ Channel name aliases — map user requests to the correct channel id:
 // In-process session map: threadId → converger instance.
 // Sessions are short-lived (one building conversation), so in-memory is correct.
 const sessions = new Map();
+
+// ── BUILDS RUN IN THE BACKGROUND ─────────────────────────────────────────────
+// A build used to BE an HTTP request: the client POSTed and the connection stayed
+// open for however long the graph took — minutes on a real workflow. Everything
+// about that was fragile. A closed tab, a refresh, a phone locking, a flaky
+// connection or a deploy took the build with it, and the proxy had to be placated
+// with a whitespace drip (keepAlive) purely to stop it cutting a healthy request.
+//
+// Now the request only STARTS the work. The graph runs detached, its progress is
+// recorded here, and the client polls. The build no longer belongs to a socket.
+//
+// Paired with session rehydration, the durability story is: the graph's own state is
+// on disk, so a build survives the process; this map is only "what is happening right
+// now", and losing it costs a poll that says `unknown`, not the build.
+const buildIntro = new Map();      // threadId → the conversational opener, attached to the first question
+const builds = new Map();          // threadId → { status, value, error, startedAt, updatedAt }
+const BUILD_TTL_MS = 60 * 60 * 1000;
+
+function sweepBuilds() {
+  const cutoff = Date.now() - BUILD_TTL_MS;
+  for (const [k, v] of builds) if ((v.updatedAt ?? 0) < cutoff) builds.delete(k);
+}
+
+/**
+ * Run `fn` detached and record where it got to. Returns immediately.
+ *
+ * A rejection is CAPTURED, never left to the process: an unhandled rejection in a
+ * detached build would take the whole server down and every other tenant's work with
+ * it — the one failure mode that is strictly worse than the long request this
+ * replaces. A GraphInterrupt is not an error; it is the build asking a question, and
+ * it is recorded as the thing to show the user.
+ */
+function startBuildJob(threadId, fn) {
+  sweepBuilds();
+  builds.set(threadId, { status: 'running', value: null, error: null, startedAt: Date.now(), updatedAt: Date.now() });
+  Promise.resolve()
+    .then(fn)
+    .then(
+      (value) => builds.set(threadId, { status: 'ready', value, error: null, startedAt: builds.get(threadId)?.startedAt ?? Date.now(), updatedAt: Date.now() }),
+      (err) => {
+        const interrupt = (err instanceof GraphInterrupt || err?.interruptValue) ? (err.interruptValue ?? err) : null;
+        if (interrupt) {
+          builds.set(threadId, { status: 'ready', value: interrupt, error: null, startedAt: builds.get(threadId)?.startedAt ?? Date.now(), updatedAt: Date.now() });
+          return;
+        }
+        logEvent('builder.job_failed', { threadId, ...errFields(err) });
+        builds.set(threadId, { status: 'error', value: null, error: String(err?.message ?? err), startedAt: builds.get(threadId)?.startedAt ?? Date.now(), updatedAt: Date.now() });
+      },
+    );
+}
+
 // threadId → the DRAFT workflow row this build belongs to. Lets the server persist
 // a finished build the moment it exists, instead of waiting for the browser to
 // acknowledge it — see the autosave in /respond.
@@ -1608,30 +1659,19 @@ Rules:
       sessionDraft.set(threadId, req.body.workflowId);
     }
 
-    let interrupt;
-    try {
+    // START the build; do not hold the request open for it. The graph can run for
+    // minutes, and a socket is the wrong thing to hang that on — see `builds` above.
+    startBuildJob(threadId, async () => {
       await converger.run(threadId, intent);
-      interrupt = { type: 'done' };
-    } catch (err) {
-      if (err instanceof GraphInterrupt || err?.interruptValue) {
-        interrupt = err.interruptValue ?? err;
-      } else {
-        logEvent('session.error', { tenant: req.tenant?.id ?? null, threadId, phase: 'start', ...errFields(err) });
-        sessions.delete(threadId);
-        closeReasoningHub(threadId);
-        return alive.send({ error: err.message ?? String(err) }, 500);
-      }
-    }
-    logEvent('session.start', { tenant: req.tenant?.id ?? null, threadId, interrupt: interrupt?.type });
+      return { type: 'done' };
+    });
+    logEvent('session.start', { tenant: req.tenant?.id ?? null, threadId, background: true });
 
-    // Attach the conversational opener to the first interrupt so the UI can show
-    // it before the first proposal/question.
-    const intro = await introP.catch(() => null);
-    if (intro && interrupt && (interrupt.type === 'proposal' || interrupt.type === 'clarification')) {
-      interrupt.intro = intro;
-    }
+    // The opener is attached by the status endpoint when the first question arrives,
+    // so this response does not wait on it either.
+    introP.then((intro) => { if (intro) buildIntro.set(threadId, intro); }).catch(() => {});
 
-    alive.send({ threadId, interrupt });
+    alive.send({ threadId, status: 'running' }, 202);
   });
 
   // ── GET /api/builder/mentions ────────────────────────────────────────────────
@@ -1684,75 +1724,112 @@ Rules:
       return res.status(404).json({ error: 'session not found or already complete' });
     }
 
-    const alive = keepAlive(res);
-    let result;
-    try {
-      // Serialize: a concurrent /respond for this thread waits for the in-flight one,
-      // so two resumes can never race on the same graph checkpoint.
-      result = await serializePerThread(threadId, async () => {
+    // Same as POST /sessions: start the resume, do not hold the socket for it.
+    if (builds.get(threadId)?.status === 'running') {
+      // Already working. Answering twice must not run the graph twice.
+      return res.status(202).json({ threadId, status: 'running' });
+    }
+    startBuildJob(threadId, () => serializePerThread(threadId, async () => {
+      let result;
+      try {
         const converger = await rehydrateSession(threadId, req);
         if (!converger) { const e = new Error('session not found or already complete'); e._stale = true; throw e; }
-        return converger.resume(threadId, req.body);
-      });
-    } catch (err) {
-      // A stale/duplicate resume (the thread already advanced) is not a failure — the
-      // real work was done by the resume that got there first. Return a benign no-op the
-      // client ignores, and NEVER surface the raw `CompiledGraph.resume()…` text.
-      if (err?._stale || isStaleResumeError(err)) {
-        logEvent('respond.duplicate', { tenant: req.tenant?.id ?? null, threadId, sent: req.body?.type });
-        return alive.send({ type: 'noop', reason: 'already_handled' });
-      }
-      logEvent('respond.error', { tenant: req.tenant?.id ?? null, threadId, sent: req.body?.type, ...errFields(err), committed: alive.committed() });
-      // A genuine failure gets a plain, human message — not a stack trace in the chat.
-      return alive.send({ error: 'Atlas hit a snag finishing that step. Try again, or start over from “+ New workflow”.' }, 500);
-    }
-
-    logEvent('respond.ok', { tenant: req.tenant?.id ?? null, threadId, sent: req.body?.type, interrupt: result?.type, heldOpen: alive.committed() });
-
-    // ── PERSIST A FINISHED BUILD THE MOMENT IT EXISTS ────────────────────────
-    //
-    // A build that took six minutes completed server-side, logged `respond.ok`
-    // with the whole workflow in hand — and the BROWSER never received it
-    // ("TypeError: Failed to fetch"). Nothing was saved, because the only thing
-    // that ever wrote the spec was the client acknowledging it, and the user was
-    // told to start over from "+ New workflow". Minutes of model work, and the
-    // user's place in a long conversation, thrown away because one HTTP response
-    // did not land.
-    //
-    // The server has the spec right here. Write it to the draft row now. If the
-    // response never arrives, opening that draft recovers the finished build
-    // instead of an empty conversation.
-    //
-    // Draft rows ONLY (`status === 'draft'`), so this can never touch a live
-    // workflow, and it is strictly best-effort: a failure here must not turn a
-    // successful build into an error.
-    const spec = result?.spec;
-    const draftId = sessionDraft.get(threadId);
-    if (draftId && spec && Array.isArray(spec.nodes) && spec.nodes.length) {
-      try {
-        const store = spine.engine.workflowStore;
-        const row = store.get(draftId, { userId: req.user.id });
-        if (row && row.tenant_id === req.tenant.id && row.status === 'draft') {
-          const patch = { nodes: spec.nodes };
-          if (Array.isArray(spec.edges))    patch.edges = spec.edges;
-          if (Array.isArray(spec.triggers)) patch.triggers = spec.triggers;
-          if (typeof spec.name === 'string' && spec.name) patch.name = spec.name;
-          // The CONTRACT rides along. The client-driven autosave omits it, which is
-          // the same omission that left `outcome` NULL on every stored workflow
-          // (F11) — a recovered draft with no promise cannot be certified against
-          // anything.
-          if (spec.outcome !== undefined) patch.outcome = spec.outcome;
-          store.update(draftId, patch, { userId: req.user.id, snapshot: false });
-          logEvent('builder.build.autosaved', { tenant: req.tenant?.id ?? null, workflowId: draftId, nodes: spec.nodes.length });
-        }
+        result = await converger.resume(threadId, req.body);
       } catch (err) {
-        logEvent('builder.build.autosave.error', { tenant: req.tenant?.id ?? null, workflowId: draftId, ...errFields(err) });
+        // A stale/duplicate resume (the thread already advanced) is not a failure — the
+        // real work was done by the resume that got there first. Return a benign no-op the
+        // client ignores, and NEVER surface the raw `CompiledGraph.resume()…` text.
+        if (err?._stale || isStaleResumeError(err)) {
+          logEvent('respond.duplicate', { tenant: req.tenant?.id ?? null, threadId, sent: req.body?.type });
+          return { type: 'noop', reason: 'already_handled' };
+        }
+        logEvent('respond.error', { tenant: req.tenant?.id ?? null, threadId, sent: req.body?.type, ...errFields(err) });
+        throw err;   // recorded as `error` by startBuildJob; the poll reports it plainly
       }
-    }
 
-    if (result?.type === 'done') { sessions.delete(threadId); sessionDraft.delete(threadId); closeReasoningHub(threadId); }
-    alive.send(result);
+      logEvent('respond.ok', { tenant: req.tenant?.id ?? null, threadId, sent: req.body?.type, interrupt: result?.type, heldOpen: alive.committed() });
+
+      // ── PERSIST A FINISHED BUILD THE MOMENT IT EXISTS ────────────────────────
+      //
+      // A build that took six minutes completed server-side, logged `respond.ok`
+      // with the whole workflow in hand — and the BROWSER never received it
+      // ("TypeError: Failed to fetch"). Nothing was saved, because the only thing
+      // that ever wrote the spec was the client acknowledging it, and the user was
+      // told to start over from "+ New workflow". Minutes of model work, and the
+      // user's place in a long conversation, thrown away because one HTTP response
+      // did not land.
+      //
+      // The server has the spec right here. Write it to the draft row now. If the
+      // response never arrives, opening that draft recovers the finished build
+      // instead of an empty conversation.
+      //
+      // Draft rows ONLY (`status === 'draft'`), so this can never touch a live
+      // workflow, and it is strictly best-effort: a failure here must not turn a
+      // successful build into an error.
+      const spec = result?.spec;
+      const draftId = sessionDraft.get(threadId);
+      if (draftId && spec && Array.isArray(spec.nodes) && spec.nodes.length) {
+        try {
+          const store = spine.engine.workflowStore;
+          const row = store.get(draftId, { userId: req.user.id });
+          if (row && row.tenant_id === req.tenant.id && row.status === 'draft') {
+            const patch = { nodes: spec.nodes };
+            if (Array.isArray(spec.edges))    patch.edges = spec.edges;
+            if (Array.isArray(spec.triggers)) patch.triggers = spec.triggers;
+            if (typeof spec.name === 'string' && spec.name) patch.name = spec.name;
+            // The CONTRACT rides along. The client-driven autosave omits it, which is
+            // the same omission that left `outcome` NULL on every stored workflow
+            // (F11) — a recovered draft with no promise cannot be certified against
+            // anything.
+            if (spec.outcome !== undefined) patch.outcome = spec.outcome;
+            store.update(draftId, patch, { userId: req.user.id, snapshot: false });
+            logEvent('builder.build.autosaved', { tenant: req.tenant?.id ?? null, workflowId: draftId, nodes: spec.nodes.length });
+          }
+        } catch (err) {
+          logEvent('builder.build.autosave.error', { tenant: req.tenant?.id ?? null, workflowId: draftId, ...errFields(err) });
+        }
+      }
+
+      if (result?.type === 'done') { sessions.delete(threadId); sessionDraft.delete(threadId); closeReasoningHub(threadId); }
+      return result;
+    }));
+    return res.status(202).json({ threadId, status: 'running' });
   });
+
+  // ── GET /api/builder/sessions/:threadId/status ───────────────────────────────
+  // Where the build has got to. `running` means keep polling; `ready` carries the
+  // question (or completion) to act on; `error` carries a plain message.
+  //
+  // `unknown` is its own answer and deliberately not an error: after a restart the
+  // graph state is still on disk but this process has no memory of what was in
+  // flight, so the honest reply is "I do not know" — the client offers to continue
+  // from the last checkpoint rather than pretending the build is lost or, worse,
+  // silently starting it again.
+  app.get('/api/builder/sessions/:threadId/status', requireActiveTenant, async (req, res) => {
+    const { threadId } = req.params;
+    // Tenant-scoped: a threadId is guessable, so ownership comes from the caller's
+    // session, never from the id.
+    let row = null;
+    try { row = spine.interactionStore?.getSession?.(req.tenant.id, threadId) ?? null; } catch { row = null; }
+    if (!row) return res.status(404).json({ error: 'session not found' });
+
+    const job = builds.get(threadId);
+    if (!job) {
+      return res.json({ threadId, status: row.completed_at ? 'done' : 'unknown' });
+    }
+    if (job.status === 'running') return res.json({ threadId, status: 'running' });
+    if (job.status === 'error')   return res.json({ threadId, status: 'error', error: job.error });
+
+    const interrupt = job.value ?? null;
+    // The opener rides along with the first question the user actually sees.
+    const intro = buildIntro.get(threadId);
+    if (intro && interrupt && (interrupt.type === 'proposal' || interrupt.type === 'clarification') && !interrupt.intro) {
+      interrupt.intro = intro;
+      buildIntro.delete(threadId);
+    }
+    return res.json({ threadId, status: 'ready', interrupt });
+  });
+
 
   // ── POST /api/builder/sessions/:threadId/setup ───────────────────────────────
   // Execute any registered capability as a one-off setup action during a converger

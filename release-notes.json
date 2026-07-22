@@ -1,5 +1,13 @@
 [
   {
+    "version": "1.6.25",
+    "date": "2026-07-22",
+    "title": "Builds keep running if you close the tab",
+    "notes": [
+      "A build used to live inside one long connection — closing the tab, refreshing, or losing signal took it with you. Builds now run on the server and the page just checks on them, so you can leave and come back."
+    ]
+  },
+  {
     "version": "1.6.24",
     "date": "2026-07-22",
     "title": "A build in progress survives a restart",

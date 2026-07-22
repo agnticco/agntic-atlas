@@ -4972,6 +4972,31 @@ class Component extends DCLogic {
           }
           if (ev.type === "done") {
             twDone = ev; // typewriter will finalize once queue drains
+            // ── ONCE THE ANSWER IS COMPLETE, THERE IS NOTHING LEFT TO ANIMATE ──
+            // The typewriter exists to make a LIVE stream feel live. After `done`
+            // the whole reply is already in hand, so continuing to reveal it one
+            // chunk at a time is pure delay — and it is not harmless:
+            //
+            //   • The "Build it" button is attached only when the queue drains, so
+            //     the user cannot act on a finished answer until the animation ends.
+            //   • A reload or navigation mid-animation persists the HALF-TYPED text
+            //     and loses the button permanently. Seen live: the server completed
+            //     a reply with ready_to_build at 03:32:07; the conversation was left
+            //     reading "…4. Add a" with no button and no way to build. The answer
+            //     existed 25 seconds in; the user was shown a dead end.
+            //
+            // So flush a backlog straight to the screen and finalize. A short tail
+            // still animates, because at that size it costs nothing.
+            if (twQueue.length > 120) {
+              const rest = twQueue;
+              twQueue = "";
+              const curMsgs = self.state.msgs;
+              if (twMsgIdx >= 0 && twMsgIdx < curMsgs.length) {
+                const nm = curMsgs.slice();
+                nm[twMsgIdx] = { ...nm[twMsgIdx], text: nm[twMsgIdx].text + rest };
+                self.setState({ msgs: nm });
+              }
+            }
             if (!twRunning) twTick(); // trigger immediately if nothing queued
           }
         }
@@ -5048,19 +5073,18 @@ class Component extends DCLogic {
       awaitingGraphApproval: false, graphApproved: [], graphSelNode: null, graphReviseOpen: false, graphReviseText: "",
       outcomeResults: [], deliveries: [], runOutput: null, runError: ""
     });
+    // The build no longer lives in this request. The POST starts it and returns a
+    // thread id; the work happens on the server and we poll. A closed tab, a refresh,
+    // a locked phone or a deploy no longer takes the build with it.
     fetch("/api/builder/sessions", { method: "POST", headers: this._H(), body: JSON.stringify({ intent: intent, workflowId: this.state.workflowId || null }) })
       .then(r => this._readJson(r))
       .then(r => {
-        // A build held open past the proxy's silence limit has already sent its 200,
-        // so a failure arrives in the BODY. Status alone would read it as success and
-        // hand `{error}` to the interrupt handler, which does nothing with it — a
-        // silent dead end. Treat a body-level error as an error whatever the status.
         if (!r.ok || (r.data && r.data.error)) return self._apiError(r.data.error);
         self.setState({ threadId: r.data.threadId });
         // Subscribe to the build's reasoning stream. The endpoint replays any beats
-        // already emitted during this first synchronous pass, then streams new ones.
+        // already emitted before this subscribe, then streams new ones.
         self._openReasoningStream(r.data.threadId);
-        self._handleInterrupt(r.data.interrupt);
+        self._pollBuild(r.data.threadId);
       })
       .catch(e => self._apiError(String(e)));
   }
@@ -5078,8 +5102,56 @@ class Component extends DCLogic {
     if (!tid) return;
     fetch("/api/builder/sessions/" + tid + "/respond", { method: "POST", headers: this._H(), body: JSON.stringify(resp) })
       .then(r => this._readJson(r))
-      .then(r => { if (!r.ok || (r.data && r.data.error)) return self._apiError(r.data.error); self._handleInterrupt(r.data); })
+      .then(r => {
+        if (!r.ok || (r.data && r.data.error)) return self._apiError(r.data.error);
+        self._pollBuild(tid);
+      })
       .catch(e => self._apiError(String(e)));
+  }
+
+  // ── WAIT FOR A BUILD BY ASKING, NOT BY HOLDING A SOCKET ────────────────────
+  // Polls until the server has something to act on. Two things this must not do:
+  //   • give up because ONE poll failed — a dropped request while the model is
+  //     thinking is exactly the case this design exists to survive, so a failed
+  //     poll is retried rather than surfaced;
+  //   • poll forever — a build that has genuinely gone silent has to say so.
+  // `unknown` means the server restarted and has no memory of what was running; the
+  // graph state is still on disk, so the honest move is to tell the user their work
+  // is safe and let them continue, never to silently restart the build.
+  _pollBuild(threadId) {
+    const self = this;
+    let misses = 0;
+    const started = Date.now();
+    const MAX_MS = 30 * 60 * 1000;
+    if (this._pollTimer) { clearTimeout(this._pollTimer); this._pollTimer = null; }
+
+    const tick = () => {
+      if (self.state.threadId !== threadId) return;   // conversation moved on
+      fetch("/api/builder/sessions/" + threadId + "/status", { headers: self._H() })
+        .then(r => self._readJson(r))
+        .then(r => {
+          const d = (r && r.data) || {};
+          if (!r.ok && r.status !== 404) throw new Error(d.error || "status unavailable");
+          if (d.status === "running") return schedule();
+          if (d.status === "unknown") {
+            return self._apiError("That build was interrupted, but your work is saved — tell me what to change and I'll carry on from here.");
+          }
+          if (d.status === "error") return self._apiError(d.error);
+          if (d.status === "ready") return self._handleInterrupt(d.interrupt);
+          if (d.status === "done")  return self._handleInterrupt({ type: "done" });
+          return schedule();
+        })
+        .catch(() => {
+          // A single failed poll is not a failed build.
+          if (++misses > 10) return self._apiError("Lost contact with the build. Your work is saved — reopen it from the list.");
+          schedule();
+        });
+    };
+    const schedule = () => {
+      if (Date.now() - started > MAX_MS) return self._apiError("That build is taking unusually long. Your work is saved — reopen it from the list.");
+      self._pollTimer = setTimeout(tick, 1500);
+    };
+    tick();
   }
 
   _handleInterrupt(iv) {
