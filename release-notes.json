@@ -1,5 +1,13 @@
 [
   {
+    "version": "1.6.20",
+    "date": "2026-07-21",
+    "title": "Replies appear in seconds, not minutes",
+    "notes": [
+      "A long reply was typed out one character at a time, and each character redrew the whole screen — so text that had already arrived took minutes to read, and the Build button only appeared at the very end."
+    ]
+  },
+  {
     "version": "1.6.19",
     "date": "2026-07-21",
     "title": "Builds stop rebuilding when the rebuild changes nothing",

@@ -4851,6 +4851,31 @@ class Component extends DCLogic {
 
       const twDelay = () => twQueue.length > 200 ? 3 : twQueue.length > 80 ? 7 : 14;
 
+      // ── TYPE IN CHUNKS, NOT CHARACTERS ──────────────────────────────────────
+      // Each tick did `setState` for ONE character, and every setState re-renders
+      // the whole app — a long conversation plus a 21-node graph. So the real cost
+      // is per RENDER, not per millisecond, and the 3 ms delay above was noise
+      // against a render that takes far longer.
+      //
+      // Measured live: the server finished a reply at 03:32:07 and the browser was
+      // still typing it out at 03:36:34 — four and a half minutes to display text
+      // that had already arrived. Worse, the "Build it" button is only added when
+      // the queue drains, so the user cannot proceed until the animation ends.
+      //
+      // Now the chunk grows with the backlog: short replies still land a character
+      // at a time (the effect is worth keeping), while a long one finishes in a
+      // bounded number of renders instead of one per character.
+      // Sized against a MEASURED render cost, not a guess: 454 characters took ~270
+      // seconds on a long conversation, i.e. roughly 0.6 s per render. Draining a
+      // fifth of the backlog each tick puts any reply — 400 characters or 6000 — in
+      // the 17–30 render range (~10–18 s) instead of 145–316 (~1.5–3 minutes). The
+      // floor of 6 keeps the last few characters from crawling; the 30 keeps the
+      // middle of a medium reply moving.
+      const twChunk = () => {
+        const q = twQueue.length;
+        return q > 300 ? Math.ceil(q / 5) : q > 60 ? 30 : 6;
+      };
+
       const twTick = () => {
         if (self._chatGen !== gen) return; // conversation replaced — stop typing into it
         if (!twQueue) {
@@ -4896,8 +4921,9 @@ class Component extends DCLogic {
           return;
         }
         twRunning = true;
-        const ch = twQueue[0];
-        twQueue = twQueue.slice(1);
+        const take = twChunk();
+        const ch = twQueue.slice(0, take);
+        twQueue = twQueue.slice(take);
         const curMsgs = self.state.msgs;
         if (twMsgIdx >= 0 && twMsgIdx < curMsgs.length) {
           const msg = curMsgs[twMsgIdx];
