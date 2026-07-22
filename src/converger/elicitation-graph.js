@@ -2558,6 +2558,19 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
     // A delivery the outcome promises never happened, or the run errored — a real wiring
     // defect the model can fix. Feed the sample + complaint back and rebuild.
     if (structural.length && (state.verifyRounds ?? 0) < MAX_VERIFY_ROUNDS) {
+      // WHY THE SELF-TEST REBUILT, ON THE RECORD. This is the most expensive decision
+      // in a build — it throws away the whole spec and pays for another Opus pass — and
+      // nothing recorded its reason. Measured on a 26-step build: verify ran 3× (462s)
+      // and drove 3 of the 4 `generate` passes (872s), i.e. 96% of a 23-minute build,
+      // and afterwards there was no way to tell whether those rebuilds were justified.
+      // The complaint lives only in a reasoning beat, which is not persisted.
+      logEvent('converger.verify_rebuild', {
+        round: (state.verifyRounds ?? 0) + 1,
+        passed: passedCount, total,
+        failures: structural.length,
+        assertion: firstFail?.oracle?.target ?? firstFail?.oracle?.id ?? null,
+        complaint: String(complaint ?? '').slice(0, 300),
+      });
       emitBeat(cfg, {
         kind: 'check',
         text: `That sample didn't pass — only ${passedCount}/${total} produced the right result.`,
