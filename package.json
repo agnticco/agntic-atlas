@@ -1,6 +1,6 @@
 {
   "name": "atlas",
-  "version": "1.6.22",
+  "version": "1.6.23",
   "description": "Atlas — conversational workflow builder (thin spine).",
   "type": "module",
   "main": "src/api/server.js",

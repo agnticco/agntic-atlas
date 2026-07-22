@@ -168,6 +168,43 @@ export async function airtableDescribeBase(api, { baseId } = {}) {
   };
 }
 
+/**
+ * Add a column to an existing table.
+ *
+ * WHY THIS EXISTS. The builder can already READ a table's real columns, so it knows
+ * when a workflow promises a field the table does not have — and until now the only
+ * thing it could do about it was rebuild the workflow and hope. Observed live: a spec
+ * promised a `Notes` column, the model believed the table had `Message`, and it
+ * oscillated between the two spellings across two whole-spec rebuilds (425s + 237s)
+ * because neither answer could ever satisfy both. The cheap resolution was always one
+ * question — "your table has no Notes column; add one, or use Message?" — and that
+ * question was unanswerable because nothing here could add a column.
+ *
+ * The permission was never the obstacle: `schema.bases:write` has been in the Airtable
+ * scope set since the connector shipped, granted by every tenant who connected, and
+ * used by nothing. Exactly the same shape as `schema.bases:read`, which sat unused
+ * until the builder learned to read schemas.
+ *
+ * DEFAULTS TO A PLAIN TEXT FIELD. `singleLineText` accepts anything a workflow can
+ * write and needs no options; a typed guess (a number, a select with invented choices)
+ * would be a decision the user did not make, and a wrong type silently rejects writes.
+ * A caller who knows better passes `type`.
+ */
+export async function airtableCreateField(api, { baseId, tableId, name, type, description } = {}) {
+  if (!baseId) throw new Error('airtable_create_field: baseId is required.');
+  if (!tableId) throw new Error('airtable_create_field: tableId is required.');
+  const fieldName = String(name ?? '').trim();
+  if (!fieldName) throw new Error('airtable_create_field: name is required — a column needs a name.');
+
+  const body = { name: fieldName, type: type || 'singleLineText' };
+  if (description) body.description = String(description).slice(0, 20000);
+
+  // The api helper takes an OPTIONS object ({ body, params }), not a bare body —
+  // passing the payload directly sends no body at all and Airtable rejects it.
+  const data = await api('POST', `/meta/bases/${baseId}/tables/${encodeURIComponent(tableId)}/fields`, { body });
+  return { id: data.id, name: data.name, type: data.type, baseId, tableId, created: true };
+}
+
 export async function airtableGetRecord(api, { baseId, tableId, recordId } = {}) {
   const data = await api('GET', `/${baseId}/${encodeURIComponent(tableId)}/${recordId}`);
   return { id: data.id, fields: data.fields, createdTime: data.createdTime };
@@ -277,6 +314,27 @@ export function registerAirtableChannels(capabilityRegistry) {
     ],
     isReady: ready,
     handle: makeHandle((api, config) => airtableDescribeBase(api, config)),
+  });
+
+  // The write half of schema awareness. Reading a table tells the builder a promised
+  // column is missing; this is what lets it OFFER to add one instead of rebuilding the
+  // workflow to work around it. Like its read siblings it is a `step` capability whose
+  // real consumer is the BUILDER, at build time — a workflow that adds a column on
+  // every run is almost never what anyone wants.
+  capabilityRegistry.register({
+    id: 'airtable_create_field', connector: 'airtable', positions: ['step'],
+    name: 'Add Airtable Column', icon: 'table',
+    description: 'Adds a column to an existing Airtable table. Use it when a workflow needs a field the table does not have yet — ask the user first, then add it, rather than writing to a column that does not exist.',
+    requiredScopes: ['schema.bases:write'],
+    configSchema: [
+      { key: 'baseId',      label: 'Base ID',     type: 'string', optional: false, hint: 'appXXXXXXXXXXXXXX — from airtable_list_bases' },
+      { key: 'tableId',     label: 'Table',       type: 'string', optional: false, hint: 'Table id or name — from airtable_describe_base' },
+      { key: 'name',        label: 'Column name', type: 'string', optional: false, hint: 'Exactly as it should read in Airtable' },
+      { key: 'type',        label: 'Column type', type: 'string', optional: true,  hint: 'Defaults to singleLineText, which accepts anything a workflow can write' },
+      { key: 'description', label: 'Description', type: 'string', optional: true },
+    ],
+    isReady: ready,
+    handle: makeHandle((api, config) => airtableCreateField(api, config)),
   });
 
   capabilityRegistry.register({

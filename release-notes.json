@@ -1,5 +1,13 @@
 [
   {
+    "version": "1.6.23",
+    "date": "2026-07-22",
+    "title": "Atlas can add a missing Airtable column",
+    "notes": [
+      "When a workflow needs a column your table doesn't have, Atlas can now offer to add it — instead of rebuilding the workflow to work around it."
+    ]
+  },
+  {
     "version": "1.6.22",
     "date": "2026-07-22",
     "title": "A problem the builder can't fix is brought to you, not retried",
