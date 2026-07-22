@@ -712,13 +712,24 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
   // inflated by however long a person took to answer.
   //
   // Free by design: one Date.now() per node and a line in the JSON-lines log.
+  // WHOSE BUILD IS THIS? Every line was `{node, ms, step}` and nothing else, so two
+    // tenants building at the same time produce one interleaved stream that cannot be
+    // separated — and this log is the primary instrument for diagnosing slow or looping
+    // builds, which is exactly when more than one person is likely to be building. The
+    // QA Manager could only attribute a build's stages by refusing to run a second one.
+    // `threadId` identifies the build; `tenant` is what makes it answerable in production.
+  const who = (cfg) => ({
+    thread: cfg?.configurable?.threadId ?? null,
+    tenant: cfg?.configurable?.tenantId ?? null,
+  });
+
   const timeNodes = (g) => {
     const orig = g.addNode.bind(g);
     g.addNode = (name, fn) => orig(name, async (state, cfg) => {
       const t0 = Date.now();
       try {
         const out = await fn(state, cfg);
-        logEvent('converger.node', { node: name, ms: Date.now() - t0, step: state?.step ?? null });
+        logEvent('converger.node', { ...who(cfg), node: name, ms: Date.now() - t0, step: state?.step ?? null });
         return out;
       } catch (err) {
         // A NODE THAT PAUSES STILL DID THE WORK. `generate` spends minutes on the
@@ -727,7 +738,7 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
         // was a 0 ms checkpoint replay. The elapsed time here is work done BEFORE the
         // pause; the human's own thinking time lands in the NEXT request, not this one.
         const paused = !!(err && (err.name === 'GraphInterruptSignal' || err._interrupt));
-        logEvent('converger.node', { node: name, ms: Date.now() - t0, step: state?.step ?? null, ...(paused ? { paused: true } : { failed: true }) });
+        logEvent('converger.node', { ...who(cfg), node: name, ms: Date.now() - t0, step: state?.step ?? null, ...(paused ? { paused: true } : { failed: true }) });
         throw err;
       }
     });
@@ -1216,6 +1227,7 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
     const survivors = blockers.filter(g => priorKeys.has(`${g.code}:${g.nodeId ?? ''}`));
     if (state._generated && survivors.length) {
       logEvent('converger.blocker_to_chat', {
+        ...who(cfg),
         survivors: survivors.length,
         codes: [...new Set(survivors.map(g => g.code))].join(','),
       });
@@ -2611,7 +2623,7 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
           .map((e, i) => ({ ...e, id: `lane_${i + 1}` }));
         if (extra.length) {
           draft = { ...draft, outcome: { ...draft.outcome, examples: [...have, ...extra] } };
-          logEvent('converger.lane_examples', { lanes: lanes.length, had: have.length, added: extra.length });
+          logEvent('converger.lane_examples', { ...who(cfg), lanes: lanes.length, had: have.length, added: extra.length });
         }
       } catch { /* keep the examples we have — never fail a build over a top-up */ }
     }
@@ -2752,6 +2764,7 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
       // and afterwards there was no way to tell whether those rebuilds were justified.
       // The complaint lives only in a reasoning beat, which is not persisted.
       logEvent('converger.verify_rebuild', {
+        ...who(cfg),
         round: (state.verifyRounds ?? 0) + 1,
         passed: passedCount, total,
         failures: structural.length,

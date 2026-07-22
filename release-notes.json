@@ -1,5 +1,13 @@
 [
   {
+    "version": "1.6.31",
+    "date": "2026-07-22",
+    "title": "Smaller fixes to questions, buttons, and diagnostics",
+    "notes": [
+      "Only the newest question keeps its quick-answer buttons; a build paused when you refresh now explains how to continue; and internal build logs now record which workspace a build belongs to."
+    ]
+  },
+  {
     "version": "1.6.30",
     "date": "2026-07-22",
     "title": "A workflow with several paths now tests all of them",

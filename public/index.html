@@ -3647,6 +3647,17 @@ class Component extends DCLogic {
     if (p === "proposed" || p === "draft" || p === "published") return true;
     return (p === "chat" || p === "building" || p === "new") && s.view === 'build';
   }
+  // Strip the answer chips from every clarification message, leaving the question
+  // text. Returns a new array (never mutates), so it is safe to feed straight into
+  // setState. `chipsLive:false` records that the control was retired on purpose, not
+  // lost — the persistence layer already drops chips on reload, and this mirrors it
+  // for the in-session case where a newer question supersedes an older one.
+  _retireClarifyChips(msgs) {
+    return (msgs || []).map(m =>
+      (m && m.isClarify && m.chips && m.chips.length)
+        ? { ...m, chips: [], chipsLive: false }
+        : m);
+  }
   _saveBuild() {
     const S = this.state;
     if (!S.authToken) return; // not signed in yet
@@ -3803,6 +3814,23 @@ class Component extends DCLogic {
         overrides.liveRevealed = null;
         if (overrides.liveConfirmed == null && !(slice.liveConfirmed > 0)) overrides.liveConfirmed = live.length;
       }
+    }
+    // A BUILD PAUSED ON A QUESTION MUST NOT COME BACK AS A DEAD-END. When a reload
+    // catches a gap review, the converger session is gone (threadId nulled) and the
+    // answer chips are stripped by persistence — so the user returns to a question
+    // with no button and nothing telling them the shortcut is gone. The questions are
+    // still answerable: a restored draft routes what you type through the spec-based
+    // edit path. So say that, once, instead of leaving them staring at an orphan
+    // question. (Only when the build was genuinely awaiting an answer — `inputMode`
+    // was 'clarify' — and the caller has not already resolved this to a finished build.)
+    if (slice.inputMode === 'clarify' && !callerSetPhase) {
+      const msgs = Array.isArray(overrides.msgs) ? overrides.msgs.slice()
+                 : (Array.isArray(slice.msgs) ? slice.msgs.slice() : []);
+      const stripped = this._retireClarifyChips(msgs);
+      stripped.push({ isAtlas: true, hasReason: false,
+        text: "Welcome back — this build was paused on the questions above. The quick-answer buttons don't survive a page refresh, but you can still just tell me in the box how you'd like to handle them and I'll carry on." });
+      overrides.msgs = stripped;
+      if (overrides.inputMode === 'clarify' || overrides.inputMode == null) overrides.inputMode = 'chat';
     }
     this.setState(Object.assign({}, slice, overrides));
   }
@@ -5245,7 +5273,14 @@ class Component extends DCLogic {
 
     if (iv.type === "clarification") {
       const lead = iv.intro ? [{ isAtlas: true, text: iv.intro, hasReason: false }] : [];
-      const msgs = [...this.state.msgs, ...lead, { isAtlas: true, text: iv.question || "Quick question:", hasReason: false }];
+      // ONLY THE NEWEST QUESTION IS ANSWERABLE. A prior clarification's chips were
+      // left live in the transcript, so after the build asked the same thing more
+      // than once (finding 2, itself now fixed) THREE "Use your suggestions" buttons
+      // sat there at once — and a stale one posts an answer to a question the session
+      // has already moved past. Retire every earlier clarification's chips as the new
+      // one arrives; the question text stays as context, only the dead control goes.
+      const prior = this._retireClarifyChips(this.state.msgs);
+      const msgs = [...prior, ...lead, { isAtlas: true, text: iv.question || "Quick question:", hasReason: false }];
       // `choices[]` is the SHARED primitive (converger-v2 §6.3): ANY interrupt may
       // carry it, and a client that ignores it still shows the composer. This is
       // how a clarification stops being a blank text box. `options` is v1's
@@ -5254,8 +5289,10 @@ class Component extends DCLogic {
         ? iv.choices.map(c => ({ label: String(c.label != null ? c.label : c), value: String(c.label != null ? c.label : c) }))
         : (Array.isArray(iv.options) ? iv.options.map(o => ({ label: String(o), value: String(o) })) : []);
       if (opts.length) {
-        msgs.push({ isClarify: true, q: "", chips: opts.map(o => ({ label: o.label, onPick: () => {
-          this.setState({ msgs: [...this.state.msgs, { isOperator: true, text: o.value }], thinking: true, inputMode: "locked" });
+        msgs.push({ isClarify: true, chipsLive: true, q: "", chips: opts.map(o => ({ label: o.label, onPick: () => {
+          // Answering retires this question's own chips too, so a double-click or a
+          // second glance cannot fire the same answer twice.
+          this.setState({ msgs: [...this._retireClarifyChips(this.state.msgs), { isOperator: true, text: o.value }], thinking: true, inputMode: "locked" });
           this._send({ type: "clarification", answer: o.value });
         } })) });
       }

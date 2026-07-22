@@ -85,7 +85,11 @@ export function createConverger({
   const graph = buildElicitationGraph({ llm, checkpointerDir, invokeCapability });
 
   // Each converger turn = ~3 node executions (analyze + propose/clarify + interrupt).
-  const cfg = (threadId) => ({ configurable: { threadId, ...(narrate ? { narrate } : {}), ...(runDryRun ? { runDryRun } : {}) }, recursionLimit: 300 });
+  // tenantId rides in configurable so the build-diagnostic log lines (converger.node,
+  // .blocker_to_chat, .verify_rebuild, .lane_examples) can name whose build they are —
+  // two tenants building at once are otherwise one unseparable stream. Already a
+  // parameter of this factory; it was simply never forwarded to the graph.
+  const cfg = (threadId) => ({ configurable: { threadId, ...(tenantId ? { tenantId } : {}), ...(narrate ? { narrate } : {}), ...(runDryRun ? { runDryRun } : {}) }, recursionLimit: 300 });
 
   async function run(threadId, intent) {
     if (interactionStore && tenantId) {
@@ -149,7 +153,7 @@ export function createConverger({
 export async function runHeadless({ intent, capabilities, llm, checkpointerDir }) {
   const graph    = buildElicitationGraph({ llm, checkpointerDir });
   const threadId = `headless-${Date.now()}`;
-  const config   = { configurable: { threadId }, recursionLimit: 300 };
+  const config   = { configurable: { threadId, ...(tenantId ? { tenantId } : {}) }, recursionLimit: 300 };
   const MAX_STEPS = 40;
   let steps = 0;
 
