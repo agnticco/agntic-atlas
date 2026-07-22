@@ -41,7 +41,8 @@ import { SystemMessage, HumanMessage } from '../core/message.js';
 import { scoreGap, unansweredGaps } from './gap-scorer.js';
 import { applyProposal, assembleSpec, wireEdges } from './spec-assembler.js';
 import { materialiseEscalations } from './escalation.js';
-import { nodeForAssertion, assertableConnectors, splitTarget, canonicalConnector } from '../workflows/outcome-oracle.js';
+import { nodeForAssertion, assertableConnectors, splitTarget, canonicalConnector,
+         laneInventoryOf } from '../workflows/outcome-oracle.js';
 import { analyzeTable } from '../workflows/decision-analysis.js';
 import { tableOf, valuesOf, HIT_POLICIES, HIT_POLICY_LABELS, DECISION_MAX_INPUTS } from '../workflows/node-types/decision.js';
 import {
@@ -51,6 +52,7 @@ import {
   buildModifyPrompt,
   buildOutcomePrompt,
   buildExamplesPrompt,
+  buildLaneExamplesPrompt,
   buildGapPrompt,
   buildSufficiencyPrompt,
   buildGeneratePrompt,
@@ -2572,8 +2574,52 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
 
   graph.addNode('verify', async (state, cfg) => {
     const runDryRun  = cfg?.configurable?.runDryRun;
-    const draft      = state.draft;
+    let   draft      = state.draft;
     const assertions = draft?.outcome?.assertions ?? [];
+
+    // ── ONE SAMPLE PER PATH, NOW THAT THE PATHS ARE KNOWN ────────────────────
+    // The example generator runs BEFORE the workflow exists, so it proposes cases
+    // blind — typically one or two, with no idea the workflow routes three ways. A
+    // router is only proved on the routes actually tested, so the panel correctly
+    // refuses to certify and Go live stays locked. Observed live: a user who answered
+    // nothing, accepted every default and got a CORRECT workflow was then asked to
+    // write test cases by hand — exactly the typing the zero-typing path exists to
+    // remove.
+    //
+    // Here the spec is assembled, so the lanes are knowable. Top up with one input
+    // aimed at each path. Deliberately weak claims: this gives every path a fair
+    // chance, it does not guarantee coverage — only RUNNING proves which lane an
+    // input takes, and the oracle still has the last word. A failure to top up is
+    // never fatal: we fall through to whatever examples already existed, which is
+    // exactly today's behaviour.
+    const lanes = laneInventoryOf(assembleSpec(draft));
+    const have  = (draft?.outcome?.examples ?? []).filter(e => e && e.given != null);
+    if (typeof runDryRun === 'function' && assertions.length && lanes.length > have.length) {
+      try {
+        const parsed = await llmJson(llm, [
+          new SystemMessage(buildSystemPrompt(state.capabilities)),
+          new HumanMessage(buildLaneExamplesPrompt({
+            intent: state.intent, outcome: draft.outcome, triggers: draft.triggers,
+            lanes, existing: have,
+          })),
+        ], tierCfg('fast', cfg?.configurable?.threadId));
+        const extra = (parsed?.examples ?? [])
+          .filter(e => e?.given != null)
+          // Ids must not collide with what is already there: `checkOutcome` keys by
+          // index precisely because a colliding key silently drops an entry, and a
+          // dropped sample is a path reported as tested that never ran.
+          .map((e, i) => ({ ...e, id: `lane_${i + 1}` }));
+        if (extra.length) {
+          draft = { ...draft, outcome: { ...draft.outcome, examples: [...have, ...extra] } };
+          logEvent('converger.lane_examples', { lanes: lanes.length, had: have.length, added: extra.length });
+        }
+      } catch { /* keep the examples we have — never fail a build over a top-up */ }
+    }
+
+    // Every return from this node must carry the draft, or the lane examples we just
+    // paid for are discarded and the panel is handed the same single sample as before.
+    const carryDraft = draft !== state.draft ? { draft } : {};
+
     const examples   = (draft?.outcome?.examples ?? [])
       .filter(e => e && e.given != null)
       .slice(0, MAX_VERIFY_EXAMPLES);
@@ -2584,7 +2630,7 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
     // is also why every existing converger test (which wires no `runDryRun`) keeps
     // its exact behaviour — the node is inert until a tester is provided.
     if (typeof runDryRun !== 'function' || !examples.length || !assertions.length) {
-      return { phase: 'ratifying' };
+      return { ...carryDraft, phase: 'ratifying' };
     }
 
     // The spec the user is about to publish — resources already resolved by the tail.
@@ -2619,6 +2665,7 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
           // block the build or claim a failure. Pass through with an honest note.
           emitBeat(cfg, { kind: 'check', text: "I couldn't run the self-test just now — you can still run it yourself before going live." });
           return {
+            ...carryDraft,
             phase: 'ratifying',
             _verifyReport: { ran: false, passed: 0, total: 0, note: `self-test could not run (${String(err?.message ?? err)})` },
             confirmationLog: [{ step: state.step, type: 'verify', ran: false, error: String(err?.message ?? err) }],
@@ -2639,6 +2686,7 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
     // proceed, untested.
     if (!judged.length) {
       return {
+        ...carryDraft,
         phase: 'ratifying',
         _verifyReport: { ran: false, passed: 0, total: 0, note: null },
         confirmationLog: [{ step: state.step, type: 'verify', ran: false, judged: 0 }],
@@ -2656,6 +2704,7 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
         text: `It produced the right result — ${passedCount}/${total} sample${total > 1 ? 's' : ''} passed.`,
       });
       return {
+        ...carryDraft,
         phase: 'ratifying',
         _verifyReport: { ran: true, passed: passedCount, total, note: null },
         confirmationLog: [{ step: state.step, type: 'verify', ran: true, passed: passedCount, total, ok: true }],
@@ -2718,6 +2767,7 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
         text: `The workflow ran, but a promised delivery didn't happen on a real sample${failLabel}: ${complaint}. Let me rebuild it so every step the outcome depends on is wired correctly.`,
       });
       return {
+        ...carryDraft,
         phase:          'proposing',
         verifyRounds:   (state.verifyRounds ?? 0) + 1,
         clarifications: [{
@@ -2742,6 +2792,7 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
         text: `Your workflow is built and every step is wired correctly. Give it a test run to see it in action.`,
       });
       return {
+        ...carryDraft,
         phase: 'ratifying',
         // Not a give-up: structurally verified. `softFlake` records that a content node
         // flaked on a sample, for provenance, without gating the build.
@@ -2759,6 +2810,7 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
       text: `I couldn't get a promised delivery to happen on a sample after ${state.verifyRounds} attempt${state.verifyRounds > 1 ? 's' : ''} — the workflow is built, but review it before going live.`,
     });
     return {
+      ...carryDraft,
       phase: 'ratifying',
       _verifyReport: { ran: true, passed: passedCount, total, note: complaint, gaveUp: true },
       confirmationLog: [{ step: state.step, type: 'verify', ran: true, passed: passedCount, total, ok: false, gaveUp: true, complaint }],

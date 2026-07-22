@@ -1026,6 +1026,45 @@ Return JSON only:
 }
 
 /**
+ * One example per PATH the workflow can take.
+ *
+ * The ordinary example generator runs before the workflow exists, so it cannot know
+ * the workflow branches — it proposes up to three cases blind. A router is only
+ * proved on the routes actually tested, so a three-way workflow with one sample can
+ * never pass its own test: the panel correctly refuses to certify and Go live stays
+ * locked. Observed live — a user who answered nothing, accepted every default and got
+ * a correct workflow was then told to write test cases by hand, which is precisely the
+ * typing the zero-typing path exists to remove.
+ *
+ * By the time the spec is assembled the paths ARE known, so this asks for an input
+ * designed to take each one, naming the path in the workflow's own routing words.
+ * It cannot GUARANTEE coverage — only running proves which lane an input takes — so
+ * the honest claim is that it gives every path a fair chance, and the oracle still
+ * has the last word.
+ */
+export function buildLaneExamplesPrompt({ intent, outcome, triggers, lanes, existing = [] }) {
+  const had = existing.filter(e => e?.label).map(e => `- ${e.label}`).join('\n');
+  return `The user is building this workflow:
+
+INTENT: "${intent}"
+OUTCOME: ${outcome?.statement ?? '(not yet stated)'}
+
+The finished workflow can take these different paths, and a test only proves the paths
+it actually goes down. Propose ONE realistic input for EACH path below — chosen so the
+workflow would genuinely take that path:
+
+${lanes.map((l, i) => `${i + 1}. ${l.label}`).join('\n')}
+${had ? `\nCases they already have (do not repeat these):\n${had}\n` : ''}
+${triggerGivenGuidance(triggers)}
+
+Each input must be specific and realistic — a real-looking subject line, a real-looking
+amount — never a generic placeholder, and never a label describing the path.
+
+Return JSON only, one entry per path, in the same order:
+{"examples":[{"id":"lane1","label":"<short label naming the path in plain words>","given":{…},"expect":{…},"shouldTrigger":true}]}`;
+}
+
+/**
  * `given` is the EVENT the workflow's first step actually receives — and the first
  * step is fed by `given` verbatim. If its shape does not match the trigger's event,
  * the first step gets nonsense: an email→summarize node handed a `{scenario:"…"}`

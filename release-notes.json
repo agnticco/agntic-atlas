@@ -1,5 +1,13 @@
 [
   {
+    "version": "1.6.30",
+    "date": "2026-07-22",
+    "title": "A workflow with several paths now tests all of them",
+    "notes": [
+      "Atlas used to write one test case even when a workflow could go three different ways, so the test could never pass and you had to write the rest by hand. It now writes one case per path."
+    ]
+  },
+  {
     "version": "1.6.29",
     "date": "2026-07-22",
     "title": "The test result no longer contradicts itself",
