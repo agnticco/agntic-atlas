@@ -1,5 +1,13 @@
 [
   {
+    "version": "1.6.16",
+    "date": "2026-07-21",
+    "title": "Opening a workflow shows that workflow",
+    "notes": [
+      "Opening one workflow after another could show the previous one's diagram and promise under the new one's name. Opening a workflow now replaces everything on screen, and its own diagram is shown."
+    ]
+  },
+  {
     "version": "1.6.15",
     "date": "2026-07-21",
     "title": "A diagram that can't be right is no longer drawn",

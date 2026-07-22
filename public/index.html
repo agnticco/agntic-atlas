@@ -4322,11 +4322,44 @@ class Component extends DCLogic {
     if (!wf) return;
     this._stopConsolePoll();
     this._clearBuild();
-    const spec = { name: wf.name, description: wf.description, triggers: wf.triggers || [], nodes: wf.nodes || [], edges: wf.edges || [], errorHandling: wf.error_handling || {} };
+    // THE SPEC CARRIES ITS id AND ITS CONTRACT. Both were omitted, and both are
+    // load-bearing: without `id` a test run opens no run row, so tests on an edited
+    // workflow were never recorded against it; without `outcome` the panel has no
+    // contract to check, so it fell back to "we ran 0 real examples — every promise
+    // held, it's cleared to go live". A false certification on every edited workflow.
+    const spec = { id: wf.id, name: wf.name, description: wf.description, triggers: wf.triggers || [],
+                   nodes: wf.nodes || [], edges: wf.edges || [], errorHandling: wf.error_handling || {},
+                   ...(wf.outcome ? { outcome: wf.outcome } : {}) };
+    // ── OPENING A WORKFLOW MUST REPLACE THE PREVIOUS ONE ENTIRELY ────────────
+    // This set `spec` and left the live-graph state alone. `liveNodes` is what the
+    // diagram is DRAWN from; `spec.edges` is where its connections come from. So
+    // after building workflow A and then opening workflow B, the screen drew A's
+    // steps joined by B's connections — and since none of B's edges names a step of
+    // A, every step looked like an entry point and the trigger fanned out to all of
+    // them. B's name sat on top of A's diagram and A's contract, with "Go live"
+    // enabled (2026-07-22).
+    //
+    // Anything derived from the OLD workflow is reset here, from the new spec.
+    // `_clearBuild()` above only drops the saved copy in the browser; it does not
+    // touch what is on screen.
+    const liveNodes = this._liveNodesFromSpec(spec);
     this.setState({
       view: 'build', phase: "proposed", intent: wf.user_intent || wf.name || null,
-      threadId: null, msgs: [], inputMode: "change",
+      threadId: null, inputMode: "change",
+      // The diagram is drawn by a message in the transcript, so opening a workflow
+      // with an empty transcript showed no diagram at all. Seed one for THIS
+      // workflow — previously a diagram only appeared if a leftover one happened to
+      // be lying around, which is the bug above.
+      msgs: [{ isLiveGraph: true, _id: 'lg_' + (this._pc = (this._pc || 0) + 1) }],
       inputValue: "", thinking: false, spec,
+      // An existing workflow's steps are already settled — shown solid, not mid-build.
+      liveNodes, liveConfirmed: liveNodes.length, liveFlashIdx: -1, liveRevealed: null,
+      awaitingGraphApproval: false, graphApproved: [], graphSelNode: null,
+      liveExplaining: false, liveExplainText: "",
+      outcome: (wf.outcome && wf.outcome.statement)
+        ? { statement: wf.outcome.statement, assertions: wf.outcome.assertions || [] } : null,
+      outcomeResults: [], laneCoverage: null,
+      pausedAsk: null, pausedNote: null, pausedRunId: null, pausedAnswering: false,
       testState: "idle", runStepIndex: 0, runSteps: [], failIndex: -1,
       deliveries: [], runOutput: null, runError: "",
       workflowId: wf.id, isEditing: true, editingIntro: null,
