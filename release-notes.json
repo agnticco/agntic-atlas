@@ -1,5 +1,13 @@
 [
   {
+    "version": "1.6.19",
+    "date": "2026-07-21",
+    "title": "Builds stop rebuilding when the rebuild changes nothing",
+    "notes": [
+      "A complex workflow could be rebuilt from scratch three extra times without fixing anything — most of a 15-minute build. It now stops as soon as a rebuild comes back with the same problems, and repairs them directly instead."
+    ]
+  },
+  {
     "version": "1.6.18",
     "date": "2026-07-21",
     "title": "Complex workflows build, and the builder repeats itself less",

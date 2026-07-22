@@ -735,6 +735,10 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
       // `propose` drip — one Opus pass each. Capped so an intent the model cannot
       // satisfy ends at `ratify` with its blockers shown, not in an endless rebuild.
       regenRounds:       0,
+      // Fingerprint of the blockers that caused the LAST rebuild. See analyze:
+      // a rebuild that comes back with the identical blocker set has proven it
+      // cannot fix them, and rebuilding again just buys the same spec twice.
+      _lastBlockerKey:   null,
       _missingNote:      null,
       // The last accepted proposal was a NO-OP (see `propose`). Read by `analyze`.
       _noProgress:       false,
@@ -1190,6 +1194,31 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
     // Naming the defects is also what makes the loop worth running at all: these
     // are precise, machine-generated messages ("X needs a sections list"), which is
     // exactly the correction a model can act on in one pass.
+    // ── A REBUILD THAT CHANGES NOTHING MUST NOT BUY ANOTHER ONE ──────────────
+    // The loop above is worth running only while it makes progress. Measured on a
+    // 4-connector build: `generate` ran FOUR times (300s + 304s + 102s + 160s) —
+    // 92% of a 15.7-minute build — and the defects that reached the gap review at
+    // the end included the very one this rebuild path exists to fix ("needs a
+    // sections list"). Three whole Opus passes, three times the cost, same spec.
+    //
+    // So: fingerprint the blockers. If a rebuild comes back with the IDENTICAL set,
+    // it has demonstrated it cannot fix them, and `gaps` — which repairs these
+    // deterministically and for free — is where they were always going to be
+    // resolved. Go straight there.
+    //
+    // Deliberately narrow: ANY change in the blocker set means the rebuild moved
+    // something and the loop continues (still bounded by MAX_REGEN_ROUNDS). This
+    // only cuts the case that provably cannot converge.
+    // `code` + the step it is about. Not the gap `id`, which embeds an array index
+    // and so changes when an unrelated gap is added or removed — that would read as
+    // "something moved" on a spec where nothing did, and the loop would run again.
+    const blockerKey = blockers.map(g => `${g.code}:${g.nodeId ?? ''}`).sort().join('|');
+    if (blockerKey && state._generated && blockerKey === state._lastBlockerKey) {
+      logEvent('converger.regen_skipped', { reason: 'blockers_unchanged', blockers: blockers.length, key: blockerKey.slice(0, 200) });
+      return { phase: 'gapping' };
+    }
+    logEvent('converger.regen', { blockers: blockers.length, key: blockerKey.slice(0, 200), round: state.regenRounds ?? 0 });
+
     const gapNote = blockers.length
       ? 'The previous build was rejected for these specific problems — fix each one:\n'
         + blockers.map(g => `- ${g.message}${g.hint ? ` (${g.hint})` : ''}`).join('\n')
@@ -1197,7 +1226,7 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
 
     const clarificationCount = (state.clarifications ?? []).length;
     if (clarificationCount >= MAX_CLARIFICATIONS) {
-      return { phase: 'proposing', ...(gapNote ? { _missingNote: gapNote } : {}) };
+      return { phase: 'proposing', _lastBlockerKey: blockerKey, ...(gapNote ? { _missingNote: gapNote } : {}) };
     }
 
     const sysmsg = new SystemMessage(buildSystemPrompt(state.capabilities));
@@ -1217,6 +1246,8 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
     return {
       phase: 'proposing',
       proposeRounds: (state.proposeRounds ?? 0) + 1,
+      // Remembered so the NEXT pass can tell whether this rebuild changed anything.
+      _lastBlockerKey: blockerKey,
       ...(gapNote ? { _missingNote: gapNote } : {}),
     };
   });
