@@ -1,5 +1,13 @@
 [
   {
+    "version": "1.6.18",
+    "date": "2026-07-21",
+    "title": "Complex workflows build, and the builder repeats itself less",
+    "notes": [
+      "Workflows with several connected apps could fail to build after minutes of work, blaming your description — they now have room to be written out. The builder also stops re-asking questions you already answered, shows decision rules in plain English, and no longer invents a currency you didn't mention."
+    ]
+  },
+  {
     "version": "1.6.17",
     "date": "2026-07-21",
     "title": "A custom AI step now uses the input you gave it",

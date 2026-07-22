@@ -33,6 +33,7 @@
  * by threadId.
  */
 
+import { logEvent }          from '../utils/event-log.js';
 import { StateGraph, END }   from '../graph/index.js';
 import { FileCheckpointer }  from '../graph/checkpointer/index.js';
 import { interrupt }         from '../graph/interrupt.js';
@@ -120,6 +121,21 @@ async function llmJson(llm, messages, config = {}) {
 // choices for the whole spec, without dwarfing the answer's own output budget.
 const DEFAULT_THINKING_BUDGET = 3072;
 
+// ── THE WHOLE-SPEC CALL NEEDS ROOM TO WRITE THE WHOLE SPEC ────────────────────
+// Thinking tokens are billed INSIDE `max_tokens`, and ChatModel's default is 8192.
+// With a 3072 thinking budget that left ~5k tokens for the JSON — which is fine for
+// a 4-step workflow and NOT ENOUGH for a real one. Observed live: a 4-connector
+// build (Gmail → extract → web search → Airtable → numeric decision → Slack approval
+// → reply/inbox) reasoned correctly for 6.6 minutes, ran out of room mid-JSON, failed
+// to parse, and the user was told "I couldn't assemble the workflow from that. Could
+// you describe, step by step, what it should do?" — after handing over a description
+// that was already step by step. Every minute of that work was discarded.
+//
+// The ceiling was invisible: nothing logged a truncation, the reasoning stream looked
+// healthy right up to the cut, and the failure blamed the input. The bigger and more
+// valuable the workflow, the more certainly it hit this.
+const GENERATE_MAX_TOKENS = Number(process.env.CONVERGER_GENERATE_MAX_TOKENS) || 32000;
+
 // Stream a JSON-emitting model call, forwarding the model's RAW extended-thinking
 // deltas to `onThinking` AS THEY ARRIVE (the visible chain of thought), and returning
 // the parsed JSON exactly like `llmJson`. This is the same tier/cost path as the
@@ -136,7 +152,7 @@ export async function llmJsonStreaming(llm, messages, config = {}, { onThinking,
   if (typeof llm.stream === 'function') {
     try {
       let acc = '';
-      const streamCfg = { ...config, thinking: DEFAULT_THINKING_BUDGET };
+      const streamCfg = { ...config, thinking: DEFAULT_THINKING_BUDGET, maxTokens: config.maxTokens ?? GENERATE_MAX_TOKENS };
       if (typeof onThinking === 'function') streamCfg.onThinking = onThinking;
       for await (const chunk of llm.stream(messages, streamCfg)) {
         const c = typeof chunk === 'string' ? chunk : (chunk?.content ?? '');
@@ -154,9 +170,18 @@ export async function llmJsonStreaming(llm, messages, config = {}, { onThinking,
       text = null; // streaming/thinking failed → fall through to the blocking path
     }
   }
-  if (text == null) return llmJson(llm, messages, config); // no-stream-support OR stream failed
+  // The blocking fallback needs the SAME room. Handing it the default 8192 would
+  // reproduce the truncation this budget exists to prevent, on the very path taken
+  // when streaming has already failed.
+  if (text == null) return llmJson(llm, messages, { ...config, maxTokens: config.maxTokens ?? GENERATE_MAX_TOKENS });
   try { return JSON.parse(extractJson(text)); }
-  catch { return null; }
+  catch {
+    // The model DID write something and it would not parse — almost always because it
+    // was cut off. Say so where someone will see it; returning a bare null is what made
+    // this ceiling invisible for so long.
+    console.warn(`[converger] whole-spec JSON did not parse (${text.length} chars emitted) — likely truncated; raise CONVERGER_GENERATE_MAX_TOKENS`);
+    return null;
+  }
 }
 
 /**
@@ -638,7 +663,51 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
   // is stable across a pass and its resume yet advances for a later (revise) rebuild.
   const streamedThinking = new Set();
 
-  const graph = new StateGraph({
+  // ── DON'T PAY TWICE FOR THE SAME ANSWER ─────────────────────────────────────
+  // A node that ends in `interrupt()` is re-executed from the top when the user
+  // answers — `interrupt()` then returns instead of throwing. Anything expensive
+  // ABOVE the interrupt therefore runs a second time for nothing. Measured: `plan`
+  // spent 15.9s building the plan, showed it, and spent 16.1s rebuilding the
+  // identical plan the moment the user clicked Approve — a third of a minute of a
+  // build, burnt, on every single workflow, plus a second paid model call.
+  //
+  // Keyed by step (like `streamedThinking`) so a genuine re-plan later in the
+  // conversation still recomputes; scoped to this converger instance, which is
+  // per-session, so it cannot leak across users.
+  const planCache = new Map();
+
+  // ── WHERE THE MINUTES GO ────────────────────────────────────────────────────
+  // A build takes single-digit minutes and nothing recorded which STEP spent them,
+  // so "the builder is slow" could not be acted on — only guessed at. Every graph
+  // node is wrapped to log its own wall-clock, once, as `converger.node`. A node
+  // that PAUSES for the user is excluded from its own timing by construction: the
+  // interrupt throws, so the timer is only reported on a completed pass, never
+  // inflated by however long a person took to answer.
+  //
+  // Free by design: one Date.now() per node and a line in the JSON-lines log.
+  const timeNodes = (g) => {
+    const orig = g.addNode.bind(g);
+    g.addNode = (name, fn) => orig(name, async (state, cfg) => {
+      const t0 = Date.now();
+      try {
+        const out = await fn(state, cfg);
+        logEvent('converger.node', { node: name, ms: Date.now() - t0, step: state?.step ?? null });
+        return out;
+      } catch (err) {
+        // A NODE THAT PAUSES STILL DID THE WORK. `generate` spends minutes on the
+        // model and THEN interrupts to show the result — so skipping the timing on an
+        // interrupt hid exactly the steps worth measuring, and every remaining entry
+        // was a 0 ms checkpoint replay. The elapsed time here is work done BEFORE the
+        // pause; the human's own thinking time lands in the NEXT request, not this one.
+        const paused = !!(err && (err.name === 'GraphInterruptSignal' || err._interrupt));
+        logEvent('converger.node', { node: name, ms: Date.now() - t0, step: state?.step ?? null, ...(paused ? { paused: true } : { failed: true }) });
+        throw err;
+      }
+    });
+    return g;
+  };
+
+  const graph = timeNodes(new StateGraph({
     stateSchema: {
       // Plain defaults (no reducer — replacement semantics)
       intent:       '',
@@ -752,7 +821,7 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
         reducer: (prev, next) => ({ ...(prev ?? {}), ...(next ?? {}) }),
       },
     },
-  });
+  }));
 
   // ── outcome ────────────────────────────────────────────────────────────────
   // "How would we know this worked?"  (P12 Increment C)
@@ -1368,19 +1437,25 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
     // this decision, like an approval, is not re-made on the way back through analyze.)
     if (!draft.outcome?.statement) return { _planShown: true, phase: 'proposing' };
 
-    let plan = null;
-    try {
-      plan = await llmJson(llm, [
-        new SystemMessage(buildSystemPrompt(state.capabilities)),
-        new HumanMessage(buildPlanPrompt({
-          intent:         state.intent,
-          outcome:        draft.outcome,
-          triggers:       draft.triggers,
-          clarifications: state.clarifications,
-          grounding:      groundPlan(draft.outcome, state.capabilities),
-        })),
-      ], tierCfg('balanced', sessionId));
-    } catch { plan = null; }
+    // See `planCache`: on the resume pass this node re-runs, and the plan it would
+    // build is the one already on screen. Reuse it rather than paying for it again.
+    const planKey = `${sessionId ?? ''}:${state.step}`;
+    let plan = planCache.get(planKey) ?? null;
+    if (!plan) {
+      try {
+        plan = await llmJson(llm, [
+          new SystemMessage(buildSystemPrompt(state.capabilities)),
+          new HumanMessage(buildPlanPrompt({
+            intent:         state.intent,
+            outcome:        draft.outcome,
+            triggers:       draft.triggers,
+            clarifications: state.clarifications,
+            grounding:      groundPlan(draft.outcome, state.capabilities),
+          })),
+        ], tierCfg('balanced', sessionId));
+      } catch { plan = null; }
+      if (plan) planCache.set(planKey, plan);
+    }
 
     // Unusable projection → skip (fail-safe). A plan with no steps is not worth a turn.
     if (!plan || !Array.isArray(plan.steps) || !plan.steps.length) {
@@ -1557,7 +1632,13 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
     // NOT ship an empty spec — fall back to a clarification interrupt, the same honest
     // move `propose` makes on unparseable output.
     if (!generated || !Array.isArray(generated.nodes) || !generated.nodes.length) {
-      const q = 'I couldn\'t assemble the workflow from that. Could you describe, step by step, what it should do?';
+      // NOT "describe it step by step". The one time this fired in real use, the user
+      // HAD described it step by step — in detail — and the build failed for reasons
+      // that had nothing to do with them. Asking someone to redo work they already did
+      // correctly is worse than saying nothing.
+      const q = "I got most of the way through building this and couldn't finish writing it out — "
+              + 'that\'s on me, not your description. Say "try again" to have another go, or tell me one '
+              + 'part to drop and I\'ll build the rest.';
       const answer = await interrupt({ type: 'clarification', question: q, step: state.step });
       return {
         clarifications:  [{ q, a: answer?.answer ?? String(answer) }],
@@ -1733,7 +1814,18 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
     // lead into a base that does not exist.
     const already = airtableNodes.map(n => n.config?.baseId).find(b => isKnownBase(b, bases));
     let base = already ? bases.find(b => b.id === already) : bases[0];
-    if (bases.length > 1) {
+    // ── A QUESTION ALREADY ANSWERED MUST NOT BE ASKED AGAIN ──────────────────
+    // `already` is a base the DRAFT names and the tenant genuinely has — which means
+    // the model chose it, and it chose it from what the user said. Asking anyway
+    // (this was `if (bases.length > 1)`) made the build re-ask a question answered
+    // moments earlier in the same conversation: observed live, the user said "Agntic
+    // CRM Sheet1", the plan named it, the schema was quoted back to them, and then a
+    // chip list appeared asking which base to write to.
+    //
+    // Only ask when there is a real ambiguity — no valid pre-resolved base AND more
+    // than one to choose from. A guessed or unknown id still asks, because a guess
+    // writes the customer's lead into a base that does not exist.
+    if (bases.length > 1 && !already) {
       const answer = await interrupt({
         type: 'clarification',
         question: 'Which Airtable base should this write to?',
@@ -1755,8 +1847,16 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
       };
     }
 
-    let table = tables[0];
-    if (tables.length > 1) {
+    // Same rule as the base: a table the draft already names, which this base really
+    // has, is an answer — not a question. Matched on id OR name, because the model
+    // writes whichever the user said ("Sheet1").
+    const namedTable = airtableNodes
+      .map(n => String(n.config?.tableId ?? n.config?.table ?? '').trim())
+      .filter(Boolean)
+      .map(t => tables.find(x => x.id === t || x.name.toLowerCase() === t.toLowerCase()))
+      .find(Boolean);
+    let table = namedTable ?? tables[0];
+    if (tables.length > 1 && !namedTable) {
       const answer = await interrupt({
         type: 'clarification',
         question: `Which table in "${base.name}"?`,
@@ -1876,20 +1976,40 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
     // (bounded to one round; after that the induced table stands and any residual
     // hole surfaces as a gap). No LLM call here — the node re-runs cleanly on each
     // per-table resume because the analysis is arithmetic.
+    // IDENTIFIERS ARE THE CODEBASE'S FILING SYSTEM, NOT ENGLISH. This read out as
+    // "when budget >50000 → budget_tier = high_budget" — three machine names in one
+    // line, on a question a non-technical user is being asked to judge. They are asked
+    // to confirm a rule, so the rule has to be in words they used.
+    const human = (s) => String(s ?? '')
+      .replace(/[_-]+/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+    // ">50000" → "is over 50,000"; "[1..50000]" → "is between 1 and 50,000"; "-" → any.
+    const readCond = (v) => {
+      const s = String(v ?? '').trim();
+      const num = (n) => Number(n).toLocaleString('en-US');
+      let m;
+      if ((m = s.match(/^>=?\s*(-?[\d.]+)$/)))  return `is over ${num(m[1])}`;
+      if ((m = s.match(/^<=?\s*(-?[\d.]+)$/)))  return `is ${num(m[1])} or under`;
+      if ((m = s.match(/^\[\s*(-?[\d.]+)\s*\.\.\s*(-?[\d.]+)\s*\]$/))) return `is between ${num(m[1])} and ${num(m[2])}`;
+      if (s === '-' || s === '') return 'is anything else';
+      return `is ${human(s)}`;
+    };
     const corrections = [];
     for (const p of payload) {
+      const outName = human(p.output?.key);
       const ruleText = (p.rules ?? []).map((r, i) => {
         const when = r?.when && Object.keys(r.when).length
-          ? Object.entries(r.when).map(([k, v]) => `${k} ${v}`).join(', ')
-          : 'otherwise';
-        return `  ${i + 1}. when ${when} → ${p.output.key} = ${r?.then ?? '?'}`;
+          ? Object.entries(r.when).map(([k, v]) => `${human(k)} ${readCond(v)}`).join(' and ')
+          : 'anything else';
+        return `  ${i + 1}. If ${when} → ${human(r?.then) || '?'}`;
       }).join('\n');
       const reply = await interrupt({
         type: 'clarification',
         kind: 'decision_review',            // inert to client/replier; identifies the surface
         decisionId: p.decisionId,
         question:
-          `Here's how I'd decide ${p.output.key} for "${p.label}":\n${ruleText || '  (no rules yet)'}\n\n`
+          `Here's how "${p.label}" would decide ${outName}:\n${ruleText || '  (no rules yet)'}\n\n`
           + `Does that match how you actually decide? Say "looks right" to keep it, or tell me what's different.`,
         choices: [{ label: 'Looks right' }],
         step: state.step,

@@ -394,6 +394,11 @@ BUILD A WORKFLOW vs DO ONE THING NOW — decide this FIRST, and get it right:
   "When a new email arrives, summarize it … build it now" is a WORKFLOW; "build it now" / "set it up now"
   means BUILD THE WORKFLOW now, NOT perform an action now. Set ready_to_build:true with a build_intent and
   call NO tools.
+- DO NOT INVENT UNITS THE USER DID NOT GIVE. If they say "over 50000", write "over 50,000" — never "£50,000"
+  and never "$50,000". A currency symbol you chose is a detail they never stated, and they will read it back
+  as a decision they made. (Seen live: the same threshold rendered as £ in the chat and $ in the plan, from
+  one user message that contained no currency at all.) The same goes for time zones, date formats and any
+  other unit — carry the user's own wording through unchanged, and ask once if the unit genuinely matters.
 - THERE IS NO TOOL THAT CREATES A WORKFLOW. Building happens ONLY via ready_to_build:true. So if you are
   about to call a delivery/action tool (inbox, email, Slack, a record) to "set up", "start", "turn on",
   or "test" a recurring workflow — STOP: that is the wrong path. Set ready_to_build instead.

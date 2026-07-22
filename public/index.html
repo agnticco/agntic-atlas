@@ -5445,7 +5445,30 @@ class Component extends DCLogic {
     const cur = this.state.msgs;
     const last = cur[cur.length - 1];
     const base = (last && last.isStreaming) ? [...cur.slice(0, -1), (({ isStreaming, ...rest }) => rest)(last)] : cur;
-    this.setState({ msgs: [...base, { isAtlas: true, text: '⚠ ' + clean + '  You can start over with “+ New workflow”.', hasReason: false, isError: true }], thinking: false, thinkingLabel: null });
+    // ── "START OVER" IS ADVICE OF LAST RESORT, NOT A DEFAULT ─────────────────
+    // This line was appended to EVERY error, including the commonest one: the build
+    // conversation is held in memory on the server, so a restart or a deploy ends it,
+    // and the next thing the user typed came back "session not found — you can start
+    // over with + New workflow". Observed live right after a failed build: the retry
+    // it had just offered was met with an instruction to throw the work away.
+    //
+    // The conversation is gone; the WORKFLOW usually is not — it is autosaved, and the
+    // edit path works from the spec alone with no session. So when there is a spec to
+    // stand on, say that and leave the user in a state they can keep working from.
+    const S = this.state;
+    const deadSession = /session not found|already complete|no checkpoint|resumeFrom/i.test(String(msg));
+    const haveSpec = !!(S.spec && Array.isArray(S.spec.nodes) && S.spec.nodes.length);
+    const patch = { thinking: false, thinkingLabel: null };
+    let tail = '  You can start over with “+ New workflow”.';
+    if (deadSession && haveSpec) {
+      clean = 'That build conversation timed out.';
+      tail  = '  Your workflow is saved though — tell me what to change and I\'ll carry on from here.';
+      // Drop into the spec-based edit path, which needs no server session.
+      patch.threadId = null;
+      patch.inputMode = 'change';
+      if (S.phase === 'building' || S.phase === 'chat') patch.phase = 'proposed';
+    }
+    this.setState({ ...patch, msgs: [...base, { isAtlas: true, text: '⚠ ' + clean + tail, hasReason: false, isError: true }] });
   }
 
   // ── proposal rendering (real converger contract) ──────────────────

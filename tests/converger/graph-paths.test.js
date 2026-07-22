@@ -288,7 +288,17 @@ describe('unparseable model output becomes a QUESTION, not a tight loop', () => 
     let asked = null;
     await drive({
       answers: { 'Build the COMPLETE workflow': {} },   // the model returns nothing usable
-      onInterrupt: (iv) => { if (!asked && iv.type === 'clarification' && /describe.*step by step|couldn't assemble/i.test(iv.question ?? '')) asked = iv; },
+      // MATCH THE INVARIANT, NOT THE COPY. This regex used to name the exact sentence
+      // ("describe, step by step"), so improving that sentence failed the test while the
+      // behaviour it guards was untouched — and the sentence needed improving, because it
+      // asked a user to redo a description they had already given correctly. What must
+      // hold is that a failed generate reaches the user as a CLARIFICATION carrying a
+      // real question and an offer to continue, never a silent spin.
+      onInterrupt: (iv) => {
+        if (asked || iv.type !== 'clarification') return;
+        const q = iv.question ?? '';
+        if (q.trim() && /try again|describe|couldn't (assemble|finish)/i.test(q)) asked = iv;
+      },
     });
     assert.ok(asked, 'unparseable generate output must reach the user as a question, not spin silently');
   });
