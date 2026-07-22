@@ -735,6 +735,10 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
       // `propose` drip — one Opus pass each. Capped so an intent the model cannot
       // satisfy ends at `ratify` with its blockers shown, not in an endless rebuild.
       regenRounds:       0,
+      // Structural fingerprint of the spec the LAST `generate` produced. See generate:
+      // a rebuild that returns the identical shape has proven it cannot fix whatever
+      // was complained about, so it stops rather than buying another Opus pass.
+      _lastShape:        null,
       // Fingerprint of the blockers that caused the LAST rebuild. See analyze:
       // a rebuild that comes back with the identical blocker set has proven it
       // cannot fix them, and rebuilding again just buys the same spec twice.
@@ -1681,6 +1685,76 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
 
     const merged = mergeGeneratedSpec(draft, generated);
 
+    // ── A REBUILD THAT PRODUCED THE SAME SPEC HAS PROVEN IT CANNOT FIX IT ─────
+    // This is the choke point: every regenerate path — a blocking gap, a
+    // sufficiency-named component, a decision-table correction, a failed self-test —
+    // routes back through THIS node. An earlier attempt guarded only one of those
+    // callers (analyze's blocking-gap route) and did nothing at all for a real build,
+    // because every rebuild in it came through `verify`. Guarding one caller while
+    // four exist is the denylist mistake; the guard belongs where the rebuild is
+    // ISSUED, not where it is requested.
+    //
+    // Measured on a 26-step, 4-connector build: generate ran 4× (871.6s) and verify 3×
+    // (462.7s) — 96% of a 23-minute build — and the workflow that came out was the one
+    // the plan described all along.
+    //
+    // The signal is the OUTPUT, not the input: the inputs legitimately differ each
+    // round (verify appends its complaint as a clarification), so "same input" would
+    // never fire. What matters is whether the rebuild actually CHANGED the workflow.
+    // If the shape that comes back is identical to the shape that went in, another
+    // pass with the same complaint will return the same thing again.
+    const shapeOf = (d) => JSON.stringify({
+      t: (d?.triggers ?? []).map(t => t?.type ?? ''),
+      n: (d?.nodes ?? []).map(n => `${n?.id}:${n?.type}:${JSON.stringify(n?.config ?? {})}`).sort(),
+      e: (d?.edges ?? []).map(x => `${x?.from}>${x?.to}`).sort(),
+    });
+    // THE FIRST FIX ATTEMPT IS ALWAYS ALLOWED. A complaint deserves one honest try even
+    // if the model happens to return the same shape — `verify` retries a flaky sample,
+    // so one identical rebuild can still end in a pass. It is the SECOND identical
+    // rebuild that has proven the point: the spec did not move, and it will not.
+    // (`buildPresentations` is the count BEFORE this pass, so 0 = first rebuild.)
+    const newShape = shapeOf(merged);
+    if (state._generated && (state.buildPresentations ?? 0) >= 1 && newShape === state._lastShape) {
+      logEvent('converger.regen_noop', {
+        round: state.buildPresentations ?? 0,
+        nodes: (merged.nodes ?? []).length,
+      });
+      // STOP THE REBUILDS WITHOUT SKIPPING THE HONEST ENDING. The obvious move —
+      // jumping straight to the walkthrough — also skips `verify`, and `verify` is
+      // where the give-up is NARRATED ("I couldn't get a sample to pass"). Cutting the
+      // cost by silently dropping the sentence that tells the user the self-test never
+      // passed would trade an honest failure for a cheaper one.
+      //
+      // So instead the rebuild BUDGETS are exhausted and the graph runs on exactly as
+      // it would have. Every loop still reaches its own terminal path and says its own
+      // piece; none of them can buy another Opus pass.
+      return {
+        draft: merged,
+        _generated: true,
+        _lastShape: newShape,
+        regenRounds:       MAX_REGEN_ROUNDS,
+        verifyRounds:      MAX_VERIFY_ROUNDS,
+        // ALL of them, not just the loud ones. Saturating verify and the gap loop while
+        // leaving the sufficiency check open meant it simply ordered the next rebuild
+        // instead — the guard fired, logged, and changed nothing. A budget guard has to
+        // close every budget that can buy a pass.
+        sufficiencyChecks: MAX_SUFFICIENCY_CHECKS,
+        // The aggregate counter must still advance. Leaving it untouched let this pass
+        // ride free and pushed the total cap out by one whole Opus rebuild — a guard
+        // that costs a pass is not a saving.
+        buildPresentations: (state.buildPresentations ?? 0) + 1,
+        _missingNote: null,
+        // STOPPING EARLY MUST NOT TURN A FAILURE INTO A SILENT PASS. If the self-test
+        // was the thing complaining, its report is carried forward and marked given-up,
+        // so ratify still tells the user plainly that it could not get a sample to pass.
+        // Without this the build ends quietly and looks successful — trading an honest
+        // failure for a cheaper one, which is the worst trade available here.
+        confirmationLog: [{ step: state.step, type: 'generate', noop: true, nodes: merged.nodes.map(n => ({ id: n.id, type: n.type })) }],
+        step:  state.step + 1,
+        phase: 'analyzing',
+      };
+    }
+
     // NO WALKTHROUGH HERE — moved to the `walkthrough` node, after verify (2026-07-16).
     //
     // The `generated_workflow` step-approval used to fire RIGHT HERE, at the end of
@@ -1708,6 +1782,9 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
       // routes it onward (gapping → destinations → …). `_generated` latches so the
       // regenerate counter (below) counts only TRUE rebuilds, not this first build.
       _generated: true,
+      // Remembered so the NEXT rebuild can tell whether it changed anything. Without
+      // this the comparison above can never match and the guard is dead code.
+      _lastShape: newShape,
       // Count a REGENERATION only when a prior build already latched — the first
       // build must not consume the MAX_REGEN_ROUNDS budget. `_missingNote` is cleared
       // now that this pass has consumed it, so it can't leak into an unrelated rebuild.

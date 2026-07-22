@@ -1,5 +1,13 @@
 [
   {
+    "version": "1.6.21",
+    "date": "2026-07-22",
+    "title": "Builds stop paying for rebuilds that change nothing",
+    "notes": [
+      "A complex build could rebuild the whole workflow several times over without the workflow changing. It now stops as soon as a rebuild comes back identical — and still says plainly if the self-test never passed."
+    ]
+  },
+  {
     "version": "1.6.20",
     "date": "2026-07-21",
     "title": "Replies appear in seconds, not minutes",

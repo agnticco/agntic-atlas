@@ -259,6 +259,59 @@ describe('a failing sample → the converger fixes its own work, bounded', () =>
 // asserts: (a) the walkthrough is shown EXACTLY ONCE, and (b) the build STOPS after at
 // most the cap (≤ 4 generate passes = the first build + 3 capped regenerates), with a
 // gave-up note. It FAILS on the pre-cap code (the loops compound unbounded).
+describe('a rebuild that changes nothing does not buy another one', () => {
+  // THE COST THIS GUARDS. `generate` is one Opus pass over the whole workflow. Measured
+  // on a real 26-step, 4-connector build: generate ran 4× (871.6s) and verify 3×
+  // (462.7s) — 96% of a 23-minute build — and the spec that came out was the one the
+  // plan described all along. Every rebuild arrived through `verify`, which is why an
+  // earlier guard on analyze's blocking-gap route did nothing at all.
+  //
+  // The rule lives in `generate` — the choke point EVERY regenerate path routes back
+  // through — and keys on the OUTPUT: if a rebuild returns a structurally identical
+  // spec, it has proven it cannot fix the complaint. The first fix attempt is always
+  // allowed; it is the second identical one that is refused.
+  // Sufficiency ALWAYS says "not finished", so the analyze regen loop compounds on top
+  // of the verify fix loop — the shape the live build showed, and the only shape where
+  // the no-op guard can bite (verify alone is already bounded to 3 by MAX_VERIFY_ROUNDS).
+  function neverFinishedLlm() {
+    const llm = makeLlm();
+    const base = llm.invoke;
+    llm.invoke = async (msgs) => {
+      const p = String(msgs[msgs.length - 1].content);
+      if (p.includes('Is this workflow FINISHED')) return J({ complete: false, missing: 'another step' });
+      return base(msgs);
+    };
+    return llm;
+  }
+
+  test('an unfixable structural failure stops rebuilding EARLY, below the aggregate cap', async () => {
+    // The model returns the same spec every time and the oracle always fails — the
+    // shape cannot move, so no number of rebuilds can help. Without the guard this runs
+    // to the aggregate cap (4 generates). With it, the second identical rebuild is
+    // refused and it stops at 3.
+    let runs = 0;
+    const runDryRun = async () => {
+      runs++;
+      return { outputs: [], deliveries: [],
+               oracleResult: { contractPassed: false, ran: true, error: null, contentError: false,
+                 contract: [{ id: 'a1', target: 'slack:#ops', kind: 'message_sent', ok: false,
+                   reason: 'nothing reached slack:#ops' }] } };
+    };
+    const llm = neverFinishedLlm();
+    const r = await drive({ llm, runDryRun });
+
+    assert.equal(llm.generateCount(), 3,
+      `an identical rebuild must not be bought twice — generate ran ${llm.generateCount()} times ` +
+      '(4 means the guard is gone and the loop ran to the aggregate cap)');
+    // Stopping early must NOT quietly turn a failed self-test into a success.
+    assert.ok(r.spec, 'it still converges to a ratified spec');
+    assert.equal(r.ratify?.verification?.gaveUp, true,
+      'the build must still admit the self-test never passed — a cheaper failure is not an honest one');
+    assert.ok(r.beats.some(b => b.kind === 'check' && /couldn't get a sample to (fully )?pass|review it before going live/i.test(b.text ?? '')),
+      'and it must still SAY so — the give-up narration lives in verify and must not be skipped');
+  });
+});
+
 describe('the aggregate regenerate cap — compounding regenerate loops always terminate', () => {
   // makeLlm, but the sufficiency check ALWAYS says "not finished" — so the analyze
   // regen loop fires on top of the verify fix loop, exactly as it did live.
