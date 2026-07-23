@@ -59,13 +59,27 @@ const delivered = {
 };
 
 const NEGATIVE = { id: 'e3', label: 'Email without ATLASTEST in subject — should not trigger', given: { from: 'team@company.com', subject: 'Weekly Standup Notes' }, expect: null };
-const POSITIVE = { id: 'e1', label: 'Standard ATLASTEST email', given: { from: 'a@b.com', subject: 'ATLASTEST: Q4' }, expect: { channel: 'slack_dm' } };
+// THE CURRENT GENERATOR ENCODING (2026-07-23): a negative case as `shouldTrigger:false`
+// with an empty `expect: {}` — NOT `expect: null`. This is the exact shape the QA found
+// certified as `kept` in a live scheduled fan-out. Pinned against what the generator
+// PRODUCES NOW, so the detector cannot drift out from under it again.
+const NEGATIVE_ST = { id: 'e2', label: 'Weekend trigger (should not fire)', given: {}, expect: {}, shouldTrigger: false };
+const POSITIVE = { id: 'e1', label: 'Standard ATLASTEST email', given: { from: 'a@b.com', subject: 'ATLASTEST: Q4' }, expect: { channel: 'slack_dm' }, shouldTrigger: true };
 
 describe('a negative example is never certified', () => {
   test('it is NOT reported as kept, even though the run delivered', () => {
     const r = evaluateExampleRun(SPEC, NEGATIVE, delivered);
     assert.notEqual(r.verdict, 'kept', 'a "should not trigger" case was certified as a kept promise');
     assert.equal(r.verdict, 'not_exercised');
+    assert.equal(r.negative, true);
+  });
+
+  test('the CURRENT encoding (shouldTrigger:false, expect:{}) is caught — the drift the QA found', () => {
+    // `expect: {}` is not `null`, so the original expect-only check MISSED this and
+    // certified it `kept` in a live build. Keyed on `shouldTrigger` now.
+    const r = evaluateExampleRun(SPEC, NEGATIVE_ST, delivered);
+    assert.equal(r.verdict, 'not_exercised',
+      'a "should not fire" row was certified as a kept promise — the 07-21 defect through a drifted encoding');
     assert.equal(r.negative, true);
   });
 
@@ -111,5 +125,21 @@ describe('the fix must not make workflows unpublishable', () => {
     // judged on its contract exactly as before.
     const noExpect = { id: 'e4', label: 'No expect key', given: { subject: 'ATLASTEST' } };
     assert.equal(evaluateExampleRun(SPEC, noExpect, delivered).verdict, 'kept');
+  });
+
+  test('a positive with shouldTrigger:true stays KEPT', () => {
+    const r = evaluateExampleRun(SPEC, POSITIVE, delivered);
+    assert.equal(r.verdict, 'kept');
+    assert.equal(r.negative, false, 'a shouldTrigger:true case is a positive — never demoted');
+  });
+
+  test('an EMPTY expect on a positive is NOT treated as negative (F17 boundary)', () => {
+    // A sparsely-specified positive (empty `expect`, no shouldTrigger:false) must not
+    // be demoted to not_exercised — that would make valid workflows uncertifiable, the
+    // regression the whole fix is scoped to avoid. Only shouldTrigger:false or a null
+    // expect is negative; a bare empty object is neither.
+    const sparsePositive = { id: 'e5', label: 'Sparse positive', given: { subject: 'ATLASTEST' }, expect: {} };
+    assert.equal(evaluateExampleRun(SPEC, sparsePositive, delivered).verdict, 'kept',
+      'demoting an empty-expect positive would trade the blocker for an F17 regression');
   });
 });

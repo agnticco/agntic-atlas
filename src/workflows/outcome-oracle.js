@@ -1314,14 +1314,13 @@ export function evaluateExampleRun(spec, example, runResult) {
 
   // A "SHOULD NOT HAPPEN" EXAMPLE CANNOT BE PROVED BY THIS HARNESS.
   //
-  // A generated sample set routinely carries a negative case — "Email without
-  // ATLASTEST in the subject — should not trigger" — with `expect: null`. But the
-  // test panel never fires the TRIGGER: it seeds the workflow with `given` and
-  // runs it. So the negative case runs like any other, DELIVERS like any other,
-  // satisfies the delivery assertion, and was reported `kept` — a green tick
-  // reading "should not trigger" sitting directly above "every promise held",
-  // moments after a real Slack DM had gone out for it. The one row a reader would
-  // take as proof the workflow stays quiet was proof of the opposite.
+  // A generated sample set routinely carries a negative case — "Weekend trigger —
+  // should not fire". But the test panel never fires the TRIGGER: it seeds the
+  // workflow with `given` and runs it. So the negative case runs like any other,
+  // DELIVERS like any other, satisfies the delivery assertion, and was reported
+  // `kept` — a green tick reading "should not fire" sitting directly above "every
+  // promise held", moments after a real Slack DM had gone out for it. The one row a
+  // reader would take as proof the workflow stays quiet was proof of the opposite.
   //
   // Whether it would have fired is a question about the TRIGGER FILTER, which this
   // harness does not evaluate, so the only honest answer is "not checked".
@@ -1330,9 +1329,25 @@ export function evaluateExampleRun(spec, example, runResult) {
   // pessimistically is what throws away a valid spec and rebuilds it (F17). It is
   // `not_exercised`, which neither certifies nor blocks — the positive examples
   // still carry the workflow to "kept".
-  const negative = !!example
-    && Object.prototype.hasOwnProperty.call(example, 'expect')
-    && example.expect === null;
+  //
+  // WHY THIS IS KEYED ON `shouldTrigger`, NOT ONLY `expect === null`. The first fix
+  // (2026-07-21) keyed on `expect === null`, the encoding the generator used then.
+  // The generator has since moved to `shouldTrigger: false` with `expect: {}` — so
+  // `{} !== null`, the check missed it, and the exact same "should not fire" row was
+  // certified `kept` again, found by the QA driving a real scheduled fan-out
+  // (2026-07-23). This is the same defect through a drifted encoding. `shouldTrigger`
+  // is the generator's EXPLICIT declaration of intent (a positive carries
+  // `shouldTrigger: true`), so keying on `=== false` tracks the intent rather than
+  // one incidental spelling of it; `expect === null` is retained for older/stored
+  // sample sets. Deliberately NOT keying on an empty `expect: {}`, which is ambiguous
+  // — a sparsely-specified POSITIVE could carry it, and demoting that to
+  // not_exercised is the F17 regression (a valid workflow that can no longer certify)
+  // the prior fix warned against. Absent `expect` AND absent `shouldTrigger` is still
+  // judged on the contract exactly as before — declaring nothing is not a negative.
+  const negative = !!example && (
+    example.shouldTrigger === false
+    || (Object.prototype.hasOwnProperty.call(example, 'expect') && example.expect === null)
+  );
 
   const verdict = !ran || broken || !contract.every(c => c.ok)
     ? 'broken'

@@ -1,5 +1,13 @@
 [
   {
+    "version": "1.6.35",
+    "date": "2026-07-22",
+    "title": "A 'should not happen' test case can't be marked as passed",
+    "notes": [
+      "A generated test case meaning 'this should NOT trigger' was being shown with a green tick as if the workflow had proven it stays quiet — while it had actually run and delivered. It's now correctly shown as 'not checked'."
+    ]
+  },
+  {
     "version": "1.6.34",
     "date": "2026-07-22",
     "title": "A forgotten connection is fixed in seconds, not minutes",
