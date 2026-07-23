@@ -1,5 +1,13 @@
 [
   {
+    "version": "1.6.32",
+    "date": "2026-07-22",
+    "title": "Builds fix small mistakes instead of starting over",
+    "notes": [
+      "When Atlas made a small error building a workflow — a missing name, an unwired step — it used to rebuild the entire workflow from scratch, several times, costing minutes. It now fixes the small thing and moves on."
+    ]
+  },
+  {
     "version": "1.6.31",
     "date": "2026-07-22",
     "title": "Smaller fixes to questions, buttons, and diagnostics",

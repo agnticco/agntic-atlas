@@ -104,6 +104,11 @@ export class WorkflowValidator {
         severity: 'error', code: 'MISSING_NAME',
         message: 'The workflow needs a name.',
         nodeId: null, field: 'name', hint: 'Give it a short descriptive title.',
+        // A derivable, mechanical fix: a workflow never needs a model to name itself,
+        // and regenerating the whole spec to add a title is pure waste. The converger's
+        // auto-repair applies this before spending a rebuild. `def.outcome.statement` is
+        // what the user already confirmed the workflow does, so it is the honest source.
+        fix: { op: 'set_name', name: deriveWorkflowName(def) },
       });
     }
     if (nodes.length === 0) {
@@ -1656,6 +1661,28 @@ function templateScannable(node) {
   if (node?.type !== 'branch') return node?.config;
   const { on, ...rest } = node.config ?? {};
   return rest;
+}
+
+/**
+ * A short, honest title derived from what the workflow already says it does — the
+ * outcome the user confirmed, else its trigger. Used only to auto-fill a MISSING_NAME
+ * so a build need not spend an Opus rebuild adding a title. Deliberately dumb: no NLP,
+ * just the first clause of the statement, capitalised and clipped. The user renames if
+ * they like; a derived default is never a decision taken from them.
+ */
+export function deriveWorkflowName(def) {
+  const stmt = def?.outcome?.statement;
+  if (typeof stmt === 'string' && stmt.trim()) {
+    // First sentence/clause, clipped to something that fits a sidebar row.
+    let s = stmt.trim().split(/[.\n]/)[0].trim();
+    if (s.length > 48) s = s.slice(0, 45).replace(/\s+\S*$/, '') + '…';
+    return s.charAt(0).toUpperCase() + s.slice(1);
+  }
+  const trg = (Array.isArray(def?.triggers) ? def.triggers : [])[0];
+  if (trg?.type === 'email')    return 'Email workflow';
+  if (trg?.type === 'schedule') return 'Scheduled workflow';
+  if (trg?.type === 'event')    return `${trg.connector ? trg.connector[0].toUpperCase() + trg.connector.slice(1) + ' ' : ''}event workflow`.trim();
+  return 'Untitled workflow';
 }
 
 /**

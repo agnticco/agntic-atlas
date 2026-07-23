@@ -119,6 +119,18 @@ export function autoRepairStructural(draft, gaps) {
           d = applyProposal(d, { component: 'remove_edge', spec: { from: e.from, to: e.to } });
           applied.push({ gapId: g.id, code: g.code, op: 'remove_edge', from: e.from, to: e.to });
         }
+      } else if (fix.op === 'set_name' && typeof fix.name === 'string' && fix.name.trim()) {
+        // A WORKFLOW NEVER NEEDS A MODEL TO NAME ITSELF. Observed live: a build
+        // regenerated all 13 nodes — a full Opus pass — with `MISSING_NAME` among the
+        // blockers, because the model omitted the top-level name. Regenerating the
+        // whole spec to add a title is pure waste; the name is derivable from the
+        // outcome the user already confirmed. The user can rename afterwards (there is
+        // a rename control), so a derived title is a safe default, never a decision
+        // taken away from them.
+        if (!d.name || !String(d.name).trim()) {
+          d = { ...d, name: fix.name.trim() };
+          applied.push({ gapId: g.id, code: g.code, op: 'set_name', name: fix.name.trim() });
+        }
       }
     } catch { /* leave as a gap — the re-score will re-surface it */ }
   }
@@ -1157,7 +1169,39 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
     // consumed here; a walkthrough/ratify user-requested change re-opens the budget.
     if (state._buildCapped) return { phase: 'finalizing', _buildCapped: false };
     const sessionId = cfg?.configurable?.threadId;
-    const gap = scoreGap(state.draft, { capabilities: state.capabilities });
+
+    // ── REPAIR BEFORE REBUILD ────────────────────────────────────────────────
+    // The deterministic repairs (a missing route edge, a missing section list, an
+    // uncheckable promise, a missing name) already existed — but they ran in `gaps`,
+    // which the build only reaches AFTER the whole-spec regenerate loop. So a blocker
+    // a one-line edit could fix instead threw away all 13 nodes and paid for a fresh
+    // Opus pass, up to three times, before `gaps` ever got to clean it up. Measured
+    // causes on the record: two `assemble` steps missing a `sections` list (3 rebuilds),
+    // the Notes-column oscillation (2 rebuilds). Apply the repairs HERE, before the
+    // regenerate decision, and re-score — so a build blocked only by things we can fix
+    // ourselves never spends a rebuild on them. A repair that clears nothing changes
+    // nothing; `generate` still rebuilds for what genuinely needs the model.
+    // ONLY AFTER A GENERATE. The repair exists to prevent a RE-generate, which only
+    // happens once the model has built a spec (`_generated`). Running it on the first,
+    // pre-generate analyze — when the draft has no nodes yet — would derive a name from
+    // the outcome and set it, and `generate`'s own name would then not override it, so
+    // the model's title would be silently dropped. (Caught by a regression test that
+    // asserted the generated name survives.)
+    let draft = state.draft;
+    let repaired = [];
+    if (state._generated) {
+      const pre = scoreGap(draft, { capabilities: state.capabilities });
+      const r = autoRepairStructural(draft, pre.gaps);
+      if (r.applied.length) {
+        draft = r.draft;
+        repaired = r.applied;
+        logEvent('converger.pre_regen_repair', { ...who(cfg), applied: r.applied.map(a => a.code) });
+      }
+    }
+    // Everything below reads `state.draft`; carry the repaired draft on every return so
+    // the fix persists whether we proceed, regenerate, or go to the user.
+    const carryRepair = repaired.length ? { draft } : {};
+    const gap = scoreGap(draft, { capabilities: state.capabilities });
 
     if (gap.complete) {
       // THE FLOOR IS MET: the spec is valid and it delivers everything the
@@ -1167,22 +1211,23 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
       // component it can NAME. (v1 instead demanded a "processing" node from a
       // hardcoded checklist, and invented one for workflows that needed none —
       // defect #4. Here "finished" is the default answer, not the exception.)
-      if ((state.sufficiencyChecks ?? 0) >= MAX_SUFFICIENCY_CHECKS) return { phase: 'gapping' };
+      if ((state.sufficiencyChecks ?? 0) >= MAX_SUFFICIENCY_CHECKS) return { ...carryRepair, phase: 'gapping' };
 
       const verdict = await llmJson(llm, [
         new SystemMessage(buildSystemPrompt(state.capabilities)),
-        new HumanMessage(buildSufficiencyPrompt({ intent: state.intent, draft: state.draft })),
+        new HumanMessage(buildSufficiencyPrompt({ intent: state.intent, draft })),
       ], tierCfg('fast', sessionId));
 
       if (verdict?.complete === false && verdict.missing) {
         return {
+          ...carryRepair,
           phase:             'proposing',
           proposeRounds:     (state.proposeRounds ?? 0) + 1,
           sufficiencyChecks: (state.sufficiencyChecks ?? 0) + 1,
           _missingNote:      String(verdict.missing),
         };
       }
-      return { phase: 'gapping' };
+      return { ...carryRepair, phase: 'gapping' };
     }
 
     // A RESOURCE gap is not something REGENERATING can fix (#25): the model cannot
@@ -1194,7 +1239,7 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
     // on the next pass.
     const blockers = unansweredGaps(gap);
     if (blockers.length && blockers.every(g => g.code === 'RESOURCE_NOT_FOUND' || g.code === 'RESOURCE_UNVERIFIED')) {
-      return { phase: 'gapping' };
+      return { ...carryRepair, phase: 'gapping' };
     }
 
     // ── A BLOCKER THAT SURVIVED A REBUILD IS NOT A REBUILD'S TO FIX ──────────
@@ -1231,7 +1276,7 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
         survivors: survivors.length,
         codes: [...new Set(survivors.map(g => g.code))].join(','),
       });
-      return { phase: 'gapping' };
+      return { ...carryRepair, phase: 'gapping' };
     }
 
     // BOUND THE WHOLE-SPEC REGENERATE LOOP (converger rearchitecture).
@@ -1243,16 +1288,16 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
     // to `ratify`, which SHOWS the remaining blockers to the user rather than
     // rebuilding a near-identical spec forever.
     if (state._generated && (state.regenRounds ?? 0) >= MAX_REGEN_ROUNDS) {
-      return { phase: 'gapping' };
+      return { ...carryRepair, phase: 'gapping' };
     }
 
     // The last accepted proposal changed NOTHING (the model re-proposed an edge the
     // draft already had; applyProposal dedupes, so the draft came back identical).
     // The model has nothing left to add — asking it again just produces the same
     // proposal, and asking the USER again makes them click the same card twice.
-    if (state._noProgress) return { phase: 'gapping', _noProgress: false };
+    if (state._noProgress) return { ...carryRepair, phase: 'gapping', _noProgress: false };
 
-    if ((state.proposeRounds ?? 0) >= MAX_PROPOSE_ROUNDS) return { phase: 'gapping' };
+    if ((state.proposeRounds ?? 0) >= MAX_PROPOSE_ROUNDS) return { ...carryRepair, phase: 'gapping' };
 
     // WHAT IS WRONG TRAVELS WITH THE REBUILD.
     //
@@ -1294,7 +1339,7 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
     const blockerKey = blockers.map(g => `${g.code}:${g.nodeId ?? ''}`).sort().join('|');
     if (blockerKey && state._generated && blockerKey === state._lastBlockerKey) {
       logEvent('converger.regen_skipped', { reason: 'blockers_unchanged', blockers: blockers.length, key: blockerKey.slice(0, 200) });
-      return { phase: 'gapping' };
+      return { ...carryRepair, phase: 'gapping' };
     }
     logEvent('converger.regen', { blockers: blockers.length, key: blockerKey.slice(0, 200), round: state.regenRounds ?? 0 });
 
@@ -1305,7 +1350,7 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
 
     const clarificationCount = (state.clarifications ?? []).length;
     if (clarificationCount >= MAX_CLARIFICATIONS) {
-      return { phase: 'proposing', _lastBlockerKey: blockerKey, ...(gapNote ? { _missingNote: gapNote } : {}) };
+      return { ...carryRepair, phase: 'proposing', _lastBlockerKey: blockerKey, ...(gapNote ? { _missingNote: gapNote } : {}) };
     }
 
     const sysmsg = new SystemMessage(buildSystemPrompt(state.capabilities));
@@ -1317,12 +1362,13 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
     const parsed = await llmJson(llm, [sysmsg, usermsg], tierCfg('fast', sessionId));
 
     if (parsed?.ready === false && parsed.question) {
-      return { phase: 'clarifying', _pendingQuestion: parsed.question };
+      return { ...carryRepair, phase: 'clarifying', _pendingQuestion: parsed.question };
     }
     // analyze runs before every propose, so counting here counts propose rounds
     // exactly once each — without threading a counter through propose's five
     // return paths, where the next person to add a sixth would forget it.
     return {
+      ...carryRepair,
       phase: 'proposing',
       proposeRounds: (state.proposeRounds ?? 0) + 1,
       // Remembered so the NEXT pass can tell whether this rebuild changed anything.
