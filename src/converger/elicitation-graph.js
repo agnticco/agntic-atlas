@@ -56,6 +56,7 @@ import {
   buildLaneExamplesPrompt,
   buildGapPrompt,
   buildSufficiencyPrompt,
+  buildWireDeliveryPrompt,
   buildGeneratePrompt,
   buildPlanPrompt,
 } from './prompts.js';
@@ -808,6 +809,7 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
       // `propose` drip — one Opus pass each. Capped so an intent the model cannot
       // satisfy ends at `ratify` with its blockers shown, not in an endless rebuild.
       regenRounds:       0,
+      wireRounds:        0,
       // Structural fingerprint of the spec the LAST `generate` produced. See generate:
       // a rebuild that returns the identical shape has proven it cannot fix whatever
       // was complained about, so it stops rather than buying another Opus pass.
@@ -1172,6 +1174,10 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
   // that `generate` always interrupts for review; this simply keeps the worst-case
   // Opus cost — and the number of near-identical workflows shown to the user — low.
   const MAX_REGEN_ROUNDS = 3;
+  // Targeted delivery-wiring attempts before falling back to a full rebuild. Two is
+  // plenty: the model either wires it in one focused call or the producing step is
+  // genuinely missing, which needs a rebuild anyway.
+  const MAX_WIRE_ROUNDS = 2;
 
   // THE AGGREGATE regenerate cap (see `buildPresentations` in the state schema). How
   // many times the whole spec may be RE-generated (after the first build) across ALL
@@ -1263,6 +1269,70 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
     const blockers = unansweredGaps(gap);
     if (blockers.length && blockers.every(g => g.code === 'RESOURCE_NOT_FOUND' || g.code === 'RESOURCE_UNVERIFIED')) {
       return { ...carryRepair, phase: 'gapping' };
+    }
+
+    // ── AN UNWIRED DELIVERY IS ONE EDGE, NOT A WHOLE REBUILD ─────────────────
+    // `process` seeds a delivery NODE per promised delivery but not its edges; the
+    // model wires them at `generate`, and when it forgets one the delivery has nothing
+    // feeding it (DELIVER_NO_INPUT) — which today throws away every node for a fresh
+    // Opus pass. The fix is a single edge: wire the delivery from the step whose output
+    // it should send. The MODEL still chooses that step (which content feeds it) — the
+    // exact judgement it makes in a full generate, so this is no less safe — but in a
+    // small fast-tier call that returns only edges, ~10× cheaper than a whole rebuild.
+    //
+    // Only when EVERY remaining blocker is DELIVER_NO_INPUT: if there are other
+    // blockers (a missing content STEP, say), wiring alone cannot complete the spec and
+    // a rebuild is the honest move — which also carries the wiring complaint. Bounded by
+    // MAX_WIRE_ROUNDS: if the targeted call cannot clear it (the producing step is truly
+    // absent, or the model wires the wrong thing and the re-score still fails), fall
+    // through to the normal, bounded regenerate loop below.
+    if (state._generated && blockers.length
+        && blockers.every(g => g.code === 'DELIVER_NO_INPUT')
+        && (state.wireRounds ?? 0) < MAX_WIRE_ROUNDS) {
+      const nodeIds = new Set((draft.nodes ?? []).map(n => n.id));
+      const unwired = [...new Set(blockers.map(g => g.nodeId).filter(id => id && nodeIds.has(id)))];
+      if (unwired.length) {
+        let wireDraft = draft;
+        try {
+          const parsed = await llmJson(llm, [
+            new SystemMessage(buildSystemPrompt(state.capabilities)),
+            new HumanMessage(buildWireDeliveryPrompt({ draft, unwired })),
+          ], tierCfg('fast', sessionId));
+          const unwiredSet = new Set(unwired);
+          for (const e of (parsed?.edges ?? [])) {
+            const from = typeof e?.from === 'string' ? e.from.trim() : '';
+            const to   = typeof e?.to   === 'string' ? e.to.trim()   : '';
+            // The model may only wire an ORPHANED delivery, and only FROM a step that
+            // already exists — never invent a node, never wire a non-delivery, never
+            // self-loop. A wire that fails these is discarded, not trusted.
+            if (unwiredSet.has(to) && nodeIds.has(from) && from !== to) {
+              wireDraft = applyProposal(wireDraft, { component: 'edge', spec: { from, to } });
+            }
+          }
+        } catch { /* the targeted call failed — fall through to the rebuild */ }
+
+        if (wireDraft !== draft) {
+          const after = scoreGap(wireDraft, { capabilities: state.capabilities });
+          const stillUnwired = unansweredGaps(after).some(g => g.code === 'DELIVER_NO_INPUT');
+          logEvent('converger.targeted_wire', {
+            ...who(cfg), unwired: unwired.length, cleared: !stillUnwired, complete: after.complete,
+          });
+          if (!stillUnwired) {
+            // The delivery is wired and the spec is complete (wiring only ADDS edges, so
+            // the only blockers it can clear are the DELIVER_NO_INPUT ones that gated
+            // entry here). Route to the happy path — gapping → … → verify → walkthrough
+            // → ratify — WITHOUT a whole-spec rebuild. `analyzing` is NOT a self-loop:
+            // the analyze edge maps it to `generate`, so returning it here would rebuild
+            // the very spec we just fixed.
+            return { draft: wireDraft, wireRounds: (state.wireRounds ?? 0) + 1, phase: 'gapping' };
+          }
+          // Wired some, but a DELIVER_NO_INPUT remains (the producing step is genuinely
+          // missing). Count the attempt and fall through to the rebuild below, which
+          // rebuilds the whole spec from scratch anyway — so the partial wire is not
+          // carried; regenerating with the wiring complaint is the honest move.
+          logEvent('converger.targeted_wire_fell_through', { ...who(cfg), reason: 'producing_step_missing' });
+        }
+      }
     }
 
     // ── A BLOCKER THAT SURVIVED A REBUILD IS NOT A REBUILD'S TO FIX ──────────

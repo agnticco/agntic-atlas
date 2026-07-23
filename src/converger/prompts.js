@@ -958,6 +958,41 @@ Return JSON only:
  * genuinely had none (defect #4): here, "yes, it's finished" is always available
  * and is the default reading for a simple workflow.
  */
+/**
+ * ONE EDGE, NOT A WHOLE REBUILD. The build seeds a delivery node per promised
+ * delivery but not its edges; the model wires them at `generate`, and when it forgets
+ * one the delivery has nothing feeding it (DELIVER_NO_INPUT). Rather than throw away
+ * every node for a fresh Opus pass, ask the model — in a small, cheap call — for JUST
+ * the edges that wire the orphaned deliveries. The model still chooses WHICH step
+ * feeds each delivery (the same judgement it makes in a full build, so no less safe);
+ * we only spare it from re-emitting the whole spec to express it.
+ */
+export function buildWireDeliveryPrompt({ draft, unwired }) {
+  const nodes = (draft?.nodes ?? []).map(n => ({ id: n.id, type: n.type, mode: n.config?.mode, label: n.label }));
+  const edges = draft?.edges ?? [];
+  return `A workflow was just built, but ${unwired.length === 1 ? 'one delivery step has' : 'some delivery steps have'} nothing wired into ${unwired.length === 1 ? 'it' : 'them'} — so ${unwired.length === 1 ? 'it' : 'they'} would deliver nothing. Wire ${unwired.length === 1 ? 'it' : 'each'} up.
+
+${outcomeBlock(draft?.outcome)}
+STEPS (id · type · what it does):
+${nodes.map(n => `  - ${n.id} · ${n.type}${n.mode ? `/${n.mode}` : ''} · ${n.label ?? ''}`).join('\n')}
+
+EDGES that already exist:
+${edges.length ? edges.map(e => `  ${e.from} → ${e.to}`).join('\n') : '  (none)'}
+
+These delivery steps have NO incoming edge and need one:
+${unwired.map(id => `  - ${id}`).join('\n')}
+
+For EACH orphaned delivery, return the edge that wires it from the step whose output it should send —
+the step that PRODUCES the content this delivery is meant to deliver (usually the summarize/extract/
+assemble/compose step for its branch). Wire it from an EXISTING step in the list above; do NOT invent
+new steps or new ids. If the step that should feed a delivery genuinely does not exist yet, OMIT that
+delivery from your answer (leave its edge out) rather than wiring it from the wrong step — a delivery
+wired to the wrong source sends the customer the wrong thing.
+
+Return JSON only — only the NEW edges to add, nothing else:
+  {"edges":[{"from":"<producing step id>","to":"<orphaned delivery id>"}]}`;
+}
+
 export function buildSufficiencyPrompt({ intent, draft }) {
   return `Is this workflow FINISHED — does it do everything the intent asks?
 

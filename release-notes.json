@@ -1,5 +1,13 @@
 [
   {
+    "version": "1.6.34",
+    "date": "2026-07-22",
+    "title": "A forgotten connection is fixed in seconds, not minutes",
+    "notes": [
+      "When Atlas built a delivery step but forgot to connect it, it used to rebuild the whole workflow to fix it. It now just adds the one missing connection — the slow rebuild is gone for that case."
+    ]
+  },
+  {
     "version": "1.6.33",
     "date": "2026-07-22",
     "title": "Workflows get their name up front",
