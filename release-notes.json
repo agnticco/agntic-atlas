@@ -1,5 +1,13 @@
 [
   {
+    "version": "1.6.33",
+    "date": "2026-07-22",
+    "title": "Workflows get their name up front",
+    "notes": [
+      "Atlas now names a workflow when you approve its plan, instead of leaving it to the final build step — which occasionally forgot, forcing a slow rebuild just to add a title."
+    ]
+  },
+  {
     "version": "1.6.32",
     "date": "2026-07-22",
     "title": "Builds fix small mistakes instead of starting over",

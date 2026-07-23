@@ -44,6 +44,7 @@ import { materialiseEscalations } from './escalation.js';
 import { nodeForAssertion, assertableConnectors, splitTarget, canonicalConnector,
          laneInventoryOf } from '../workflows/outcome-oracle.js';
 import { analyzeTable } from '../workflows/decision-analysis.js';
+import { deriveWorkflowName } from '../workflows/workflow-validator.js';
 import { tableOf, valuesOf, HIT_POLICIES, HIT_POLICY_LABELS, DECISION_MAX_INPUTS } from '../workflows/node-types/decision.js';
 import {
   buildSystemPrompt,
@@ -78,6 +79,28 @@ import {
  *
  * @returns {{ draft: object, applied: Array<{gapId,code,op,from,to}> }}
  */
+/**
+ * Give an approved draft a name, on the state object, so the build can never forget it.
+ *
+ * Precedence, and each step is load-bearing:
+ *  1. a name the draft ALREADY has is kept — this is the EDIT flow, where an existing,
+ *     named workflow is re-planned; renaming it out from under the user would be a
+ *     silent edit to something they named;
+ *  2. else a title the plan itself carried (the model already reasoned about it);
+ *  3. else one derived from the outcome the user just approved.
+ *
+ * `mergeGeneratedSpec` keeps the draft's name over the model's, so whatever this
+ * returns survives `generate`. That is the whole point: MISSING_NAME was the model
+ * omitting a required field and a 13-node Opus rebuild firing to add a title.
+ */
+export function nameApprovedDraft(draft, plan) {
+  if (draft?.name && String(draft.name).trim()) return draft;
+  const planTitle = typeof plan?.name === 'string' && plan.name.trim() ? plan.name.trim()
+                  : typeof plan?.title === 'string' && plan.title.trim() ? plan.title.trim()
+                  : null;
+  return { ...draft, name: planTitle || deriveWorkflowName(draft) };
+}
+
 export function autoRepairStructural(draft, gaps) {
   const applied = [];
   let d = draft;
@@ -1646,7 +1669,21 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
       };
     }
 
+    // NAME THE WORKFLOW HERE, ON THE STATE OBJECT — not later, in the model's hands.
+    // The workflow is a `draft` object carried through the graph's state; a field set
+    // here rides along to `generate`, and mergeGeneratedSpec keeps the draft's name
+    // over the model's (`base.name ?? g.name`). So a name set at the approved plan can
+    // never be forgotten by the build — which is what `MISSING_NAME` was: the model
+    // omitting a required field, then a whole 13-node Opus rebuild fired to add a title.
+    // The name comes from the outcome the user just approved on THIS screen, so it is
+    // aligned with intent and renamable. A prompt rule was the alternative and it is
+    // strictly weaker: the prompt already declares the name required and the model drops
+    // it anyway — a rule asks; writing the field guarantees. (The plan's own title is
+    // preferred when it carried one; else it is derived from the outcome.)
+    const named = nameApprovedDraft(draft, plan);
+
     return {
+      draft:           named,
       _planShown:      true,
       _approvedPlan:   plan,
       ...(change ? { clarifications: [{ q: '(plan change)', a: String(change) }] } : {}),
