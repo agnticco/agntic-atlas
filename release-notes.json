@@ -1,5 +1,13 @@
 [
   {
+    "version": "1.6.36",
+    "date": "2026-07-23",
+    "title": "The sign-in screen no longer offers account creation",
+    "notes": [
+      "Atlas is a product you don't buy yourself. 'Create an account' is now removed from the sign-in screen for good — it can't reappear on its own."
+    ]
+  },
+  {
     "version": "1.6.35",
     "date": "2026-07-22",
     "title": "A 'should not happen' test case can't be marked as passed",

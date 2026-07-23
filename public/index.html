@@ -9495,10 +9495,23 @@ class Component extends DCLogic {
     function _afterLogin() { if (_rmsg) { loginErr.style.color = _rgood ? "rgba(159,214,168,.95)" : "#e87461"; err(loginErr, _rmsg); } }
     function _openSignup() { try { document.getElementById("signup-plan").value = _signupPlan; } catch (e) {} showSignup(); show(); }
     fetch("/setup/status").then(function (r) { return r.ok ? r.json() : {}; }).then(function (s) {
-      // Self-serve signup exists only while Stripe is configured on the server.
-      // With it off, the entry link stays hidden and a ?plan= deep-link falls
-      // through to the ordinary sign-in screen instead of a form that 503s.
-      var selfServe = !!(s && s.selfServe);
+      // SELF-SERVE SIGNUP UI — HARD OFF-SWITCH (operator, 2026-07-23).
+      // "Atlas is a product you cannot buy yourself." Beyond the server flag, the
+      // sign-in "Create an account" entry must not appear and must NOT be able to
+      // reappear merely because Stripe is configured on the box (which also powers
+      // granted-plan checkout / the billing portal). This boolean forces it off
+      // regardless of `/setup/status` selfServe. It gates BOTH the entry link AND
+      // the ?plan= deep-link that would otherwise auto-open the signup form
+      // (via `_signupPlan`), so there is no back door.
+      // Flip to `true` to restore the flag-gated behaviour — the Stripe module,
+      // routes and columns are UNTOUCHED, so this is a one-boolean reversal, not a
+      // deletion. (Do not delete the Stripe machinery — that is the irreversible
+      // step CLAUDE.md warns against.)
+      var SELF_SERVE_SIGNUP_UI = false;
+      // Self-serve signup exists only while Stripe is configured on the server AND
+      // this UI switch is on. With either off, the entry link stays hidden and a
+      // ?plan= deep-link falls through to the ordinary sign-in screen (no 503 form).
+      var selfServe = SELF_SERVE_SIGNUP_UI && !!(s && s.selfServe);
       if (!selfServe) _signupPlan = null;
       else { try { document.getElementById("signup-entry").style.display = "block"; } catch (e) {} }
       if (s && s.required) { showSetup(); show(); }
