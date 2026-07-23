@@ -191,6 +191,13 @@ verify these are still true rather than assuming:
   sample runs against the same live data, so they all prove the same one thing.
 - **Test runs count toward the live health score**, so a workflow that has never
   fired for real can read "100% success".
-- **An approval step cannot be answered from the test panel**, so the steps after
-  the gate are exercised by no test. It correctly refuses to certify — do not
-  "fix" that by making a paused run count as a pass.
+- **Answering an approval IN the test panel now exists — but is unverified end to
+  end.** The panel renders in-panel Approve/Reject for a paused approval and clicking
+  one resumes the run (shipped `6ef6135`), so the old "an approval cannot be answered
+  here" is STALE. What is NOT yet confirmed by anyone clicking it through: that the
+  after-gate steps then resolve and Go live unlocks. There is a real reason it has not
+  been clicked in QA — **clicking Approve runs the REAL after-gate steps, including
+  real writes and sends, so a "test" can create real data**; the panel says as much.
+  Treat post-gate behaviour as unproven until a run is answered and reaches a kept
+  verdict. Still true and load-bearing: a run left PAUSED (unanswered) must never
+  certify — do not make a paused run count as a pass.

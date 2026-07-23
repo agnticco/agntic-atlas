@@ -1235,6 +1235,13 @@ refactor them without an explicit decision recorded here:
     locked, so an approval workflow is now testable and honest but **not publishable through the
     panel**. Per `outcome-oracle.js` doctrine an unexercised promise must never certify — **do not
     make a paused run count as a pass to unblock publishing.**
+    - **Update (2026-07-23): the answer-in-panel half was subsequently built** — `6ef6135`
+      ("feat(test-panel): answer an approval step and test both routes") wired `_answerPause`, which
+      renders in-panel Approve/Reject on a paused approval and POSTs `{resumeRunId, decision}` to
+      resume the run. So "the tester cannot answer in the panel" is now STALE. What remains unverified:
+      that the after-gate path then resolves and Go live unlocks — no QA run has clicked it through,
+      because clicking Approve executes the REAL after-gate steps (real writes/sends). The
+      never-certify-a-PAUSED-run rule above is unchanged and still correct.
 
 - **THE 100s PROXY CEILING IS A SILENCE LIMIT, NOT A TIME LIMIT (2026-07-21).** An approval-gate
   build died `524` three times running, each death discarding the whole build and telling the user

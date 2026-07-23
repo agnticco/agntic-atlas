@@ -69,13 +69,20 @@ of confirmation, which is the same confirmation the design requires.
 ## Still genuinely open (carried, none a blocker)
 
 From the re-measurement's "could not test":
-- **An approval step can't be answered from the test panel**, so the steps after a
-  gate are exercised by no test. Known-open, correct to leave Go live locked.
+- ~~**An approval step can't be answered from the test panel**~~ **STALE (corrected
+  2026-07-23):** it can — `6ef6135` wired in-panel Approve/Reject (`_answerPause`),
+  which resumes the run. What is still unverified end to end: that the after-gate
+  steps then resolve and Go live unlocks — no QA run has clicked it through, because
+  clicking Approve runs the REAL after-gate steps (real writes/sends). A run left
+  PAUSED (unanswered) must still never certify.
 - **Test runs aren't persisted to `workflow_runs`**, so the QA couldn't confirm from
   data which lane a test took. Also means the live health score counts test runs
-  (original F14, separate).
-- **Cost per build is unmeasured** — `memory/llm_costs.db` is 0 bytes locally. Flagged
-  as a suspicion; needs a deliberate check of whether local dev records costs at all.
+  (original F14, separate). *(Later QA found cost IS recorded, in `llm_cost_log`
+  inside `workflows.sqlite` — the 0-byte `memory/llm_costs.db` is a stale unused path,
+  not evidence costs go untracked.)*
+- **Cost per build is unmeasured** — ~~`memory/llm_costs.db` is 0 bytes locally~~
+  **corrected 2026-07-23:** costs ARE recorded, in `llm_cost_log` inside
+  `workflows.sqlite`; the 0-byte `memory/llm_costs.db` is an unused/stale path.
 - **The "more than one route could gate a step" branch of the finding-3 fix** was
   never exercised — the test build had a single unambiguous gate. That is the half
   most likely to regress quietly; a build where two branches gate one delivery would
