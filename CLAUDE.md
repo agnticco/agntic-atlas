@@ -928,6 +928,31 @@ grounded findings report; it never edits code. The running record of these sessi
 the deployed version trails local. Confirm the real gap with `curl -s
 https://atlas.agntic.co/health` against `package.json` before assuming what's live.*
 
+**The test panel sent real messages and could never verify an approval workflow — FIXED
+(2026-07-24, operator drove it live).** The operator pressed Run test on a built approval
+workflow and got **5 real Slack DMs** and a **"0 real examples · not verified"** verdict
+despite the workflow having 8 good examples. Two defects, both in `public/index.html`'s
+test panel:
+- **A test sent real messages.** The panel ran with REAL deliveries (no `dryRunDeliveries`),
+  so testing an approval workflow fired a real Slack DM per urgent example. **Fix:** the
+  panel now passes `dryRunDeliveries:true` on every run AND on the resume — terminal sends
+  become would-deliver receipts the oracle reads as would-satisfy, so the contract is still
+  checked ("would keep its promise") with **nothing actually sent**. The engine still pauses
+  at the gate, so the in-panel Approve/Reject still work.
+- **An approval workflow could never reach a verdict.** The loop **blanked all accumulated
+  evidence at the first pause** (`outcomeResults: []`) and, on approve, scored against an
+  empty set (`_answerPause` read a single `outcomeCheck` where the panel expected the
+  `outcomeResults` array) — so it always read "0 examples / not verified", however well
+  built. **Fix:** completed examples' verdicts accumulate as `pendingEvidence` and are kept
+  across the gate; every answerable pause is **queued**; as each is answered its resumed
+  verdict **folds into** the evidence; only when the queue is empty is the FULL set scored
+  (with lane coverage). Go live stays locked until then. The operator's guess — "behaviour
+  after the approve button, built but never verified" — was exactly right. Pinned by
+  `tests/api/test-panel-paused.test.js` (updated to the queue mechanism) +
+  `test-panel-certification.test.js`; the client script syntax-checks clean.
+  **NOT yet witnessed live end-to-end** — the fix is code-level; a fresh Run test through to
+  a verdict is the pending confirmation.
+
 **Settled by the QA pass (2026-07-23):**
 
 - **"Editing a workflow silently drops its promise" — DISPROVEN.** The QA Manager drove it

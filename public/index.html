@@ -5796,7 +5796,7 @@ class Component extends DCLogic {
 
     if (this._testInterval) { clearInterval(this._testInterval); this._testInterval = null; }
     this._testStartMs = Date.now();
-    this.setState({ testState: "running", runStepIndex: 0, runSteps: [], failIndex: -1, runError: "", runElapsed: 0 });
+    this.setState({ testState: "running", runStepIndex: 0, runSteps: [], failIndex: -1, runError: "", runElapsed: 0, pendingEvidence: [], pausedQueue: [] });
 
     // Pending result from the backend (arrives before animation finishes)
     let pendingResult = null;
@@ -5822,47 +5822,70 @@ class Component extends DCLogic {
     // ── THE OUTCOME ORACLE (P12 Increment G) ──────────────────────────────
     // If the workflow carries worked examples, the test panel asserts EACH of
     // them against the contract — not one sample against "did it complete". Each
-    // example runs LIVE (real Slack/record/email), sequentially, and the run's
-    // own contract verdict comes back as `outcomeCheck`. A workflow with no
-    // examples falls back to the single sample run (v1 behaviour, unchanged).
+    // example runs DRY (deliveries stubbed — a test must never send real messages;
+    // see the dryRun note below) and the run's own contract verdict comes back as
+    // `outcomeCheck`. A workflow with no examples falls back to the single sample run.
+    //
+    // DRY RUN, ALWAYS (2026-07-24). The panel used to run with REAL deliveries, so
+    // testing an approval workflow fired a real Slack DM per urgent example (the
+    // operator got 5 from one Run test). We now pass `dryRunDeliveries:true`:
+    // terminal sends become would-deliver receipts the oracle reads as
+    // would-satisfy, so the contract is still checked ("would keep its promise")
+    // with nothing actually sent. The engine still PAUSES at a human gate, so the
+    // in-panel Approve/Reject still work.
     const examples = (S.spec.outcome && Array.isArray(S.spec.outcome.examples)) ? S.spec.outcome.examples : [];
     const runs = examples.length
       ? examples.map(function(ex, i) { return { initialContext: ex.given, example: Object.assign({ id: ex.id || ("e" + (i + 1)) }, ex) }; })
       : [{ initialContext: this._sampleEvent(), example: null }];
 
+    // EVIDENCE IS KEPT ACROSS THE GATE (2026-07-24). An approval workflow pauses on
+    // every URGENT example, but the NORMAL/SPAM ones complete and carry real
+    // verdicts. The old loop threw ALL of that away at the first pause and scored
+    // certification against nothing — so an approval workflow could only ever read
+    // "0 examples / not verified", however well it was built. Now the completed
+    // examples' verdicts accumulate in `outcomeResults`, every ANSWERABLE pause is
+    // queued, and the panel surfaces them one at a time: as each is answered its
+    // resumed verdict folds into the evidence (see `_answerPause`), and only when
+    // the queue is empty is the FULL set scored. Go live stays locked until then
+    // (`reviewDraft` requires "passed"), so an unexercised promise never certifies.
     const outcomeResults = [];
+    const pausedRuns     = [];   // { runId, ask, note, steps, deliveries, output } per answerable pause
     let lastData = {};
-    // ── A PAUSED EXAMPLE IS AN OUTCOME, NOT "STILL GOING" ─────────────────
-    // A spec with an approval step stops at the gate on every example, and the
-    // server says so (`paused:true`). The loop used to carry only the LAST
-    // example's data forward, so a pause was reported only if it happened to be
-    // the final one — and the honest verdict for a mixed set is the same as for
-    // an all-paused one: the steps after the gate were never exercised, so
-    // nothing past it can be certified. First pause wins and is what the panel
-    // reports. `testState: "paused"` leaves Go live locked (`reviewDraft`
-    // requires "passed"), which is the point: an unexercised promise must never
-    // certify.
-    let pausedData = null;
 
-    // Run them one at a time — live deliveries should not be fired in a burst.
     const runOne = function(i) {
       if (i >= runs.length) {
-        // Every example has run. The verdict is the CONTRACT: a workflow passes
-        // only if it kept its outcome's promises on every example. With no
-        // examples, `outcomeResults` is empty and the old structural check stands.
-        const r = { ok: true, data: Object.assign({}, pausedData || lastData, { outcomeResults: outcomeResults }) };
-        if (self._testInterval) { pendingResult = { r: r, d: r.data }; }
-        else { self._applyTestResult(r, r.data); }
+        const answerable = pausedRuns.filter(function(p) { return p.runId; });
+        if (answerable.length) {
+          // Surface the first approval; keep the accumulated evidence + the rest queued.
+          if (self._testInterval) { clearInterval(self._testInterval); self._testInterval = null; }
+          const first = answerable[0];
+          self.setState({
+            testState: "paused", pendingEvidence: outcomeResults, pausedQueue: answerable.slice(1),
+            runSteps: first.steps || [], deliveries: first.deliveries || [], runOutput: first.output || null,
+            pausedAsk: first.ask || null, pausedNote: first.note || null, pausedRunId: first.runId,
+            pausedAnswering: false, laneCoverage: null,
+            runDurationMs: self._testStartMs ? (Date.now() - self._testStartMs) : null,
+          });
+          return;
+        }
+        // No answerable pauses — score the full accumulated evidence (through the animation).
+        const d = Object.assign({}, lastData, { paused: false, completed: true, outcomeResults: outcomeResults });
+        const r = { ok: true, data: d };
+        if (self._testInterval) { pendingResult = { r: r, d: d }; }
+        else { self._applyTestResult(r, d); }
         return;
       }
       fetch("/workflows/run", { method: "POST", headers: self._H(),
-        body: JSON.stringify({ spec: S.spec, initialContext: runs[i].initialContext, example: runs[i].example }) })
+        body: JSON.stringify({ spec: S.spec, initialContext: runs[i].initialContext, example: runs[i].example, dryRunDeliveries: true }) })
         .then(function(res) { return self._readJson(res); })
         .then(function(res) {
           const d = res.data || {};
           lastData = d;   // keep the last run's steps for the pipeline animation
-          if (d.paused && !pausedData) pausedData = d;
           if (d.outcomeCheck) outcomeResults.push(d.outcomeCheck);
+          if (d.paused && d.answerable && d.runId) {
+            pausedRuns.push({ runId: d.runId, ask: d.awaiting || null, note: d.note || null,
+                              steps: d.steps || [], deliveries: d.deliveries || [], output: d.output || null });
+          }
           runOne(i + 1);
         })
         .catch(function(e) {
@@ -5892,15 +5915,38 @@ class Component extends DCLogic {
     this.setState({ pausedAnswering: true, testState: "running", runElapsed: 0 });
     this._testStartMs = this._testStartMs || Date.now();
     fetch("/workflows/run", { method: "POST", headers: this._H(),
-      body: JSON.stringify({ resumeRunId: S.pausedRunId, decision: decision }) })
+      body: JSON.stringify({ resumeRunId: S.pausedRunId, decision: decision, dryRunDeliveries: true }) })
       .then(function(res) { return self._readJson(res); })
       .then(function(res) {
         const d = res.data || {};
-        // A resumed run can stop at ANOTHER gate — a workflow may have several.
-        // `_applyTestResult` already handles a pause, so a second one simply lands
-        // back in this same state with the next question. Nothing here counts them.
-        self.setState({ pausedAnswering: false });
-        self._applyTestResult({ ok: true, data: d }, d);
+        // FOLD THIS ANSWER'S VERDICT INTO THE EVIDENCE (2026-07-24). The resumed run
+        // finished the after-gate steps and produced its own `outcomeCheck` — add it
+        // to what the completed examples already proved, then either take the next
+        // approval (this example hit a second gate, or another example is queued) or,
+        // when nothing is left to answer, score the FULL set. Without this, answering
+        // scored against an empty set and always read "0 examples / not verified".
+        const evidence = (self.state.pendingEvidence || []).slice();
+        if (d.outcomeCheck) evidence.push(d.outcomeCheck);
+        // This same example may stop at ANOTHER gate — answer it too before moving on.
+        if (d.paused && d.answerable && d.runId) {
+          self.setState({ pausedAnswering: false, pendingEvidence: evidence,
+            testState: "paused", runSteps: d.steps || [], deliveries: d.deliveries || [], runOutput: d.output || null,
+            pausedAsk: d.awaiting || null, pausedNote: d.note || null, pausedRunId: d.runId, laneCoverage: null });
+          return;
+        }
+        // More paused EXAMPLES queued? Surface the next one's approval.
+        const queue = (self.state.pausedQueue || []).slice();
+        if (queue.length) {
+          const next = queue.shift();
+          self.setState({ pausedAnswering: false, pendingEvidence: evidence, pausedQueue: queue,
+            testState: "paused", runSteps: next.steps || [], deliveries: next.deliveries || [], runOutput: next.output || null,
+            pausedAsk: next.ask || null, pausedNote: next.note || null, pausedRunId: next.runId, laneCoverage: null });
+          return;
+        }
+        // Everything answered — score the full accumulated evidence.
+        self.setState({ pausedAnswering: false, pendingEvidence: [], pausedQueue: [] });
+        const fd = Object.assign({}, d, { paused: false, completed: true, outcomeResults: evidence });
+        self._applyTestResult({ ok: true, data: fd }, fd);
       })
       .catch(function(e) {
         self.setState({ pausedAnswering: false, testState: "failed", runError: String(e) });
@@ -5963,7 +6009,7 @@ class Component extends DCLogic {
     if (d.paused) {
       this.setState({
         testState: "paused", runSteps: d.steps || [], deliveries: d.deliveries || [],
-        runOutput: d.output || null, runDurationMs: runDurationMs, outcomeResults: [],
+        runOutput: d.output || null, runDurationMs: runDurationMs, outcomeResults: (this.state.pendingEvidence || []),
         pausedAsk: d.awaiting || null, pausedNote: d.note || null, laneCoverage: null,
         // Answerable only if the SERVER says so. It holds the resume state, so it
         // is the only thing that knows whether this pause can be continued; a

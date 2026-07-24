@@ -83,13 +83,21 @@ describe('the test panel on a paused (approval-gated) run', () => {
       'the steps after an approval gate were never run, so nothing past it can be certified');
   });
 
-  test('the example loop carries a pause forward even when it is not the LAST example', () => {
-    // The loop used to hand `_applyTestResult` only the final example's data, so a
-    // pause on any earlier example was silently dropped. `pausedData` must win.
+  test('the example loop QUEUES pauses and KEEPS the completed examples\' evidence', () => {
+    // The loop used to hand `_applyTestResult` only the final example's data AND blank
+    // `outcomeResults` at the first pause — so an approval workflow (which pauses on
+    // every urgent example) scored certification against nothing and always read
+    // "0 examples / not verified", however well it was built (2026-07-24). Now every
+    // ANSWERABLE pause is queued, and the completed examples' verdicts are carried as
+    // `pendingEvidence`, to be folded in as each pause is answered (see `_answerPause`).
     const src = readFileSync(HTML, 'utf8');
-    assert.match(src, /if \(d\.paused && !pausedData\) pausedData = d;/,
-      'the example loop no longer records a pause — a pause on an earlier example would be lost');
-    assert.match(src, /Object\.assign\(\{\}, pausedData \|\| lastData,/,
-      'the example loop no longer prefers the paused run when building its result');
+    assert.match(src, /pausedRuns\.push\(/,
+      'the example loop no longer queues answerable pauses — a pause on an earlier example would be lost');
+    assert.match(src, /pendingEvidence: outcomeResults/,
+      'the completed examples\' evidence is not carried across the gate — an approval workflow can never reach a verdict');
+    // The old single-pause path that dropped every pause but the last, and blanked
+    // the evidence, must be gone.
+    assert.doesNotMatch(src, /if \(d\.paused && !pausedData\) pausedData = d;/,
+      'the old "pausedData" single-pause path is still present — it dropped every pause but the last');
   });
 });
