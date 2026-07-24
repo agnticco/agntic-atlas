@@ -195,9 +195,19 @@ verify these are still true rather than assuming:
   end.** The panel renders in-panel Approve/Reject for a paused approval and clicking
   one resumes the run (shipped `6ef6135`), so the old "an approval cannot be answered
   here" is STALE. What is NOT yet confirmed by anyone clicking it through: that the
-  after-gate steps then resolve and Go live unlocks. There is a real reason it has not
-  been clicked in QA — **clicking Approve runs the REAL after-gate steps, including
-  real writes and sends, so a "test" can create real data**; the panel says as much.
-  Treat post-gate behaviour as unproven until a run is answered and reaches a kept
-  verdict. Still true and load-bearing: a run left PAUSED (unanswered) must never
-  certify — do not make a paused run count as a pass.
+  after-gate steps then resolve and Go live unlocks. The old warning that clicking
+  Approve creates real data is now STALE too — `/workflows/run` (both the initial test
+  and the resume-after-approval) is FORCED dry as of `de92b49`, so the after-gate
+  writes/sends are VERIFIED into would-deliver receipts, never fired. Treat post-gate
+  behaviour as unproven until a run is answered and reaches a kept verdict, but it can
+  now be exercised safely. Still true and load-bearing: a run left PAUSED (unanswered)
+  must never certify — do not make a paused run count as a pass.
+
+  **What "would deliver" now means.** A dry receipt with `wouldDeliver:true` proves the
+  content is real and fully resolved, the connection is live, a target is present, AND
+  — where the connector has a `probe` (Slack, Airtable today) — the destination actually
+  EXISTS and is reachable. So "the test says it will deliver" is now ~99% of "it will
+  deliver", not just "a target is typed in". A destination the probe finds missing reads
+  as **broken** with a plain reason ("the Slack channel #ops wasn't found"), not a false
+  green. A connector with no probe keeps the shallower guarantee — that is a residual to
+  close as probes are added, not a regression.
