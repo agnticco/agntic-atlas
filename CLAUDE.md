@@ -963,7 +963,10 @@ https://atlas.agntic.co/health` against `package.json` before assuming what's li
    blank**, re-asking forever. **Fix:** `_attachSectionFixes` now fills a **complete default** for
    any document with ≥1 content source — one section per source, in edge order, each headed by its
    own step — applied silently by the existing structural auto-repair (no question, no regenerate),
-   exactly as it already does for a missing name or route edge. It can never drop content (every
+   exactly as it already does for a missing name or route edge. **It looks THROUGH control nodes**
+   (the ACTUAL live shape, found on the re-verify build: "compose the approved record" hangs off the
+   approval branch, so it has ZERO *direct* content parents — the first cut of this fix still gave up
+   there and looped; the walk now passes through a branch/human to the summary that feeds them). It can never drop content (every
    source appears) and the user edits it like a rename. Zero sources stays a genuine gap. Pinned by
    `tests/converger/section-autorepair.test.js` (mutation-verified; the old narrow guard turns the
    two-source test red). **Carried, NOT fixed:** the *general* pattern — a blocking-gap answer

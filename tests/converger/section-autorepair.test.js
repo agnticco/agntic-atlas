@@ -141,6 +141,42 @@ describe('a missing section list repairs itself, single or multi source', () => 
       'a branch outputs a route, not prose — using it as the document body would deliver {"value":…}');
   });
 
+  test('a document BEHIND an approval gate — looks THROUGH the control step to its content', () => {
+    // THE ACTUAL LIVE LOOP (2026-07-23/24). "Compose the approved record" hangs off the
+    // approval branch, so its only direct parent is a control node and it has ZERO direct
+    // content parents. The first fix gave up here ("< 1 content parents") and the blank
+    // went to the user and back through a regenerate that reproduced it — forever. The
+    // repair must look THROUGH the branch/human to the summary that feeds them.
+    const spec = {
+      name: 'T', triggers: [{ type: 'email' }],
+      nodes: [
+        { id: 'trigger',   type: 'trigger', label: 'Email',   config: { type: 'email' } },
+        { id: 'summarize', type: 'llm',     label: 'Summarize', config: { mode: 'summarize', prompt: 'x' } },
+        { id: 'ask',       type: 'human',   label: 'Approve', config: { prompt: 'Save?', decisions: ['approve', 'reject'], timeout: { after: '1d' } } },
+        { id: 'gate',      type: 'branch',  label: 'Route by approval', config: { on: '{{ask.decision}}', cases: [{ when: 'approve', to: 'doc' }, { when: '*', to: 'drop' }] } },
+        { id: 'doc',       type: 'assemble', label: 'Compose approved record', config: { title: 'Email Summary' } },
+        { id: 'drop',      type: 'deliver', label: 'Stop',    config: { channel: 'inbox', subject: 'x' } },
+        { id: 'send',      type: 'deliver', label: 'Save',    config: { channel: 'inbox', subject: 'S' } },
+      ],
+      edges: [
+        { from: 'trigger', to: 'summarize' }, { from: 'summarize', to: 'ask' }, { from: 'ask', to: 'gate' },
+        { from: 'gate', to: 'doc' }, { from: 'gate', to: 'drop' }, { from: 'doc', to: 'send' },
+      ],
+    };
+    const issue = validatorOf().validate(spec).issues
+      .find(i => i.code === 'DIGEST_MISSING_SECTIONS' && i.nodeId === 'doc');
+    assert.ok(issue, 'the blank must still be reported for the document');
+    assert.ok(issue.fix, 'a document behind a gate must look through it, not give up and loop the user');
+    const sections = JSON.parse(issue.fix.config.sections);
+    assert.equal(sections.length, 1, 'one content source feeds it (through the gate)');
+    assert.equal(sections[0].content, '{{summarize.output}}',
+      'the body comes from the summary that feeds the gate — seen THROUGH the branch and the human');
+    // and applying it clears the defect (breaks the loop).
+    const { draft } = autoRepairStructural(spec, validatorOf().validate(spec).issues);
+    assert.ok(!validatorOf().validate(draft).issues.some(i => i.code === 'DIGEST_MISSING_SECTIONS' && i.nodeId === 'doc'),
+      'the blank is filled without a question — the loop is broken');
+  });
+
   test('the repair MERGES — a value already on the node survives', () => {
     const spec = specWith(['summarize']);
     spec.nodes.find(n => n.id === 'doc').config.intro = 'Here is what came in.';

@@ -337,12 +337,30 @@ export class WorkflowValidator {
       if (issue.code !== 'DIGEST_MISSING_SECTIONS' || issue.fix) continue;
       const node = byId.get(issue.nodeId);
       if (!node) continue;
-      // A control step reports a route or a decision, not prose — it can never be
-      // the body of a document, and `_node-input.js` already refuses to feed one in.
-      const parents = edges
-        .filter(e => e.to === node.id)
-        .map(e => byId.get(e.from))
-        .filter(p => p && !NON_CONTENT_TYPES.has(p.type));
+      // The document's body is the CONTENT step(s) that feed it. A control step
+      // (branch / human / decision) reports a route or a decision, not prose — it can
+      // never be the body, and `_node-input.js` already refuses to feed one in. But a
+      // document routinely sits BEHIND one: "compose the approved record" hangs off the
+      // approval branch, so its only direct parent is that branch and it has NO direct
+      // content parent at all. That was the ACTUAL live loop (2026-07-23/24): the repair
+      // found zero content parents, gave up, and the blank went to the user and back
+      // through a regenerate that reproduced it. So look THROUGH a control parent to the
+      // nearest content step feeding it. Only when NO content step feeds it on any path,
+      // however far up, is there genuinely nothing to lay out (then it stays a real gap).
+      const seen = new Set([node.id]);
+      const contentSourcesOf = (id) => {
+        const out = [];
+        for (const e of edges) {
+          if (e.to !== id) continue;
+          const p = byId.get(e.from);
+          if (!p || seen.has(p.id)) continue;
+          seen.add(p.id);
+          if (NON_CONTENT_TYPES.has(p.type)) out.push(...contentSourcesOf(p.id));
+          else out.push(p);
+        }
+        return out;
+      };
+      const parents = contentSourcesOf(node.id);
       if (parents.length < 1) continue;
       // ONE source keeps the title the converger already chose as the single heading.
       // MULTIPLE sources each become their own section, headed by the source step's own
