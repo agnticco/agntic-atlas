@@ -333,6 +333,80 @@ refactor them without an explicit decision recorded here:
   ANTHROPIC_API_KEY is set. Chat context (`builder.js`) surfaces web capability when connected.
   The old `search_web` built-in node type remains but is no longer promoted to the converger;
   `web_search` connector-action is the primary path.
+- **Event triggers actually fire (2026-07-24)** — three silent failures, all of the same
+  shape: a user publishes a trigger, Atlas shows the workflow live, and it never runs.
+  Found while scoping the premade-workflow library
+  ([`docs/handoff/workflow-library-draft-2026-07-24.md`](docs/handoff/workflow-library-draft-2026-07-24.md)).
+  1. **Airtable "record changed" was dead three ways over.** Nothing created the webhook
+     (`POST /connectors/airtable/webhooks` was called from nowhere in `src/` **or**
+     `public/`); nothing renewed it (`refreshAirtableWebhook` had exactly one reference —
+     its own definition — against Airtable's 7-day expiry); and the event names never
+     agreed (the converger's generic trigger template emits the capability id
+     `airtable_record_changed`, the dispatcher matched only the bare `record_changed`), so
+     a correct trigger matched **no** workflow even with a webhook in place. New
+     `src/connectors/airtable/webhook-sync.js` is an **idempotent, tenant-scoped
+     reconcile**: it makes the live webhook set equal what the tenant's active workflows
+     need, in both directions. Called on publish / edit / delete / status-change
+     (`builder.js`) and exposed as `POST /connectors/airtable/webhooks/sync`; renewed daily
+     from `start()` and once at boot so a restart heals. **Best-effort but never silent** —
+     publish returns a `triggerWarning` when the watch could not be armed, because "saved
+     but not armed" is the truth and "live" is not. `registerWebhookRoute` now persists
+     `tableId` (part of a webhook's identity: base-wide ≠ one table).
+  2. **A Slack channel filter written by NAME could never match.** `dispatchSlackEvent`
+     compared `"#requests"` against the channel **ID** Slack puts on the event. Now
+     resolved via the existing `resolveChannel`, cached per tenant (positives indefinitely,
+     misses for 60s so inviting the bot takes effect without a restart). **Unresolved means
+     DOES NOT MATCH and is logged** — never "matches everything".
+  3. **The `keywords` filter was enforced by nothing** — declared on the `slack_message`
+     trigger's `configSchema`, applied nowhere, so the workflow fired on every message
+     while its own definition promised otherwise. And **`app_mention` events were dropped**
+     (`ev.type !== 'message'`), making the catalog's "Slack App Mention" trigger
+     unrunnable.
+  Matching logic is now exported and pure (`selectSlackFlows`, `slackEventKind`) so a check
+  can construct it the way production does. Pinned by `tests/api/slack-trigger-dispatch.test.js`
+  (18) + `tests/api/airtable-webhook-sync.test.js` (20); **every guard hand-mutated red→green**.
+  **Not yet witnessed live** — code-level only; a real Slack post and a real Airtable record
+  edit are the pending confirmation.
+- **Publishing FAILS CLOSED when a trigger cannot be armed (2026-07-24, operator's call —
+  this reverses the best-effort behaviour shipped hours earlier in the same session).** A
+  workflow that saved, shows as live, and can never fire is the lie the product exists to
+  prevent, and the operator judged a warning banner next to a green tick insufficient. The
+  cheap, deterministic reasons (no base named; Airtable not connected) are refused **before
+  anything is written** (`checkAirtableTriggersArmable` → 422 with a plain-language fix);
+  the one that can only be found by asking Airtable rolls the publish back
+  (`workflowStore.delete` + a reconcile to prune any orphan webhook) and returns 502
+  `TRIGGER_NOT_ARMED`. The PUT path is the publish path for most workflows, so it enforces
+  the same rule, marking the workflow `error` rather than leaving it live. **Do not weaken
+  this back to a warning.**
+- **Trigger frequency is a user setting (2026-07-24)** — `src/workflows/trigger-frequency.js`,
+  config key `checkEvery` (minutes) on a trigger. ONE user-facing idea, two mechanics,
+  because Atlas's triggers arrive two ways and a single mechanic would be a lie:
+  **polled** (email — genuinely hardcoded at every 60s tick until now) sets the *poll
+  interval*; **pushed** (Airtable) sets a *floor on how often the workflow may run*, since
+  there is no checking to slow down. **An event inside the quiet window is DEFERRED to the
+  end of it, never dropped** (`createRunGate`) — dropping would be a fresh silent failure of
+  exactly the kind this session fixed. **Slack messages deliberately have NO such control**:
+  each message is its own unit of work, so a gap could only drop or unboundedly queue them.
+  `checkEveryMinutes` does NOT round to whole minutes on purpose — a pushed trigger honours
+  30s exactly, and `pollIntervalMs` raises sub-minute values to the tick floor, so the clamp
+  guards a reachable value instead of being decorative (found by mutation: the rounded
+  version made the floor unreachable and the mutant survived). Pinned by
+  `tests/workflows/trigger-frequency.test.js` (18), mutation-verified.
+
+- **EVERY new connector must state whether it can "phone us" (operator, 2026-07-24).**
+  Before the connector is built, answer in its own header comment: does the service
+  publish a subscription/webhook mechanism, or must Atlas poll it? If it pushes — who
+  registers the subscription **and when** (arming on publish is not automatic), does it
+  expire and need renewing, how is an inbound call proved genuine, and how is it torn down
+  on delete/pause? If it polls — at what interval and what does that cost across every
+  active workflow? And does push require Atlas to be publicly reachable (if so, that
+  trigger **cannot be proven on a laptop**, and a green local suite must not stand in for
+  the live check)? This is not bookkeeping: it decides what the connector can promise, what
+  the user's "how often should this check?" setting means for it, and where it can be
+  tested. **Today Slack and Airtable push; Gmail POLLS every 60s** even though Google
+  offers Pub/Sub push (never built, `google/index.js` `gmail_new_message` says so in its
+  own description); web and filesystem have no trigger at all. Full checklist in
+  [`docs/handoff/p13-implementation-brief.md`](docs/handoff/p13-implementation-brief.md).
 
 ## Hard-won lessons (do not relearn these)
 
@@ -1099,18 +1173,60 @@ test panel:
     thread is full of the word "yes". Approvals go through a signed, single-use
     link.
 
-- [ ] **P13 — many more connectors.** *Planned, not started.*
+- [ ] **P13 — many more connectors.** *Planned, not started. **Rescoped 2026-07-24** — see
+      the box below; the shape of this phase changed.*
 
   Today each new service Atlas can talk to is hand-built, which is why there are
-  only a handful. This phase makes Atlas able to pick up a service's own published
-  description and generate the connection automatically — with a second, fallback
-  method for services that don't publish one. Triggers ("when this happens…") stay
-  hand-built either way.
+  only a handful. This phase makes Atlas able to connect to a service **that nobody
+  hand-built, with no developer setup by anyone** — the customer clicks one button,
+  approves on the service's own screen, and it works. Triggers ("when this happens…")
+  stay hand-built and are **not** in this phase.
 
-  **Start with the groundwork, not the connectors.** Three things in the existing
+  **The constraint that set the scope (operator, 2026-07-24).** Atlas is a no-code
+  product for non-technical people, so **a customer must never be sent into a developer
+  settings screen** to create an integration, pick permissions, and paste a secret. That
+  leaves exactly two ways to connect a service, both ending at one Connect button:
+  1. **Self-identifying — no setup by anyone.** Atlas publishes one identity file at a
+     fixed address it already owns (`atlas.agntic.co`), and that address is its identity
+     with every service that supports the standard. *(Client ID Metadata Documents —
+     CIMD / SEP-991, MCP authorization spec 2025-11-25. It supersedes the older
+     register-us mechanism, DCR/RFC 7591, which was downgraded `SHOULD`→`MAY` **because
+     CIMD replaced it**.)* **Verified 2026-07-24:** Notion, Linear, Stripe, Asana,
+     Sentry, Figma. **Blocked:** Atlassian (approved clients only) and Google (rejects it).
+  2. **Agntic registers once** — a developer account, an app, permissions, a callback and
+     two secrets on the box, once per service forever.
+
+  **P13 ships route 1 only.** Consequences, recorded honestly because they are a real
+  cost and a deliberate trade, not an oversight:
+  - **Generating connectors from a published API manual (OpenAPI) LEFT the phase.** Such
+    a connector always needs someone to register an app — it is always route 2. It stays
+    in the design doc as the on-demand mechanism for route-2 connectors *after* P13.
+  - **Microsoft 365, HubSpot and QuickBooks are OUT of P13** — all route 2, and arguably
+    the highest-value services for the client base. They are the first afternoons after
+    the phase closes.
+  - **The connector setup screen is OUT of P13** — it exists to make route 2 cheap and has
+    nothing to serve in a route-1-only phase. Build it alongside the Microsoft 365 work.
+  - **The MCP adapter moved from last-and-optional to the phase's entire delivery
+    mechanism.**
+
+  **The hard stop that must not be softened.** The standard's identity order is
+  *pre-registered credentials → CIMD → the older register-us mechanism → **prompt the user
+  to type in credentials***. **Implement the first three and STOP.** That fourth step *is*
+  the banned developer-settings screen, and a naive implementation of the spec falls
+  through to it by default. A service that exhausts the first three is **"not supported
+  yet"** → it goes on the route-2 list. It never degrades into asking a customer for a token.
+
+  **Start with the groundwork, not the connectors.** **Four** things in the existing
   code assume the connectors we happen to have; if new ones are added first, every
   one of them inherits the same silent bug (Atlas mistaking which steps write data,
-  which is how a workflow ends up not doing the thing it promised).
+  which is how a workflow ends up not doing the thing it promised). The fourth was
+  added 2026-07-24: **which credential a step receives is decided by hand-typed lists
+  of action names in `server.js`** (`CONNECTOR_INJECTORS` + the per-connector
+  `*_ACTION_IDS` Sets). The code carries its own warning that a capability missing from
+  its list gets no credential at run time *even though the customer is correctly
+  connected* — that is the R22 defect, and importing a server with forty tools would
+  reproduce it forty times. Credential resolution must come from the connector the
+  capability already declares.
 
   **How this phase gets signed off** — decided by the operator, 2026-07-15, and
   deliberately narrower than P12's:
@@ -1119,7 +1235,9 @@ test panel:
   2. **The product works for a real person** — a live, operator-witnessed run in a
      visible browser: connect a service Atlas has never hand-built, build a
      workflow with it, run it, see real data read and written. Recorded in
-     `docs/gates/p13.md` with screenshots.
+     `docs/gates/p13.md` with screenshots. **The connect step is half the proof**:
+     one button, the service's own consent screen, back to Atlas connected — and at
+     no point is the customer asked for a credential or sent to a settings screen.
 
   **No coverage percentage blocks this phase.** Re-breaking the code to check a
   test notices is a per-fix technique, not a score to chase — chasing the score is

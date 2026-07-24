@@ -3,7 +3,45 @@
 **Companion to:** [`docs/architecture/mcp-capability-adapter.md`](../architecture/mcp-capability-adapter.md) (the decision + design).
 **This doc:** the executable handoff — invariants, behavioral acceptance tests, gates.
 **Written:** 2026-07-15, re-grounded live against `main` @ `3c87709`.
+**RESCOPED 2026-07-24** — see "What P13 ships" below. MCP+CIMD is now primary; OpenAPI-autogen
+is out of the phase; a fourth seam was added to P13-0.
 **Branch:** build P13 off `main`, not off an unmerged branch.
+
+---
+
+## ⚠️ RESCOPE 2026-07-24 — what P13 ships, and what left the phase
+
+**The operator's constraint:** Atlas is a no-code product for non-technical people, so a
+customer must **never** be sent into a developer settings screen to mint a token. Exactly two
+connector routes are acceptable, both ending at one Connect button:
+
+1. **Route 1 — self-identifying.** No console work from *anyone*. Atlas self-publishes one
+   **Client ID Metadata Document** (CIMD, SEP-991, MCP auth spec 2025-11-25) at a stable
+   HTTPS URL on `atlas.agntic.co`; that URL *is* its `client_id` with every CIMD-supporting
+   server. **Verified 2026-07-24:** Notion, Linear, Stripe, Asana, Sentry, Figma.
+   **Blocked:** Atlassian (approved clients only), Google (rejects registration).
+2. **Route 2 — Agntic registers once.** Developer account + app + scopes + callback + two
+   secrets, once per service forever. Still one button for the customer.
+
+**P13 ships ROUTE 1 ONLY.** That is the scope tightening. Consequences, stated plainly:
+
+- **OpenAPI-autogen is OUT of P13.** An OpenAPI-generated capability always needs someone to
+  register an OAuth app, i.e. it is always route 2. It is retained in the design doc as the
+  mechanism for route-2 connectors taken **on demand after** the phase.
+- **Microsoft 365, HubSpot and QuickBooks are OUT of P13.** All route 2. This is a real cost
+  — they are arguably the highest-value services for the client base — and it is an accepted,
+  deliberate trade, not an oversight. They are the first afternoons *after* P13 closes.
+- **The connector setup screen is OUT of P13.** It exists to make route 2 cheap; with no
+  route-2 connector in the phase it has nothing to serve. Build it alongside the Microsoft
+  365 afternoon.
+- **The MCP adapter moves from last (P13-C, "fallback") to first-after-the-seams.** It is no
+  longer a fallback; it is the entire delivery mechanism of the phase.
+
+**The spec's client-identity priority order — and the hard stop:** pre-registered creds →
+CIMD → DCR → *prompt the user for credentials*. **Implement the first three and STOP.** A
+naive implementation falls through to the fourth, which is precisely the banned behaviour. A
+server exhausting all three is **"not supported yet"** → route-2 list. It never degrades into
+asking a customer for a token.
 
 ---
 
@@ -13,25 +51,35 @@
    `3c87709` on 2026-07-15. The **invariant + the behavioral acceptance test** is the
    contract. **Re-ground every seam against current code before you touch it** — grep
    the symbol, don't trust the line.
-2. **⚠️ `src/workflows/outcome-oracle.js` is being edited by another session** (showed
-   `M`, uncommitted, at brief time). Two of P13-0's three seams live in that file.
-   **Do not race it.** Either wait until that work lands on `main` and re-ground, or
-   coordinate explicitly. A fix landing under you mid-grounding costs a full round.
-3. **Mutation-testing hazard (learned twice):** `mutation-sweep.mjs` rewrites `src/`
-   in place. Run it **foreground only**, **commit before** running, and if it's ever
-   interrupted, `grep -rn "if (true)\|if (false)\|void 0 && " src/` before anything
-   else. Never restore a mutated file with `git checkout --` if you have uncommitted
-   edits (it reverts to HEAD, deleting them) — use a saved copy.
-4. **Spawn `test-adversary` after each increment, before the verifier.** The Builder
-   writing his own pinning tests is a tautology. Every guard added in the FIX must be
-   mutation-tested, not just the ones you started with.
+2. ~~`outcome-oracle.js` is being edited by another session~~ — **resolved.** That work landed;
+   re-ground against `main` as normal.
+3. ~~**Mutation-testing hazard:** `mutation-sweep.mjs` …~~ — **VOID (2026-07-24).**
+   `mutation-sweep.mjs` and `mutation-guard.mjs` were **deleted on 2026-07-19** by operator
+   decision, along with the `test-adversary` agent. Do not look for them and **do not
+   re-introduce them unasked** (CLAUDE.md, "Mutation testing was removed").
+4. ~~**Spawn `test-adversary` after each increment**~~ — **VOID (2026-07-24).** That agent no
+   longer exists. **Its replacement is the QA Manager handoff:** agents are treated as real
+   positions, and the QA work order is written **at the start of the increment, from the
+   stated guarantees, before the code exists** — then executed against the built increment in
+   a headed browser, in parallel with the `verifier`. The Builder does not sign off their own
+   work. See CLAUDE.md, "Agents & gate enforcement".
+5. **The discipline that survived the tooling removal:** when you add a guard, re-introduce
+   the bug **by hand** and watch the test go red. A green suite is evidence of nothing until
+   you have watched it fail.
 
 ---
 
 ## The P13 contract (what "done" means for the whole phase)
 
-A capability sourced **externally** (OpenAPI-autogenerated, or projected from an MCP
-server) is indistinguishable to the converger/engine/oracle from a native one:
+A capability sourced **externally** (for P13: projected from a **CIMD-authenticated MCP
+server** — see the rescope note; OpenAPI-autogen left the phase) is indistinguishable to the
+converger/engine/oracle from a native one:
+
+- **It connects with zero console work from anyone.** Atlas identifies itself by its
+  self-published metadata document; the customer clicks Connect, approves on the service's
+  own consent screen, and the returned tenant token lands in the existing vault. **No step
+  of that flow may ever ask a customer for a credential** — if the identity chain
+  (pre-registered → CIMD → DCR) is exhausted, the connector is *not supported yet*.
 
 - **`complete ⇒ publishable` holds for it** — the gap scorer certifies it iff publish
   accepts it. (Same floor as P12; not lowered.)
@@ -44,6 +92,37 @@ server) is indistinguishable to the converger/engine/oracle from a native one:
   only. Event triggers remain the hand-built track. Do not surface an external
   capability in a `trigger` position.
 
+### Mandatory for EVERY new connector: can it phone us? (operator, 2026-07-24)
+
+**Answer this before writing the connector, and write the answer down.** It is not an
+afterthought — it decides what the connector can promise a user, what "how often does
+this check?" even means for it, and whether it can be tested anywhere but a public
+host. Getting it wrong has already produced a trigger that published, showed as live,
+and could never fire (see the Airtable entry in `CLAUDE.md`'s recorded edits).
+
+Today: **Slack and Airtable push to us. Gmail does not — Atlas polls it every 60s**,
+even though Google offers push via Pub/Sub; it was never built. Web and filesystem have
+no trigger at all. So the answer genuinely differs per connector and cannot be assumed.
+
+Four questions, recorded in the connector's own header comment:
+
+1. **Does the service publish a subscription mechanism** (webhook, event stream, push
+   notification)? If not, the only honest trigger is a poll, and say so out loud.
+2. **If it pushes: what is the full lifecycle?** Who registers the subscription and
+   *when* (it must be armed on publish — nothing arms itself); does it expire and need
+   renewing; how is an inbound call proved genuine (signature/HMAC); and how is it torn
+   down when the workflow is deleted or paused. **A create with no renewal is a trigger
+   that dies quietly a week later** — that exact defect shipped.
+3. **If it polls: what interval, and what does it cost** to have every active workflow
+   wake up on it? This is the number the user's "how often should this check?" setting
+   moves (`src/workflows/trigger-frequency.js`).
+4. **Does push need Atlas publicly reachable?** If yes, the connector's trigger
+   **cannot be proven on a laptop** — plan the live verification on the real host, and
+   do not let a green local suite stand in for it.
+
+**Publishing must fail closed** if a trigger needs something set up on the other side
+and it could not be set up. Not a warning — a refusal. See `CLAUDE.md`.
+
 ---
 
 ## Increment P13-0 — generalize the converger seams (PREREQUISITE, build first)
@@ -55,7 +134,8 @@ are **pre-existing F-era debt** — the already-built `sheets_describe`
 (`google/index.js:709`) is unwired for the same reason, so **fixing seam #3 also fixes
 native Google Sheets today.** That's the tell that this is debt repayment, not new scope.
 
-The three files are **already in `mutation-sweep.mjs` TARGETS** (validator +
+~~The three files are **already in `mutation-sweep.mjs` TARGETS**~~ *(void — the sweep was
+deleted 2026-07-19; hand-mutate instead)* (validator +
 outcome-oracle + gap-scorer from C, elicitation-graph from F) — so the sweep will grade
 these fixes. Good.
 
@@ -143,58 +223,89 @@ prove the catalog is genuinely source-agnostic:
 - (b) as a `deliver` node it **satisfies** a `record_exists` assertion and publishes
   (seam #2);
 - (c) it offers **click-to-pick** destination resolution via its connector's declared
-  schema-read capability (seam #3).
+  schema-read capability (seam #3);
+- (d) **every** capability of a connected connector receives its tenant credential —
+  proving credential resolution is driven by the connector the capability *declares*, not
+  by a hand-maintained id list (seam #4).
 
-All three via `test-adversary`-authored tests, each mutation-killed. Only when this gate
-is green does an adapter get built on top.
+Each pinned by a test, and **each mutation-killed by hand** — revert the seam, watch the
+test go red. (`test-adversary` and the sweep are gone; this is now the Builder's own
+discipline plus the verifier's independent hand-mutation.) Only when this gate is green does
+an adapter get built on top.
+
+### Seam #4 — credential resolution must be catalog-driven, not a hand-typed id list *(added 2026-07-24)*
+
+- **Current state (re-ground before touching):** `CONNECTOR_INJECTORS` in `src/api/server.js`
+  is a hand-maintained array whose `ownsNode` predicates test membership of per-connector
+  `Set`s of literal capability ids (`SLACK_ACTION_IDS`, `AIRTABLE_ACTION_IDS`,
+  `GOOGLE_ACTION_IDS`). The code carries its own warning at the Google set: *"A capability
+  missing here gets no googleToken injected → 'no access token' at run time even though it's
+  connected (this is how drive_create_folder broke, R22)."*
+- **Why it blocks the phase:** an imported server exposing 40 tools would require 40 literal
+  strings hand-added, with a run-time failure for each one missed — on a connector the
+  customer has correctly connected. Same silent-failure class as seams #1–#3.
+- **Invariant:** the credential for a node is resolved from the **`connector` field the
+  capability already declares in the catalog**. Adding a capability to a connected connector
+  never requires editing a list. **Fail closed on a missing tenant** — throw, never
+  `?? default`.
+- **Behavioral acceptance test:** register a synthetic capability on an existing connected
+  connector *without* adding its id anywhere; assert the tenant credential is injected.
+- **Mutation:** restore the literal-`Set` membership test → the synthetic capability gets no
+  credential → test **red**.
 
 ---
 
-## Increment P13-A — capability contract + OpenAPI adapter (primary)
+## Increment P13-A — capability contract + MCP catalog loader + CIMD identity
 
-- **Invariant:** one internal capability contract; an OpenAPI operation projects into it
-  deterministically — params/requestBody → `configSchema`, **HTTP verb → `effect`**
-  (GET/HEAD read; POST/PUT/PATCH/DELETE write), response schema → locators, `enum` →
-  closed domains. `position` and `outputFormat` are supplied by a **mandatory human
-  curation pass** (neither source declares them). Raw autogen is never registered
-  unreviewed.
-- **Gate:** a capability autogenerated from a real, high-quality spec (**Stripe or
-  GitHub**) appears in `/capabilities` and `CapabilityRegistry.list()` beside native
-  caps with correct `effect`/`positions`/`configSchema`, and passes the P13-0 synthetic
-  gate's checks for real (not a stub).
+*(Was P13-C "MCP adapter (fallback)". Promoted 2026-07-24: it is no longer a fallback, it is
+the phase's entire delivery mechanism. The OpenAPI adapter that used to be P13-A has left the
+phase — see the rescope note.)*
 
-## Increment P13-B — outbound execution + per-tenant auth (OpenAPI path)
+- **Invariant — one contract:** a single internal capability shape that a native
+  registration and an MCP tool both project into. `McpCatalogLoader` connects to a **remote
+  Streamable-HTTP** server (never stdio, never a per-tenant subprocess), lists tools, projects
+  `inputSchema → configSchema`, applies the annotation layer, and registers into the same
+  `CapabilityRegistry`. Effect **fails closed to `write`** when `readOnlyHint` is unset — an
+  un-flagged write would skip idempotency and the approval gate.
+- **Invariant — identity without registration:** Atlas serves **one CIMD document** at a
+  stable HTTPS URL on `atlas.agntic.co`; that URL is its `client_id`. The client-identity
+  chain is **pre-registered → CIMD → DCR → STOP**. Reaching the spec's fourth step (prompt
+  the user for credentials) is a **defect**, not a fallback: a server that exhausts the chain
+  is surfaced as *"not supported yet"*.
+- **Invariant — no triggers.** MCP-sourced capabilities are `step`/`delivery` only, never
+  `trigger`. The four trigger questions above still get answered and written down, and for
+  every P13 connector the honest answer is "no trigger in this phase."
+- **Gate:** a real tool from a real CIMD-supporting server (**Notion** or **Linear**) appears
+  in `/capabilities` and `CapabilityRegistry.list()` beside native capabilities with correct
+  `effect`/`positions`/`configSchema`, and passes the P13-0 synthetic gate's four checks for
+  real (not a stub). **Plus:** the CIMD document is served, and a forced walk of the identity
+  chain proves step 4 is unreachable.
 
-- **Invariant:** the generated handler makes the HTTP call with the tenant token
-  injected on the `Authorization: Bearer` header via the **existing** vault /
-  `CONNECTOR_INJECTORS` seam — no new auth infrastructure. **Fail closed on missing
-  tenant** (throw, never `?? default` — the recurring cross-tenant-leak lesson).
-- **Gate:** a workflow with one autogenerated **read** step + one native `deliver` runs
-  green through the real engine; two tenants isolated — tenant B never sees tenant A's
-  credential (adversarial, mirrors the P12 cross-tenant tests).
+## Increment P13-B — outbound execution + per-tenant token persistence
 
-## Increment P13-C — MCP adapter (fallback)
+- **Invariant:** `makeMcpHandle` opens the session and injects the **tenant's** token on the
+  transport, resolved through the *same* `oauthTokenStore` + `token-cipher` path as a native
+  connector — CIMD changes only *our* client identity, never the customer's credential
+  handling. **Fail closed on missing tenant** (throw, never `?? default`). Refresh/rotation
+  uses the existing vault logic.
+- **Invariant:** the connect flow is one button end to end — Connect → the service's own
+  consent screen → back → connected. No screen in that flow asks for a credential.
+- **Gate:** a workflow with one MCP-sourced **read** step + one native `deliver` runs green
+  through the real engine; **two tenants isolated** — tenant B never reaches tenant A's
+  credential (adversarial, mirrors the P12 cross-tenant tests). An **MCP write inside a
+  `foreach`** is exercised — the highest-risk shape, where three separate P12 defects lived.
 
-- **Invariant:** used **only** for OpenAPI-poor / AI-native services (Linear is
-  GraphQL-only; Notion ships no first-class spec). `McpCatalogLoader` connects to a
-  **remote Streamable-HTTP** server (never stdio/per-tenant subprocess), lists tools,
-  projects `inputSchema → configSchema`, applies the annotation layer (effect **fails
-  closed to write** if `readOnlyHint` is unset), and registers into the same catalog.
-  `makeMcpHandle` injects the tenant token on the transport (header where the server
-  accepts one — Linear/GitHub/Stripe/Atlassian/Airtable do — else the per-tenant OAuth
-  flow).
-- **Gate:** a Linear or Notion **write** runs end-to-end for a connected tenant; the
-  same synthetic-capability moat checks pass with the source = MCP.
+## Increment P13-C — the moat, adversarial
 
-## Increment P13-D — the moat, adversarial, both sources
+*(Was P13-D. "Both sources" collapses to one source now that OpenAPI is out of the phase.)*
 
-- **Invariant:** every P12 moat invariant holds identically whether a capability came
-  from native code, OpenAPI, or MCP. `LLM_INPUT_NOT_ENUM`, `complete ⇒ publishable`,
+- **Invariant:** every P12 moat invariant holds identically whether a capability came from
+  native code or from MCP. `LLM_INPUT_NOT_ENUM`, `complete ⇒ publishable`,
   `WEAK_APPROVAL_FOR_WRITE`, idempotency-on-write — none weakened.
 - **Gate:** re-run the P12 moat suite (`moat-adversarial.test.js`, `gate-adversarial`,
-  `decision-adversarial`) with **both** an OpenAPI-sourced and an MCP-sourced write
-  capability substituted into the fixtures. The moat holds regardless of source. Nothing
-  in the P12 floor is lowered to accommodate P13.
+  `decision-adversarial`) with an **MCP-sourced write capability** substituted into the
+  fixtures. The moat holds regardless of source. Nothing in the P12 floor is lowered to
+  accommodate P13.
 
 ---
 
@@ -220,12 +331,15 @@ is green does an adapter get built on top.
 ## Test & gate wiring
 
 - **New gate:** `scripts/gates/p13.sh`, **progressive** like `p12.sh` (runs increments
-  0→D in order, stops at the first unbuilt one, so `bash scripts/gate.sh 13` answers both
-  "closed?" and "which increment next?"). Fail-closed; unimplemented check does not pass.
-- **`mutation-sweep.mjs`:** the three P13-0 files are already TARGETS. **Add** the new
-  adapter files (`capability contract`, OpenAPI projector, `McpCatalogLoader`,
-  `makeMcpHandle`) to TARGETS as they land, and their suites to SUITES. **Floor is a
-  ratchet — raise, never lower.**
+  **0 → A → B → C** in order, stops at the first unbuilt one, so `bash scripts/gate.sh 13`
+  answers both "closed?" and "which increment next?"). Fail-closed; unimplemented check does
+  not pass.
+- ~~**`mutation-sweep.mjs`:** …~~ **VOID (2026-07-24)** — deleted 2026-07-19 by operator
+  decision, along with `mutation-guard.mjs` and the `test-adversary` agent. There is no
+  sweep, no TARGETS list and **no coverage floor** in this phase. What replaces it: the
+  Builder hand-mutates each new guard (revert the bug, watch the test go red) and the
+  **verifier independently hand-mutates the increment's NEW guards** — the one thing a log
+  cannot fake. Do not re-introduce the tooling unasked.
 - **`scripts/` diffs:** any change to a check or gate is recorded here and in CLAUDE.md.
   Checks are ADDED, never weakened — a silent `scripts/` diff is how a verifier detects a
   builder weakening their own gate.
@@ -239,13 +353,15 @@ the phase *close* over a non-functional gap. **P13 does not repeat that.** The g
 **exactly two things**, and nothing else blocks the close:
 
 1. **The backend works** — the behavioral acceptance tests in this brief pass (the moat
-   holds, the three seams are generalized, a real autogenerated connector reads/writes
+   holds, **all four** seams are generalized, a real MCP-sourced connector reads/writes
    end-to-end for a tenant, cross-tenant isolation holds).
 2. **The UI/UX works for the phase's expected outcome** — a **live, headed** browser run
-   the operator can watch: **connect a service Atlas never hand-built, build a workflow
-   with it by talking, run it, and see the real read/write happen.** Narrate each step,
-   save screenshots to disk (CLAUDE.md → Working rules: visible UI verification). The
-   verifier attests this in `docs/gates/p13.md`.
+   the operator can watch: **connect a service Atlas never hand-built — with no developer
+   console work by anyone — build a workflow with it by talking, run it, and see the real
+   read/write happen.** Narrate each step, save screenshots to disk (CLAUDE.md → Working
+   rules: visible UI verification). The verifier attests this in `docs/gates/p13.md`.
+   **The connect step is half the proof**: one button, the service's own consent screen,
+   back to Atlas connected — and at no point is the customer asked for a credential.
 
 **No aggregate mutation-coverage floor is a blocking bar in P13.** Mutation-testing stays
 an **internal technique** — each new guard must fail when its bug is reverted, so the
@@ -256,9 +372,12 @@ never a pass/fail number to chase.** That chase is the specific thing that stall
 **blocks only on user-reachable, silent (or destructive) defects** — everything else is a
 **residual**, recorded and carried forward, not a merge-blocker. The gate is run **once, by
 the builder** (the verifier confirms the SHA/log, doesn't re-run a 20-min deterministic
-result). `test-adversary` and `verifier` run **in parallel**, not in series. And the
-operator may **ship ahead of the formal close** (flag once with facts, defer the debt,
-never fake it — the `ship-over-gate-ceremony` rule).
+result). The **QA Manager** and the **verifier** run **in parallel**, not in series — the QA
+work order is written at the START of the increment from its stated guarantees, before the
+code exists, and executed against the built increment in a headed browser. (This replaces the
+deleted `test-adversary`; agents are treated as positions, and the Builder does not sign off
+their own work.) And the operator may **ship ahead of the formal close** (flag once with
+facts, defer the debt, never fake it — the `ship-over-gate-ceremony` rule).
 
 ## Git shape for this phase (branch-per-increment)
 
@@ -266,11 +385,12 @@ Each increment is its own branch off `main`, PR'd and squash-merged back — the
 every prior phase has in the history:
 
 ```
-main:  …─ (P13 planning #22) ─ (P13-0 #xx) ─ (P13-A #xx) ─ (P13-B #xx) ─ (P13-C #xx) ─ (P13-D + Gate: P13 close)
-                 \                  \             \             \             \             \
-                (docs, merged)   p13-0/seams   feat/p13-a-   feat/p13-b-   feat/p13-c-   feat/p13-d-
-                                 -generalize   openapi-      outbound-     mcp-fallback  moat-adversarial
-                                               adapter       auth
+main:  …─ (P13 planning #22) ─ (P13-0 #xx) ────── (P13-A #xx) ────── (P13-B #xx) ────── (P13-C + Gate: P13 close)
+                 \                  \                  \                  \                  \
+                (docs, merged)   p13-0/seams-      feat/p13-a-mcp-    feat/p13-b-        feat/p13-c-
+                                 generalize        catalog-cimd       outbound-auth      moat-adversarial
+                                 (4 seams)         (contract+loader   (tenant token,     (moat holds with
+                                                    +identity)         foreach write)     an MCP source)
 ```
 
 - **One increment = one branch = one session, ending at that increment's gate.** Rehydrate

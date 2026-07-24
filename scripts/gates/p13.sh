@@ -5,20 +5,39 @@
 # Design:  docs/architecture/mcp-capability-adapter.md
 # Build:   docs/handoff/p13-implementation-brief.md
 #
+# RESCOPED 2026-07-24 (operator). Atlas is a no-code product: a CUSTOMER MUST NEVER be sent
+# into a developer settings screen to mint a token. Only two connector routes are acceptable
+# — (1) self-identifying, zero console work from anyone, via OAuth Client ID Metadata
+# Documents (CIMD, SEP-991, MCP auth spec 2025-11-25); (2) Agntic registers an app once.
+# P13 SHIPS ROUTE 1 ONLY. OpenAPI-autogen is always route 2, so it LEFT THE PHASE (it stays
+# in the design doc as the on-demand mechanism for route-2 connectors afterwards). Microsoft
+# 365 / HubSpot / QuickBooks are route 2 and are explicitly OUT of P13 — an accepted trade,
+# not an oversight. Full rationale: docs/handoff/p13-implementation-brief.md, RESCOPE note.
+#
 # Done when — the increments of the brief, in order:
-#   0. Generalize the three F-era converger seams so the catalog is SOURCE-AGNOSTIC:
+#   0. Generalize FOUR seams so the catalog is SOURCE-AGNOSTIC:
 #      (1) effect from a structural signal the capability declares, NOT an id regex;
 #      (2) a deliver-node effect fallback (parity with connector-action);
 #      (3) connector-generic destination schema-discovery — also wires native
-#          sheets_describe (registered at google/index.js, unwired from the converger).
-#   A. Capability contract + OpenAPI adapter (verb→effect, response→locators, enum→domains),
-#      behind a mandatory human curation pass.
-#   B. Outbound execution + per-tenant auth on the Bearer header — reuses the existing
-#      vault / CONNECTOR_INJECTORS; FAIL-CLOSED on missing tenant (no `?? default`).
-#   C. MCP adapter (fallback) for OpenAPI-poor services (Linear GraphQL-only; Notion no
-#      spec), remote Streamable-HTTP only — never a per-tenant stdio subprocess.
-#   D. THE MOAT, adversarial: the P12 moat suite holds with an OpenAPI- AND an MCP-sourced
-#      write capability substituted in. NO P12 invariant weakened.
+#          sheets_describe (registered at google/index.js, unwired from the converger);
+#      (4) credential resolution driven by the capability's DECLARED connector, not the
+#          hand-typed id Sets in server.js CONNECTOR_INJECTORS (the R22 failure class:
+#          a capability missing from the list gets no token at run time even though the
+#          tenant is correctly connected). Added 2026-07-24.
+#   A. Capability contract + McpCatalogLoader + CIMD identity. Remote Streamable-HTTP only
+#      — never a per-tenant stdio subprocess. Effect FAILS CLOSED to `write` when
+#      readOnlyHint is unset. Identity chain is pre-registered -> CIMD -> DCR -> STOP:
+#      reaching the spec's 4th step (prompt the user for credentials) is a DEFECT, because
+#      that step IS the banned developer-settings screen.
+#   B. Outbound execution + per-tenant token persistence — tenant token on the transport,
+#      resolved through the EXISTING oauthTokenStore/token-cipher vault; FAIL-CLOSED on
+#      missing tenant (no `?? default`). Includes an MCP write inside a `foreach`.
+#   C. THE MOAT, adversarial: the P12 moat suite holds with an MCP-sourced write capability
+#      substituted in. NO P12 invariant weakened.
+#
+# NOT in this phase: triggers. MCP-sourced capabilities are step/delivery only. The four
+# trigger questions in the brief are still answered and written down per connector — and for
+# every P13 connector the honest answer is "no trigger in this phase".
 #
 # ── WHAT THIS GATE PROVES (calibration — operator, 2026-07-15) ─────────────────
 # This gate proves exactly two things, and nothing else blocks the phase close:
@@ -78,15 +97,25 @@ next() {
 # registered with NO code special-casing it must, with zero further changes,
 #   (a) classify as a WRITE  → gets an idempotency key + the approval gate fires;
 #   (b) as a `deliver` node, SATISFY a record_exists assertion (no false UNSATISFIED_ASSERTION);
-#   (c) offer click-to-pick destination resolution via its connector's schema-read capability.
-# Each pinned by test-adversary and mutation-killed (revert the seam ⇒ the test goes red).
+#   (c) offer click-to-pick destination resolution via its connector's schema-read capability;
+#   (d) RECEIVE ITS TENANT CREDENTIAL without its id being added to any list (seam #4).
+# Each pinned by a test and mutation-killed BY HAND (revert the seam ⇒ the test goes red).
+# NOTE: `test-adversary` and mutation-sweep.mjs were deleted 2026-07-19 — there is no sweep
+# and NO coverage floor here. The hand-mutation is the Builder's discipline, re-done
+# independently by the verifier on the increment's NEW guards.
 P130_TEST="tests/converger/source-agnostic-catalog.test.js"
 [ -f "$P130_TEST" ] || next "P13-0" \
-  "the source-agnostic-catalog adversarial suite ($P130_TEST) does not exist — the three F-era seams (outcome-oracle effect-from-structure, deliver-node effect fallback, connector-generic destinations + sheets_describe wired) are not generalized yet"
+  "the source-agnostic-catalog adversarial suite ($P130_TEST) does not exist — the four seams (outcome-oracle effect-from-structure, deliver-node effect fallback, connector-generic destinations + sheets_describe wired, catalog-driven credential resolution) are not generalized yet"
 
-# When P13-0 lands, replace the line below with the real run + a mutation-kill of the
-# three seam guards, then add the P13-A/B/C/D blocks in order.
+# When P13-0 lands, replace the line below with the real run + a hand mutation-kill of the
+# four seam guards, then add the P13-A/B/C blocks in order.
 next "P13-0" \
-  "$P130_TEST exists but the gate's real checks are not wired in — run the suite, mutation-kill the three seam guards, then unblock and add P13-A"
+  "$P130_TEST exists but the gate's real checks are not wired in — run the suite, hand mutation-kill the four seam guards, then unblock and add P13-A"
 
-# ── P13-A / P13-B / P13-C / P13-D — added as each increment lands (see the brief) ──
+# ── P13-A / P13-B / P13-C — added as each increment lands (see the brief) ──
+#
+# P13-A must additionally assert, when wired:
+#   · the CIMD document is SERVED at its stable URL (a 404 breaks every connection at once);
+#   · a forced walk of the identity chain proves step 4 (prompt the user for credentials)
+#     is UNREACHABLE. That step is the banned developer-settings screen; a naive
+#     implementation of the spec falls through to it by default.

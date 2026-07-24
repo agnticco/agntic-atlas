@@ -2,9 +2,79 @@
 
 **Status:** proposed (candidate P13). **Decided direction, not yet built.**
 **Author:** connector-strategy audit, 2026-07-14.
+**REVISED 2026-07-24** — MCP is now the **PRIMARY** breadth engine, not the fallback, and
+the auth story is rewritten around **Client ID Metadata Documents (CIMD)**. See the
+revision note directly below; it reverses two decisions in the body of this doc.
 **Supersedes the intent of:** the `mcp-connector-strategy-post-pilot` note ("evaluate
 consuming MCP as a generic connector-expansion path after launch"). This is that
 evaluation, concluded.
+
+---
+
+## ⚠️ REVISION 2026-07-24 — read this before the rest of the doc
+
+Two things changed, one product decision and one protocol fact. **Where the body of this
+doc disagrees with this section, this section wins.**
+
+### 1. The operator's constraint: a customer NEVER does developer work
+
+Atlas is a no-code product sold to non-technical people. A customer must **never** be sent
+into a developer settings screen to create an integration, choose scopes, and paste a
+token. That deletes the entire "customer pastes a personal access token" path as a
+**product** route (it remains legitimate inside a paid consulting engagement, where Agntic
+does it *for* the client). Exactly two routes are acceptable, and both end at one Connect
+button:
+
+1. **Self-identifying** — no console work from *anyone*. See CIMD below.
+2. **Agntic registers once** — a developer account + app registration + scopes + callback
+   + two secrets on the box, once per service, forever. The customer still sees one button.
+
+### 2. CIMD replaced Dynamic Client Registration — and it is better for us
+
+The **2025-11-25 MCP authorization spec** introduced **OAuth Client ID Metadata Documents**
+(CIMD, SEP-991). Instead of registering with each authorization server and storing a
+`client_id` per server (DCR, RFC 7591), **the client self-publishes one JSON metadata
+document at an HTTPS URL, and that URL *is* its `client_id` everywhere.**
+
+For Atlas this is strictly better than DCR: nothing is registered anywhere, nothing is
+stored per service, and **we already own the host** (`atlas.agntic.co`). DCR was downgraded
+`SHOULD` → `MAY` in the same spec revision **because CIMD replaced it**, not because the
+idea was abandoned — CIMD carries the `SHOULD`.
+
+**The spec's client-identity priority order, and where we must stop:**
+
+| # | Mechanism | Atlas |
+|---|---|---|
+| 1 | Pre-registered client credentials, if we have them | ✅ route 2 |
+| 2 | **CIMD** — if the AS advertises `client_id_metadata_document_supported: true` | ✅ **primary** |
+| 3 | **DCR** — if the AS advertises a `registration_endpoint` | ✅ fallback |
+| 4 | **Prompt the user to enter client credentials** | 🚫 **NEVER — this is the banned behaviour** |
+
+> **Implement 1–3 and STOP.** A naive implementation of this spec falls through to step 4,
+> which is exactly the developer-settings screen the operator has forbidden. A server that
+> exhausts 1–3 is **"not supported yet"** → it goes on the route-2 list for an afternoon of
+> Agntic's time. It must never degrade into asking a customer for a token.
+
+**Verified 2026-07-24** — self-identifying works with: **Notion** (documented explicitly),
+**Linear**, **Stripe**, **Asana**, **Sentry**, **Figma**. **Blocked:** **Atlassian**
+(hosted MCP accepts only individually-approved clients — no public and no dynamic
+registration) and **Google** (rejects the registration request outright; already built the
+long way, so no loss).
+
+### 3. Consequences for the body of this doc
+
+- **"Primary breadth engine: OpenAPI-autogen. Fallback: MCP." is REVERSED.** An
+  OpenAPI-generated capability still needs *someone* to register an OAuth app — i.e. it is
+  always route 2. MCP+CIMD is the **only** mechanism that yields a connector with zero
+  console work from anyone, so it is now primary and is what **P13 ships**.
+- **The "two-hop problem" section is over-stated for first-party servers.** Notion's MCP
+  server *is* Notion: one hop, one consent, one token. Two hops only ever applied to
+  community/aggregator servers, which this doc already rules out. The vault/`token-cipher`
+  rule below still governs how the resulting **tenant** token is stored and refreshed —
+  CIMD changes only *our* client identity, never the customer's credential handling.
+- **P13's shipped connectors are now scoped to route 1 only** (see the implementation
+  brief). Microsoft 365, HubSpot and QuickBooks are route 2 and are explicitly **out of
+  P13**, taken on demand afterwards.
 
 ---
 
@@ -21,8 +91,15 @@ The one-line decision: **do not make the converger speak MCP or OpenAPI. Add ada
 that project external tool definitions *into* the existing `CapabilityRegistry`.** The
 converger, the decision moat, and the SOP keep reading the one catalog they already read.
 
-**Primary breadth engine: OpenAPI-autogen. Fallback: MCP.** (Revised 2026-07-14 after the
-head-to-head research — see "Two adapters, one contract".) OpenAPI derives more of our
+> ~~**Primary breadth engine: OpenAPI-autogen. Fallback: MCP.**~~ **REVERSED 2026-07-24 —
+> see the revision note above.** The 2026-07-14 reasoning below was sound on *metadata
+> quality* and is retained for the record, but it weighed the wrong axis. Under the
+> operator's no-developer-work constraint the deciding factor is **who has to register an
+> app**: an OpenAPI-generated capability always needs one (route 2), while MCP+CIMD needs
+> none from anyone (route 1). MCP is now **primary and is what P13 ships**; OpenAPI-autogen
+> is retained as the mechanism for route-2 connectors taken on demand *after* P13.
+
+*(Original 2026-07-14 text, kept for provenance:)* OpenAPI derives more of our
 catalog from *structure* (HTTP verb → effect, response schema → locators, `enum` → closed
 domains) and reuses our existing OAuth vault verbatim; MCP's equivalent metadata is optional
 author-supplied hints and carries the two-hop auth problem. MCP is reserved for
@@ -227,7 +304,26 @@ oracle work unchanged.
 
 ---
 
-## Multi-tenant OAuth — the two-hop problem, handled with the vault we already have
+## Multi-tenant OAuth — CIMD for OUR identity, the existing vault for THEIR token
+
+> **Revised 2026-07-24.** Two distinct things that were previously conflated:
+>
+> - **Our client identity** — solved by **CIMD**. Atlas self-publishes one metadata
+>   document at a stable HTTPS URL on `atlas.agntic.co`; that URL is its `client_id` with
+>   every CIMD-supporting server. Nothing registered, nothing stored per service.
+>   **New operational responsibility: that URL must stay stable and served.** If it moves
+>   or 404s, every connection using it breaks at once — treat it like a DNS record, not
+>   like a page.
+> - **The customer's credential** — unchanged, and already built. The access/refresh token
+>   returned by the consent flow is stored per tenant in the existing AES-256-GCM vault via
+>   `oauthTokenStore` + `token-cipher`, refreshed exactly as Slack/Google/Airtable are
+>   today. **CIMD changes nothing here.**
+>
+> **The two-hop problem below applies only to community/aggregator servers**, which this
+> doc already rules out. For a **first-party vendor-hosted** server — Notion's server *is*
+> Notion — there is one hop, one consent screen, and one token. That is the shape P13 ships.
+
+*(Original framing, still correct for the aggregator case:)*
 
 MCP does **not** remove per-tenant OAuth; it relocates *where the token is stamped*.
 The MCP auth spec covers only hop 1 (client → MCP server). Hop 2 (MCP server →
@@ -297,7 +393,16 @@ doc-is-the-memory rule.)
 
 ## Suggested build increments (P13 shape)
 
-Each ends at a demonstrable gate.
+> **⚠️ SUPERSEDED 2026-07-24.** The A–D list below was written when OpenAPI was primary.
+> The current increment plan lives in
+> [`docs/handoff/p13-implementation-brief.md`](../handoff/p13-implementation-brief.md)
+> and is scoped to **route-1 connectors only**: P13-0 (four seam repairs) → P13-A (capability
+> contract + MCP catalog loader + CIMD identity) → P13-B (outbound execution + per-tenant
+> token persistence) → P13-C (the moat, adversarial). **OpenAPI-autogen is out of P13** and
+> becomes the mechanism for route-2 connectors taken on demand afterwards. The list below is
+> retained for provenance only — do not build from it.
+
+*(Original 2026-07-14 increments, superseded:)* Each ends at a demonstrable gate.
 
 - **P13-0 — generalize the converger seams (prerequisite, do this first).** Fix the three
   F-era hardwirings above: effect from structural signal not a token regex (seam #1), a
