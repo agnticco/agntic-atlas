@@ -318,10 +318,18 @@ export class WorkflowValidator {
    * over as a `fix`, and `autoRepairStructural` applies it with no model call and
    * no question, exactly as it already does for a missing route edge.
    *
-   * DELIBERATELY NARROW. Only when the section list is entirely absent and the
-   * step has EXACTLY ONE upstream content parent, because that is the only case
-   * with one right answer. Two parents is a real question about ordering and
-   * headings, and it stays a question.
+   * ANY number of content parents (>= 1) gets a filled default now, not just one.
+   * ONE source -> a single section headed by the title the converger chose. MULTIPLE
+   * sources -> one section per source, in edge order, each under its own step's name.
+   * The old rule ("two sources stays a question") was the SOURCE of the worst live
+   * rebuild loop: a multi-source document ("compose the approved record" from the
+   * extract AND the summary) left `sections` blank, that BLOCKING gap routed the user's
+   * answer through a whole-spec regenerate which reproduced the same blank, so the build
+   * re-asked and the answer never stuck (~11 min, observed 2026-07-23). A complete
+   * default is strictly better: every source appears (it can NEVER drop content), and
+   * the user re-orders or re-heads it exactly as they rename a step. Only zero content
+   * parents stays a genuine gap — a document with nothing feeding it has nothing to lay
+   * out, so that one is a real question, not a blank to fill.
    */
   _attachSectionFixes(nodes, edges, issues) {
     const byId = new Map(nodes.map(n => [n.id, n]));
@@ -335,12 +343,20 @@ export class WorkflowValidator {
         .filter(e => e.to === node.id)
         .map(e => byId.get(e.from))
         .filter(p => p && !NON_CONTENT_TYPES.has(p.type));
-      if (parents.length !== 1) continue;
-      const heading = String(node.config?.title || node.label || 'Summary').trim();
+      if (parents.length < 1) continue;
+      // ONE source keeps the title the converger already chose as the single heading.
+      // MULTIPLE sources each become their own section, headed by the source step's own
+      // name, in the order they were wired — a complete, editable default, never a guess
+      // that drops or hides a source.
+      const sections = parents.length === 1
+        ? [{ heading: String(node.config?.title || node.label || 'Summary').trim(),
+             content: `{{${parents[0].id}.output}}` }]
+        : parents.map(p => ({ heading: String(p.label || p.id).trim(),
+                              content: `{{${p.id}.output}}` }));
       issue.fix = {
         op: 'set_config',
         nodeId: node.id,
-        config: { sections: JSON.stringify([{ heading, content: `{{${parents[0].id}.output}}` }]) },
+        config: { sections: JSON.stringify(sections) },
       };
     }
   }

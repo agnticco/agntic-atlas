@@ -952,14 +952,26 @@ https://atlas.agntic.co/health` against `package.json` before assuming what's li
 
 **Still open, roughly in the order they matter:**
 
-1. **The blocking-gap rebuild loop (the "asks the same questions / rebuilds" family).** Distinct
-   from the verify-spiral fixed above, and now the dominant slowness: a live re-build (2026-07-23)
-   ran **three** whole-workflow generate passes (200s + 90s + **403s** ≈ 11½ min) driven by
-   `blocker_to_chat` — Atlas hitting a blocking gap, asking the user, regenerating, hitting
-   another — and never reached verify. The user clicks "Use your suggestions", waits minutes for
-   a full rebuild, and is asked more/again. Partially mitigated (the single-possible-answer case);
-   the general case is open, diagnosed in `hardening-2026-07-22.md`. Most user-visible. *(One
-   generate hit 403s — worth checking it isn't silently truncating.)*
+1. **The blocking-gap rebuild loop — DOMINANT CAUSE FIXED (2026-07-24), general pattern carried.**
+   Distinct from the verify-spiral. A live re-build (2026-07-23) ran **three** whole-workflow
+   generate passes (200s + 90s + **403s** ≈ 11½ min) driven by `blocker_to_chat`, never reaching
+   verify. **Root cause (diagnosed from the log):** a document step that assembles from **two+**
+   sources (`assemble`, e.g. "compose the approved record" from the extract AND the summary) left
+   its `sections` blank; that BLOCKING gap (`DIGEST_MISSING_SECTIONS`) had **no auto-repair for the
+   multi-source case** (`_attachSectionFixes` was deliberately narrow to one source), so it asked
+   the user — and the answer routed through a whole-spec **regenerate that reproduced the same
+   blank**, re-asking forever. **Fix:** `_attachSectionFixes` now fills a **complete default** for
+   any document with ≥1 content source — one section per source, in edge order, each headed by its
+   own step — applied silently by the existing structural auto-repair (no question, no regenerate),
+   exactly as it already does for a missing name or route edge. It can never drop content (every
+   source appears) and the user edits it like a rename. Zero sources stays a genuine gap. Pinned by
+   `tests/converger/section-autorepair.test.js` (mutation-verified; the old narrow guard turns the
+   two-source test red). **Carried, NOT fixed:** the *general* pattern — a blocking-gap answer
+   always routes through a full regenerate rather than being applied directly — still stands for
+   any OTHER gap type whose regenerate can reproduce the same blank. The `set_config`/`applyProposal`
+   machinery to apply an answer directly exists; extending it beyond the section case is the
+   follow-up (see `hardening-2026-07-22.md`). *(Also: one generate hit 403s — worth checking it
+   isn't silently truncating.)*
 2. **Test examples can't reach some workflows.** If a workflow starts by fetching something (say,
    "read my unread email"), the made-up test cases can't influence what it fetches — so every
    test case runs against the same live data and proves the same one thing. Filed as F3.

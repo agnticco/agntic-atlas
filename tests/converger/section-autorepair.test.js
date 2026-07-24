@@ -17,9 +17,15 @@
  *
  * WHAT THESE PIN, and why each is here:
  *  - the fix is OFFERED at all (the loop above is the cost of it not being);
- *  - it is NARROW — two content parents is a real question about ordering and
- *    headings, and must stay one. A repair that guesses there is worse than a
- *    question, because the user never sees what it chose;
+ *  - it covers MULTIPLE sources too — one section per source, in edge order, each
+ *    under its own step's name. The old "two sources stays a question" rule was the
+ *    SOURCE of the worst live loop (2026-07-23, ~11 min): a multi-source document left
+ *    `sections` blank, the question routed the answer through a whole-spec regenerate
+ *    that reproduced the same blank, so it re-asked and never stuck. A complete default
+ *    drops no content and is editable — strictly better than a question the user cannot
+ *    usefully answer;
+ *  - ZERO content parents stays a genuine gap — a document with nothing feeding it has
+ *    nothing to lay out;
  *  - control steps are not content. A branch reports a route, so counting one as
  *    the body of a document would both pick the wrong source AND make an
  *    ambiguous case look unambiguous;
@@ -66,7 +72,7 @@ function specWith(parents, extra = {}) {
 
 const sectionIssue = (r) => r.issues.find(i => i.code === 'DIGEST_MISSING_SECTIONS');
 
-describe('a missing section list repairs itself when there is only one answer', () => {
+describe('a missing section list repairs itself, single or multi source', () => {
   test('ONE upstream content step — the fix is offered', () => {
     const issue = sectionIssue(validatorOf().validate(specWith(['summarize'])));
     assert.ok(issue, 'the blank must still be reported');
@@ -92,11 +98,33 @@ describe('a missing section list repairs itself when there is only one answer', 
       'a repair that does not clear the defect is worse than none — it re-asks having spent the pass');
   });
 
-  test('TWO upstream content steps — NO fix, it stays a question', () => {
-    const issue = sectionIssue(validatorOf().validate(specWith(['sum_a', 'sum_b'])));
+  test('TWO upstream content steps — a complete default is offered, one section per source', () => {
+    // The old behaviour left this blank and ASKED — and because the answer routed
+    // through a whole-spec regenerate that reproduced the blank, it re-asked and never
+    // stuck (~11 min live, 2026-07-23). A complete default is strictly better.
+    const spec  = specWith(['sum_a', 'sum_b']);
+    const issue = sectionIssue(validatorOf().validate(spec));
     assert.ok(issue, 'still reported');
-    assert.ok(!issue.fix,
-      'order and headings across two sources is a real decision — guessing it silently is worse than asking');
+    assert.ok(issue.fix, 'a multi-source document must fill a default now, not ask a question the answer never sticks to');
+    const sections = JSON.parse(issue.fix.config.sections);
+    assert.equal(sections.length, 2, 'one section per content source — nothing dropped');
+    assert.deepEqual(sections.map(s => s.content), ['{{sum_a.output}}', '{{sum_b.output}}'],
+      'every source appears, in the order they were wired');
+    assert.deepEqual(sections.map(s => s.heading), ['sum_a', 'sum_b'],
+      'each section is headed by its own source step, since there is no single title to share');
+    // AND applying it clears the defect (a repair that does not is worse than none).
+    const { applied, draft } = autoRepairStructural(spec, validatorOf().validate(spec).issues);
+    assert.ok(applied.some(a => a.op === 'set_config'));
+    assert.ok(!sectionIssue(validatorOf().validate(draft)), 'the blank is gone — the loop is broken');
+  });
+
+  test('ZERO content parents — stays a genuine gap (nothing feeds the document)', () => {
+    // A document with no content source is not a blank to fill — there is nothing to
+    // lay out — so it must stay a real question, never a silently-invented body.
+    const spec  = specWith([]);   // doc fed by nothing
+    const issue = sectionIssue(validatorOf().validate(spec));
+    assert.ok(issue, 'still reported');
+    assert.ok(!issue.fix, 'no source means no default — this is a real gap');
   });
 
   test('a control step is not content, so a branch parent does not make it unambiguous', () => {
