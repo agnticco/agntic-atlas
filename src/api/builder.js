@@ -28,6 +28,9 @@ import { mailerConfigured } from '../utils/mailer.js';
 import { getGoogleAccessToken } from '../connectors/google/index.js';
 import { getSlackToken } from '../connectors/slack/oauth.js';
 import { getAirtableAccessToken } from '../connectors/airtable/oauth.js';
+import {
+  syncAirtableWebhooksForTenant, isAirtableRecordChangedTrigger, checkAirtableTriggersArmable,
+} from '../connectors/airtable/webhook-sync.js';
 import { sumTimeSavedMinutes, timeSavedMinutesForRun, isValueRun, isLiveRun } from '../workflows/time-saved.js';
 import { APP_VERSION } from '../version.js';
 import { notesSince } from '../release-notes.js';
@@ -777,6 +780,26 @@ function healthRating(score) {
 export function mountBuilderRoutes(app, { spine, requireActiveTenant, requireAuth, readSources, tenantGuard, dryRunSpecForTenant = null }) {
   // No-op guard when not supplied (keeps the builder mountable in isolation/tests).
   const guard = tenantGuard ?? ((_req, _res, next) => next());
+
+  // Keep Airtable's record-change watches in step with what is actually live.
+  // Anything that changes WHICH workflows are active, or what their triggers watch,
+  // has to run this — otherwise a deleted workflow leaves a webhook firing into
+  // nothing, and a paused one keeps waking up.
+  //
+  // Fire-and-forget: the user's action has already succeeded by the time this runs,
+  // so it must never block the response or turn a good save into an error. It logs
+  // either way, so a failure is findable rather than invisible.
+  const reconcileAirtable = (tenantId, why) =>
+    syncAirtableWebhooksForTenant(spine, tenantId)
+      .then((r) => {
+        if (r.created?.length || r.removed?.length || r.failed?.length) {
+          logEvent('airtable.webhooks.reconcile', {
+            tenant: tenantId, why,
+            created: r.created?.length ?? 0, removed: r.removed?.length ?? 0, failed: r.failed?.length ?? 0,
+          });
+        }
+      })
+      .catch((e) => logEvent('airtable.webhooks.reconcile_error', { tenant: tenantId, why, error: String(e?.message ?? e) }));
 
   // ── GET /api/builder/me ──────────────────────────────────────────────────────
   app.get('/api/builder/me', requireAuth, (req, res) => {
@@ -2415,6 +2438,7 @@ CRITICAL: if the result says the run did NOT prove the workflow works, then NOTH
     const ok = store.softDelete(req.params.id, { userId: req.user.id, tenantId: req.tenant.id });
     if (!ok) return res.status(404).json({ ok: false, error: 'Workflow not found' });
     logEvent('builder.delete.ok', { tenant: req.tenant?.id ?? null, workflowId: req.params.id });
+    reconcileAirtable(req.tenant.id, 'delete');   // tear down a watch nothing needs any more
     res.json({ ok: true });
   });
 
@@ -2441,6 +2465,17 @@ CRITICAL: if the result says the run did NOT prove the workflow works, then NOTH
     const existing = store.get(id, { userId: req.user.id });
     if (!existing || existing.tenant_id !== req.tenant.id) {
       return res.status(404).json({ ok: false, error: 'Workflow not found' });
+    }
+
+    // Same fail-closed rule as first publish: this route IS the publish path for
+    // most workflows. An edit that cannot be armed must not be accepted, or the
+    // user is left with a live-looking workflow that stopped being able to fire.
+    if ((spec.triggers ?? []).some(isAirtableRecordChangedTrigger)) {
+      const armable = await checkAirtableTriggersArmable(spine, req.tenant.id, spec);
+      if (!armable.ok) {
+        logEvent('builder.update.trigger_not_armable', { tenant: req.tenant?.id ?? null, workflowId: id, code: armable.code });
+        return res.status(422).json({ ok: false, code: armable.code, error: armable.error });
+      }
     }
 
     let result;
@@ -2504,6 +2539,21 @@ CRITICAL: if the result says the run did NOT prove the workflow works, then NOTH
       result.workflow.status = 'active';
     }
 
+    // An edit can add, move or drop a watched base. Awaited, not fire-and-forget:
+    // if the new trigger cannot be armed the workflow must not be left LIVE, so we
+    // mark it broken and say so rather than reporting a successful publish.
+    try {
+      const armed = await syncAirtableWebhooksForTenant(spine, req.tenant.id);
+      if (armed.failed?.length) throw new Error(armed.failed[0].error ?? 'the Airtable watch could not be created');
+    } catch (e) {
+      try { store.update(id, { status: 'error' }, { userId: req.user.id }); } catch { /* best-effort */ }
+      logEvent('builder.update.trigger_not_armed', { tenant: req.tenant?.id ?? null, workflowId: id, error: String(e?.message ?? e) });
+      return res.status(502).json({
+        ok: false, code: 'TRIGGER_NOT_ARMED',
+        error: 'Your changes were saved, but Atlas could not set up the Airtable watch they need — so this workflow has been marked as not running rather than left looking live. Try publishing again, or reconnect Airtable.',
+      });
+    }
+
     logEvent('builder.update.ok', { tenant: req.tenant?.id ?? null, workflowId: id });
     res.json({ ok: true, workflowId: result.workflow.id, workflow: result.workflow });
   });
@@ -2519,6 +2569,7 @@ CRITICAL: if the result says the run did NOT prove the workflow works, then NOTH
     if (!wf || wf.tenant_id !== req.tenant.id) return res.status(404).json({ error: 'Not found' });
     store.update(req.params.id, { status }, { userId: req.user.id });
     logEvent('builder.workflow.status', { tenant: req.tenant?.id ?? null, workflowId: req.params.id, status });
+    reconcileAirtable(req.tenant.id, `status:${status}`);  // pausing must stop the watch, not just the runs
     res.json({ ok: true, status });
   });
 
@@ -2612,6 +2663,19 @@ CRITICAL: if the result says the run did NOT prove the workflow works, then NOTH
       });
     }
 
+    // ── Refuse to publish a workflow whose trigger cannot be armed ────────────
+    // Checked BEFORE anything is written, so the common failures (no base named,
+    // Airtable not connected) never produce a workflow at all. 422 rather than 400:
+    // the request is well-formed, the world just isn't ready for it.
+    const needsAirtableWatch = (spec.triggers ?? []).some(isAirtableRecordChangedTrigger);
+    if (needsAirtableWatch) {
+      const armable = await checkAirtableTriggersArmable(spine, req.tenant.id, spec);
+      if (!armable.ok) {
+        logEvent('persist.trigger_not_armable', { tenant: req.tenant?.id ?? null, code: armable.code });
+        return res.status(422).json({ ok: false, code: armable.code, error: armable.error });
+      }
+    }
+
     let result;
     try {
       result = await spine.engine.workflowService.create(
@@ -2661,6 +2725,41 @@ CRITICAL: if the result says the run did NOT prove the workflow works, then NOTH
           store.failRun(run.id, testRun.error || 'Test failed', testRun.cost ?? null);
         }
       } catch (e) { /* non-fatal — run logged best-effort */ }
+    }
+
+    // ── Arm the triggers that need something created on the OTHER side ────────
+    // An Airtable "when a record changes" trigger is not live just because the
+    // workflow is saved: Airtable only sends events to a webhook we asked it for.
+    //
+    // FAIL CLOSED (operator, 2026-07-24). If the watch cannot be set up, the
+    // publish is REFUSED and the workflow is rolled back — a saved workflow that
+    // says "live" and cannot fire is precisely the lie this product exists to
+    // prevent, and a warning banner next to a green tick is not enough. The cheap
+    // reasons were already refused above, before anything was written; this is the
+    // one that can only be found by asking Airtable.
+    try {
+      const armed = await syncAirtableWebhooksForTenant(spine, req.tenant.id);
+      if (armed.created?.length || armed.removed?.length || armed.failed?.length) {
+        logEvent('persist.airtable_webhooks', {
+          tenant: req.tenant.id, workflowId: result.workflow.id,
+          created: armed.created?.length ?? 0, removed: armed.removed?.length ?? 0, failed: armed.failed?.length ?? 0,
+        });
+      }
+      if (armed.failed?.length || (armed.missingBase && needsAirtableWatch)) {
+        throw new Error(armed.failed?.[0]?.error ?? 'the Airtable watch could not be created');
+      }
+    } catch (e) {
+      // Roll the publish back so no dead workflow is left behind, then reconcile
+      // again so no orphan webhook is left at Airtable's end either.
+      try { spine.engine.workflowStore.delete(result.workflow.id, { userId: req.user.id }); } catch { /* best-effort */ }
+      syncAirtableWebhooksForTenant(spine, req.tenant.id).catch(() => {});
+      logEvent('persist.airtable_arm_failed', {
+        tenant: req.tenant?.id ?? null, workflowId: result.workflow.id, error: String(e?.message ?? e),
+      });
+      return res.status(502).json({
+        ok: false, code: 'TRIGGER_NOT_ARMED',
+        error: 'Atlas could not set up the Airtable watch this workflow needs, so it was not published — it would have looked live without ever running. This is usually Airtable being briefly unreachable or the connection needing renewing. Try again, or reconnect Airtable.',
+      });
     }
 
     logEvent('persist.ok', { tenant: req.tenant?.id ?? null, workflowId: result.workflow.id, slug: result.workflow.slug });

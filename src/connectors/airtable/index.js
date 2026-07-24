@@ -15,6 +15,7 @@
  */
 
 import { createHmac, timingSafeEqual } from 'node:crypto';
+import { CHECK_EVERY_CHOICES } from '../../workflows/trigger-frequency.js';
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 
@@ -75,8 +76,13 @@ function _saveWebhookMap() {
   } catch { /* non-fatal */ }
 }
 
-export function registerWebhookRoute({ webhookId, tenantId, userId, baseId, macSecretBase64 }) {
-  _webhookMap.set(webhookId, { tenantId, userId, baseId, macSecretBase64: macSecretBase64 ?? null });
+// `tableId` is part of the route because it is part of the webhook's IDENTITY:
+// "base X, all tables" and "base X, table Y" are different subscriptions, and the
+// reconcile in webhook-sync.js has to tell them apart to avoid creating a duplicate
+// or pruning a live one. Routes written before this existed simply have it absent,
+// which reads as null — the "all tables in the base" case they actually were.
+export function registerWebhookRoute({ webhookId, tenantId, userId, baseId, tableId, macSecretBase64 }) {
+  _webhookMap.set(webhookId, { tenantId, userId, baseId, tableId: tableId ?? null, macSecretBase64: macSecretBase64 ?? null });
   _saveWebhookMap();
 }
 
@@ -466,6 +472,14 @@ export function registerAirtableChannels(capabilityRegistry) {
     configSchema: [
       { key: 'baseId',  label: 'Base ID',            type: 'string', optional: false, hint: 'appXXXXXXXXXXXXXX' },
       { key: 'tableId', label: 'Table ID (optional)', type: 'string', optional: true,  hint: 'tblXXXXXXXXXXXXXX — blank = all tables in base' },
+      // Airtable PUSHES changes to Atlas, so this is not a polling interval — it is
+      // a floor on how often this workflow may run. 0/blank = run on every change,
+      // as soon as it happens. Enforced in dispatchAirtableEvent via the run gate;
+      // a change inside the window is deferred to the end of it, never dropped.
+      { key: 'checkEvery', label: 'Run at most', type: 'select', optional: true, default: 0,
+        options: CHECK_EVERY_CHOICES.map((c) => c.minutes),
+        optionLabels: CHECK_EVERY_CHOICES.map((c) => c.label),
+        hint: 'Minutes. Blank or 0 runs the moment a record changes; a larger value batches busy tables into one run.' },
     ],
     isReady: ready,
   });
