@@ -186,7 +186,36 @@ these fixes. Good.
 - **Mutation:** restore the `CHANNEL_EFFECTS`-only `deliver` path → assertion
   unsatisfiable → publish blocked → test **red**.
 
-### Seam #3 — destination schema-discovery must be connector-generic *(UX regression; also fixes native Sheets)*
+### Seam #3 — destination schema-discovery must be connector-generic *(UX regression)*
+
+> **⚠️ CORRECTION 2026-07-24 — "also fixes native Sheets" was WRONG, and the
+> `sheets_describe` wiring below is NOT the proof of this seam.**
+>
+> Grounded live before implementing. Airtable and Sheets have structurally different
+> write models, so this is not a literal-swap:
+> - **Sheets has no capability that lists containers.** Airtable's flow opens with
+>   `airtable_list_bases` → chips. Nothing equivalent is registered for spreadsheets
+>   (`grep sheets_list src/connectors/google/index.js` → nothing).
+> - **Sheets has no named fields.** `sheets_append` takes `values`, a positional array
+>   of arrays (`google/index.js`, its `configSchema`). The entire mapping machinery —
+>   `mapFieldsToColumns` → `config.fields` → `rewriteAssertionFields` — is built for a
+>   NAMED-column write. Sheets needs name → column **index** and positional emission.
+> - **A Sheets tab is not a config key.** It lives inside a `range` string
+>   (`Sheet1!A:D`). Writing `config.tableId` at a Sheets node would fail
+>   `UNKNOWN_CONFIG_KEY` at publish, since `sheets_append` does not declare it.
+>
+> **What was built instead:** the mechanism is generalized and proven by a **synthetic
+> connector** — which is what the P13-0 gate actually asks for ("register a synthetic
+> write capability with NO code special-casing it… (c) it offers click-to-pick"). A
+> connector declares `schemaDiscovery` on its describe capability
+> (`capability-registry.js`) and the node drives entirely off that declaration,
+> config-key names included. Airtable declares it and behaves exactly as before.
+>
+> **Carried, not fixed:** Sheets click-to-pick. It needs name→column-index mapping and
+> range parsing — a distinct feature, not this seam. Folding it in here would double
+> the increment and risk a half-built path that appends into the wrong column while
+> reporting success. **Do not re-add the "also fixes Sheets" claim without building
+> that.**
 
 - **Current state:** `elicitation-graph.js`'s `destinations` node fires only for
   Airtable — `usesConnector(n,'airtable')` (`~line 195, ~900`), hardcoded

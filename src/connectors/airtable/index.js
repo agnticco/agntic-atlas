@@ -314,6 +314,23 @@ export function registerAirtableChannels(capabilityRegistry) {
     ],
     isReady: ready,
     handle: makeHandle((api, config) => airtableDescribeBase(api, config)),
+    // P13-0 seam #3 — how the converger discovers where an Airtable write lands.
+    // This used to be hardcoded in `elicitation-graph.js` as the literal strings
+    // 'airtable', 'airtable_list_bases' and 'airtable_describe_base', so every other
+    // connector fell back to "make the user paste an id". The connector now DECLARES
+    // it and the converger reads the declaration, so a connector Atlas has never
+    // hand-built gets click-to-pick for free.
+    schemaDiscovery: {
+      listCapability:    'airtable_list_bases',
+      listResultKey:     'bases',
+      describeArg:       'baseId',
+      describeResultKey: 'tables',
+      tableColumnsKey:   'fields',
+      containerKey:      'baseId',
+      tableKey:          'tableId',
+      containerLabel:    'Airtable base',
+      tableLabel:        'table',
+    },
   });
 
   // The write half of schema awareness. Reading a table tells the builder a promised

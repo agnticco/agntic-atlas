@@ -1442,6 +1442,10 @@ CRITICAL: if the result says the run did NOT prove the workflow works, then NOTH
       interactionStore: spine.interactionStore,
       tenantId:         req.tenant.id,
       userId:           req.user?.id,
+      // P13-0 seam #3 — destination resolution reads the connector's DECLARED schema
+      // discovery from this catalog rather than the literal string 'airtable', so any
+      // connector that declares it gets click-to-pick instead of "paste an id".
+      capabilityCatalog: spine.engine?.capabilityRegistry ?? null,
       // The graph narrates its reasoning through this (Increment #22). Bound to the
       // threadId so every converger node can call cfg.configurable.narrate(beat)
       // without knowing which session it is in. Additive — absent, the graph is silent.

@@ -199,3 +199,87 @@ describe('P13-0 — the registry refuses a malformed declaration', () => {
     );
   });
 });
+
+/* ── P13-0 (c) — destination resolution works for ANY declaring connector ─────
+ *
+ * The `destinations` node used to be Airtable by literal string in four places, so
+ * every other connector fell back to "make the user paste an id" — violating the
+ * converger's own rule, "never ask for what we can read".
+ *
+ * These exercise the registry side of the seam: a connector nobody hand-built
+ * declares how its schema is read, and the catalog surfaces that declaration. The
+ * node then drives entirely off the declaration (config-key names included, which
+ * matters because writing a key the target node type does not declare fails
+ * UNKNOWN_CONFIG_KEY at publish).
+ */
+describe('P13-0 (c) — schema discovery is declared, not hardcoded', () => {
+  const DISCOVERY = {
+    listCapability:    'x_list_spaces',
+    listResultKey:     'spaces',
+    describeArg:       'spaceId',
+    describeResultKey: 'collections',
+    tableColumnsKey:   'columns',
+    containerKey:      'spaceId',
+    tableKey:          'collectionId',
+    containerLabel:    'X space',
+    tableLabel:        'collection',
+  };
+
+  test('a synthetic connector that declares discovery is found by connector name', () => {
+    registry.register({ id: 'x_list_spaces', connector: 'x', positions: ['step'], effect: 'read' });
+    registry.register({
+      id: 'x_describe_space', connector: 'x', positions: ['step'], effect: 'read',
+      schemaDiscovery: DISCOVERY,
+    });
+
+    const found = registry.schemaDiscoveryFor('x');
+
+    // MUTATION: restore the literal `usesConnector(n, 'airtable')` / hardcoded
+    // 'airtable_list_bases' in elicitation-graph's destinations node — the synthetic
+    // connector is then never resolved and the user is asked to paste an id.
+    assert.ok(found, 'a declaring connector must be discoverable by name alone');
+    assert.equal(found.describeCapability, 'x_describe_space',
+      'the descriptor must carry WHICH capability declared it, so the node can call it');
+    assert.equal(found.listCapability, 'x_list_spaces');
+    assert.equal(found.containerKey, 'spaceId');
+    assert.equal(found.tableKey, 'collectionId');
+  });
+
+  test('a connector that declares nothing returns null — we ASK rather than guess', () => {
+    registry.register({ id: 'y_write_thing', connector: 'y', positions: ['step'], effect: 'write' });
+
+    // Honest degradation is the whole point: no declaration means the ordinary
+    // propose loop asks the user for the destination. Inventing one would write a
+    // customer's record into somewhere that does not exist.
+    assert.equal(registry.schemaDiscoveryFor('y'), null);
+    assert.equal(registry.schemaDiscoveryFor('nope'), null);
+    assert.equal(registry.schemaDiscoveryFor(''), null);
+  });
+
+  test('schemaDiscoveryConnectors lists only connectors that declared', () => {
+    registry.register({ id: 'x_describe_space', connector: 'x', positions: ['step'], schemaDiscovery: DISCOVERY });
+    registry.register({ id: 'y_write_thing',   connector: 'y', positions: ['step'], effect: 'write' });
+
+    assert.deepEqual(registry.schemaDiscoveryConnectors(), ['x']);
+  });
+
+  test('the real Airtable connector declares it — the generalization did not drop the case it replaced', () => {
+    // Guards the swap itself. It is entirely possible to generalize a mechanism and
+    // silently lose the one connector that used to work; this is the check that the
+    // literals were REPLACED rather than merely deleted.
+    registry.register({
+      id: 'airtable_describe_base', connector: 'airtable', positions: ['step'],
+      schemaDiscovery: {
+        listCapability: 'airtable_list_bases', listResultKey: 'bases',
+        describeArg: 'baseId', describeResultKey: 'tables', tableColumnsKey: 'fields',
+        containerKey: 'baseId', tableKey: 'tableId',
+        containerLabel: 'Airtable base', tableLabel: 'table',
+      },
+    });
+
+    const d = registry.schemaDiscoveryFor('airtable');
+    assert.equal(d.describeCapability, 'airtable_describe_base');
+    assert.equal(d.containerKey, 'baseId', 'Airtable still resolves through baseId');
+    assert.equal(d.tableColumnsKey, 'fields', 'Airtable columns still come from table.fields');
+  });
+});
