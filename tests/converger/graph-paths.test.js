@@ -271,8 +271,12 @@ describe('the destination resolution touches only what it should', () => {
     const r = await drive({ blockingGap: true });
     assert.equal(r.calls.filter(c => c === 'airtable_list_bases').length, 1,
       `the base was looked up ${r.calls.filter(c => c === 'airtable_list_bases').length} times across the gap round`);
-    assert.ok(r.seen.some(iv => iv.type === 'clarification' && iv.kind === 'gap_review'),
-      'precondition: the gap loop actually ran (#24: gaps now surface as a clarification)');
+    // The gap loop is now SILENT (2026-07-24): a blocking gap no longer walls the user
+    // with a gap_review card — it drives a bounded regenerate. Establish the precondition
+    // by the regenerate itself (generate ran more than once), not by a wall that no
+    // longer appears.
+    assert.ok(r.genCalls >= 2,
+      `precondition: the gap loop actually ran (a blocking gap drove a silent regenerate; generate ran ${r.genCalls}×)`);
   });
 });
 

@@ -952,7 +952,23 @@ https://atlas.agntic.co/health` against `package.json` before assuming what's li
 
 **Still open, roughly in the order they matter:**
 
-1. **The blocking-gap rebuild loop — DOMINANT CAUSE FIXED (2026-07-24), general pattern carried.**
+1. **The blocking-gap rebuild loop — FIXED (2026-07-24), two ways.** *(a) the specific cause and
+   (b) the operator's call to remove the wall entirely.*
+   **(b) The "Use your suggestions" wall is gone (operator, 2026-07-24).** The converger's gap step
+   no longer STOPS the build to make the user rubber-stamp a suggestion — whose default answer was
+   already "the suggestions", so it was pure friction, and whose click routed the answer through a
+   whole-spec regenerate that (for a reproduced blank) re-asked forever. Reasoning: the product's own
+   promise is *publish having answered nothing*, so a blocking gap's suggested answer is the DEFAULT,
+   not a decision to ratify. Now: the converger's own blanks auto-repair silently (see (a)); a
+   genuinely un-defaultable choice (a destination that doesn't exist) is still asked **conversationally
+   and applied DIRECTLY** — create-or-pick, no rebuild (this is the intended "chatbot clarification":
+   one natural question, answer applied on the spot); and a wiring gap only a rebuild can fix
+   regenerates **silently and bounded**, narrating progress. The user reviews the finished workflow
+   step by step, and `complete ⇒ publishable` still gates go-live. `elicitation-graph.js` gaps node.
+   Two tests that pinned the *wall itself* were repurposed to pin the new contract (no wall; the
+   suggestion still drives a bounded rebuild, not discarded; the connector isn't re-asked) — checks
+   preserved, not weakened. ~1,000 converger/workflow/approvals/api tests green.
+   **(a) The specific cause (below).**
    Distinct from the verify-spiral. A live re-build (2026-07-23) ran **three** whole-workflow
    generate passes (200s + 90s + **403s** ≈ 11½ min) driven by `blocker_to_chat`, never reaching
    verify. **Root cause (diagnosed from the log):** a document step that assembles from **two+**

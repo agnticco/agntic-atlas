@@ -2553,86 +2553,49 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
     const suggestionFor = (id) =>
       (suggested?.suggestions ?? []).find(s => s.gapId === id)?.answer ?? null;
 
-    // ── ASK CONVERSATIONALLY, NOT ON A CARD (#24) ───────────────────────────
-    // The gap review used to be a bespoke `gap_review` card the client rendered;
-    // an empty or awkward payload froze the walkthrough→gaps transition with
-    // nothing to click. It is now the ordinary `clarification` surface — which
-    // always shows a composer, so the build can never strand here. The REASONING
-    // is unchanged (scoreGap + auto-repair + the suggestions above); only the
-    // presentation moved.
-    //
-    // The default is still "keep the safe defaults": every blocking gap takes the
-    // model's suggested answer (fed back through regenerate), every soft gap
-    // escalates to a person. ANY unrecognised answer — an empty reply, the chip,
-    // or the zero-typing autoRespond string — resolves to those defaults, so a
-    // provably-complete workflow still publishes having answered NOTHING (§11.9).
-    const lines = [];
-    for (const g of blocking) {
-      const s = suggestionFor(g.id);
-      lines.push(`• ${g.message}${s ? ` — I'd go with: ${s}` : ''}`);
-    }
-    for (const g of soft) lines.push(`• ${g.message} — otherwise a person handles it`);
-
-    const acceptLabel = blocking.length ? 'Use your suggestions' : 'Keep the safe defaults';
-    const question =
-      (blocking.length
-        ? `Before I finalize, ${blocking.length === 1 ? 'one thing I want' : 'a few things I want'} to lock down:`
-        : `Your workflow's ready. ${soft.length === 1 ? 'One optional edge case' : `${soft.length} optional edge cases`} you can weigh in on:`)
-      + `\n${lines.join('\n')}\n\n`
-      + `${acceptLabel}, or tell me how you'd rather handle any of these.`;
-
-    const reply = await interrupt({
-      type: 'clarification',
-      // `kind` is inert to the client and the headless replier (both key on `type`)
-      // but lets provenance and tests tell a gap clarification from an ordinary one.
-      kind: 'gap_review',
-      question,
-      choices: [{ label: acceptLabel }],
-      step: state.step,
-    });
-
-    const raw = String(reply?.answer ?? (typeof reply === 'string' ? reply : '')).trim();
-    const isDefault = !raw
-      || raw.toLowerCase() === acceptLabel.toLowerCase()
-      || /please proceed with your best inference/i.test(raw);
-
-    // Blocking gaps always resolve — to the suggestion by default — so the spec
-    // can regenerate and clear them. Only a BLOCKING gap regenerates the spec (as
-    // before): a soft-only review escalates and proceeds, never triggering a
-    // rebuild, so a resolved destination cannot be clobbered by a spurious pass.
+    // ── RESOLVE, DON'T INTERROGATE (2026-07-24, operator) ────────────────────
+    // This USED to STOP here with a "Use your suggestions" wall — whose default answer
+    // was already "the suggestions". So it was a speed bump the user rolled over with a
+    // click, and the click routed the answer through a WHOLE-SPEC REGENERATE that, for a
+    // blank the model reproduces, re-asked the same question forever (the section loop).
+    // The product's own promise is that a complete workflow publishes having answered
+    // NOTHING — so a blocking gap's model-suggested answer is the DEFAULT, not a decision
+    // the user must ratify. What reaches here is one of three, and NONE needs a wall:
+    //   · the converger's OWN blank (sections / name / edges) — auto-repaired ABOVE, so
+    //     it never arrives here at all;
+    //   · a genuinely un-defaultable choice (a destination that does not exist) — handled
+    //     conversationally ABOVE (create-or-pick) and applied DIRECTLY, no rebuild. THAT
+    //     is the converger's chatbot-style clarification: one natural question, answer
+    //     applied on the spot;
+    //   · a wiring gap only a rebuild can fix — take the suggestion as the answer and
+    //     regenerate SILENTLY (bounded), narrating progress, with no wall.
+    // The user reviews the finished workflow step by step, and the publish gate
+    // (complete ⇒ publishable) protects correctness if a rebuild cannot close a blocker.
     const answers = {};
     const clarifications = [];
     for (const g of blocking) {
       const s = suggestionFor(g.id);
       if (s) { answers[g.id] = String(s); clarifications.push({ q: g.message, a: String(s) }); }
     }
-    // Free-text guidance rides along on the regenerate ONLY when there is a
-    // blocking gap to regenerate for — matching the old card, where a soft-gap
-    // answer changed nothing (soft gaps escalate; they do not rebuild the spec).
-    if (!isDefault && clarifications.length) {
-      clarifications.push({ q: 'How I should handle the remaining questions', a: raw });
-    }
 
     // Soft gaps escalate — a person handles the case at run time. `nodeId` is
-    // load-bearing, not decoration: materialiseEscalations() has to find the step
-    // the gap is ABOUT to put a real escalation path on it (P12 Increment E — a
-    // DECISION_TABLE_GAP escalates by routing the uncovered case to a person).
-    // Dropped here, the gap arrives at the materialiser as an anonymous sentence
-    // and can only be reported unmaterialised — "escalated" would mean nothing.
+    // load-bearing: materialiseEscalations() finds the step to put the escalation on.
     const escalated = soft.map(g => ({
       id: g.id, class: g.class, code: g.code, message: g.message, nodeId: g.nodeId ?? null, resolution: 'escalated',
     }));
 
     const logEntry = {
-      step: state.step, type: 'gap_review',
+      step: state.step, type: 'gap_review', auto: true,
       gaps: [...blocking, ...soft].map(g => ({ id: g.id, code: g.code, class: g.class, blocking: g.blocking })),
-      escalated, answers, confirmation: reply,
+      escalated, answers,
     };
 
-    // Answers to BLOCKING gaps go back through the propose loop, which is the
-    // only thing that can actually change the spec. Bounded, so a gap the model
-    // cannot close ends in a question rather than a spin.
+    // A blocking gap regenerates SILENTLY with the suggestion as a hint — bounded. A
+    // first-time blocker usually clears on that rebuild; a survivor is capped by
+    // MAX_GAP_ROUNDS and then proceeds to the walkthrough, where `ratify` shows any
+    // remaining blocker honestly rather than rebuilding a near-identical spec forever.
     if (clarifications.length && (state.gapRounds ?? 0) < MAX_GAP_ROUNDS) {
+      emitBeat(cfg, { kind: 'thinking', text: 'Filling in the last details and finishing your workflow…' });
       return {
         ...carry,
         clarifications,

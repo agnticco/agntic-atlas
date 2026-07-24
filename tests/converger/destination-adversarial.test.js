@@ -405,6 +405,7 @@ describe('a blocking gap arrives at the user with an answer in the box', () => {
     const J = (o) => ({ content: JSON.stringify(o) });
     const draftIn = (p) => { const m = /CURRENT DRAFT:\n(\{[\s\S]*?\n\})\n/.exec(p); try { return JSON.parse(m[1]); } catch { return {}; } };
 
+    let builds = 0;
     const llm = { invoke: async (messages) => {
       const p = String(messages[messages.length - 1].content);
       if (p.includes('OUTCOME CONTRACT')) return J({ candidates: [{ id: 'c1', statement: 'Leads are saved.',
@@ -427,6 +428,7 @@ describe('a blocking gap arrives at the user with an answer in the box', () => {
       // UNSATISFIED_ASSERTION, exactly what this scenario needs to test that a blocking
       // gap reaches the user with an answer already in the box.
       if (p.includes('Build the COMPLETE workflow')) {
+        builds++;
         return J({
           triggers: [{ type: 'email', filter: 'to:leads@acme.com' }],
           nodes: [
@@ -451,20 +453,26 @@ describe('a blocking gap arrives at the user with an answer in the box', () => {
     try { await conv.run('t2', 'save leads to airtable'); iv = { type: 'done' }; }
     catch (err) { iv = err.interruptValue ?? err; }
 
-    let review = null;
+    // RESOLVE, DON'T INTERROGATE (2026-07-24, operator): a blocking gap no longer STOPS
+    // the user with a "Use your suggestions" wall. The model's suggestion is still
+    // computed and keyed to its gap (the historical bug this file pins — the ids were
+    // never shown, so the suggestion was discarded and the blocker went straight to
+    // ratify unrepaired — is still guarded), but it is now applied SILENTLY through a
+    // bounded regenerate. So: (a) the build must NOT surface a gap_review wall, and (b)
+    // the suggestion must still drive a rebuild, not be thrown away.
+    let sawGapWall = false;
     const reply = { outcome_check: () => ({ id: 'c1' }), example_request: () => ({ type: 'skip' }),
                     proposal: () => ({ type: 'accept' }), clarification: () => ({ answer: 'yes' }),
-                    gap_review: () => ({ acceptDefaults: true }), ratify: () => ({ type: 'approve' }) };
+                    ratify: () => ({ type: 'approve' }) };
     for (let i = 0; i < 60 && iv?.type !== 'done'; i++) {
-      // #24: gaps now surface as a `clarification` (kind:'gap_review'); the model's
-      // suggested answer is embedded in the question rather than a `suggestedAnswer`
-      // field, but it must be THERE — an empty box is an interrogation, not a review.
-      if (iv.type === 'clarification' && iv.kind === 'gap_review' && !review) review = iv;
+      if (iv.type === 'clarification' && iv.kind === 'gap_review') sawGapWall = true;
       iv = await conv.resume('t2', (reply[iv.type] ?? (() => ({ type: 'accept' })))(iv));
     }
 
-    assert.ok(review, 'precondition: the draft has at least one gap to review');
-    assert.match(review.question, /I'd go with: Set it on that step/,
-      `the blocking gap arrived with an empty box — no suggestion in the question: ${JSON.stringify(review.question)}`);
+    assert.equal(sawGapWall, false,
+      'a blocking gap must NOT wall the user with a "Use your suggestions" card — it resolves silently');
+    assert.ok(builds >= 2,
+      `the suggestion must drive a bounded rebuild, not be discarded — the whole-spec build ran ${builds}×, expected >= 2`);
+    assert.equal(iv?.type, 'done', 'and the build completes rather than stranding on the gap');
   });
 });
