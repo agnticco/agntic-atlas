@@ -74,6 +74,21 @@ cd "$(git rev-parse --show-toplevel)"
 
 fail() { echo "p13 FAIL: $*" >&2; exit 1; }
 
+# Run a node test file; fail with its tail on error.
+#
+# FAIL CLOSED ON ANY SKIP, for the reason recorded in p12.sh: a suite that
+# self-skips its central test still reports a cheerful "N pass / 1 skip", and P11
+# was nearly closed on exactly that. A skipped test is not a passed test.
+run_test() {
+  f="$1"; label="$2"
+  log="/tmp/p13-$(basename "$f").log"
+  node --env-file-if-exists=.env --test "$f" >"$log" 2>&1 \
+    || { tail -40 "$log" >&2; fail "$label — $f did not pass"; }
+  grep -qE '^# skipped 0$' "$log" \
+    || { grep -E '^# (pass|fail|skipped)' "$log" >&2
+         fail "$label — $f SKIPPED a test. A skipped test is not a passed test."; }
+}
+
 # `next` = this increment is not built yet. Not a defect — the phase is simply not
 # finished. Fail-closed all the same: the gate does not pass.
 next() {
@@ -105,17 +120,52 @@ next() {
 # independently by the verifier on the increment's NEW guards.
 P130_TEST="tests/converger/source-agnostic-catalog.test.js"
 [ -f "$P130_TEST" ] || next "P13-0" \
-  "the source-agnostic-catalog adversarial suite ($P130_TEST) does not exist — the four seams (outcome-oracle effect-from-structure, deliver-node effect fallback, connector-generic destinations + sheets_describe wired, catalog-driven credential resolution) are not generalized yet"
+  "the source-agnostic-catalog adversarial suite ($P130_TEST) does not exist — the four seams (outcome-oracle effect-from-structure, deliver-node effect fallback, connector-generic destinations, catalog-driven credential resolution) are not generalized yet"
 
-# When P13-0 lands, replace the line below with the real run + a hand mutation-kill of the
-# four seam guards, then add the P13-A/B/C blocks in order.
-next "P13-0" \
-  "$P130_TEST exists but the gate's real checks are not wired in — run the suite, hand mutation-kill the four seam guards, then unblock and add P13-A"
+echo "p13: [P13-0] the catalog is source-agnostic (synthetic capability, no special-casing)..."
+run_test "$P130_TEST" "P13-0 source-agnostic catalog"
 
-# ── P13-A / P13-B / P13-C — added as each increment lands (see the brief) ──
+# The seams are behavioural, so this gate EXERCISES them — it does not grep for
+# symbols. A grep proves a symbol exists, not that anything enforces it (CLAUDE.md).
+# The suite above registers a synthetic capability with no code special-casing it
+# anywhere and asserts all four seams fire on it.
 #
-# P13-A must additionally assert, when wired:
-#   · the CIMD document is SERVED at its stable URL (a 404 breaks every connection at once);
-#   · a forced walk of the identity chain proves step 4 (prompt the user for credentials)
-#     is UNREACHABLE. That step is the banned developer-settings screen; a naive
-#     implementation of the spec falls through to it by default.
+# NOT scriptable, and deliberately left to the fresh verifier: the MUTATION KILL.
+# Reverting each seam by hand must turn a named test red. The Builder ran all four
+# (recorded in each commit message); the verifier re-runs them independently, since
+# that is the one thing a log cannot fake. There is no mutation tooling — it was
+# removed 2026-07-19 — and no coverage floor blocks this phase.
+
+echo "p13: [P13-0] regression — the seams did not break destination resolution..."
+run_test tests/converger/destination-adversarial.test.js "P13-0 regression: destinations"
+run_test tests/converger/destination-mapping.test.js    "P13-0 regression: field mapping"
+
+echo "p13: [P13-0] regression — the P12 moat still holds..."
+run_test tests/converger/moat-adversarial.test.js "P13-0 regression: moat"
+run_test tests/workflows/control-flow.test.js     "P13-0 regression: control flow"
+run_test tests/workflows/outcome-oracle.test.js   "P13-0 regression: outcome oracle"
+
+echo "p13: P13-0 PASSES — the catalog is source-agnostic."
+
+# ── P13-A — capability contract + McpCatalogLoader + CIMD identity ────────────
+P13A_TEST="tests/connectors/mcp-catalog-cimd.test.js"
+[ -f "$P13A_TEST" ] || next "P13-A" \
+  "the MCP catalog + CIMD identity suite ($P13A_TEST) does not exist — no capability can yet be sourced from a remote Streamable-HTTP server, and Atlas publishes no Client ID Metadata Document"
+
+# When P13-A lands, wire its run here. It must assert, behaviourally:
+#   · a real tool from a CIMD-supporting server (Notion or Linear) appears in
+#     /capabilities and CapabilityRegistry.list() beside native capabilities, with
+#     correct effect/positions/configSchema, and passes P13-0's four synthetic checks
+#     FOR REAL rather than against a stub;
+#   · the CIMD document is SERVED at its stable URL — a 404 breaks every connection
+#     using it, all at once, so this is a live check and not a file-exists test;
+#   · a forced walk of the identity chain proves step 4 — PROMPT THE USER FOR
+#     CREDENTIALS — is UNREACHABLE. That step IS the banned developer-settings screen,
+#     and a naive implementation of the spec falls through to it by default. A server
+#     that exhausts pre-registered -> CIMD -> DCR must surface as "not supported yet";
+#   · effect FAILS CLOSED to 'write' when readOnlyHint is unset;
+#   · no MCP-sourced capability is ever offered in a `trigger` position.
+next "P13-A" \
+  "$P13A_TEST exists but the gate's real checks are not wired in — run the suite, then add P13-B"
+
+# ── P13-B / P13-C — added as each increment lands (see the brief) ──
