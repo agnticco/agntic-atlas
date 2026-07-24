@@ -182,6 +182,85 @@ const WRITE_VERBS = {
 /** docs_create / drive_create_folder are documents; airtable_create_record is a record. */
 const DOC_CONNECTORS = new Set(['docs', 'drive']);
 
+/* ── P13-0 seam #1 + #2: effect from DECLARED STRUCTURE, not from the id ──────
+ *
+ * The tables above only know the connectors we happened to hand-build. A capability
+ * from any other source — an imported server, a generated connector — hits
+ * `WRITE_VERBS` with an id containing no token it recognises (`notion_create_page`:
+ * "page" is not in the set) and is classified as a READ. It then silently skips
+ * idempotency and the approval gate, and the run reports success. That is the
+ * failure class this whole phase exists to kill, and it is invisible in production.
+ *
+ * So: a capability DECLARES its effect in the catalog, and that declaration wins.
+ * The id-regex survives only as the legacy path for native capabilities that
+ * declare nothing (they are all in the tables above and behave as before).
+ *
+ * The catalog is injected rather than imported: `outcome-oracle.js` is a pure module
+ * used by the validator, the gap scorer, the test panel and the converger, several
+ * of which construct it without a running server. A missing catalog therefore must
+ * NOT be an error — it degrades to exactly today's behaviour.
+ */
+let _catalog = null;
+
+/**
+ * Give the oracle the live capability catalog. Called once at boot, beside the
+ * registry construction. Passing `null` restores the pre-P13 id-regex behaviour.
+ *
+ * @param {{ get: (id: string) => object|undefined }|null} catalog
+ */
+export function setCapabilityCatalog(catalog) {
+  _catalog = (catalog && typeof catalog.get === 'function') ? catalog : null;
+}
+
+/** The catalog entry for a capability id, or `undefined` when unknown/uninjected. */
+function capabilityOf(id) {
+  if (!_catalog || !id) return undefined;
+  try { return _catalog.get(id) ?? undefined; } catch { return undefined; }
+}
+
+/**
+ * Does this capability write, according to what it DECLARED?
+ *
+ *   'write'     — declared a write, or declared nothing while being able to occupy a
+ *                 delivery position (fail closed — see the register() note).
+ *   'read'      — declared a read. Satisfies nothing, and must not appear to.
+ *   undefined   — we have no catalog entry at all; the caller falls back to the
+ *                 legacy id-regex so native behaviour is unchanged.
+ */
+function declaredEffectOf(id) {
+  const cap = capabilityOf(id);
+  if (!cap) return undefined;
+  if (cap.effect === 'write' || cap.effect === 'read') return cap.effect;
+  // Declared nothing. A capability that can be a DELIVERY is a writer by definition
+  // — that is what delivering is. Fail closed rather than guessing from the name.
+  if (Array.isArray(cap.positions) && cap.positions.includes('delivery')) return 'write';
+  return undefined;   // step-only and silent → legacy path decides.
+}
+
+/**
+ * Build the effect record for a capability that declared a write.
+ * `assertionKind` is honoured when declared; otherwise the verb regex is consulted
+ * as a hint, and `record_exists` is the last resort — the most generic statement of
+ * "something now exists that did not before".
+ */
+function declaredWriteEffect(id, cap, config) {
+  const connector = String(cap?.connector ?? id.split('_')[0] ?? '').toLowerCase();
+  let kind = cap?.assertionKind;
+  if (!ASSERTION_KINDS.includes(kind)) {
+    kind = ASSERTION_KINDS.find(k => WRITE_VERBS[k].test(id)) ?? 'record_exists';
+    if (kind === 'record_exists' && DOC_CONNECTORS.has(connector)) kind = 'document_exists';
+  }
+  const keys = Array.isArray(cap?.locatorKeys) && cap.locatorKeys.length ? cap.locatorKeys : null;
+  return {
+    kind,
+    connectors: aliasesFor(connector),
+    locators:   keys
+      ? keys.map(k => config?.[k]).filter(v => typeof v === 'string' && v.trim())
+      : collectLocators(config),
+    fields:     readFieldNames(config?.fields),
+  };
+}
+
 /**
  * The effect a node has on the world, or `null` if it has none (a read, an LLM
  * step, a branch — none of which can satisfy an assertion, and none of which
@@ -215,13 +294,25 @@ export function nodeEffect(node) {
   if (node.type === 'deliver') {
     const channel = String(node.config?.channel ?? '').trim();
     const eff = CHANNEL_EFFECTS[channel];
-    if (!eff) return null;
-    return {
-      kind:       eff.kind,
-      connectors: aliasesFor(eff.connector),
-      locators:   eff.locatorKeys.map(k => node.config?.[k]).filter(v => typeof v === 'string' && v.trim()),
-      fields:     readFieldNames(node.config?.fields),
-    };
+    if (eff) {
+      return {
+        kind:       eff.kind,
+        connectors: aliasesFor(eff.connector),
+        locators:   eff.locatorKeys.map(k => node.config?.[k]).filter(v => typeof v === 'string' && v.trim()),
+        fields:     readFieldNames(node.config?.fields),
+      };
+    }
+    // SEAM #2 — a `deliver` used to return null here, with no fallback of any kind
+    // (unlike `connector-action` below, which at least had the verb regex). So a
+    // correctly-configured delivery to any capability outside the ~12-entry table
+    // got effect `null`, its outcome assertion could never be satisfied, and publish
+    // hard-failed with UNSATISFIED_ASSERTION on a workflow that was perfectly good.
+    // Loud rather than silent — but it blocks a real user, so it is a blocker.
+    if (!channel) return null;
+    const declared = declaredEffectOf(channel);
+    if (declared === 'read')  return null;
+    if (declared === 'write') return declaredWriteEffect(channel, capabilityOf(channel), node.config);
+    return null;
   }
 
   if (node.type === 'connector-action') {
@@ -241,6 +332,13 @@ export function nodeEffect(node) {
       };
     }
 
+    // SEAM #1 — the DECLARED effect wins over any inference from the id. A write
+    // whose name contains no verb we happen to recognise is still a write.
+    const declared = declaredEffectOf(action);
+    if (declared === 'read')  return null;   // declared a read: satisfies nothing.
+    if (declared === 'write') return declaredWriteEffect(action, capabilityOf(action), node.config);
+
+    // Legacy path: native capabilities that declare nothing. Unchanged behaviour.
     const connector = action.split('_')[0].toLowerCase();
     for (const kind of ASSERTION_KINDS) {
       if (!WRITE_VERBS[kind].test(action)) continue;

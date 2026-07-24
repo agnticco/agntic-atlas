@@ -36,11 +36,29 @@ export class CapabilityRegistry {
    * @param {string}   [def.outputFormat]  — 'html' | 'mrkdwn' | 'plain'; format the engine delivers as-is to this channel
    * @param {Function} [def.handle]        — async ({ config, body, lastOutput, title }) => result
    * @param {Function} [def.isReady]       — () => boolean; defaults to always ready
+   *
+   * ── Effect (P13-0 seam #1) ────────────────────────────────────────────────
+   * @param {'read'|'write'} [def.effect]  — does this capability CHANGE the outside world?
+   * @param {string} [def.assertionKind]   — 'message_sent' | 'record_exists' | 'document_exists'
+   * @param {string[]} [def.locatorKeys]   — config keys that name the destination
+   *
+   * A capability's read/write effect is a property it DECLARES, never something
+   * inferred from its id. `outcome-oracle.js` used to derive it by testing the id
+   * against verb regexes, so a write whose name contained no known verb token
+   * (`notion_create_page` — "page" is not in the set) was silently misclassified as
+   * a READ and skipped both idempotency and the approval gate. That is invisible in
+   * production: the run reports success and the guard never fired.
+   *
+   * FAIL CLOSED: a capability that declares no `effect` but whose position set makes
+   * it a plausible writer is treated as a WRITE by the oracle. A spurious idempotency
+   * key on a read is harmless; a missing one on a real write is unrecoverable.
    */
   register(def) {
     if (!def?.id) throw new Error('CapabilityRegistry.register: id is required');
     if (!Array.isArray(def.positions) || !def.positions.length)
       throw new Error(`CapabilityRegistry.register "${def.id}": positions[] is required`);
+    if (def.effect != null && def.effect !== 'read' && def.effect !== 'write')
+      throw new Error(`CapabilityRegistry.register "${def.id}": effect must be 'read' or 'write', got ${JSON.stringify(def.effect)}`);
 
     this._caps.set(def.id, {
       id:             def.id,
@@ -54,6 +72,13 @@ export class CapabilityRegistry {
       outputFormat:   def.outputFormat   ?? 'plain',
       isReady:        def.isReady        ?? (() => true),
       handle:         def.handle         ?? null,
+      // Declared effect. `null` means "this capability said nothing" — the oracle
+      // decides what to do with silence (see nodeEffect / declaredEffectOf). It is
+      // deliberately NOT defaulted to 'read' here: a default here would be a silent
+      // fallback on a security-relevant value, which is the bug this seam removes.
+      effect:         def.effect         ?? null,
+      assertionKind:  def.assertionKind  ?? null,
+      locatorKeys:    Array.isArray(def.locatorKeys) ? def.locatorKeys : null,
       // A non-destructive READ that confirms this delivery's DESTINATION exists and is
       // reachable — e.g. "does this Slack channel exist and is the bot in it", "does this
       // Airtable base/table exist". Called ONLY by the dry-run test path (`_dryRunDeliver`)

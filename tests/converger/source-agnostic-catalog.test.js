@@ -1,0 +1,201 @@
+/**
+ * P13-0 — the catalog is SOURCE-AGNOSTIC.
+ *
+ * The whole point of this suite: register a capability that NO line of Atlas code
+ * has ever heard of — no entry in CHANNEL_EFFECTS, no token WRITE_VERBS recognises,
+ * no special case anywhere — and prove the guards still fire on it.
+ *
+ * Why it exists. Effect used to be inferred from the capability's NAME by testing it
+ * against verb regexes. A write whose id contained no known token — `notion_create_page`
+ * is the canonical one, because "page" is not in the set — was classified as a READ.
+ * It then skipped idempotency and the approval gate, and the run reported success.
+ * That is the exact failure class P13 exists to kill: user-reachable, and silent.
+ *
+ * Each test names the mutation that must turn it red. If you change the seam, revert
+ * the fix by hand and watch these fail — a guard whose mutation survives is pinned by
+ * nothing (CLAUDE.md, "A green suite is evidence of nothing until you have watched it
+ * go red"). There is no mutation tooling; this is done by hand, deliberately.
+ */
+
+import { describe, test, beforeEach, afterEach } from 'node:test';
+import assert from 'node:assert/strict';
+
+import { CapabilityRegistry } from '../../src/connectors/capability-registry.js';
+import { nodeEffect, setCapabilityCatalog } from '../../src/workflows/outcome-oracle.js';
+
+/**
+ * The synthetic connector. `x_create_page` is chosen deliberately:
+ *   · "page" appears in NO WRITE_VERBS pattern, so the legacy id-regex calls it a read;
+ *   · "x" is in no connector table, no alias map, no CHANNEL_EFFECTS entry.
+ * If this classifies as a write, it did so because the capability DECLARED it.
+ */
+const SYNTHETIC = 'x_create_page';
+
+let registry;
+
+beforeEach(() => {
+  registry = new CapabilityRegistry();
+  setCapabilityCatalog(registry);
+});
+
+afterEach(() => {
+  setCapabilityCatalog(null);   // never leak the catalog into another suite
+});
+
+describe('P13-0 (a) — a declared write is a write, whatever it is called', () => {
+  test('an unfamiliar id declared as a write classifies as a write', () => {
+    registry.register({
+      id: SYNTHETIC, connector: 'x', positions: ['step'],
+      effect: 'write', assertionKind: 'record_exists', locatorKeys: ['pageId'],
+    });
+
+    const eff = nodeEffect({
+      id: 'w', type: 'connector-action',
+      config: { action: SYNTHETIC, pageId: 'Pages' },
+    });
+
+    // MUTATION: delete the `declaredEffectOf` branch in nodeEffect's connector-action
+    // path so it falls straight through to WRITE_VERBS. "page" matches nothing, the
+    // function returns null, and this assertion goes red.
+    assert.ok(eff, 'a declared write must produce an effect, not null');
+    assert.equal(eff.kind, 'record_exists');
+    assert.ok(eff.connectors.has('x'), 'effect must carry its declaring connector');
+    assert.deepEqual(eff.locators, ['Pages'], 'locators come from the declared keys');
+  });
+
+  test('the SAME id with no declaration is still read by the legacy regex — proving the declaration is what did the work', () => {
+    registry.register({ id: SYNTHETIC, connector: 'x', positions: ['step'] });
+
+    // Declares nothing and is step-only, so it falls to the legacy path, where
+    // "create_page" matches no verb. This is the OLD behaviour, pinned on purpose:
+    // it is the control that stops the test above passing for the wrong reason.
+    assert.equal(
+      nodeEffect({ id: 'w', type: 'connector-action', config: { action: SYNTHETIC } }),
+      null,
+    );
+  });
+
+  test('a declared READ satisfies nothing, even when its name sounds like a write', () => {
+    // `x_send_digest` matches the message_sent verb pattern. The declaration must
+    // beat the regex in BOTH directions, or "declared" is only half honoured.
+    registry.register({
+      id: 'x_send_digest', connector: 'x', positions: ['step'], effect: 'read',
+    });
+
+    // MUTATION: make declaredEffectOf ignore effect:'read' and fall through — the
+    // verb regex then matches "send", an effect appears, and this goes red.
+    assert.equal(
+      nodeEffect({ id: 'r', type: 'connector-action', config: { action: 'x_send_digest' } }),
+      null,
+      'a declared read must never look like it satisfied an assertion',
+    );
+  });
+
+  test('FAIL CLOSED: a delivery-capable capability that declares no effect is treated as a write', () => {
+    // The dangerous direction. A missing idempotency key on a real write is
+    // unrecoverable; a spurious one on a read is harmless. So silence must resolve
+    // to write, never to read.
+    registry.register({ id: 'x_quiet_push', connector: 'x', positions: ['step', 'delivery'] });
+
+    const eff = nodeEffect({
+      id: 'w', type: 'connector-action', config: { action: 'x_quiet_push', target: 'somewhere' },
+    });
+
+    // MUTATION: change the `positions.includes('delivery')` fail-closed branch in
+    // declaredEffectOf to `return undefined` — the id matches no verb, the effect
+    // becomes null, and an undeclared write goes unguarded. Red.
+    assert.ok(eff, 'an undeclared delivery-capable capability must fail CLOSED to write');
+  });
+});
+
+describe('P13-0 (b) — a deliver node to an unknown capability can still satisfy its promise', () => {
+  test('a declared delivery write produces an effect instead of null', () => {
+    registry.register({
+      id: SYNTHETIC, connector: 'x', positions: ['delivery'],
+      effect: 'write', assertionKind: 'record_exists', locatorKeys: ['pageId'],
+    });
+
+    const eff = nodeEffect({
+      id: 'd', type: 'deliver',
+      config: { channel: SYNTHETIC, pageId: 'Pages' },
+    });
+
+    // MUTATION: restore the original `if (!eff) return null;` in the deliver branch,
+    // removing the catalog fallback entirely. Effect becomes null, the outcome
+    // assertion can never be satisfied, and publish would hard-fail with
+    // UNSATISFIED_ASSERTION on a correctly-configured workflow. Red.
+    assert.ok(eff, 'a deliver to a declared write capability must have an effect');
+    assert.equal(eff.kind, 'record_exists');
+    assert.ok(eff.connectors.has('x'));
+    assert.deepEqual(eff.locators, ['Pages']);
+  });
+
+  test('a deliver to a genuinely unknown channel is still null — the fallback did not become a rubber stamp', () => {
+    // Nothing registered. The fallback must not invent an effect for a channel the
+    // catalog has never heard of; that would make UNSATISFIED_ASSERTION unreachable
+    // and turn the publish check into theatre.
+    assert.equal(
+      nodeEffect({ id: 'd', type: 'deliver', config: { channel: 'teams_send', target: '#ops' } }),
+      null,
+    );
+  });
+
+  test('an empty channel is null, not a lookup of the empty string', () => {
+    assert.equal(nodeEffect({ id: 'd', type: 'deliver', config: { channel: '   ' } }), null);
+  });
+});
+
+describe('P13-0 — native behaviour is unchanged by the seam', () => {
+  test('with NO catalog injected, native capabilities behave exactly as before', () => {
+    setCapabilityCatalog(null);
+
+    const slack = nodeEffect({ id: 'd', type: 'deliver', config: { channel: 'slack', target: '#ops' } });
+    assert.equal(slack.kind, 'message_sent');
+    assert.deepEqual(slack.locators, ['#ops']);
+
+    const airtable = nodeEffect({
+      id: 'w', type: 'connector-action', config: { action: 'airtable_create_record', tableId: 'tbl1' },
+    });
+    assert.equal(airtable.kind, 'record_exists');
+
+    assert.equal(
+      nodeEffect({ id: 'r', type: 'connector-action', config: { action: 'airtable_list_records' } }),
+      null,
+    );
+  });
+
+  test('a registered native capability that declares nothing keeps its table-driven effect', () => {
+    registry.register({ id: 'slack', connector: 'slack', positions: ['delivery'] });
+
+    const eff = nodeEffect({ id: 'd', type: 'deliver', config: { channel: 'slack', target: '#ops' } });
+    assert.equal(eff.kind, 'message_sent', 'CHANNEL_EFFECTS still wins for the ids it knows');
+  });
+
+  test('a write inside a foreach is still a write when the capability is declared', () => {
+    // The highest-risk shape: three separate P12 defects were "added to the top-level
+    // executor, not the foreach sub-loop". The seam must reach inside a loop too.
+    registry.register({
+      id: SYNTHETIC, connector: 'x', positions: ['step'],
+      effect: 'write', assertionKind: 'record_exists', locatorKeys: ['pageId'],
+    });
+
+    const eff = nodeEffect({
+      id: 'loop', type: 'foreach',
+      config: { steps: [{ id: 's', type: 'connector-action', config: { action: SYNTHETIC, pageId: 'Pages' } }] },
+    });
+
+    assert.ok(eff, 'a foreach carries the effects of the steps inside it');
+    assert.equal(eff.kind, 'record_exists');
+  });
+});
+
+describe('P13-0 — the registry refuses a malformed declaration', () => {
+  test('an effect that is neither read nor write is rejected at registration', () => {
+    // Fail at build time, not at run time. A typo'd effect must not silently become
+    // "declared nothing" — that would put a real write back on the legacy guess path.
+    assert.throws(
+      () => registry.register({ id: 'x_bad', connector: 'x', positions: ['step'], effect: 'writes' }),
+      /effect must be 'read' or 'write'/,
+    );
+  });
+});
