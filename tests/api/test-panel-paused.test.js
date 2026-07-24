@@ -83,21 +83,27 @@ describe('the test panel on a paused (approval-gated) run', () => {
       'the steps after an approval gate were never run, so nothing past it can be certified');
   });
 
-  test('the example loop QUEUES pauses and KEEPS the completed examples\' evidence', () => {
-    // The loop used to hand `_applyTestResult` only the final example's data AND blank
-    // `outcomeResults` at the first pause — so an approval workflow (which pauses on
-    // every urgent example) scored certification against nothing and always read
-    // "0 examples / not verified", however well it was built (2026-07-24). Now every
-    // ANSWERABLE pause is queued, and the completed examples' verdicts are carried as
-    // `pendingEvidence`, to be folded in as each pause is answered (see `_answerPause`).
+  test('the test NEVER pauses — it pre-answers every gate and exercises BOTH lanes', () => {
+    // BEHAVIOUR CHANGE (2026-07-24, operator). Pressing Run test now authorizes the
+    // whole run: `runTest` supplies each `human` gate's decision UP FRONT (`decisions`
+    // in the body) so the run completes instead of pausing, and it runs a gate-reaching
+    // example ONCE PER ANSWER (approve-all, then reject-all) so the reject path is
+    // actually PROVEN, not assumed. The old "queue every pause and make the tester click
+    // Approve/Reject one at a time" flow is gone, and so is its evidence-carrying dance.
     const src = readFileSync(HTML, 'utf8');
-    assert.match(src, /pausedRuns\.push\(/,
-      'the example loop no longer queues answerable pauses — a pause on an earlier example would be lost');
-    assert.match(src, /pendingEvidence: outcomeResults/,
-      'the completed examples\' evidence is not carried across the gate — an approval workflow can never reach a verdict');
-    // The old single-pause path that dropped every pause but the last, and blanked
-    // the evidence, must be gone.
-    assert.doesNotMatch(src, /if \(d\.paused && !pausedData\) pausedData = d;/,
-      'the old "pausedData" single-pause path is still present — it dropped every pause but the last');
+    // The new mechanism: a per-pass decision map + a driver that runs the extra
+    // (reject) pass only when the example actually reached a gate.
+    assert.match(src, /decisionMapForPass/,
+      'runTest no longer builds a per-pass gate-decision map — gates cannot be pre-answered');
+    assert.match(src, /decisions: decisions/,
+      'runTest no longer sends a pre-answered `decisions` map, so the run would still pause at a gate');
+    assert.match(src, /const gates = \(S\.spec\.nodes \|\| \[\]\)\.filter/,
+      'runTest no longer enumerates the spec\'s human gates');
+    // The old pause QUEUE must be gone: no queued answerable pauses surfaced to the user.
+    assert.doesNotMatch(src, /pausedRuns\.push\(/,
+      'the old answerable-pause QUEUE is still present — the test should never surface a pause to the tester now');
+    // And the in-panel Approve/Reject buttons must no longer be offered.
+    assert.match(src, /showPauseAnswers: false/,
+      'the in-panel Approve/Reject buttons are still offered — a test must not ask the tester to answer a gate');
   });
 });

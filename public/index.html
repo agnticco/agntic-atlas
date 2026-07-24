@@ -281,7 +281,7 @@
 
       <!-- ░ MODE: NEW (centered landing — shown when + is clicked) ░ -->
       <sc-if value="{{ modeNew }}" hint-placeholder-val="{{ false }}">
-      <div style="flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;background:#0A0A0A;animation:{{ newStateAnim }}">
+      <div style="flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;background:#0A0A0A;background-image:radial-gradient(rgba(255,255,255,.05) 1px,transparent 1px);background-size:16px 16px;animation:{{ newStateAnim }}">
         <img src="assets/atlas-globe-white.svg" style="width:140px;height:140px;opacity:.65;margin-bottom:36px" alt="">
         <h1 style="font-family:'Inter Tight',sans-serif;font-size:36px;font-weight:600;color:rgba(255,255,255,.88);letter-spacing:-0.025em;margin:0 0 40px;text-align:center">What would you like to automate?</h1>
         <div style="width:100%;max-width:720px;padding:0 40px;box-sizing:border-box">
@@ -5786,7 +5786,15 @@ class Component extends DCLogic {
     walk(spec.nodes);
     if (!dests.length) return null;
     const list = dests.slice(0, 3).join(", ") + (dests.length > 3 ? " and " + (dests.length - 3) + " more" : "");
-    return "This sends for real — " + n + " example" + (n === 1 ? "" : "s") + " × " + list + ".";
+    // NOTHING IS SENT (2026-07-24). A test used to send for real — this line warned
+    // about that. It no longer does: every run is dry (terminal sends become
+    // would-deliver receipts), so the honest disclosure is reassurance, not a warning.
+    // Each destination is CONFIRMED REACHABLE via a non-destructive read instead of
+    // delivered to, and approval steps are exercised BOTH ways automatically.
+    const hasGate = (spec.nodes || []).some(function (nd) { return nd && nd.type === "human"; });
+    return "Nothing is sent — this is a dry check. " + n + " example" + (n === 1 ? "" : "s") +
+      " run against the real engine" + (hasGate ? " (approval steps tried both ways)" : "") +
+      "; each destination (" + list + ") is confirmed reachable, not delivered to.";
   }
   runTest() {
     const S = this.state;
@@ -5819,86 +5827,108 @@ class Component extends DCLogic {
       }
     }, 750);
 
-    // ── THE OUTCOME ORACLE (P12 Increment G) ──────────────────────────────
-    // If the workflow carries worked examples, the test panel asserts EACH of
-    // them against the contract — not one sample against "did it complete". Each
-    // example runs DRY (deliveries stubbed — a test must never send real messages;
-    // see the dryRun note below) and the run's own contract verdict comes back as
-    // `outcomeCheck`. A workflow with no examples falls back to the single sample run.
+    // ── THE OUTCOME ORACLE (P12 Increment G) — gates auto-exercised (2026-07-24) ──
+    // If the workflow carries worked examples, the panel asserts EACH against the
+    // contract — not one sample against "did it complete". Every run is DRY (terminal
+    // sends become would-deliver receipts the oracle reads as would-satisfy), so a test
+    // NEVER sends a real message — the operator got 5 real Slack DMs from one Run test
+    // before this. A workflow with no examples falls back to the single sample run.
     //
-    // DRY RUN, ALWAYS (2026-07-24). The panel used to run with REAL deliveries, so
-    // testing an approval workflow fired a real Slack DM per urgent example (the
-    // operator got 5 from one Run test). We now pass `dryRunDeliveries:true`:
-    // terminal sends become would-deliver receipts the oracle reads as
-    // would-satisfy, so the contract is still checked ("would keep its promise")
-    // with nothing actually sent. The engine still PAUSES at a human gate, so the
-    // in-panel Approve/Reject still work.
+    // APPROVAL GATES ARE AUTO-ANSWERED, BOTH WAYS (2026-07-24, operator). The panel no
+    // longer STOPS at a `human` step to make the tester click Approve/Reject — pressing
+    // Run test IS the authorization. For any example that reaches a gate it runs the
+    // example ONCE PER ANSWER (approve, then reject, …), supplying the gate's decision
+    // up front via `decisions` so the run completes straight through instead of pausing.
+    // The two runs exercise BOTH lanes — the oracle enforces only the lane each run
+    // actually took (assertionApplicability) and SKIPS the other — so the reject path is
+    // genuinely proven, never assumed. Nothing is sent either way. This is why there is
+    // no in-panel Approve/Reject any more: a test never pauses.
     const examples = (S.spec.outcome && Array.isArray(S.spec.outcome.examples)) ? S.spec.outcome.examples : [];
     const runs = examples.length
       ? examples.map(function(ex, i) { return { initialContext: ex.given, example: Object.assign({ id: ex.id || ("e" + (i + 1)) }, ex) }; })
       : [{ initialContext: this._sampleEvent(), example: null }];
 
-    // EVIDENCE IS KEPT ACROSS THE GATE (2026-07-24). An approval workflow pauses on
-    // every URGENT example, but the NORMAL/SPAM ones complete and carry real
-    // verdicts. The old loop threw ALL of that away at the first pause and scored
-    // certification against nothing — so an approval workflow could only ever read
-    // "0 examples / not verified", however well it was built. Now the completed
-    // examples' verdicts accumulate in `outcomeResults`, every ANSWERABLE pause is
-    // queued, and the panel surfaces them one at a time: as each is answered its
-    // resumed verdict folds into the evidence (see `_answerPause`), and only when
-    // the queue is empty is the FULL set scored. Go live stays locked until then
-    // (`reviewDraft` requires "passed"), so an unexercised promise never certifies.
+    // The approval gates in this spec, each with its own DECLARED answers (the closed
+    // set a person may give; default approve/reject). We exercise every one of them.
+    const gates = (S.spec.nodes || []).filter(function(n) { return n && n.type === "human"; });
+    const gateIds = {}; gates.forEach(function(g) { gateIds[g.id] = true; });
+    const gateAnswers = gates.map(function(g) {
+      const ds = (g.config && Array.isArray(g.config.decisions) && g.config.decisions.length) ? g.config.decisions : ["approve", "reject"];
+      return { id: g.id, decisions: ds };
+    });
+    // Pass k answers EVERY gate with its k-th declared decision (clamped): pass 0 =
+    // approve-all, pass 1 = reject-all, and so on for richer vocabularies. maxAnswers is
+    // 0 when there are no gates (→ a single plain run with no decisions supplied).
+    const maxAnswers = gateAnswers.reduce(function(m, g) { return Math.max(m, g.decisions.length); }, gates.length ? 1 : 0);
+    const decisionMapForPass = function(k) {
+      if (!gates.length) return null;
+      const map = {};
+      gateAnswers.forEach(function(g) { map[g.id] = g.decisions[Math.min(k, g.decisions.length - 1)]; });
+      return map;
+    };
+
     const outcomeResults = [];
-    const pausedRuns     = [];   // { runId, ask, note, steps, deliveries, output } per answerable pause
     let lastData = {};
 
-    const runOne = function(i) {
-      if (i >= runs.length) {
-        const answerable = pausedRuns.filter(function(p) { return p.runId; });
-        if (answerable.length) {
-          // Surface the first approval; keep the accumulated evidence + the rest queued.
-          if (self._testInterval) { clearInterval(self._testInterval); self._testInterval = null; }
-          const first = answerable[0];
-          self.setState({
-            testState: "paused", pendingEvidence: outcomeResults, pausedQueue: answerable.slice(1),
-            runSteps: first.steps || [], deliveries: first.deliveries || [], runOutput: first.output || null,
-            pausedAsk: first.ask || null, pausedNote: first.note || null, pausedRunId: first.runId,
-            pausedAnswering: false, laneCoverage: null,
-            runDurationMs: self._testStartMs ? (Date.now() - self._testStartMs) : null,
-          });
-          return;
-        }
-        // No answerable pauses — score the full accumulated evidence (through the animation).
-        const d = Object.assign({}, lastData, { paused: false, completed: true, outcomeResults: outcomeResults });
-        const r = { ok: true, data: d };
-        if (self._testInterval) { pendingResult = { r: r, d: d }; }
-        else { self._applyTestResult(r, d); }
-        return;
-      }
-      fetch("/workflows/run", { method: "POST", headers: self._H(),
-        body: JSON.stringify({ spec: S.spec, initialContext: runs[i].initialContext, example: runs[i].example, dryRunDeliveries: true }) })
+    // Post one (example × pre-answered-gates) run and fold its verdict. DEFENSIVE: if a
+    // gate we didn't pre-answer somehow still pauses, never ask the tester and never
+    // hang — auto-answer it with the step's first declared decision so the run
+    // completes and still contributes a verdict. (With gates pre-answered this cannot
+    // normally fire; it is a belt-and-braces guard, not the primary path.)
+    const postRun = function(runSpec, decisions) {
+      return fetch("/workflows/run", { method: "POST", headers: self._H(),
+        body: JSON.stringify(Object.assign({ spec: S.spec, initialContext: runSpec.initialContext, example: runSpec.example, dryRunDeliveries: true },
+                                            decisions ? { decisions: decisions } : {})) })
         .then(function(res) { return self._readJson(res); })
         .then(function(res) {
           const d = res.data || {};
           lastData = d;   // keep the last run's steps for the pipeline animation
           if (d.outcomeCheck) outcomeResults.push(d.outcomeCheck);
           if (d.paused && d.answerable && d.runId) {
-            pausedRuns.push({ runId: d.runId, ask: d.awaiting || null, note: d.note || null,
-                              steps: d.steps || [], deliveries: d.deliveries || [], output: d.output || null });
+            const dec = (d.awaiting && d.awaiting.ask && d.awaiting.ask.decisions && d.awaiting.ask.decisions[0]) || "approve";
+            return fetch("/workflows/run", { method: "POST", headers: self._H(),
+              body: JSON.stringify({ resumeRunId: d.runId, decision: dec, dryRunDeliveries: true }) })
+              .then(function(r2) { return self._readJson(r2); })
+              .then(function(r2) { const d2 = r2.data || {}; lastData = d2; if (d2.outcomeCheck) outcomeResults.push(d2.outcomeCheck); return d2; });
           }
-          runOne(i + 1);
-        })
-        .catch(function(e) {
-          clearInterval(self._testInterval);
-          self._testInterval = null;
-          self.setState({ testState: "failed", runStepIndex: 0, failIndex: 0, runError: String(e) });
-          if (self.state.workflowId) {
-            fetch('/api/builder/workflows/' + self.state.workflowId + '/status', { method: 'PATCH', headers: self._H(), body: JSON.stringify({ status: 'error' }) })
-              .then(function() { self._loadWorkflows(); }).catch(function() {});
-          }
+          return d;
         });
     };
-    runOne(0);
+
+    // Drive one example: run pass 0 (approve-all); if it actually REACHED a gate (a
+    // human node id shows in the run's steps), run the remaining answer-passes
+    // (reject-all, …) so both lanes are proven. An example that never reaches a gate is
+    // identical across passes, so it runs exactly once — no double counting.
+    const driveExample = function(runSpec) {
+      return postRun(runSpec, decisionMapForPass(0)).then(function(d0) {
+        const reached = gates.length && (d0.steps || []).some(function(s) { return gateIds[s.nodeId]; });
+        if (!reached || maxAnswers <= 1) return;
+        let chain = Promise.resolve();
+        for (let k = 1; k < maxAnswers; k++) {
+          (function(kk) { chain = chain.then(function() { return postRun(runSpec, decisionMapForPass(kk)); }); })(k);
+        }
+        return chain;
+      });
+    };
+
+    // Run every example in order, then score the FULL accumulated evidence (through the
+    // animation). Go live stays locked until "passed" (`reviewDraft`), so an unexercised
+    // promise still never certifies.
+    let seq = Promise.resolve();
+    runs.forEach(function(runSpec) { seq = seq.then(function() { return driveExample(runSpec); }); });
+    seq.then(function() {
+      const d = Object.assign({}, lastData, { paused: false, completed: true, outcomeResults: outcomeResults });
+      const r = { ok: true, data: d };
+      if (self._testInterval) { pendingResult = { r: r, d: d }; }
+      else { self._applyTestResult(r, d); }
+    }).catch(function(e) {
+      if (self._testInterval) { clearInterval(self._testInterval); self._testInterval = null; }
+      self.setState({ testState: "failed", runStepIndex: 0, failIndex: 0, runError: String(e) });
+      if (self.state.workflowId) {
+        fetch('/api/builder/workflows/' + self.state.workflowId + '/status', { method: 'PATCH', headers: self._H(), body: JSON.stringify({ status: 'error' }) })
+          .then(function() { self._loadWorkflows(); }).catch(function() {});
+      }
+    });
   }
 
   // ── ANSWERING AN APPROVAL IN THE TEST PANEL (2026-07-22) ──────────────────
@@ -8552,12 +8582,14 @@ class Component extends DCLogic {
       testSteps: contract.show ? [] : testSteps, slackChannel: this._slackChannel(), deliveryTarget: this._deliveryMeta().header, summaryText: this._summaryText(),
       outcomeCards: this._outcomeCards(), showOutcomes: (S.outcomeResults || []).length > 0 && (TS === "passed" || TS === "failed") && !contract.show,
       contract,
-      // ANSWERING THE GATE. One button per answer the step itself declares, in the
-      // step's own words — nothing here knows what "approve" means. The safe answer
-      // is listed first and styled plainly, because a gate that only ever gets
-      // approved proves nothing: `isWrite` marks the answers whose route performs a
-      // real send or write, so the tester sees which button has consequences.
-      showPauseAnswers: TS === "paused" && !!S.pausedRunId && !S.pausedAnswering,
+      // GATE ANSWERS ARE NO LONGER ASKED IN THE PANEL (2026-07-24, operator). Pressing
+      // Run test authorizes the whole run, and `runTest` now exercises every gate BOTH
+      // ways automatically (approve-all and reject-all passes, gates pre-answered so the
+      // run never pauses) — so there is nothing to click. This is forced false rather
+      // than deleted so `_applyTestResult`'s defensive "if somehow paused, land safely
+      // and never certify" branch still holds (a paused run must never read as passed),
+      // it just no longer offers in-panel Approve/Reject.
+      showPauseAnswers: false,
       pauseQuestion: (S.pausedAsk && S.pausedAsk.ask && S.pausedAsk.ask.prompt) || "Approve this step?",
       pauseAnswers: ((S.pausedAsk && S.pausedAsk.ask && S.pausedAsk.ask.decisions) || []).map((dec) => ({
         label: this._titleCase(String(dec).replace(/[_-]+/g, " ")),

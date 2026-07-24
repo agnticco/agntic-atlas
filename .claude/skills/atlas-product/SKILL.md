@@ -133,7 +133,15 @@ Verdicts you should see, and what each means:
   A sample that took a do-nothing path, a workflow with no promises, or a negative
   example ("should not trigger") all land here. The whole point is that Atlas
   refuses to certify rather than certifying blind.
-- **paused** — the run stopped at an approval step. Also must not unlock Go live.
+
+**Approval steps no longer pause the test** (2026-07-24). Pressing Run test authorizes
+the whole run; Atlas answers each approval gate itself and runs a gate-reaching example
+BOTH ways — an approve pass and a reject pass — so both lanes are actually proven, with
+nothing sent (every run is dry). There is **no in-panel Approve/Reject any more**, and a
+test never sits "Waiting on a person." **Must:** for a gated workflow, the evidence list
+shows the urgent/gated examples twice (approve ✓ and reject ✓); if a reject pass is
+missing, the reject path went unproven. A run that somehow DOES pause must still never
+certify (the safety net holds), but you should not see one.
 
 **Must:** if the workflow has three paths and the samples only exercised one, Atlas
 says so and blocks. A router is only proved on the routes you test.
@@ -191,17 +199,16 @@ verify these are still true rather than assuming:
   sample runs against the same live data, so they all prove the same one thing.
 - **Test runs count toward the live health score**, so a workflow that has never
   fired for real can read "100% success".
-- **Answering an approval IN the test panel now exists — but is unverified end to
-  end.** The panel renders in-panel Approve/Reject for a paused approval and clicking
-  one resumes the run (shipped `6ef6135`), so the old "an approval cannot be answered
-  here" is STALE. What is NOT yet confirmed by anyone clicking it through: that the
-  after-gate steps then resolve and Go live unlocks. The old warning that clicking
-  Approve creates real data is now STALE too — `/workflows/run` (both the initial test
-  and the resume-after-approval) is FORCED dry as of `de92b49`, so the after-gate
-  writes/sends are VERIFIED into would-deliver receipts, never fired. Treat post-gate
-  behaviour as unproven until a run is answered and reaches a kept verdict, but it can
-  now be exercised safely. Still true and load-bearing: a run left PAUSED (unanswered)
-  must never certify — do not make a paused run count as a pass.
+- **Approvals in the test panel are now AUTO-EXERCISED, both ways — witnessed live
+  (2026-07-24).** The old in-panel Approve/Reject clicking is GONE. Pressing Run test
+  answers each gate for the tester and runs a gate-reaching example once as approve and
+  once as reject (gates pre-answered via `decisions` so the run completes instead of
+  pausing), so BOTH lanes are proven, with nothing sent (dry). Confirmed in a headed
+  browser: a classify→approve workflow reached "Contract kept · Go live" with the urgent
+  examples showing an approve ✓ and a reject ✓ pass each, the reject passes taking the
+  stop lane, zero real sends. Still true and load-bearing: a run that left PAUSED
+  (unanswered) must never certify — the defensive landing that keeps a paused payload out
+  of "passed" is retained, though a test should no longer produce one.
 
   **What "would deliver" now means.** A dry receipt with `wouldDeliver:true` proves the
   content is real and fully resolved, the connection is live, a target is present, AND

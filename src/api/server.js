@@ -2294,6 +2294,24 @@ export function createApp(spine) {
       // gate would otherwise read as unmet.)
       let runId = resumeState?.runId ?? null, completed = false, output = null;
       const steps = resumeState ? [...resumeState.priorSteps] : [];
+      // PRE-ANSWERED GATES (2026-07-24, operator). The Run-test panel no longer stops
+      // at an approval step to ask the tester (which meant clicking through one pause
+      // per urgent example, with no way for a test to prove the REJECT path). Instead
+      // it supplies each gate's answer UP FRONT — `body.decisions` is { [humanNodeId]:
+      // "approve"|"reject"|… } — and runs the example once per answer, so BOTH the
+      // approve and the reject lane are exercised automatically, no person in the loop.
+      // The executor skips a `human` node whose id is already answered (flow-tester
+      // `if (node.type==='human' && !decisions[node.id])`), so the run completes
+      // straight through instead of pausing. Only on a FRESH run (never a resume, which
+      // already carries its own accumulated answers). Every delivery is still dry, so a
+      // pre-approved gate sends nothing real. An answer not in the step's own declared
+      // set just falls through the branch catch-all — harmless, the same as any
+      // unrecognised route — so no validation is needed here.
+      const initialDecisions = (!resumeState && req.body?.decisions && typeof req.body.decisions === 'object' && !Array.isArray(req.body.decisions))
+        ? Object.fromEntries(Object.entries(req.body.decisions)
+            .filter(([, dec]) => typeof dec === 'string' && dec)
+            .map(([nid, dec]) => [nid, { decision: dec, by: 'test', at: new Date().toISOString(), channel: 'test_panel' }]))
+        : null;
       // tenantId/workflowId are LOAD-BEARING: they scope the idempotency keys.
       // Omitting them used to collapse every tenant into one shared namespace
       // (`unscoped:<nodeId>`), so one tenant's step could be handed another
@@ -2317,7 +2335,8 @@ export function createApp(spine) {
         // far. Replayed steps are restored, never re-run, so nothing that already
         // sent happens twice. Keeping the ORIGINAL runId means cost stays attached
         // to one session and the client keeps answering against a stable id.
-        ...(resumeState ? { checkpoint: resumeState.checkpoint, decisions: resumeState.decisions, runId: resumeState.runId } : {}),
+        ...(resumeState ? { checkpoint: resumeState.checkpoint, decisions: resumeState.decisions, runId: resumeState.runId }
+                        : (initialDecisions ? { decisions: initialDecisions } : {})),
       };
       for await (const ev of spine.engine.flowTester.run(spec, flowOpts)) {
         if (ev.type === 'run_started') {
