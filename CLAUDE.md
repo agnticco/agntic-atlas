@@ -928,24 +928,45 @@ grounded findings report; it never edits code. The running record of these sessi
 the deployed version trails local. Confirm the real gap with `curl -s
 https://atlas.agntic.co/health` against `package.json` before assuming what's live.*
 
+**Settled by the QA pass (2026-07-23):**
+
+- **"Editing a workflow silently drops its promise" — DISPROVEN.** The QA Manager drove it
+  live: an edit correctly *revokes* the green tick, re-locks Go live, forces a fresh test,
+  and the promise survives intact (confirmed unchanged in the DB after the edit through the
+  exact PUT path the old F12 bug lived in). Not a defect. This was open item #3; closed.
+- **A DISTINCT, worse bug was found and fixed: the self-test corrupted the workflow to defeat
+  "ignore spam."** On the canonical classify→approve shape, the converger's self-test (`verify`)
+  enforced a conditional promise gated on the *approval branch* even against a **spam** sample
+  that never reached that branch — so a correctly-stopped spam email read as a **broken
+  delivery**, drove the rebuild loop, and the model rewrote the classifier to forward spam so
+  the delivery would fire (~23 min, a workflow doing the opposite of what the user asked).
+  **Root cause + fix live in the single shared oracle** (`outcome-oracle.js`): `runRouteInfo`
+  now records whether each branch was *reached*; `assertionApplicability` enforces-on-doubt only
+  for a branch that actually **ran** — a never-reached gate's promise does not apply (SKIP, not
+  enforce). One fix covers **both** the converger self-test and the client test panel. Pinned by
+  `tests/workflows/approval-gate-not-reached.test.js` (mutation-verified red→green; the two
+  anti-false-pass cases — a real miss on the *reached* lane still fails, a reject still skips —
+  are in the same suite). **Status: code-proven (919 tests green, server restarted on the new
+  code); a clean end-to-end LIVE witness is still pending** — the first live re-build got stuck
+  in the *separate* gap-loop below before it reached verify.
+
 **Still open, roughly in the order they matter:**
 
-1. **Atlas asks the same set-up questions twice, and the answer still doesn't stick.**
-   The user clicks "Use your suggestions", waits ~1.5–3 minutes for a full rebuild, and
-   is asked the identical questions again with no way to make the answer take. Partially
-   mitigated (the single-possible-answer case is fixed); the general case is open and
-   precisely diagnosed in `hardening-2026-07-22.md`. This is the most user-visible one.
-2. **Test examples can't reach some workflows.** If a workflow starts by fetching
-   something (say, "read my unread email"), the made-up test cases can't influence what
-   it fetches — so every test case runs against the same live data and proves the same
-   one thing. Filed as F3. **Overlaps P13's output-schema groundwork.**
-3. **Editing a workflow may quietly drop its promise.** Suspected, not proven — needs a
-   live test before anyone acts on it. If real, someone could edit a live workflow and
-   have it marked "verified" against a promise nothing checked.
-4. **Test runs are counted in the live health dashboard**, so a workflow that has never
-   actually fired can show "100% success". Cosmetic, but it is the number an operator
-   trusts. Filed as F14.
-5. The rest of the handoff documents — smaller, individually recorded there.
+1. **The blocking-gap rebuild loop (the "asks the same questions / rebuilds" family).** Distinct
+   from the verify-spiral fixed above, and now the dominant slowness: a live re-build (2026-07-23)
+   ran **three** whole-workflow generate passes (200s + 90s + **403s** ≈ 11½ min) driven by
+   `blocker_to_chat` — Atlas hitting a blocking gap, asking the user, regenerating, hitting
+   another — and never reached verify. The user clicks "Use your suggestions", waits minutes for
+   a full rebuild, and is asked more/again. Partially mitigated (the single-possible-answer case);
+   the general case is open, diagnosed in `hardening-2026-07-22.md`. Most user-visible. *(One
+   generate hit 403s — worth checking it isn't silently truncating.)*
+2. **Test examples can't reach some workflows.** If a workflow starts by fetching something (say,
+   "read my unread email"), the made-up test cases can't influence what it fetches — so every
+   test case runs against the same live data and proves the same one thing. Filed as F3.
+   **Overlaps P13's output-schema groundwork.**
+3. **Test runs are counted in the live health dashboard**, so a workflow that has never actually
+   fired can show "100% success". Cosmetic, but it is the number an operator trusts. Filed as F14.
+4. The rest of the handoff documents — smaller, individually recorded there.
 
 ## The phases
 

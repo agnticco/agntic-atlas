@@ -1008,6 +1008,10 @@ export function runRouteInfo(spec, runResult) {
     if (typeof o === 'string') { try { o = JSON.parse(o); } catch { /* keep the string */ } }
     stepOut.set(s?.nodeId, o);
   }
+  // Every node the run actually EXECUTED. A skipped node emits `step_skipped`, which
+  // the dry-run does not push, so a node absent here did not run on this sample. Used
+  // below to tell "this branch was on the executed path" from "this branch never ran".
+  const executed = new Set(stepOut.keys());
 
   const domain = new Set();
   const taken  = new Set();
@@ -1015,7 +1019,7 @@ export function runRouteInfo(spec, runResult) {
   // assertion gated on branch B2's value could be skipped just because a *different*
   // branch B1 positively took a *different* value (adversary Finding 1). `branchRoutes`
   // lets a promise be judged against ITS OWN branch. `taken` is kept for back-compat.
-  const branchRoutes = [];             // per-branch: { domain:Set, taken: string|null }
+  const branchRoutes = [];             // per-branch: { domain:Set, taken: string|null, reached }
   for (const b of branches) {
     const srcId = onRefId(b.config?.on);
     if (!srcId) continue;
@@ -1023,7 +1027,14 @@ export function runRouteInfo(spec, runResult) {
     for (const v of (closedDomainOf(byId.get(srcId)) ?? [])) { const r = normRoute(v); bDomain.add(r); domain.add(r); }
     let bTaken = null;
     if (stepOut.has(srcId)) { const r = normRoute(stepOut.get(srcId)); if (r) { bTaken = r; taken.add(r); } }
-    branchRoutes.push({ domain: bDomain, taken: bTaken });
+    // Was this branch ON THE EXECUTED PATH at all? Yes if its source ran, or if any of
+    // its lane targets ran (a lane's entry node runs only if the branch routed there —
+    // this is what distinguishes "ran but route unreadable" from "never reached").
+    // Adversary Finding 1's shape (branch on the path, source step artificially absent)
+    // stays `reached:true` because its delivery target IS in the steps → still enforced.
+    const reached = executed.has(srcId)
+      || normalizeCases(b.config?.cases).some(c => c?.to && executed.has(c.to));
+    branchRoutes.push({ domain: bDomain, taken: bTaken, reached });
   }
   return { hasBranch: branches.length > 0, domain, taken, branchRoutes };
 }
@@ -1187,9 +1198,21 @@ export function assertionApplicability(assertion, routeInfo) {
   if (Array.isArray(info.branchRoutes)) {
     const owning = info.branchRoutes.filter(b => b.domain.has(w));
     if (owning.length) {
-      if (owning.some(b => b.taken === w || b.taken == null)) return { conditional: true, applies: true };
+      // Enforce if an owning branch positively took this lane, OR ran but its route was
+      // unreadable (doubt → enforce). A branch that was NEVER REACHED on this run is NOT
+      // doubt: an upstream branch sent the sample down a different lane, so this gate's
+      // node never executed and its lane definitively did not happen — the promise does
+      // not apply. Without the `b.reached` guard, a conditional gated on a DOWNSTREAM
+      // branch (e.g. an approval gate reachable only from the "urgent" lane) is wrongly
+      // enforced on every sample that never reaches it: a spam email "fails" a promise
+      // about approved mail, and the converger's self-test rebuilds — corrupting the
+      // classifier to force the delivery. `reached` is the whole fix.
+      if (owning.some(b => b.taken === w || (b.reached && b.taken == null))) return { conditional: true, applies: true };
+      const took = owning.map(b => b.taken).filter(Boolean);
       return { conditional: true, applies: false, malformed: false,
-        reason: `this sample routed "${owning.map(b => b.taken).filter(Boolean).join(', ')}", not "${when}", so this promise does not apply to it` };
+        reason: took.length
+          ? `this sample routed "${took.join(', ')}", not "${when}", so this promise does not apply to it`
+          : `this sample never reached the step that decides "${when}", so this promise does not apply to it` };
     }
   }
   // A different lane was positively taken ⇒ this promise is about a case this sample
