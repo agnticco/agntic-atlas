@@ -1,5 +1,13 @@
 [
   {
+    "version": "1.6.37",
+    "date": "2026-07-24",
+    "title": "Safer, smarter testing",
+    "notes": [
+      "Running a test never sends real messages now, and it confirms each destination actually exists before it says a step will deliver. Workflows with an approval step test themselves — both the approve and the reject path — with no clicking."
+    ]
+  },
+  {
     "version": "1.6.36",
     "date": "2026-07-23",
     "title": "The sign-in screen no longer offers account creation",
