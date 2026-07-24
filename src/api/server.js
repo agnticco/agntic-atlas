@@ -96,7 +96,7 @@ import { renderResetEmail } from '../auth/reset-email.js';
 import { ApprovalStore } from '../approvals/approval-store.js';
 import { ApprovalService } from '../approvals/approval-service.js';
 import { availableApprovalChannels, approvalChannelView } from '../workflows/approval-channels.js';
-import { evaluateExampleRun, normalizeDelivery, isDeliveryNode } from '../workflows/outcome-oracle.js';
+import { evaluateExampleRun, normalizeDelivery, isDeliveryNode, setCapabilityCatalog } from '../workflows/outcome-oracle.js';
 import { runSpecDryRun } from '../workflows/dry-run-runner.js';
 import { oauthRedirectBase } from '../connectors/oauth-redirect.js';
 import { entitlementsFor, PUBLIC_PLANS, PLAN_META, isSelfServe } from '../entitlements/index.js';
@@ -320,31 +320,55 @@ function verifySlackSignature(req, signingSecret) {
   catch { return false; }
 }
 
-// A node that posts to / calls Slack (so it needs the tenant's Slack token).
-const isSlackNode = (n) =>
-  (n?.type === 'deliver' && String(n?.config?.channel ?? '').startsWith('slack')) ||
-  (n?.type === 'connector-action' && String(n?.config?.action ?? '').startsWith('slack'));
+/* ── P13-0 seam #4: which credential a node needs is DECLARED, not listed ─────
+ *
+ * This used to be three hand-typed Sets of capability ids — and the Google one
+ * carried its own warning: *"keep in sync with the Google capability catalog. A
+ * capability missing here gets no googleToken injected → 'no access token' at run
+ * time even though it's connected (this is how drive_create_folder broke, R22)."*
+ *
+ * A comment telling the next person to remember something is not a mechanism. The
+ * capability already knows which connector it belongs to — it declared it at
+ * registration — so credential resolution reads that instead of a parallel list
+ * somebody has to maintain. Import a server exposing forty tools and the old shape
+ * needed forty strings hand-added here, with a run-time failure for every one
+ * missed, on a connector the customer had correctly connected.
+ *
+ * The catalog is injected once at boot rather than threaded through the six call
+ * sites that build `deps` differently. Unset ⇒ the legacy id-prefix fallback, which
+ * is exactly what Slack already did, so nothing regresses in a test that builds the
+ * injectors without an engine.
+ */
+let _injectorCatalog = null;
+export function setInjectorCatalog(catalog) {
+  _injectorCatalog = (catalog && typeof catalog.get === 'function') ? catalog : null;
+}
 
-const AIRTABLE_ACTION_IDS = new Set([
-  'airtable_list_records', 'airtable_get_record', 'airtable_search_records',
-  'airtable_create_record', 'airtable_update_record', 'airtable_delete_record',
-]);
-const isAirtableNode = (n) =>
-  (n?.type === 'deliver' && AIRTABLE_ACTION_IDS.has(n?.config?.channel)) ||
-  (n?.type === 'connector-action' && AIRTABLE_ACTION_IDS.has(n?.config?.action));
+/** The capability id a node invokes, whichever node type it is. */
+const capabilityIdOf = (n) =>
+  n?.type === 'deliver'           ? String(n?.config?.channel ?? '').trim()
+  : n?.type === 'connector-action' ? String(n?.config?.action  ?? '').trim()
+  : '';
 
-// NOTE: keep in sync with the Google capability catalog (registerGoogleChannels).
-// A capability missing here gets no googleToken injected → "no access token" at
-// run time even though it's connected (this is how drive_create_folder broke, R22).
-const GOOGLE_ACTION_IDS = new Set([
-  'gmail_search', 'gmail_get_message', 'gmail_send', 'gmail_mark_read',
-  'calendar_list_events', 'calendar_create_event',
-  'drive_list_files', 'drive_create_folder', 'sheets_read', 'sheets_append',
-  'docs_read', 'docs_create', 'tasks_list', 'tasks_create',
-]);
-const isGoogleNode = (n) =>
-  (n?.type === 'deliver' && GOOGLE_ACTION_IDS.has(n?.config?.channel)) ||
-  (n?.type === 'connector-action' && GOOGLE_ACTION_IDS.has(n?.config?.action));
+/**
+ * Does this node belong to `connectorId`? Answered by the capability's DECLARED
+ * connector. Falls back to the id prefix only for capabilities the catalog does not
+ * know — note this fallback CANNOT work for Google (`gmail_search`, `sheets_append`,
+ * `docs_create` share no prefix with 'google'), which is precisely why the
+ * declaration is the primary source and the list had to exist at all.
+ */
+export const ownsConnector = (connectorId) => (n) => {
+  const id = capabilityIdOf(n);
+  if (!id) return false;
+  const declared = _injectorCatalog?.get?.(id)?.connector;
+  if (declared) return String(declared).toLowerCase() === connectorId;
+  const lower = id.toLowerCase();
+  return lower === connectorId || lower.startsWith(`${connectorId}_`);
+};
+
+const isSlackNode    = ownsConnector('slack');
+const isAirtableNode = ownsConnector('airtable');
+const isGoogleNode   = ownsConnector('google');
 
 // ── Connector credential registry ────────────────────────────────────────────
 // Per-tenant credential handling for EVERY connector, in one place. Each entry
@@ -796,6 +820,11 @@ async function buildEngine(workflowStore, llm, costTracker = null) {
   await sourceRegistry.init();
 
   const capabilityRegistry = new CapabilityRegistry();
+  // P13-0 seams #1/#2/#4 — the oracle derives effect from what a capability DECLARES,
+  // and credential resolution reads the connector a capability DECLARES, instead of
+  // id-regexes and hand-typed id lists. Both read this one catalog.
+  setInjectorCatalog(capabilityRegistry);
+  setCapabilityCatalog(capabilityRegistry);
 
   const channelRegistry = new ChannelRegistry(capabilityRegistry);
   registerBuiltInChannels(channelRegistry, {});           // in-app + webhook; mcp channel is opt-in

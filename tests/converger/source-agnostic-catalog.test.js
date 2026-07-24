@@ -22,6 +22,10 @@ import assert from 'node:assert/strict';
 
 import { CapabilityRegistry } from '../../src/connectors/capability-registry.js';
 import { nodeEffect, setCapabilityCatalog } from '../../src/workflows/outcome-oracle.js';
+// The REAL predicate production uses, not a copy of it. A mirrored rule is a
+// tautology: revert the seam in server.js and a mirrored test stays green, which is
+// exactly the blind spot this suite exists to close.
+import { ownsConnector, setInjectorCatalog } from '../../src/api/server.js';
 
 /**
  * The synthetic connector. `x_create_page` is chosen deliberately:
@@ -281,5 +285,84 @@ describe('P13-0 (c) — schema discovery is declared, not hardcoded', () => {
     assert.equal(d.describeCapability, 'airtable_describe_base');
     assert.equal(d.containerKey, 'baseId', 'Airtable still resolves through baseId');
     assert.equal(d.tableColumnsKey, 'fields', 'Airtable columns still come from table.fields');
+  });
+});
+
+/* ── P13-0 (d) — the credential a node needs is DECLARED, not listed ──────────
+ *
+ * `server.js` decided which tenant token a node needed by testing its capability id
+ * against three hand-typed Sets. The Google one carried its own warning: a capability
+ * missing from the list gets no token at run time even though the tenant is properly
+ * connected — the R22 defect, shipped once already.
+ *
+ * The failure is user-reachable and near-silent: the workflow publishes, the connector
+ * shows connected, and the run dies with "no access token". Import a server exposing
+ * forty tools and the old shape reproduces it forty times.
+ *
+ * These pin the RULE (resolve from the declared connector) at the registry level,
+ * which is where `server.js`'s `ownsConnector` reads it from.
+ */
+describe('P13-0 (d) — credential resolution follows the declared connector', () => {
+  // `ownsConnector` is imported from server.js and reads the catalog installed by
+  // setInjectorCatalog — the same wiring buildEngine() does at boot.
+  beforeEach(() => setInjectorCatalog(registry));
+  afterEach(()  => setInjectorCatalog(null));
+  const owns = (connectorId) => ownsConnector(connectorId);
+
+  test('a NEW capability on a connected connector gets its credential without being listed anywhere', () => {
+    // The whole point. `x_brand_new_thing` is in no Set, no regex, no list.
+    registry.register({ id: 'x_brand_new_thing', connector: 'x', positions: ['step'], effect: 'write' });
+
+    const ownsX = owns('x');
+
+    // MUTATION: restore the hand-typed `X_ACTION_IDS` Set membership test in
+    // server.js — the capability is absent from it, no token is injected, and the run
+    // fails with "no access token" on a properly connected tenant. Red.
+    assert.ok(ownsX({ type: 'connector-action', config: { action: 'x_brand_new_thing' } }),
+      'a capability declaring connector "x" must resolve x credentials, unlisted');
+  });
+
+  test('the id prefix CANNOT stand in for the declaration — the Google case', () => {
+    // This is why the hand-typed lists existed at all. Google capabilities are named
+    // gmail_/sheets_/docs_/drive_ and share NO prefix with their connector, so any
+    // prefix-based shortcut silently resolves nothing for the biggest connector we have.
+    registry.register({ id: 'sheets_append', connector: 'google', positions: ['step', 'delivery'] });
+    registry.register({ id: 'gmail_send',    connector: 'google', positions: ['step', 'delivery'] });
+
+    const ownsG = owns('google');
+
+    assert.ok(ownsG({ type: 'connector-action', config: { action: 'sheets_append' } }),
+      'sheets_append declares connector google and must resolve google credentials');
+    assert.ok(ownsG({ type: 'deliver', config: { channel: 'gmail_send' } }),
+      'a deliver node resolves credentials the same way a step does');
+  });
+
+  test('a capability of ANOTHER connector never draws the wrong credential', () => {
+    // The dangerous direction: handing one connector's token to another connector's
+    // call. Cross-connector, and with a shared vault, a step from leaking a credential.
+    registry.register({ id: 'sheets_append',  connector: 'google', positions: ['step'] });
+    registry.register({ id: 'x_create_thing', connector: 'x',      positions: ['step'] });
+
+    assert.equal(
+      owns('google')({ type: 'connector-action', config: { action: 'x_create_thing' } }),
+      false, 'connector x must never be handed google credentials');
+    assert.equal(
+      owns('x')({ type: 'connector-action', config: { action: 'sheets_append' } }),
+      false, 'connector google must never be handed x credentials');
+  });
+
+  test('an unregistered id falls back to the prefix, so nothing regresses', () => {
+    // Slack always worked by prefix; a catalog-less test harness must still behave.
+    const ownsS = owns('slack');
+    assert.ok(ownsS({ type: 'deliver', config: { channel: 'slack' } }));
+    assert.ok(ownsS({ type: 'connector-action', config: { action: 'slack_post_message' } }));
+    assert.equal(ownsS({ type: 'connector-action', config: { action: 'notion_create_page' } }), false);
+  });
+
+  test('a node that invokes no capability owns nothing', () => {
+    const ownsN = owns('x');
+    assert.equal(ownsN({ type: 'llm', config: { mode: 'summarize' } }), false);
+    assert.equal(ownsN({ type: 'connector-action', config: {} }), false);
+    assert.equal(ownsN(null), false);
   });
 });
