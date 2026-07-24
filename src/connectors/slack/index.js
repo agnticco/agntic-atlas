@@ -272,6 +272,22 @@ export function registerSlackChannel(registry, { fetchImpl = fetch } = {}) {
       { key: 'icon_emoji', label: 'Bot icon emoji',type: 'string',   optional: true  },
     ],
     isReady: ready,
+    // Non-destructive reachability read for the dry-run test: does the channel exist?
+    // (`chat.postMessage`'s #1 real failure is channel_not_found.) A read, never a send.
+    // resolveChannel THROWS both when the channel definitively doesn't exist AND on a
+    // transient API/auth error — only the first should fail the test. A definitive
+    // "not found" returns reachable:false (blocks); anything else RE-THROWS so the
+    // dry path marks reachability inconclusive rather than failing a valid workflow.
+    probe: async ({ config }) => {
+      try {
+        await resolveChannel(makeApi(config), config.target);
+        return { reachable: true };
+      } catch (e) {
+        if (/not[ _]found/i.test(e.message))
+          return { reachable: false, reason: `the Slack channel "${config.target}" wasn't found` };
+        throw e;   // transient — let the dry path treat it as inconclusive
+      }
+    },
     deliver: async ({ config, body, title }) => {
       const api = makeApi(config);
       if (!config.target) throw new Error('slack: config.target (channel) is required');
@@ -294,6 +310,19 @@ export function registerSlackChannel(registry, { fetchImpl = fetch } = {}) {
       { key: 'body', label: 'Message',                  type: 'textarea', optional: true  },
     ],
     isReady: ready,
+    // Non-destructive reachability read: does the Slack user exist? A read, never a send.
+    // Same contract as the channel probe: a definitive "no such user" blocks; a
+    // transient error re-throws and is treated as inconclusive by the dry path.
+    probe: async ({ config }) => {
+      try {
+        await resolveUser(makeApi(config), config.user);
+        return { reachable: true };
+      } catch (e) {
+        if (/no user found|not[ _]found/i.test(e.message))
+          return { reachable: false, reason: `no Slack user matches "${config.user}"` };
+        throw e;   // transient — inconclusive, don't fail a valid workflow
+      }
+    },
     deliver: async ({ config, body, title }) => {
       const api = makeApi(config);
       const userId = await resolveUser(api, config.user);

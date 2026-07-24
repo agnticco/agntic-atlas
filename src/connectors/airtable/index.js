@@ -394,6 +394,20 @@ export function registerAirtableChannels(capabilityRegistry) {
       { key: 'fields',  label: 'Fields',            type: 'object',   optional: false, hint: 'An OBJECT of column → value: { "Name": "{{extract.name}}" }. One template per column — a JSON string is refused, because its column names cannot be checked against the real table.' },
     ],
     isReady: ready,
+    // Non-destructive reachability read for the dry-run test: does the target base
+    // exist and actually contain the target table? (Airtable SILENTLY drops writes to a
+    // table that isn't there.) It reads the base's schema — never writes. A definitive
+    // "table not in this base" returns reachable:false (blocks); any other error (the
+    // base is gone, a transient API/auth failure) RE-THROWS so the dry path marks
+    // reachability inconclusive rather than failing a valid workflow.
+    probe: async ({ config }) => {
+      const api = makeAirtableApi(config.airtableToken);
+      const schema = await airtableDescribeBase(api, { baseId: config.baseId });
+      const wanted = String(config.tableId ?? '');
+      const found = (schema?.tables ?? []).some(t => t.id === wanted || t.name === wanted);
+      return found ? { reachable: true }
+                   : { reachable: false, reason: `the Airtable table "${wanted}" wasn't found in that base` };
+    },
     handle: makeHandle((api, config) => airtableCreateRecord(api, config)),
   });
 

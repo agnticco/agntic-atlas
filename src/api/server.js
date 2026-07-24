@@ -2303,13 +2303,16 @@ export function createApp(spine) {
         ...(dbRun ? { runId: dbRun.id } : {}),
         ...(req.tenant ? { tenantId: req.tenant.id } : {}),
         ...(spec.id ? { workflowId: spec.id } : {}),
-        // DRY RUN (increment #21). When set, terminal side-effect nodes (deliver +
-        // writing connector-actions) are VERIFIED into a would-deliver receipt
-        // instead of fired — no real emails/records/Slack posts. This is what lets
-        // the converger's self-verification loop iterate a draft through the real
-        // engine without spamming real deliveries on every fix-retry. Default OFF:
-        // absent the flag, deliveries fire for real, exactly as before.
-        ...(req.body?.dryRunDeliveries === true ? { dryRunDeliveries: true } : {}),
+        // ALWAYS DRY (2026-07-24, operator). /workflows/run is the TEST path — the only
+        // callers are the Run-test panel — and a test MUST NEVER SEND REAL MESSAGES (the
+        // operator got 5 real Slack DMs from one Run test). Terminal side-effect nodes
+        // (deliver + writing connector-actions) are VERIFIED into a would-deliver receipt
+        // instead of fired: the outcome oracle reads it as would-satisfy, and a connector
+        // `probe` confirms the destination actually EXISTS and is reachable
+        // (flow-tester `_dryRunDeliver`), so the test proves "it WILL deliver" without
+        // sending. The ONE real delivery is Go-live. Forced here (was opt-in via the
+        // request flag) so no client bug or other caller can make a test send for real.
+        dryRunDeliveries: true,
         // RESUMING: the executor takes the checkpoint plus the answers given so
         // far. Replayed steps are restored, never re-run, so nothing that already
         // sent happens twice. Keeping the ORIGINAL runId means cost stays attached

@@ -53,6 +53,7 @@ export class ChannelRegistry {
       outputFormat:   def.outputFormat ?? 'plain',
       isReady:        def.isReady     ?? (() => true),
       handle:         def.deliver,
+      probe:          def.probe       ?? null,   // dry-run destination-reachability read
     });
     return this;
   }
@@ -74,6 +75,9 @@ export class ChannelRegistry {
 
   /** Internal — handler fn for node executors. */
   getHandler(id) { return this._cap.getHandler(id); }
+
+  /** Internal — destination-reachability probe for the dry-run test path, or null. */
+  getProbe(id) { return this._cap.getProbe(id); }
 
   /**
    * All step + delivery capabilities (triggers excluded), deduplicated,

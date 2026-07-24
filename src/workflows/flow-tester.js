@@ -872,8 +872,32 @@ export class FlowTester {
     const bodyWellFormed = hasBody && !UNRESOLVED_TEMPLATE.test(body);
     const { present: targetPresent, target } = deliveryTarget(node);
 
-    const checks = { hasBody, bodyWellFormed, targetPresent, capabilityConnected };
-    const wouldDeliver = hasBody && bodyWellFormed && targetPresent && capabilityConnected;
+    // DESTINATION REACHABILITY — the gap between "would deliver" and "WILL deliver".
+    // The checks above prove the content is real and a target is SPECIFIED — not that
+    // the target EXISTS and is reachable (a `#channel` that's filled in but deleted, or
+    // the bot isn't a member; an Airtable base that was removed). A connector may
+    // register a `probe`: a non-destructive READ (Slack resolve-channel, Airtable
+    // describe-base) that confirms the destination is real, so the test can say "it WILL
+    // deliver" without doing the delivery. Run it only when the connection is live and a
+    // target is present (nothing to reach otherwise), and only if the connector provides
+    // one — a capability with no probe keeps the shallower guarantee rather than being
+    // blocked. A probe that ERRORS is inconclusive (a flaky read is not proof the
+    // destination is bad), so it leaves reachability null and never fails a valid run.
+    const probe = services?.channelRegistry?.getProbe?.(channelId);
+    let destinationReachable = null;   // null = not probed (no regression); true/false = probed
+    let unreachableReason    = null;
+    if (probe && capabilityConnected && targetPresent) {
+      try {
+        const r = await probe({ config: cfg, node, services });
+        destinationReachable = r?.reachable !== false;
+        if (destinationReachable === false) unreachableReason = r?.reason || 'the destination could not be reached';
+      } catch { destinationReachable = null; }
+    }
+
+    const checks = { hasBody, bodyWellFormed, targetPresent, capabilityConnected, destinationReachable };
+    // A POSITIVELY-unreachable destination blocks; unprobed / inconclusive (null) does not.
+    const wouldDeliver = hasBody && bodyWellFormed && targetPresent && capabilityConnected
+      && destinationReachable !== false;
 
     return {
       dryRun: true,
@@ -882,6 +906,7 @@ export class FlowTester {
       target: target ?? null,
       contentPreview: body.slice(0, 200),
       checks,
+      ...(unreachableReason ? { unreachableReason } : {}),
     };
   }
 

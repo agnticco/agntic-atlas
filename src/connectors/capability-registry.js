@@ -54,6 +54,12 @@ export class CapabilityRegistry {
       outputFormat:   def.outputFormat   ?? 'plain',
       isReady:        def.isReady        ?? (() => true),
       handle:         def.handle         ?? null,
+      // A non-destructive READ that confirms this delivery's DESTINATION exists and is
+      // reachable — e.g. "does this Slack channel exist and is the bot in it", "does this
+      // Airtable base/table exist". Called ONLY by the dry-run test path (`_dryRunDeliver`)
+      // so a test can say "it WILL deliver" without doing the delivery. Optional: a
+      // capability with no probe keeps the shallower "a target is specified" check.
+      probe:          def.probe          ?? null,
     });
     return this;
   }
@@ -86,6 +92,11 @@ export class CapabilityRegistry {
     return this._caps.get(id)?.handle ?? null;
   }
 
+  /** Internal — the destination reachability probe (dry-run test path only), or null. */
+  getProbe(id) {
+    return this._caps.get(id)?.probe ?? null;
+  }
+
   /** Whether a capability is registered AND its isReady() probe passes. */
   isAvailable(id) {
     return this.get(id)?.available ?? false;
@@ -100,7 +111,7 @@ export class CapabilityRegistry {
       available = false;
       unavailableReason = e.message;
     }
-    const { handle, isReady, ...pub } = cap;
+    const { handle, isReady, probe, ...pub } = cap;
     return { ...pub, available, unavailableReason };
   }
 }

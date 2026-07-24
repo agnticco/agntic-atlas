@@ -158,7 +158,10 @@ describe('dry-run mode — deliver is verified, not fired', () => {
     assert.equal(receipt.channel, 'slack');
     assert.equal(receipt.target, '#ops');
     assert.deepEqual(receipt.checks,
-      { hasBody: true, bodyWellFormed: true, targetPresent: true, capabilityConnected: true });
+      { hasBody: true, bodyWellFormed: true, targetPresent: true, capabilityConnected: true,
+        // this recordingRegistry has no getProbe, so reachability is not probed (null) —
+        // the shallower "a target is specified" guarantee, no regression.
+        destinationReachable: null });
     // The body was actually computed from the upstream content step (proves the
     // processing chain ran for real), and appears in the preview.
     assert.ok(receipt.contentPreview.includes('Q3'), 'the preview is the real computed body');
@@ -314,6 +317,99 @@ describe('outcome oracle — would-satisfy from a dry receipt', () => {
     const node = { type: 'deliver', config: { channel: 'slack', target: '#ops' } };
     const real = normalizeDelivery(node, { delivered: true, ts: '1728.1' });
     assert.equal(real.delivered, true);
+  });
+});
+
+// ── 4b. DESTINATION REACHABILITY — "would deliver" vs "WILL deliver" ───────────
+
+/**
+ * A registry that ALSO exposes a `getProbe` — the non-destructive destination read
+ * the dry path consults to close the gap between "a target is specified" and "the
+ * target exists and is reachable". `probeResult` is what the connector's probe
+ * returns (or throw:true to simulate a flaky read).
+ */
+function probingRegistry(probeResult, { throws = false } = {}) {
+  const sent = [];
+  const registry = {
+    get: (id) => ({ id, available: true }),
+    getHandler: (id) => async (args) => { sent.push({ channel: id, body: args.body }); return { delivered: true, ts: `${id}-1.1` }; },
+    getProbe: (_id) => async () => { if (throws) throw new Error('slack API flaked'); return probeResult; },
+  };
+  return { registry, sent };
+}
+
+describe('dry-run mode — a probe closes the "will it actually reach" gap', () => {
+  test('a POSITIVELY-unreachable destination → wouldDeliver:false, destinationReachable:false, reason named', async () => {
+    const { registry, sent } = probingRegistry({ reachable: false, reason: 'the Slack channel "#ops" wasn\'t found' });
+    const events = await runAll(tester(registry), slackDeliverySpec(),
+      { dryRunDeliveries: true, initialContext: 'raw' });
+
+    assert.equal(sent.length, 0, 'still no real send — the probe is a READ');
+    const receipt = outputOf(events, 'd');
+    assert.equal(receipt.wouldDeliver, false, 'an unreachable destination must not "would-deliver"');
+    assert.equal(receipt.checks.destinationReachable, false, 'the failing check is named');
+    assert.ok(/wasn't found/.test(receipt.unreachableReason), 'the human reason is carried');
+    // and the content itself was fine — this is a DESTINATION failure, not a body one
+    assert.equal(receipt.checks.hasBody, true);
+    assert.equal(receipt.checks.bodyWellFormed, true);
+  });
+
+  test('a reachable destination → wouldDeliver:true, destinationReachable:true', async () => {
+    const { registry } = probingRegistry({ reachable: true });
+    const events = await runAll(tester(registry), slackDeliverySpec(),
+      { dryRunDeliveries: true, initialContext: 'raw' });
+    const receipt = outputOf(events, 'd');
+    assert.equal(receipt.wouldDeliver, true);
+    assert.equal(receipt.checks.destinationReachable, true);
+    assert.equal(receipt.unreachableReason, undefined, 'no reason on a clean receipt');
+  });
+
+  test('a probe that ERRORS is inconclusive — reachability null, run NOT blocked', async () => {
+    // A flaky read is not proof the destination is bad. Reachability stays null and
+    // wouldDeliver rides on the other four checks — a valid workflow is never failed
+    // by a transient API blip in the probe.
+    const { registry } = probingRegistry(null, { throws: true });
+    const events = await runAll(tester(registry), slackDeliverySpec(),
+      { dryRunDeliveries: true, initialContext: 'raw' });
+    const receipt = outputOf(events, 'd');
+    assert.equal(receipt.checks.destinationReachable, null, 'a thrown probe leaves reachability unknown');
+    assert.equal(receipt.wouldDeliver, true, 'inconclusive does not block a valid delivery');
+  });
+
+  test('NO-REGRESSION: a connector with no probe keeps the shallower guarantee', async () => {
+    // recordingRegistry has no getProbe → reachability is never probed. wouldDeliver
+    // must still ride on the four content/target/connection checks, exactly as before.
+    const { registry } = recordingRegistry();
+    const events = await runAll(tester(registry), slackDeliverySpec(),
+      { dryRunDeliveries: true, initialContext: 'raw' });
+    const receipt = outputOf(events, 'd');
+    assert.equal(receipt.checks.destinationReachable, null, 'unprobed = null, not false');
+    assert.equal(receipt.wouldDeliver, true, 'an unprobed connector is not blocked');
+  });
+
+  test('the oracle reads an unreachable dry receipt as NOT satisfied (the promise is broken)', () => {
+    // This is the whole point: the test panel must not certify a delivery whose
+    // destination it just confirmed unreachable.
+    const node = { type: 'deliver', config: { channel: 'slack', target: '#ops' } };
+    const unreachable = normalizeDelivery(node, {
+      dryRun: true, wouldDeliver: false, channel: 'slack', target: '#ops',
+      checks: { hasBody: true, bodyWellFormed: true, targetPresent: true, capabilityConnected: true, destinationReachable: false },
+    });
+    assert.equal(unreachable.delivered, false, 'wouldDeliver:false maps to delivered:false');
+    const verdict = checkAssertionAtRuntime({ id: 'a1', kind: 'message_sent', target: 'slack:#ops' }, [unreachable]);
+    assert.equal(verdict.ok, false, 'the message_sent assertion is NOT satisfied');
+  });
+
+  test('THE DISCRIMINATOR: flipping only the probe result flips wouldDeliver', async () => {
+    // Everything else held constant, reachability is the deciding check. If the probe
+    // were ignored (dropped from the wouldDeliver conjunction), both runs would say
+    // true and this goes red — proving the probe is load-bearing, not decorative.
+    const reachable   = probingRegistry({ reachable: true });
+    const unreachable = probingRegistry({ reachable: false, reason: 'gone' });
+    const evR = await runAll(tester(reachable.registry),   slackDeliverySpec(), { dryRunDeliveries: true, initialContext: 'raw' });
+    const evU = await runAll(tester(unreachable.registry), slackDeliverySpec(), { dryRunDeliveries: true, initialContext: 'raw' });
+    assert.equal(outputOf(evR, 'd').wouldDeliver, true);
+    assert.equal(outputOf(evU, 'd').wouldDeliver, false);
   });
 });
 
