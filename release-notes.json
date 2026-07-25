@@ -1,5 +1,13 @@
 [
   {
+    "version": "1.6.41",
+    "date": "2026-07-25",
+    "title": "Times are now local, not UTC",
+    "notes": [
+      "Atlas now tells the time in your timezone rather than UTC — and because UTC rolls over to tomorrow in the evening, this also makes \"today\" correct after about 7pm Central."
+    ]
+  },
+  {
     "version": "1.6.40",
     "date": "2026-07-25",
     "title": "Atlas knows what day it is",

@@ -41,7 +41,7 @@ function captureLLM() {
 const systemTextOf = (messages) => String(messages[0]?.content ?? '');
 
 import { ChatModel } from '../../src/llm/chat-model.js';
-import { currentDateLine } from '../../src/utils/current-time.js';
+import { currentDateLine, deploymentTimeZone } from '../../src/utils/current-time.js';
 import { SystemMessage, HumanMessage } from '../../src/core/message.js';
 
 /**
@@ -87,11 +87,54 @@ describe('every model call Atlas makes is told the current date', () => {
   });
 
   test('the clock states the date, the weekday, and forbids guessing', () => {
-    const line = currentDateLine(new Date('2026-07-25T09:30:00.000Z'));
-    assert.match(line, /2026-07-25/);
+    const line = currentDateLine(new Date('2026-07-25T09:30:00.000Z'), 'UTC');
     assert.match(line, /Saturday/);          // "even on a Saturday" on a Friday was a real symptom
     assert.match(line, /25 July 2026/);      // 07/25 vs 25/07 is itself a date bug
-    assert.match(line, /Never infer the date from your training data/i);
+    assert.match(line, /2026-07-25T09:30/);  // UTC carried alongside, for machine use
+    assert.match(line, /Never infer the date or time from your training data/i);
+  });
+
+  test('it reports the LOCAL time and names the zone, not bare UTC', () => {
+    // Reported from production: chat said "4:34 UTC". Unhelpful as a format, and the
+    // symptom of something worse — see the rollover test below.
+    const line = currentDateLine(new Date('2026-07-25T16:37:00.000Z'), 'America/Chicago');
+    assert.match(line, /11:37/, 'local wall-clock time, not the UTC hour');
+    assert.match(line, /Central Daylight Time/, 'the zone must be named readably, not as GMT-5');
+    assert.match(line, /America\/Chicago/, 'and stated unambiguously for the model');
+    assert.match(line, /2026-07-25T16:37/, 'UTC still carried for machine-readable use');
+  });
+
+  test('THE ROLLOVER: a UTC clock makes "today" WRONG for a third of the day', () => {
+    // This is why the timezone is a correctness bug and not a formatting nicety. At
+    // 01:34 UTC on the 26th it is still the EVENING OF THE 25TH in Chicago. A UTC
+    // clock would tell the model it is the 26th, so "today's date" is wrong — the
+    // exact defect this whole module exists to prevent, wearing a different hat.
+    const at = new Date('2026-07-26T01:34:00.000Z');
+
+    const local = currentDateLine(at, 'America/Chicago');
+    assert.match(local, /Saturday, 25 July 2026/, 'local date must still be the 25th');
+    assert.match(local, /20:34/);
+
+    // MUTATION: drop the `timeZone: tz` option so it renders in UTC — this flips to
+    // "Sunday, 26 July" and goes red. That was the shipped behaviour.
+    const utc = currentDateLine(at, 'UTC');
+    assert.match(utc, /Sunday, 26 July 2026/, 'UTC really has rolled over — the bug is real');
+  });
+
+  test('an unset zone defaults to UTC, and a nonsense zone falls back instead of throwing', () => {
+    // A broken zone must not emit a broken clock, and must not take down a run.
+    const prev = process.env.ATLAS_TIMEZONE;
+    try {
+      delete process.env.ATLAS_TIMEZONE;
+      assert.equal(deploymentTimeZone(), 'UTC');
+      process.env.ATLAS_TIMEZONE = 'Mars/Olympus_Mons';
+      assert.equal(deploymentTimeZone(), 'UTC', 'an unknown zone falls back rather than throwing');
+      assert.match(currentDateLine(new Date('2026-07-25T09:00:00.000Z')), /25 July 2026/);
+      process.env.ATLAS_TIMEZONE = 'America/Chicago';
+      assert.equal(deploymentTimeZone(), 'America/Chicago');
+    } finally {
+      if (prev === undefined) delete process.env.ATLAS_TIMEZONE; else process.env.ATLAS_TIMEZONE = prev;
+    }
   });
 
   test('it falls back to the real clock, and tolerates a bad one', () => {
