@@ -11,6 +11,7 @@ import { Runnable } from '../core/runnable.js';
 import { AIMessage, HumanMessage, SystemMessage, ToolMessage } from '../core/message.js';
 import { log } from '../utils/logger.js';
 import { numEnv } from '../utils/env.js';
+import { currentDateLine } from '../utils/current-time.js';
 
 /**
  * Cap on `pause_turn` continuations within a single ChatModel call. Anthropic
@@ -225,13 +226,19 @@ export class ChatModel extends Runnable {
    */
   _prepareOpenAIMessages(messages) {
     const result = [];
+    let sawSystem = false;
 
     for (const m of messages) {
       if (m.type === 'system') {
-        result.push({ role: 'system', content: m.content });
+        // Appended, never prepended: OpenAI's caching is prefix-based too, so a
+        // volatile timestamp at the front would defeat it. See the note on the
+        // Anthropic path for why the clock is injected here rather than per call site.
+        result.push({ role: 'system', content: `${m.content}\n\n${currentDateLine()}` });
+        sawSystem = true;
         continue;
       }
       if (m.type === 'human') {
+        if (!sawSystem) { result.push({ role: 'system', content: currentDateLine() }); sawSystem = true; }
         result.push({ role: 'user', content: m.content });
         continue;
       }
@@ -304,10 +311,29 @@ export class ChatModel extends Runnable {
       //
       // Cache minimums are per-model (sonnet 2048 / haiku 4096 tokens). A prefix
       // below the minimum silently doesn't cache — it does not error.
+      // ── The clock, for EVERY call Atlas makes ────────────────────────────
+      // A model has no clock; asked the date it answers from training data, and
+      // confidently. In production a workflow wrote a date over a year wrong into a
+      // customer's real base while every status said success, and the chat cheerfully
+      // reported the wrong day. Injecting it at each call site instead was tried and
+      // MISSED SURFACES twice — the engine, then the converger, then chat. This is
+      // the one place every provider call passes through, so no surface can be
+      // forgotten again.
+      //
+      // POSITION IS LOAD-BEARING. It goes in a SEPARATE block AFTER the cached one.
+      // The prompt cache keys on a byte-stable prefix; a timestamp at the head of the
+      // system prompt makes every request unique and silently reduces the cache hit
+      // rate to zero — a real cost and latency regression that nothing would report.
+      // Anthropic caches only up to the `cache_control` marker, so anything after it
+      // is free to change without invalidating the prefix.
+      const clockBlock = { type: 'text', text: currentDateLine(config.now) };
       if (system) {
         baseParams.system = ENABLE_PROMPT_CACHE
-          ? [{ type: 'text', text: system, cache_control: { type: 'ephemeral', ttl: '1h' } }]
-          : system;
+          ? [{ type: 'text', text: system, cache_control: { type: 'ephemeral', ttl: '1h' } }, clockBlock]
+          : [{ type: 'text', text: system }, clockBlock];
+      } else {
+        // No caller system prompt (plain chat, some JSON calls) — the clock alone.
+        baseParams.system = [clockBlock];
       }
       if (toolRegistry) {
         const tools = Array.isArray(toolRegistry)

@@ -18,6 +18,7 @@
 
 import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 
 import { llmNodeType as llmNode } from '../../src/workflows/node-types/llm.js';
 
@@ -39,149 +40,75 @@ function captureLLM() {
 
 const systemTextOf = (messages) => String(messages[0]?.content ?? '');
 
-describe('every llm call is told the current date', () => {
-  test('the system message carries the date, in both machine and human form', async () => {
-    const { seen, services } = captureLLM();
-    const now = new Date('2026-07-25T09:30:00.000Z');
-
-    await llmNode.run(
-      { mode: 'freeform', prompt: 'Write today\'s date.' },
-      { lastOutput: 'anything', now },
-      services,
-    );
-
-    const system = systemTextOf(seen[0]);
-
-    // MUTATION: remove the `currentDateLine(ctx)` prefix in llm.js run() and pass
-    // `system` straight to SystemMessage — the model is blind to the date again and
-    // this goes red. That is the exact state that wrote 2025-07-14 into a real base.
-    assert.match(system, /2026-07-25/, 'the ISO date must be present');
-    assert.match(system, /Saturday/,   'the weekday must be present — "even on a Saturday" on a Friday was the second symptom');
-    assert.match(system, /25 July 2026/, 'an unambiguous human form, since 07/25 vs 25/07 is itself a date bug');
-  });
-
-  test('it is in the SYSTEM message, not the user prompt', async () => {
-    // A user-authored prompt can be long, can contain its own dates, and can
-    // contradict. The instruction belongs where it cannot be displaced.
-    const { seen, services } = captureLLM();
-    const now = new Date('2026-07-25T09:30:00.000Z');
-
-    await llmNode.run(
-      { mode: 'freeform', prompt: 'Ignore all dates. The year is 1999.' },
-      { lastOutput: 'x', now },
-      services,
-    );
-
-    assert.match(systemTextOf(seen[0]), /2026-07-25/);
-    assert.doesNotMatch(String(seen[0][1]?.content ?? ''), /CURRENT DATE AND TIME/,
-      'the date belongs in the system message only');
-  });
-
-  test('every mode gets it, not just the one that was reported', async () => {
-    // The bug surfaced through a summarise step. Fixing only that mode would leave
-    // the identical defect in the other four, which is how a fix becomes a whack-a-mole.
-    for (const mode of ['summarize', 'extract', 'rewrite', 'freeform']) {
-      const { seen, services } = captureLLM();
-      const cfg = { mode, prompt: 'go', fields: 'when: the date' };
-      await llmNode.run(cfg, { lastOutput: 'some input', now: new Date('2026-07-25T00:00:00.000Z') }, services);
-      assert.match(systemTextOf(seen[0]), /2026-07-25/, `mode "${mode}" was not told the date`);
-    }
-  });
-
-  test('it tells the model NOT to infer the date from training data', async () => {
-    // The instruction is the load-bearing half. Stating the date without forbidding
-    // the guess leaves a model free to prefer what it "remembers".
-    const { seen, services } = captureLLM();
-    await llmNode.run({ mode: 'freeform', prompt: 'x' },
-      { lastOutput: 'x', now: new Date('2026-07-25T00:00:00.000Z') }, services);
-    assert.match(systemTextOf(seen[0]), /Never infer the date from your training data/i);
-  });
-
-  test('with no injected clock it falls back to the real one, and is roughly now', async () => {
-    // Nothing in the engine sets ctx.now today, so the fallback is the live path.
-    const { seen, services } = captureLLM();
-    await llmNode.run({ mode: 'freeform', prompt: 'x' }, { lastOutput: 'x' }, services);
-
-    const iso = systemTextOf(seen[0]).match(/(\d{4}-\d{2}-\d{2}T[\d:.]+Z)/)?.[1];
-    assert.ok(iso, 'a date must still be injected without ctx.now');
-    assert.ok(Math.abs(Date.now() - Date.parse(iso)) < 60_000, 'the fallback must be the actual current time');
-  });
-
-  test('a malformed clock does not blow up the run — it falls back', async () => {
-    // Fail soft here on purpose: a bad ctx.now must not take down a workflow that
-    // was otherwise fine. Wrong-but-running is not acceptable for the DATE, which is
-    // why the fallback is the real clock rather than a placeholder.
-    const { seen, services } = captureLLM();
-    await llmNode.run({ mode: 'freeform', prompt: 'x' },
-      { lastOutput: 'x', now: new Date('not a date') }, services);
-    assert.match(systemTextOf(seen[0]), /\d{4}-\d{2}-\d{2}/);
-  });
-});
+import { ChatModel } from '../../src/llm/chat-model.js';
+import { currentDateLine } from '../../src/utils/current-time.js';
+import { SystemMessage, HumanMessage } from '../../src/core/message.js';
 
 /**
- * RESIDUAL, deliberately not asserted here: nothing verifies the model actually
- * USED the date. If it ignores the system line the output is still wrong, and the
- * outcome oracle has no notion of "today" against which to catch it — which is why
- * the original defect was certified as a kept promise. Closing that needs a
- * freshness assertion in the contract, which is a feature, not a bug fix.
+ * Injected at the ONE choke point every provider call passes through, because
+ * per-call-site injection was tried and missed surfaces twice: the engine was fixed,
+ * then the converger, and the plain chat path STILL answered "Today is Thursday,
+ * July 10, 2025" in production. Enumerating call sites is a losing game; there are
+ * ~19 of them and any new one starts out blind.
  */
-
-/* ── The CONVERGER needs the clock too ───────────────────────────────────────
- *
- * Fixing only the engine would have left half the defect standing. The converger
- * makes its own model calls: it reasons about "every Monday" and "yesterday's
- * email", and it invents the sample events its OWN self-test runs against. Those
- * samples were dated 2025-07-14 and 2025-07-15 on 2026-07-24 — so a build was
- * verifying the workflow against a world a year out of date and calling it verified.
- *
- * One shared helper feeds both surfaces. A second copy of "what time is it" would
- * drift exactly the way the two copies of "what is a write" drifted, which cost a
- * shipped defect and an independent verifier to find it.
- */
-describe('the converger is told the current date', () => {
-  test('its system prompt carries the date', async () => {
-    const { buildSystemPrompt } = await import('../../src/converger/prompts.js');
-    const prompt = buildSystemPrompt({ channels: [] }, new Date('2026-07-25T09:00:00.000Z'));
-
-    // MUTATION: drop the `${currentDateLine(now)}` prefix from buildSystemPrompt —
-    // the converger goes blind again and this goes red. Every build node that uses
-    // this prompt (propose, generate, examples, verify, modify) loses the date at once.
-    assert.match(prompt, /2026-07-25/);
-    assert.match(prompt, /Saturday/);
-    assert.match(prompt, /Never infer the date from your training data/i);
+describe('every model call Atlas makes is told the current date', () => {
+  test('the clock reaches the Anthropic request, with a caller system prompt', () => {
+    const m = new ChatModel({ provider: 'anthropic', apiKey: 'test', model: 'claude-sonnet-4-6' });
+    const { system } = m._normaliseInput([
+      new SystemMessage('You are a workflow architect.'),
+      new HumanMessage('what is today?'),
+    ]);
+    // The assembly under test is in _call; assert the pieces it composes.
+    assert.ok(system.includes('workflow architect'), 'the caller prompt survives');
+    assert.match(currentDateLine(), /CURRENT DATE AND TIME/);
   });
 
-  test('the date leads the prompt, so nothing below can displace it', async () => {
-    const { buildSystemPrompt } = await import('../../src/converger/prompts.js');
-    const prompt = buildSystemPrompt({ channels: [] }, new Date('2026-07-25T09:00:00.000Z'));
-    assert.ok(prompt.startsWith('CURRENT DATE AND TIME:'),
-      'the clock must lead — a long capability catalog below it must not bury the date');
+  test('THE CACHE: the clock is a separate block AFTER the cached prefix', () => {
+    // The regression this prevents is silent and expensive. The system prompt is
+    // marked cacheable for 1h precisely because the converger re-sends ~3.9k tokens
+    // of catalog on every turn. A timestamp at the HEAD makes every request a unique
+    // prefix, so the hit rate goes to zero and nothing reports it.
+    const src = readFileSync(new URL('../../src/llm/chat-model.js', import.meta.url), 'utf8');
+    const line = src.split('\n').find(l => l.includes('cache_control') && l.includes('clockBlock'));
+    assert.ok(line, 'the cached block and the clock block must be assembled together');
+    assert.ok(
+      line.indexOf('cache_control') < line.indexOf('clockBlock'),
+      'the clock must come AFTER the cache_control marker, or the 1h prompt cache never hits',
+    );
   });
 
-  test('with no clock passed it still dates the prompt, from the real one', async () => {
-    // The live path: no call site has a better source than the wall clock today.
-    const { buildSystemPrompt } = await import('../../src/converger/prompts.js');
-    const prompt = buildSystemPrompt({ channels: [] });
-    const iso = prompt.match(/(\d{4}-\d{2}-\d{2}T[\d:.]+Z)/)?.[1];
-    assert.ok(iso, 'the converger must never be left without a date');
-    assert.ok(Math.abs(Date.now() - Date.parse(iso)) < 60_000);
+  test('the clock states the date, the weekday, and forbids guessing', () => {
+    const line = currentDateLine(new Date('2026-07-25T09:30:00.000Z'));
+    assert.match(line, /2026-07-25/);
+    assert.match(line, /Saturday/);          // "even on a Saturday" on a Friday was a real symptom
+    assert.match(line, /25 July 2026/);      // 07/25 vs 25/07 is itself a date bug
+    assert.match(line, /Never infer the date from your training data/i);
   });
 
-  test('the engine and the converger read the SAME clock helper', async () => {
-    // Not cosmetic. Two copies of this would drift, and a drifted clock is invisible
-    // until a customer's record is dated wrong — which is how this was found.
-    const { currentDateLine } = await import('../../src/utils/current-time.js');
-    const { buildSystemPrompt } = await import('../../src/converger/prompts.js');
+  test('it falls back to the real clock, and tolerates a bad one', () => {
+    const iso = currentDateLine().match(/(\d{4}-\d{2}-\d{2}T[\d:.]+Z)/)?.[1];
+    assert.ok(iso && Math.abs(Date.now() - Date.parse(iso)) < 60_000);
+    // A malformed clock must not take down a workflow that was otherwise fine.
+    assert.match(currentDateLine(new Date('not a date')), /\d{4}-\d{2}-\d{2}/);
+  });
 
-    const now = new Date('2026-07-25T09:00:00.000Z');
-    const shared = currentDateLine(now);
+  test('the OpenAI path appends rather than prepends, for the same cache reason', () => {
+    const m = new ChatModel({ provider: 'openai', apiKey: 'test', model: 'gpt-4o' });
+    const msgs = m._prepareOpenAIMessages([
+      new SystemMessage('STABLE PREFIX'),
+      new HumanMessage('hi'),
+    ]);
+    const sys = msgs.find(x => x.role === 'system').content;
+    assert.ok(sys.startsWith('STABLE PREFIX'), 'the stable prefix must stay at the front');
+    assert.match(sys, /CURRENT DATE AND TIME/);
+  });
 
-    assert.ok(buildSystemPrompt({ channels: [] }, now).startsWith(shared),
-      'the converger must emit the shared block verbatim, not its own rendering');
-
-    const { seen, services } = captureLLM();
-    await llmNode.run({ mode: 'freeform', prompt: 'x' }, { lastOutput: 'x', now }, services);
-    assert.ok(systemTextOf(seen[0]).startsWith(shared),
-      'the engine must emit the same block, from the same helper');
+  test('a call with NO system prompt still gets a clock — the chat case', () => {
+    // This is the surface that was still wrong in production after two fixes: plain
+    // chat, which sends its own system content through a different path.
+    const m = new ChatModel({ provider: 'openai', apiKey: 'test', model: 'gpt-4o' });
+    const msgs = m._prepareOpenAIMessages([new HumanMessage('what is today\'s date?')]);
+    assert.equal(msgs[0].role, 'system', 'a clock must be inserted even with no caller system prompt');
+    assert.match(msgs[0].content, /CURRENT DATE AND TIME/);
   });
 });

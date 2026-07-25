@@ -27,7 +27,6 @@
 import { SystemMessage, HumanMessage } from '../../core/message.js';
 import { resolveTransformInput } from './_node-input.js';
 import { pickCategory } from './decision.js';
-import { currentDateLine } from '../../utils/current-time.js';
 
 export const LLM_MODES = ['summarize', 'extract', 'rewrite', 'classify', 'freeform'];
 
@@ -174,10 +173,6 @@ export const llmNodeType = {
     const mode = cfg.mode ?? 'freeform';
 
     const { system, prompt } = buildMessages(mode, cfg, ctx);
-    // THE MODEL HAS NO CLOCK. Without this it answers "what is today's date?" from
-    // training data — see currentDateLine below. Prepended to the SYSTEM message so
-    // it applies to every mode and cannot be displaced by a user's own prompt text.
-    const datedSystem = `${currentDateLine(ctx?.now)}\n\n${system}`;
 
     const timeoutMs = cfg.timeoutMs ?? 120_000;
     const invokeConfig = cfg.maxTokens
@@ -188,7 +183,7 @@ export const llmNodeType = {
     let raw;
     try {
       const res = await Promise.race([
-        services.llm.invoke([new SystemMessage(datedSystem), new HumanMessage(prompt)], invokeConfig),
+        services.llm.invoke([new SystemMessage(system), new HumanMessage(prompt)], invokeConfig),
         new Promise((_, reject) => {
           timeoutHandle = setTimeout(
             () => reject(new Error(`LLM call timed out after ${Math.round(timeoutMs / 1000)}s`)),

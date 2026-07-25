@@ -1,5 +1,13 @@
 [
   {
+    "version": "1.6.39",
+    "date": "2026-07-25",
+    "title": "Atlas knows what day it is",
+    "notes": [
+      "Atlas now knows the current date everywhere — in chat, while building a workflow, and while running one. It previously answered from memory and could be a year out."
+    ]
+  },
+  {
     "version": "1.6.38",
     "date": "2026-07-25",
     "title": "Correct dates, and safer go-live",

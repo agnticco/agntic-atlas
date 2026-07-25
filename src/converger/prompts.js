@@ -6,7 +6,6 @@
  */
 
 import { gapLabel, unansweredGaps } from './gap-scorer.js';
-import { currentDateLine } from '../utils/current-time.js';
 
 // ── Capability summary for system prompt ─────────────────────────────────────
 
@@ -190,14 +189,12 @@ function slackChannelsBlock(capabilities) {
 
 // ── System prompt (shared across all converger LLM calls) ────────────────────
 
-export function buildSystemPrompt(capabilities, now) {
-  // THE CONVERGER HAS NO CLOCK EITHER. It reasons about "every Monday" and
-  // "yesterday's email", and it invents the sample events its own self-test runs
-  // against — those were dated a year stale, so a build was verifying the workflow
-  // against the wrong world. Same helper the engine uses; not a second copy.
-  return `${currentDateLine(now)}
-
-You are a workflow architect. Your job is to turn a user's intent into a structured automation spec, one component at a time.
+export function buildSystemPrompt(capabilities) {
+  // The date is NOT injected here. It is added once, for every model call Atlas
+  // makes, in chat-model.js — and deliberately AFTER the prompt-cache breakpoint,
+  // because a timestamp at the head of this prompt makes every request a unique
+  // prefix and silently destroys the 1h cache this catalog exists to reuse.
+  return `You are a workflow architect. Your job is to turn a user's intent into a structured automation spec, one component at a time.
 ${operatorSummary(capabilities)}
 AVAILABLE CONNECTOR ACTIONS:
 ${capabilitySummary(capabilities)}
