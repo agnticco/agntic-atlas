@@ -51,3 +51,8 @@ Thumbs.db
 *.zip
 tmp-uitest/
 tmp-g-verify/
+
+# Agent-org positions are installed to ~/.claude/agents (outside any repo).
+# A copy here would shadow the real one and can be deleted by a branch operation.
+.claude/agents/qa-*.md
+.claude/agents/coding-*.md

@@ -882,16 +882,30 @@ passing one that was introduced.
 
 ### The agent org
 
-`qa-manager`, `qa-worker`, `coding-manager` and `coding-worker` are **generated
-copies**. Their canonical source is `~/Desktop/agent-org/` — each installed file
-carries a header saying so. **Edit them there**, then:
+`qa-manager`, `qa-worker`, `coding-manager` and `coding-worker` **do not live in
+this repository, on purpose.** They are defined in `~/Desktop/agent-org/` and
+installed to `~/.claude/agents/`, outside any repo. They are tools that operate
+*on* Atlas; they are not part of it.
 
 ```bash
-cd ~/Desktop/agent-org && node scripts/sync-agents.mjs --write   # push changes out
-node scripts/sync-agents.mjs --check                             # detect drift
+cd ~/Desktop/agent-org && node scripts/sync-agents.mjs --check   # verify deployed
+node scripts/sync-agents.mjs --write                             # install/update
 ```
 
-Editing the copy in `.claude/agents/` gets silently overwritten on the next sync.
+**Why they were moved out (2026-07-24).** They were installed here, inside
+`.claude/agents/`, which is inside git. A branch cleanup dropped the commit that
+added them and **silently deleted two positions and reverted a third** — the org
+was un-installed by a routine git operation and nothing announced it. The first
+real run then found "the workers didn't exist". `git clean -xdf` would do the same
+to an ignored copy, so ignoring them here was not enough; they had to leave.
+
+**Never put a copy back in `.claude/agents/`.** A project-scoped file **shadows**
+the user-scoped one, so a stale copy silently reinstates an old definition — the
+same failure with a longer fuse. `.gitignore` blocks the obvious paths, and
+`sync-agents.mjs --check` reports any that appear.
+
+`scout`, `verifier` and `adversary` are **not** part of that org. They are Atlas's
+own gate machinery, they predate the report contract, and they stay here.
 
 Two rules of that org that change how you read what they hand back:
 
