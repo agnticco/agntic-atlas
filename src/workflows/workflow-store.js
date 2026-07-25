@@ -16,6 +16,7 @@
 import Database from 'better-sqlite3';
 import { randomUUID } from 'crypto';
 import { log } from '../utils/logger.js';
+import { zonedParts, deploymentTimeZone } from '../utils/current-time.js';
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS workflows (
@@ -1430,24 +1431,49 @@ export class WorkflowStore {
       }
       if (hh == null || mm == null) continue;
 
-      const now = new Date();
-      if (allowedDows && !allowedDows.has(now.getDay())) continue;
-      if (workflow.last_run) {
-        const lastRunDate = new Date(workflow.last_run);
-        if (lastRunDate.toDateString() === now.toDateString()) continue;
-      }
-      const scheduled = new Date(now); scheduled.setHours(hh, mm, 0, 0);
-      const delta = now.getTime() - scheduled.getTime();
-      if (delta < 0) continue;              // before today's scheduled time
-      if (delta <= GRACE_MS) return 'due';  // within the grace window → fire
-      return 'overdue';                     // missed the window → owner-notified, not auto-fired
+      // ── THE TRIGGER'S DECLARED TIMEZONE IS HONOURED ─────────────────────────
+      // This used to compare against SERVER-LOCAL time — `now.getDay()`,
+      // `toDateString()`, `scheduled.setHours(...)` — while the spec has carried a
+      // declared `timezone` per schedule trigger all along (documented in
+      // prompts.js; the converger emits "America/Chicago"). Nothing read it: a grep
+      // for `timezone` across this file and workflow-scheduler.js returned nothing.
+      //
+      // The prod box is Etc/UTC, so "every weekday at 9am America/Chicago" fired at
+      // 9am UTC — 4am Chicago. The workflow ran, reported success, and was five hours
+      // early. Silent, user-reachable, and it breaks the one thing a scheduled
+      // workflow promises.
+      //
+      // All THREE decisions have to move into that zone together, and getting one
+      // wrong is a whole new bug:
+      //   · which day it is        (a Friday-only trigger is Saturday in UTC by 7pm CT)
+      //   · whether it ran "today" (the calendar day rolls over at a different instant)
+      //   · how long since due     (the wall-clock comparison itself)
+      //
+      // Compared as wall-clock minutes rather than by constructing a local Date and
+      // subtracting: no instant arithmetic means nothing to get wrong across a DST
+      // boundary. Falls back to the deployment zone when a trigger declares none.
+      const tz  = t.timezone ?? t.config?.timezone ?? deploymentTimeZone();
+      const now = zonedParts(new Date(), tz);
+
+      if (allowedDows && !allowedDows.has(now.dow)) continue;
+      if (workflow.last_run && zonedParts(new Date(workflow.last_run), tz).date === now.date) continue;
+
+      const deltaMs = (now.minutes - (hh * 60 + mm)) * 60_000;
+      if (deltaMs < 0) continue;              // before today's scheduled time, there
+      if (deltaMs <= GRACE_MS) return 'due';  // within the grace window → fire
+      return 'overdue';                       // missed → owner-notified, never auto-fired
     }
     return null;
   }
 
   /**
    * Check if a workflow is due based on its schedule and last_run.
-   * Schedule format: "daily HH:MM" (24h, local time).
+   * Schedule format: "daily HH:MM" (24h).
+   *
+   * The legacy `fetch`-kind path. Same defect as the flow path above — it compared
+   * against server-local time — and fixed the same way, except a bare "daily HH:MM"
+   * string carries no zone, so it uses the DEPLOYMENT zone. "Daily at 9" means 9am
+   * where the operator is, not 9am UTC.
    */
   _isDue(workflow) {
     const { schedule, last_run } = workflow;
@@ -1458,14 +1484,12 @@ export class WorkflowStore {
 
     const targetHour = parseInt(match[1], 10);
     const targetMin  = parseInt(match[2], 10);
-    const now = new Date();
+    const tz  = deploymentTimeZone();
+    const now = zonedParts(new Date(), tz);
 
-    if (last_run) {
-      const lastRunDate = new Date(last_run);
-      if (lastRunDate.toDateString() === now.toDateString()) return false;
-    }
+    if (last_run && zonedParts(new Date(last_run), tz).date === now.date) return false;
 
-    return now.getHours() > targetHour || (now.getHours() === targetHour && now.getMinutes() >= targetMin);
+    return now.minutes >= targetHour * 60 + targetMin;
   }
 
   /** Generate a URL-safe slug from user intent. */

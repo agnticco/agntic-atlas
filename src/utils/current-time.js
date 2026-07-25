@@ -85,3 +85,47 @@ export function currentDateLine(now, timeZone) {
     'Never infer the date or time from your training data; it is not now.',
   ].join('\n');
 }
+
+/**
+ * The wall-clock parts of an instant, IN A GIVEN ZONE.
+ *
+ * Exists because the scheduler decided "is this due?" against SERVER-LOCAL time
+ * (`now.getDay()`, `scheduled.setHours(...)`, `toDateString()`), while the spec
+ * carries a declared `timezone` per schedule trigger that nothing read. The prod box
+ * is UTC, so "every weekday at 9am America/Chicago" fired at 9am UTC — 4am Chicago.
+ * The workflow ran, reported success, and was five hours early: silent, and it breaks
+ * the core promise of a scheduled workflow.
+ *
+ * Returns wall-clock parts rather than a constructed instant deliberately. Comparing
+ * "what time is it there" against "what time was asked for" needs no instant
+ * arithmetic, so it cannot go wrong across a DST boundary the way building a local
+ * `Date` and subtracting does.
+ *
+ * `dow` is derived from the zone's calendar date rather than a locale weekday string,
+ * so it is locale-independent: 0 = Sunday, matching both `Date.getDay()` and cron.
+ *
+ * @param {Date} at
+ * @param {string} tz — IANA zone name
+ * @returns {{ date: string, dow: number, minutes: number }}
+ *   date    — 'YYYY-MM-DD' calendar date in that zone (the "did it already run today?" key)
+ *   dow     — 0..6, Sunday-first
+ *   minutes — minutes since local midnight
+ */
+export function zonedParts(at, tz) {
+  const parts = {};
+  for (const { type, value } of new Intl.DateTimeFormat('en-CA', {
+    timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', hour12: false,
+  }).formatToParts(at)) parts[type] = value;
+
+  const y = Number(parts.year), mo = Number(parts.month), d = Number(parts.day);
+  // Some ICU builds render midnight as hour 24 with hour12:false.
+  const h = Number(parts.hour) % 24;
+  const mi = Number(parts.minute);
+
+  return {
+    date:    `${parts.year}-${parts.month}-${parts.day}`,
+    dow:     new Date(Date.UTC(y, mo - 1, d)).getUTCDay(),
+    minutes: h * 60 + mi,
+  };
+}
