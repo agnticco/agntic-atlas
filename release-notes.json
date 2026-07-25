@@ -1,5 +1,15 @@
 [
   {
+    "version": "1.6.38",
+    "date": "2026-07-25",
+    "title": "Correct dates, and safer go-live",
+    "notes": [
+      "Workflows now know today's date. A step that wrote \"today\" could previously produce a date over a year out, and the test would still report the promise kept — that is fixed for both building and running.",
+      "Resuming a paused workflow now re-arms its trigger, and a workflow that has never been published can no longer be switched live from the console.",
+      "A step that changes something in another system is now recognised from what the connector declares rather than from its name, so approval prompts and duplicate protection fire on every write."
+    ]
+  },
+  {
     "version": "1.6.37",
     "date": "2026-07-24",
     "title": "Safer, smarter testing",
