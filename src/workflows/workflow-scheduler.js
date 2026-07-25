@@ -22,6 +22,7 @@ import { runProducedContentError } from './outcome-oracle.js';
 import { deadlineFrom } from './duration.js';
 import { normalizeDecisions, TIMEOUT_DECISION } from './node-types/human.js';
 import { timeoutAuthorizesWrite } from './workflow-validator.js';
+import { pollIntervalMs } from './trigger-frequency.js';
 
 const TICK_INTERVAL_MS = 60_000;
 
@@ -56,6 +57,10 @@ export class WorkflowScheduler {
     this.tickInterval   = tickInterval;
     this._timer         = null;
     this._running       = false;
+    // workflowId → when its mailbox was last checked, for the per-workflow
+    // "how often should this check?" setting. In memory on purpose: the cost of
+    // losing it on restart is one early check, which is harmless.
+    this._lastEmailPoll = new Map();
   }
 
   /** Start the tick loop. */
@@ -118,8 +123,19 @@ export class WorkflowScheduler {
       if (this._pollEmail) {
         const emailFlows = this.workflowStore.list({ kind: 'flow', status: 'active' })
           .filter((w) => (w.triggers ?? []).some((t) => t.type === 'email'))
-          .filter(active);
+          .filter(active)
+          // Honour the user's "how often should this check?" setting. Absent, this
+          // is every tick — the behaviour before the setting existed. The last-poll
+          // clock is in memory, so a restart simply checks sooner than asked, never
+          // later: erring toward more prompt, never toward silently not running.
+          .filter((w) => {
+            const interval = pollIntervalMs(w, { only: (t) => t.type === 'email' });
+            if (!interval) return true;
+            const last = this._lastEmailPoll.get(w.id) ?? 0;
+            return Date.now() - last >= interval;
+          });
         for (const workflow of emailFlows) {
+          this._lastEmailPoll.set(workflow.id, Date.now());
           try {
             const newEmails = await this._pollEmail(workflow);
             for (const email of newEmails) {

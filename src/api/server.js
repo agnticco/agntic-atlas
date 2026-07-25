@@ -39,6 +39,7 @@ import {
   FlowTester,
   WorkflowService,
 } from '../workflows/index.js';
+import { createRunGate, minGapMs } from '../workflows/trigger-frequency.js';
 import { CapabilityRegistry } from '../connectors/capability-registry.js';
 import { ConnectorDemandStore, REQUESTABLE_CONNECTORS, isRequestable } from '../connectors/connector-demand.js';
 import { APP_VERSION } from '../version.js';
@@ -64,6 +65,10 @@ import {
   lookupWebhook, allWebhooks as _airtableWebhooks, initWebhookStore, verifyAirtableSignature,
   createAirtableWebhook, deleteAirtableWebhook, fetchWebhookPayloads,
 } from '../connectors/airtable/index.js';
+import {
+  isAirtableRecordChangedTrigger, syncAirtableWebhooksForTenant,
+  refreshAllAirtableWebhooks, airtableNotificationUrl,
+} from '../connectors/airtable/webhook-sync.js';
 import {
   AIRTABLE_CONNECTOR_ID,
   airtableOAuthConfig, isAirtableOAuthConfigured, createAirtableOAuthFlow,
@@ -91,7 +96,7 @@ import { renderResetEmail } from '../auth/reset-email.js';
 import { ApprovalStore } from '../approvals/approval-store.js';
 import { ApprovalService } from '../approvals/approval-service.js';
 import { availableApprovalChannels, approvalChannelView } from '../workflows/approval-channels.js';
-import { evaluateExampleRun, normalizeDelivery, isDeliveryNode } from '../workflows/outcome-oracle.js';
+import { evaluateExampleRun, normalizeDelivery, isDeliveryNode, setCapabilityCatalog } from '../workflows/outcome-oracle.js';
 import { runSpecDryRun } from '../workflows/dry-run-runner.js';
 import { oauthRedirectBase } from '../connectors/oauth-redirect.js';
 import { entitlementsFor, PUBLIC_PLANS, PLAN_META, isSelfServe } from '../entitlements/index.js';
@@ -315,31 +320,55 @@ function verifySlackSignature(req, signingSecret) {
   catch { return false; }
 }
 
-// A node that posts to / calls Slack (so it needs the tenant's Slack token).
-const isSlackNode = (n) =>
-  (n?.type === 'deliver' && String(n?.config?.channel ?? '').startsWith('slack')) ||
-  (n?.type === 'connector-action' && String(n?.config?.action ?? '').startsWith('slack'));
+/* ── P13-0 seam #4: which credential a node needs is DECLARED, not listed ─────
+ *
+ * This used to be three hand-typed Sets of capability ids — and the Google one
+ * carried its own warning: *"keep in sync with the Google capability catalog. A
+ * capability missing here gets no googleToken injected → 'no access token' at run
+ * time even though it's connected (this is how drive_create_folder broke, R22)."*
+ *
+ * A comment telling the next person to remember something is not a mechanism. The
+ * capability already knows which connector it belongs to — it declared it at
+ * registration — so credential resolution reads that instead of a parallel list
+ * somebody has to maintain. Import a server exposing forty tools and the old shape
+ * needed forty strings hand-added here, with a run-time failure for every one
+ * missed, on a connector the customer had correctly connected.
+ *
+ * The catalog is injected once at boot rather than threaded through the six call
+ * sites that build `deps` differently. Unset ⇒ the legacy id-prefix fallback, which
+ * is exactly what Slack already did, so nothing regresses in a test that builds the
+ * injectors without an engine.
+ */
+let _injectorCatalog = null;
+export function setInjectorCatalog(catalog) {
+  _injectorCatalog = (catalog && typeof catalog.get === 'function') ? catalog : null;
+}
 
-const AIRTABLE_ACTION_IDS = new Set([
-  'airtable_list_records', 'airtable_get_record', 'airtable_search_records',
-  'airtable_create_record', 'airtable_update_record', 'airtable_delete_record',
-]);
-const isAirtableNode = (n) =>
-  (n?.type === 'deliver' && AIRTABLE_ACTION_IDS.has(n?.config?.channel)) ||
-  (n?.type === 'connector-action' && AIRTABLE_ACTION_IDS.has(n?.config?.action));
+/** The capability id a node invokes, whichever node type it is. */
+const capabilityIdOf = (n) =>
+  n?.type === 'deliver'           ? String(n?.config?.channel ?? '').trim()
+  : n?.type === 'connector-action' ? String(n?.config?.action  ?? '').trim()
+  : '';
 
-// NOTE: keep in sync with the Google capability catalog (registerGoogleChannels).
-// A capability missing here gets no googleToken injected → "no access token" at
-// run time even though it's connected (this is how drive_create_folder broke, R22).
-const GOOGLE_ACTION_IDS = new Set([
-  'gmail_search', 'gmail_get_message', 'gmail_send', 'gmail_mark_read',
-  'calendar_list_events', 'calendar_create_event',
-  'drive_list_files', 'drive_create_folder', 'sheets_read', 'sheets_append',
-  'docs_read', 'docs_create', 'tasks_list', 'tasks_create',
-]);
-const isGoogleNode = (n) =>
-  (n?.type === 'deliver' && GOOGLE_ACTION_IDS.has(n?.config?.channel)) ||
-  (n?.type === 'connector-action' && GOOGLE_ACTION_IDS.has(n?.config?.action));
+/**
+ * Does this node belong to `connectorId`? Answered by the capability's DECLARED
+ * connector. Falls back to the id prefix only for capabilities the catalog does not
+ * know — note this fallback CANNOT work for Google (`gmail_search`, `sheets_append`,
+ * `docs_create` share no prefix with 'google'), which is precisely why the
+ * declaration is the primary source and the list had to exist at all.
+ */
+export const ownsConnector = (connectorId) => (n) => {
+  const id = capabilityIdOf(n);
+  if (!id) return false;
+  const declared = _injectorCatalog?.get?.(id)?.connector;
+  if (declared) return String(declared).toLowerCase() === connectorId;
+  const lower = id.toLowerCase();
+  return lower === connectorId || lower.startsWith(`${connectorId}_`);
+};
+
+const isSlackNode    = ownsConnector('slack');
+const isAirtableNode = ownsConnector('airtable');
+const isGoogleNode   = ownsConnector('google');
 
 // ── Connector credential registry ────────────────────────────────────────────
 // Per-tenant credential handling for EVERY connector, in one place. Each entry
@@ -547,28 +576,133 @@ function checkRunBudget(spine, tenantId) {
   }
 }
 
+/**
+ * Resolve a trigger's channel target ("#requests", "requests", or "C0123…") to a
+ * Slack channel ID, so a filter written the ONLY way a user knows a channel — by
+ * name — can actually match the ID Slack puts on the event.
+ *
+ * Cached per tenant+target. A successful resolution is cached indefinitely (channel
+ * ids are stable); a FAILURE is cached only briefly, because the usual cause is a
+ * channel the bot has not been invited to yet, and a permanent negative would mean
+ * inviting the bot never takes effect until a restart.
+ *
+ * Returns null when it cannot be resolved — callers must treat that as "does not
+ * match" and say so in the log, never as "matches anything".
+ */
+const _slackChannelIdCache = new Map(); // JSON.stringify([tenantId, target]) → { id, at }
+const SLACK_CHANNEL_MISS_TTL_MS = 60_000;
+
+async function resolveSlackChannelId(spine, tenantId, target) {
+  if (!target) return null;
+  const raw = String(target);
+  if (/^[CGDW][A-Z0-9]+$/i.test(raw)) return raw;   // already an id
+
+  const key = JSON.stringify([tenantId, raw]);      // never concatenate — "ab"+"c" collides with "a"+"bc"
+  const hit = _slackChannelIdCache.get(key);
+  if (hit && (hit.id || Date.now() - hit.at < SLACK_CHANNEL_MISS_TTL_MS)) return hit.id;
+
+  let id = null;
+  try {
+    const grant = getSlackToken({ oauthTokenStore: spine.auth.oauthTokenStore, cipher: spine.auth.tokenCipher, tenantId });
+    if (grant?.botToken) id = await resolveChannel(makeSlackApi({ token: grant.botToken }), raw);
+  } catch { id = null; }                            // not found / no scope / API down → unresolved
+  _slackChannelIdCache.set(key, { id, at: Date.now() });
+  if (_slackChannelIdCache.size > 2000) _slackChannelIdCache.clear(); // crude bound
+  return id;
+}
+
+/**
+ * Which of a tenant's live workflows does this Slack event actually fire?
+ *
+ * Exported and pure (channel resolution is injected) because this is the logic
+ * that was wrong, and a check has to be able to construct it the way production
+ * does. Production passes the real resolver; a test passes a stub.
+ *
+ * @param {object[]} flows            — the tenant's active flows
+ * @param {object}   ev               — the Slack event
+ * @param {string}   wantEvent        — 'message' | 'app_mention'
+ * @param {Function} resolveChannelId — async (target) => channelId | null
+ * @param {Function} [onUnresolved]   — (workflow, target) => void, for logging
+ */
+export async function selectSlackFlows({ flows, ev, wantEvent, resolveChannelId, onUnresolved }) {
+  const isSlackTrigger = (t) => t.type === 'event' && t.connector === 'slack' && t.event === wantEvent;
+
+  // The `keywords` filter is declared on the slack_message trigger's config schema
+  // and was previously enforced by NOTHING — the workflow fired on every message
+  // while its own definition promised otherwise.
+  const keywordMatches = (t) => {
+    const raw = t.filter?.keywords ?? t.filter?.keyword;
+    if (raw === undefined || raw === null || raw === '') return true;
+    const words = (Array.isArray(raw) ? raw : String(raw).split(','))
+      .map((w) => String(w).trim().toLowerCase()).filter(Boolean);
+    if (!words.length) return true;
+    const text = String(ev.text ?? '').toLowerCase();
+    return words.some((w) => text.includes(w));
+  };
+
+  const matched = [];
+  for (const w of (flows ?? [])) {
+    const triggers = (w.triggers ?? []).filter(isSlackTrigger);
+    if (!triggers.length) continue;
+    let hit = false;
+    for (const t of triggers) {
+      if (!keywordMatches(t)) continue;
+      const want = t.filter?.channel;
+      if (!want) { hit = true; break; }             // no channel filter → any channel
+      // A name ("#requests") is the only form a user knows; resolve it to the id
+      // Slack puts on the event. Unresolved means DOES NOT MATCH — never "matches all".
+      const id = await resolveChannelId(want);
+      if (id && id === ev.channel) { hit = true; break; }
+      if (!id) onUnresolved?.(w, String(want));
+    }
+    if (hit) matched.push(w);
+  }
+  return matched;
+}
+
+/**
+ * Which trigger event name (if any) a raw Slack event satisfies.
+ *
+ * `app_mention` used to be dropped here, which made the "Slack App Mention"
+ * trigger — offered by the capability catalog, and emitted by the converger as
+ * `event:"app_mention"` — impossible to fire. Bot echoes, edits and joins are
+ * still ignored.
+ *
+ * @returns {'message'|'app_mention'|null}
+ */
+export function slackEventKind(ev) {
+  if (!ev || ev.bot_id || ev.subtype) return null;
+  if (ev.type === 'app_mention') return 'app_mention';
+  if (ev.type === 'message') return 'message';
+  return null;
+}
+
 async function dispatchSlackEvent(spine, body) {
   const teamId = body?.team_id;
   const ev = body?.event ?? {};
-  // Only real user messages — skip bot echoes, edits, joins, etc.
-  if (!teamId || ev.type !== 'message' || ev.bot_id || ev.subtype) return;
+  // A Slack event satisfies exactly one trigger event name; anything else is ignored.
+  const wantEvent = slackEventKind(ev);
+  if (!teamId || !wantEvent) return;
+  const isMention = wantEvent === 'app_mention';
 
   const tenantId = spine.auth.oauthTokenStore.findTenantByAccount?.({ connectorId: 'slack', account: teamId });
   if (!tenantId) { logEvent('slack.event.no_tenant', { teamId }); return; }
 
-  const channelMatches = (t) => {
-    const want = t.filter?.channel;
-    if (!want) return true;                       // no channel filter → any channel
-    return want === ev.channel || String(want).replace(/^#/, '') === ev.channel; // id match (names need resolution — see doc)
-  };
-  const flows = spine.engine.workflowStore.list({ tenantId, kind: 'flow', status: 'active' })
-    .filter((w) => (w.triggers ?? []).some((t) => t.type === 'event' && t.connector === 'slack' && t.event === 'message' && channelMatches(t)));
+  const flows = await selectSlackFlows({
+    flows: spine.engine.workflowStore.list({ tenantId, kind: 'flow', status: 'active' }),
+    ev, wantEvent,
+    resolveChannelId: (target) => resolveSlackChannelId(spine, tenantId, target),
+    onUnresolved: (w, target) =>
+      logEvent('slack.event.channel_unresolved', { tenant: tenantId, workflow: w.slug, channel: target }),
+  });
 
   if (!flows.length) return;
   const slackDeps = { oauthTokenStore: spine.auth.oauthTokenStore, cipher: spine.auth.tokenCipher };
-  const context = `New Slack message in <#${ev.channel}> from <@${ev.user}>:\n\n${ev.text ?? ''}`;
+  const context = isMention
+    ? `Atlas was @-mentioned in <#${ev.channel}> by <@${ev.user}>:\n\n${ev.text ?? ''}`
+    : `New Slack message in <#${ev.channel}> from <@${ev.user}>:\n\n${ev.text ?? ''}`;
   for (const wf of flows) {
-    logEvent('slack.event.dispatch', { tenant: tenantId, workflow: wf.slug, channel: ev.channel });
+    logEvent('slack.event.dispatch', { tenant: tenantId, workflow: wf.slug, channel: ev.channel, event: wantEvent });
     let tenantWf = await injectTenantTokens(wf, tenantId, { ...slackDeps, userId: wf.user_id });
     tenantWf = injectInboxContext(tenantWf, tenantId, tenantWf.user_id ?? '');
     tenantWf = injectFilesystemContext(tenantWf, tenantId);
@@ -577,6 +711,10 @@ async function dispatchSlackEvent(spine, body) {
     catch (err) { logEvent('slack.event.error', { tenant: tenantId, workflow: wf.slug, ...errFields(err) }); }
   }
 }
+
+// Releases Airtable-triggered runs no faster than each workflow's `checkEvery`
+// setting allows, holding (never dropping) anything that arrives inside the window.
+const _airtableRunGate = createRunGate();
 
 // Route an Airtable webhook notification to matching workflows.
 // Airtable only sends a ping (base + webhook id); payloads are fetched separately.
@@ -604,21 +742,41 @@ async function dispatchAirtableEvent(spine, body) {
   }
   if (!payloads.length) return;
 
+  // `isAirtableRecordChangedTrigger` accepts both the bare `record_changed` and the
+  // capability id `airtable_record_changed`. This matcher only ever accepted the
+  // bare form, while the converger's generic trigger template emits the capability
+  // id — so a correctly-built Airtable trigger matched NOTHING here even before the
+  // missing-webhook problem. Two independent silent failures on the same feature.
   const flows = spine.engine.workflowStore.list({ tenantId, kind: 'flow', status: 'active' })
     .filter((w) => (w.triggers ?? []).some((t) =>
-      t.type === 'event' && t.connector === 'airtable' && t.event === 'record_changed' &&
+      isAirtableRecordChangedTrigger(t) &&
       (!t.filter?.baseId || t.filter.baseId === baseId)));
 
   if (!flows.length) return;
   const context = `Airtable record changed in base ${baseId}.\n\nChanges:\n${JSON.stringify(payloads.slice(0, 3), null, 2)}`;
   for (const wf of flows) {
-    logEvent('airtable.event.dispatch', { tenant: tenantId, workflow: wf.slug });
-    let tenantWf = await injectTenantTokens(wf, tenantId, { ...airtableDeps, userId: wf.user_id });
-    tenantWf = injectInboxContext(tenantWf, tenantId, tenantWf.user_id ?? '');
-    tenantWf = injectFilesystemContext(tenantWf, tenantId);
-    tenantWf = injectInboxCapabilityContext(tenantWf, tenantId);
-    try { await spine.engine.workflowScheduler._executeFlow(tenantWf, { trigger: 'event', emailContext: context }); }
-    catch (err) { logEvent('airtable.event.error', { tenant: tenantId, workflow: wf.slug, ...errFields(err) }); }
+    // Honour "how often may this run?" (`checkEvery`). Airtable PUSHES to us, so
+    // there is no checking to slow down — the setting is a floor on how often the
+    // workflow may run, which is what a person means when a busy base would
+    // otherwise fire the same workflow all day and eat the month's run budget.
+    //
+    // A change arriving inside the window is DEFERRED, never dropped: the deferred
+    // run re-reads the base, so nothing that happened in the gap is lost.
+    const gate = _airtableRunGate.request({
+      key: JSON.stringify([tenantId, wf.id]),          // never concatenate — collisions
+      gapMs: minGapMs(wf, { only: isAirtableRecordChangedTrigger }),
+      run: async () => {
+        logEvent('airtable.event.dispatch', { tenant: tenantId, workflow: wf.slug });
+        let tenantWf = await injectTenantTokens(wf, tenantId, { ...airtableDeps, userId: wf.user_id });
+        tenantWf = injectInboxContext(tenantWf, tenantId, tenantWf.user_id ?? '');
+        tenantWf = injectFilesystemContext(tenantWf, tenantId);
+        tenantWf = injectInboxCapabilityContext(tenantWf, tenantId);
+        try { await spine.engine.workflowScheduler._executeFlow(tenantWf, { trigger: 'event', emailContext: context }); }
+        catch (err) { logEvent('airtable.event.error', { tenant: tenantId, workflow: wf.slug, ...errFields(err) }); }
+      },
+    });
+    if (gate.released) await gate.promise;             // keep dispatch serial, as before
+    else logEvent('airtable.event.deferred', { tenant: tenantId, workflow: wf.slug, waitMs: gate.waitMs, coalesced: gate.coalesced });
   }
 }
 
@@ -662,6 +820,11 @@ async function buildEngine(workflowStore, llm, costTracker = null) {
   await sourceRegistry.init();
 
   const capabilityRegistry = new CapabilityRegistry();
+  // P13-0 seams #1/#2/#4 — the oracle derives effect from what a capability DECLARES,
+  // and credential resolution reads the connector a capability DECLARES, instead of
+  // id-regexes and hand-typed id lists. Both read this one catalog.
+  setInjectorCatalog(capabilityRegistry);
+  setCapabilityCatalog(capabilityRegistry);
 
   const channelRegistry = new ChannelRegistry(capabilityRegistry);
   registerBuiltInChannels(channelRegistry, {});           // in-app + webhook; mcp channel is opt-in
@@ -2593,7 +2756,12 @@ export function createApp(spine) {
     res.json({ ok: true, removed });
   });
 
-  // Register a webhook for an Airtable base (called after publishing a workflow with an airtable_record_changed trigger).
+  // Register a webhook for an Airtable base BY HAND.
+  //
+  // Publishing now arms its own triggers (see webhook-sync.js), so this is no
+  // longer the only door — it is the manual/diagnostic one. It goes through the
+  // same notification-URL helper as the automatic path, because two callback URLs
+  // derived two different ways is how one of them silently ends up wrong.
   app.post('/connectors/airtable/webhooks', requireActiveTenant, async (req, res) => {
     const { baseId, tableId } = req.body ?? {};
     if (!baseId) return res.status(400).json({ error: 'baseId is required' });
@@ -2602,11 +2770,24 @@ export function createApp(spine) {
     if (!token) return res.status(403).json({ error: 'Airtable not connected for this tenant' });
     try {
       const api = makeAirtableApi(token);
-      const notificationUrl = `${process.env.OAUTH_REDIRECT_BASE ?? `http://localhost:${PORT}`}/connectors/airtable/events`;
-      const { webhookId, macSecretBase64 } = await createAirtableWebhook(api, { baseId, tableId, notificationUrl });
-      registerWebhookRoute({ webhookId, tenantId, baseId, macSecretBase64 });
+      const { webhookId, macSecretBase64 } = await createAirtableWebhook(api, {
+        baseId, tableId, notificationUrl: airtableNotificationUrl(),
+      });
+      registerWebhookRoute({ webhookId, tenantId, baseId, tableId: tableId ?? null, macSecretBase64 });
       res.json({ ok: true, webhookId });
     } catch (err) { res.status(500).json({ error: err.message ?? String(err) }); }
+  });
+
+  // Reconcile this tenant's Airtable watches against its live workflows on demand.
+  // The same call publish makes — exposed so a tenant that connected Airtable AFTER
+  // publishing, or whose webhook was lost, can arm without republishing.
+  app.post('/connectors/airtable/webhooks/sync', requireActiveTenant, async (req, res) => {
+    const result = await syncAirtableWebhooksForTenant(spine, req.tenant.id);
+    logEvent('airtable.webhooks.sync', {
+      tenant: req.tenant.id, created: result.created?.length ?? 0,
+      removed: result.removed?.length ?? 0, failed: result.failed?.length ?? 0, reason: result.reason ?? null,
+    });
+    res.json(result);
   });
 
   // Airtable webhook event receiver. NOT auth-gated — Airtable POSTs here.
@@ -2811,6 +2992,21 @@ export async function start() {
   server.headersTimeout = numEnv('HEADERS_TIMEOUT_MS', 30_000);
   server.requestTimeout = numEnv('REQUEST_TIMEOUT_MS', 300_000);
 
+  // ── Keep Airtable's record-change watches alive ────────────────────────────
+  // Airtable expires a webhook 7 days after its last refresh. A webhook created
+  // once and never renewed dies quietly, and the workflow it feeds simply stops
+  // firing with nothing to show the user — the same silent failure as never
+  // creating it, only a week late. Renew daily: frequent enough that several
+  // consecutive failures still leave days of headroom, cheap enough to ignore.
+  const refreshEveryMs = numEnv('AIRTABLE_WEBHOOK_REFRESH_MS', 24 * 60 * 60 * 1000);
+  const refreshWebhooks = () =>
+    refreshAllAirtableWebhooks(spine)
+      .then((r) => { if (r.refreshed || r.failed || r.dropped) logEvent('airtable.webhooks.refresh', r); })
+      .catch((err) => logEvent('airtable.webhooks.refresh_error', errFields(err)));
+  refreshWebhooks();                                            // once at boot, so a restart also heals
+  const refreshTimer = setInterval(refreshWebhooks, refreshEveryMs);
+  refreshTimer.unref();                                         // never hold the process open
+
   let shuttingDown = false;
   const shutdown = (signal) => {
     if (shuttingDown) return;
@@ -2819,6 +3015,7 @@ export async function start() {
     // Stop starting new scheduled runs immediately, then stop accepting new
     // connections and let in-flight requests finish before disposing + exiting.
     try { spine.engine.workflowScheduler.stop?.(); } catch { /* ignore */ }
+    clearInterval(refreshTimer);
     server.close(async () => {
       try { await spine.disposeModels(); } catch { /* ignore */ }
       try { spine.close(); } catch { /* ignore */ }

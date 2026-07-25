@@ -21,7 +21,8 @@ import { join }                  from 'node:path';
 import { createConverger } from '../../src/converger/index.js';
 import { realCatalog }     from '../helpers/catalog.js';
 
-const CAPS = { channels: realCatalog().getAll().map(c => ({ ...c, available: true })) };
+const catalog = realCatalog();
+const CAPS = { channels: catalog.getAll().map(c => ({ ...c, available: true })) };
 
 const tmpDirs = [];
 const scratch = () => { const d = mkdtempSync(join(tmpdir(), 'atlas-gp-')); tmpDirs.push(d); return d; };
@@ -114,7 +115,10 @@ async function drive({
     return J({});
   } };
 
-  const conv = createConverger({ llm, capabilities: CAPS, invokeCapability, checkpointerDir: scratch() });
+  const conv = createConverger({ llm, capabilities: CAPS, invokeCapability, checkpointerDir: scratch(),
+    // Production hands the converger the real CapabilityRegistry; destination
+    // resolution reads the connector's DECLARED schema discovery from it.
+    capabilityCatalog: catalog.capabilities });
   const defaults = { outcome_check: () => ({ id: 'c1' }), example_request: () => ({ type: 'skip' }),
                      proposal: () => ({ type: 'accept' }), clarification: () => ({ answer: 'yes' }),
                      gap_review: () => ({ acceptDefaults: true }), ratify: () => ({ type: 'approve' }) };
@@ -373,7 +377,10 @@ describe('the paths nothing was driving', () => {
       return J({});
     } };
 
-    const conv = createConverger({ llm, capabilities: CAPS, invokeCapability, checkpointerDir: scratch() });
+    const conv = createConverger({ llm, capabilities: CAPS, invokeCapability, checkpointerDir: scratch(),
+    // Production hands the converger the real CapabilityRegistry; destination
+    // resolution reads the connector's DECLARED schema discovery from it.
+    capabilityCatalog: catalog.capabilities });
     let reviewed = false;
     const reply = { outcome_check: () => ({ id: 'c1' }), example_request: () => ({ type: 'skip' }),
                     // The FIRST whole-graph review is modified (rename the delivery); the
@@ -450,7 +457,10 @@ describe('generate builds a connected, branch-fed spec through the graph', () =>
       if (p.includes('Build the next component'))       return J({ component: 'name', spec: 'Lead Router' });
       return J({});
     } };
-    const conv = createConverger({ llm, capabilities: CAPS, invokeCapability, checkpointerDir: scratch() });
+    const conv = createConverger({ llm, capabilities: CAPS, invokeCapability, checkpointerDir: scratch(),
+    // Production hands the converger the real CapabilityRegistry; destination
+    // resolution reads the connector's DECLARED schema discovery from it.
+    capabilityCatalog: catalog.capabilities });
     const reply = { outcome_check: () => ({ id: 'c1' }), example_request: () => ({ type: 'skip' }),
                     proposal: () => ({ type: 'accept' }), clarification: () => ({ answer: 'yes' }),
                     gap_review: () => ({ acceptDefaults: true }), ratify: () => ({ type: 'approve' }) };

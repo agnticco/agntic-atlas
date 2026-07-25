@@ -826,13 +826,15 @@ testing was removed".)*
   conclusions with `file:line`, never edits.
 - **`verifier`** — fresh, independent gate checker; did *not* write the code.
 - **`adversary`** — Phase 3 only; tries to break the converger.
-- **`qa-manager`** *(added 2026-07-22, operator's call)* — hands-on product QA. It
-  drives the real app in a **headed** browser like a customer, carries whole jobs end
-  to end, and hands the Builder a grounded findings report. It **never edits `src/`**,
-  never commits and never deploys. Pair it with the **`atlas-product` skill**
-  (`.claude/skills/atlas-product/`), which is the *behavioural* contract — what a
-  person must SEE on each screen — and is the thing to fix when the product's
-  intended behaviour changes.
+The four below are **positions in the agent org**, not local one-offs — see
+"The agent org" at the end of this section before you dispatch one.
+
+- **`qa-manager`** *(added 2026-07-22; split into manager + worker 2026-07-24)* —
+  owns product quality. It **no longer does the testing itself**: it decomposes a
+  testing objective into scoped customer journeys, dispatches `qa-worker`s (max 4)
+  that drive the real app in headed browsers, and compiles what they observed into
+  one prioritised findings report with a demo agenda. It **never edits `src/`**,
+  never commits and never deploys.
   **Why it exists:** every serious defect this codebase has shipped was found by
   *using* the product, not reading it, with the suite green throughout — and since
   the mutation apparatus was removed (below), the blind spot where the Builder writes
@@ -840,10 +842,27 @@ testing was removed".)*
   This does not close that hole (it is not a test-designer) but it attacks the same
   blind spot from the only other side available: a person, in a browser, asking
   whether the thing actually worked. It is also the standing answer to the operator's
-  rule that a live UI check must be witnessed, not claimed.
-  **Keep the skill true in the same commit as any behaviour change** — it is read as
-  authoritative, so a stale one sends the QA Manager hunting a bug that was fixed, or
-  passing one that was introduced.
+  rule that a live UI check must be witnessed, not claimed. Splitting it lifted a run
+  from one journey per session to several in parallel, and put a reader on all of
+  them who can see what no single worker can.
+- **`qa-worker`** — carries **one** customer journey end to end in a headed browser
+  and writes one report. Read-only, same prohibitions as its manager. Carries the
+  headed-browser procedure that used to live in the QA Manager.
+- **`coding-manager`** *(added 2026-07-24)* — owns implementation. Takes findings
+  (from QA or from the operator), re-grounds them against live code, sections them
+  into packets that cannot collide, dispatches `coding-worker`s (max 3), and verifies
+  the packets integrate. **It does not write the code**, does not merge to `main`,
+  and does not deploy.
+- **`coding-worker`** — implements **one** packet, pins it with a test, **watches
+  that test go red** by hand-reintroducing the bug, and produces a diff. Does not
+  commit, merge, or deploy; leaves integration to its manager.
+
+**Pair the QA pair with the `atlas-product` skill** (`.claude/skills/atlas-product/`),
+which is the *behavioural* contract — what a person must SEE on each screen — and is
+the thing to fix when the product's intended behaviour changes.
+**Keep the skill true in the same commit as any behaviour change** — it is read as
+authoritative, so a stale one sends a QA worker hunting a bug that was fixed, or
+passing one that was introduced.
 
 **Gates are HARD (fail-closed).** A phase closes only through its check:
 
@@ -860,6 +879,32 @@ testing was removed".)*
   (`.claude/settings.json` → `.claude/hooks/block-no-verify.sh`) blocks agents
   from bypassing the commit-msg / pre-push hooks. Don't weaken the check scripts
   to force a pass either; if a check is wrong, fix it and record why here.
+
+### The agent org
+
+`qa-manager`, `qa-worker`, `coding-manager` and `coding-worker` are **generated
+copies**. Their canonical source is `~/Desktop/agent-org/` — each installed file
+carries a header saying so. **Edit them there**, then:
+
+```bash
+cd ~/Desktop/agent-org && node scripts/sync-agents.mjs --write   # push changes out
+node scripts/sync-agents.mjs --check                             # detect drift
+```
+
+Editing the copy in `.claude/agents/` gets silently overwritten on the next sync.
+
+Two rules of that org that change how you read what they hand back:
+
+- **Every worker writes one report to a shared contract**
+  (`~/Desktop/agent-org/agents/REPORT_CONTRACT.md`), and a manager compiles them into
+  `COMPILED.md` + a self-contained `COMPILED.html` under `~/Desktop/agent-org/runs/`.
+  **No report = failed run** — a worker's verbal summary with no file on disk is not
+  a result, and a manager must not compile a run whose reports fail
+  `scripts/validate-reports.mjs`.
+- **Workers never read each other's reports.** Cross-worker synthesis is the
+  manager's job; the isolation is the point.
+
+Operating manual: `~/Desktop/agent-org/OPERATING.md`.
 
 ### Review calibration — the INCREMENT loop (decided 2026-07-13, operator)
 
@@ -980,13 +1025,17 @@ not happen. The closing commit carries **no `Gate: P12` trailer**, so
 **Next up is P13**, once the product's behaviour and appearance have been
 hardened (below).
 
-**What is being worked on right now: product hardening, driven by the QA Manager.**
+**What is being worked on right now: product hardening, driven by QA.**
 Since 2026-07-22 there is a dedicated QA role (the `qa-manager` agent + the
 `atlas-product` skill) whose whole job is to *use* the live product like a customer,
 in a visible browser, and report what misbehaves — because every serious defect this
 codebase has shipped was found by using the product, not by reading it, with the test
-suite green throughout. It carries whole jobs end to end and hands the Builder a
-grounded findings report; it never edits code. The running record of these sessions:
+suite green throughout. It never edits code.
+
+**As of 2026-07-24 it is a manager + workers**, not one agent: `qa-manager` picks the
+journeys and compiles, `qa-worker`s carry one journey each end to end in parallel.
+The sessions below predate the split, so they are the record of *one* agent doing
+both — the findings stand, the shape does not. Running record: 
 
 - [`docs/handoff/ui-test-findings-2026-07-19.md`](docs/handoff/ui-test-findings-2026-07-19.md)
   — the original six-workflow sweep. Theme of the serious ones: **the product told
@@ -1227,6 +1276,45 @@ test panel:
   connected* — that is the R22 defect, and importing a server with forty tools would
   reproduce it forty times. Credential resolution must come from the connector the
   capability already declares.
+
+  **✅ P13-0 is BUILT and merged (2026-07-25).** All four seams landed, plus two
+  blockers that QA found while using the product. What changed, in plain terms:
+  - Atlas no longer guesses whether a step **changes something in the outside world**
+    from the step's name — the step declares it, and silence from something that can
+    deliver counts as a write. *(`effect` on the capability catalog.)*
+  - A workflow delivering to a step outside a hardcoded twelve-entry table can now
+    **prove it kept its promise** instead of being blocked from going live.
+  - **Picking where a write lands** works for any service that says how its structure
+    can be read, not only Airtable. *(`schemaDiscovery` on the catalog.)*
+  - **Which account credentials a step gets** comes from the service it declares it
+    belongs to, not three hand-typed lists. Six capabilities were silently missing one.
+
+  **Two things a verifier caught that the Builder's own green suite did not**, both
+  recorded because they are the pattern, not the exception:
+  - The claim that declaring a write makes the **duplicate check and the approval
+    check** fire was **false on first ship**. Those two guards ran off a *second*,
+    untouched name-matching rule (`isWritingAction` in `workflow-validator.js`), so
+    `notion_create_page` and `notion_update_page` — the exact shapes P13-A imports —
+    escaped both while the oracle knew they wrote. Now routed through one shared
+    `declaresWrite()`, and a declaration can only ever **ADD** a write, never remove a
+    guard.
+  - The part of the destination fix that **actually runs when a user builds a
+    workflow** was pinned by no test at all: reverting it left the entire suite green.
+    It was a closure nobody could reach, which is *how* a generalization gets silently
+    reverted. Extracted and pinned.
+
+  **Two blockers fixed alongside, neither caused by P13** — both found by using the
+  product, and both silent:
+  - **A workflow writing "today's date" wrote a date over a year wrong**, and Atlas
+    certified it: test panel said the promise was kept, the run said Success, the
+    dashboard said 100%. Nothing told the model what day it is, so it answered from
+    training data. Now every AI step is given the date and told not to guess it.
+    *Residual:* nothing checks the model **used** it — the promise-checker still has no
+    notion of "today".
+  - **The pause button could make a never-tested draft live** — one line promoted any
+    non-active workflow to active, with no verification and no trigger arming. A real
+    draft was live for 42 seconds during QA. Now only a *paused* workflow may resume,
+    and resuming arms its triggers.
 
   **How this phase gets signed off** — decided by the operator, 2026-07-15, and
   deliberately narrower than P12's:

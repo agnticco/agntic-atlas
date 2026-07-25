@@ -151,6 +151,32 @@ says so and blocks. A router is only proved on the routes you test.
 Locked until the test actually passed. A published workflow appears in the sidebar
 and runs on its trigger.
 
+**Publishing FAILS CLOSED when the trigger cannot be armed** (2026-07-24). Some
+triggers need Atlas to set something up on the other service before they can fire —
+an Airtable "when a record changes" needs a watch registered with Airtable. If that
+cannot be done, **the workflow must not publish at all**: the user sees a refusal
+naming the fix ("Airtable is not connected", "it does not say which base to watch"),
+and no workflow is created. **A workflow that saved, shows as live, and cannot fire
+is a blocker, not a residual** — that is the product telling someone it is working
+when it is not.
+
+- Editing a live workflow follows the same rule. If the edit's trigger cannot be
+  armed, the workflow is marked as not running rather than left looking live.
+- **Must:** the trigger that "cannot fire" is invisible from the outside. To test
+  it, disconnect Airtable and try to publish an Airtable-triggered workflow — you
+  should be refused, not warned.
+
+**How often a trigger runs is a user setting** (2026-07-24). A trigger may carry
+"run at most every N minutes". What it means depends on the trigger:
+- **Email** is genuinely checked on a timer — the setting is how often Atlas looks.
+- **Airtable** pushes to Atlas the moment a record changes, so the setting is a
+  floor on how often the workflow may run, for a busy table. A change arriving
+  inside the quiet window must still run when the window closes — **if a change is
+  silently dropped, that is a blocker.**
+- **Slack messages have no such setting on purpose.** Every message is its own job.
+  If you see a frequency control offered on a Slack message trigger, that is a
+  finding — it would have to drop messages to work.
+
 ## What counts as a finding
 
 Report it if a **real user can hit it** and it either **looks like success** or

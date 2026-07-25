@@ -85,7 +85,10 @@ async function converge(map) {
     return J({});
   } };
 
-  const conv = createConverger({ llm, capabilities: CAPS, invokeCapability, checkpointerDir: scratch() });
+  const conv = createConverger({ llm, capabilities: CAPS, invokeCapability, checkpointerDir: scratch(),
+    // Production hands the converger the real CapabilityRegistry; destination
+    // resolution reads the connector's DECLARED schema discovery from it.
+    capabilityCatalog: catalog.capabilities });
   const reply = { outcome_check: () => ({ id: 'c1' }), example_request: () => ({ type: 'skip' }),
                   proposal: () => ({ type: 'accept' }), clarification: () => ({ answer: 'yes' }),
                   gap_review: () => ({ acceptDefaults: true }), ratify: () => ({ type: 'approve' }) };
@@ -169,7 +172,10 @@ async function convergeWithGapLoop() {
     return J({});
   } };
 
-  const conv = createConverger({ llm, capabilities: CAPS, invokeCapability, checkpointerDir: scratch() });
+  const conv = createConverger({ llm, capabilities: CAPS, invokeCapability, checkpointerDir: scratch(),
+    // Production hands the converger the real CapabilityRegistry; destination
+    // resolution reads the connector's DECLARED schema discovery from it.
+    capabilityCatalog: catalog.capabilities });
   const reply = { outcome_check: () => ({ id: 'c1' }), example_request: () => ({ type: 'skip' }),
                   proposal: () => ({ type: 'accept' }), clarification: () => ({ answer: 'yes' }),
                   gap_review: () => ({ acceptDefaults: true }), ratify: () => ({ type: 'approve' }) };

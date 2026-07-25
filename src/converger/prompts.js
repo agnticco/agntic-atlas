@@ -67,7 +67,18 @@ function connectorTriggerSummary(capabilities) {
     let spec;
     if (t.id === 'slack_message')    spec = '{"type":"event","connector":"slack","event":"message","filter":{"channel":"#channel-name"}}';
     else if (t.id === 'slack_mention') spec = '{"type":"event","connector":"slack","event":"app_mention"}';
+    // Add "checkEvery":<minutes> ONLY if the user asks how often it should check
+    // (e.g. "check my inbox every 15 minutes"). Omit it otherwise — the default is
+    // every minute, which is what people expect.
     else if (t.id === 'gmail_new_message') spec = '{"type":"email","filter":"is:unread"}';  // incoming mail; add "from:<sender>" ONLY if the user names a sender — never "from:<their own address>", which matches mail they SENT
+    // baseId is REQUIRED and must be a real base id — resolve it with airtable_list_bases /
+    // airtable_list_tables at build time, never leave it blank. Atlas subscribes to the named
+    // base when the workflow is published; with no base there is nothing to watch and the
+    // trigger cannot fire. tableId is optional (omit it to watch every table in the base).
+    // Airtable pushes changes to Atlas, so this runs the moment a record changes.
+    // Add "checkEvery":<minutes> to the filter ONLY if the user asks for it to run
+    // less often ("at most once an hour") — it batches a busy table into one run.
+    else if (t.id === 'airtable_record_changed') spec = '{"type":"event","connector":"airtable","event":"record_changed","filter":{"baseId":"appXXXXXXXXXXXXXX","tableId":"tblXXXXXXXXXXXXXX"}}';
     else spec = `{"type":"event","connector":"${t.connector}","event":"${t.id}"}`;
     return `- ${t.name} — ${t.description} Spec: ${spec}`;
   });

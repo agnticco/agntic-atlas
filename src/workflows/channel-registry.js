@@ -22,6 +22,19 @@ export class ChannelRegistry {
   }
 
   /**
+   * The underlying CapabilityRegistry.
+   *
+   * The converger's destination resolution needs capability-level facts this adapter
+   * deliberately does not expose (`schemaDiscoveryFor`), and production hands it the
+   * real registry. A test that reached past this into `_cap` would be testing a
+   * different construction than production runs — the exact hazard this adapter's own
+   * suite exists to prevent — so the accessor is public.
+   */
+  get capabilities() {
+    return this._cap;
+  }
+
+  /**
    * Register a delivery/step channel (old format). Translates to CapabilityRegistry.
    *
    * @param {object} def

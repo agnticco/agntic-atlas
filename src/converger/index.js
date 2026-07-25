@@ -69,6 +69,9 @@ export function createConverger({
   // rather than asking them to be typed (§6.2.3). Absent ⇒ the graph degrades to
   // asking, which is exactly what it did before F — never to guessing.
   invokeCapability = null,
+  // P13-0 seam #3 — the CapabilityRegistry. Lets the `destinations` node read a
+  // connector's DECLARED schema-discovery instead of hardcoding Airtable's.
+  capabilityCatalog = null,
   // Reasoning-beat narrator (Increment #22). The server binds this to the build's
   // threadId and puts it in configurable, so every graph node can call
   // cfg.configurable.narrate({kind,text,detail}) to stream the WHY behind a step to
@@ -82,7 +85,7 @@ export function createConverger({
   // passes through to ratify and the build is unchanged (never blocked on the tester).
   runDryRun = null,
 } = {}) {
-  const graph = buildElicitationGraph({ llm, checkpointerDir, invokeCapability });
+  const graph = buildElicitationGraph({ llm, checkpointerDir, invokeCapability, capabilityCatalog });
 
   // Each converger turn = ~3 node executions (analyze + propose/clarify + interrupt).
   // tenantId rides in configurable so the build-diagnostic log lines (converger.node,

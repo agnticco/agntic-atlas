@@ -159,6 +159,10 @@ async function converge({ baseId = 'appPLACEHOLDER', mapping = { Name: 'Name', B
   const conv = createConverger({
     llm, capabilities: CAPS, checkpointerDir: scratch(),
     invokeCapability: withInvoker ? invokeCapability : null,
+    // Production hands the converger the real CapabilityRegistry (builder.js), and
+    // destination resolution now reads the connector's DECLARED schema discovery from
+    // it. A harness that omits it is testing a program nobody runs.
+    capabilityCatalog: catalog.capabilities,
   });
 
   const seen = {};
@@ -448,7 +452,10 @@ describe('a blocking gap arrives at the user with an answer in the box', () => {
       return J({});
     } };
 
-    const conv = createConverger({ llm, capabilities: CAPS, checkpointerDir: scratch(), invokeCapability });
+    const conv = createConverger({
+      llm, capabilities: CAPS, checkpointerDir: scratch(), invokeCapability,
+      capabilityCatalog: catalog.capabilities,
+    });
     let iv;
     try { await conv.run('t2', 'save leads to airtable'); iv = { type: 'done' }; }
     catch (err) { iv = err.interruptValue ?? err; }

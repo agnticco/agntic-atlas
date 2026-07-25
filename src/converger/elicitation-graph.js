@@ -471,12 +471,18 @@ function isKnownBase(v, bases) {
  * very code meant to prevent it. It stays, it fails UNSATISFIED_ASSERTION, and the
  * user is told which column their table does not have.
  */
-function rewriteAssertionFields(outcome, renames, columns) {
+function rewriteAssertionFields(outcome, renames, columns, connector = 'airtable') {
   if (!outcome || !renames || !Object.keys(renames).length) return outcome ?? null;
   const real = new Set(columns.map(c => String(c.name).toLowerCase()));
+  // P13-0 seam #3: keyed off the connector we ACTUALLY resolved, not the literal
+  // /airtable/i. With the regex, a rename discovered on any other connector was
+  // computed and then silently discarded — the node got the real column names and
+  // the promise kept the invented ones, which is UNSATISFIED_ASSERTION on the
+  // success path: the exact dead-end this rewrite exists to prevent.
+  const targetRe = new RegExp(String(connector).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
 
   const assertions = (outcome.assertions ?? []).map((a) => {
-    if (!/airtable/i.test(String(a?.target ?? '')) || !Array.isArray(a?.fields)) return a;
+    if (!targetRe.test(String(a?.target ?? '')) || !Array.isArray(a?.fields)) return a;
     const fields = a.fields.map((f) => {
       if (real.has(String(f).toLowerCase())) return f;   // already a real column
       // The mapping model told us what this promise is called in the real table
@@ -547,11 +553,16 @@ function readFields(config) {
  * the user is told their table has neither column — which is the truth, and the thing
  * they need to know.
  */
-function fillDestination(nodes, { baseId, tableId, fields, columnsRead = false }) {
+function fillDestination(nodes, { connector, descriptor, containerId, tableId, fields, columnsRead = false }) {
+  // P13-0 seam #3: the connector and its config-key names come from the connector's
+  // own declaration, not from the literals 'airtable' / `baseId` / `tableId`. Writing
+  // a key the target node type does not declare would fail UNKNOWN_CONFIG_KEY at
+  // publish, so the keys MUST come from the connector rather than be assumed.
+  if (!connector || !descriptor) return nodes;
   return nodes.map((n) => {
-    if (!usesConnector(n, 'airtable')) return n;
-    const config = { ...(n.config ?? {}), baseId };
-    if (tableId) config.tableId = tableId;
+    if (!usesConnector(n, connector)) return n;
+    const config = { ...(n.config ?? {}), [descriptor.containerKey]: containerId };
+    if (tableId) config[descriptor.tableKey] = tableId;
     // Only touch `fields` where the node HAS them (a create/update). A search or a
     // delete has none, and inventing some would be a config key nothing reads.
     // NORMALISES the string form away: what goes back is always an object, so every
@@ -716,7 +727,53 @@ function emitBeat(cfg, beat) {
  * @param {{ llm: ModelPool, checkpointerDir?: string }} opts
  * @returns {CompiledGraph}
  */
-export function buildElicitationGraph({ llm, checkpointerDir = './memory/converger', invokeCapability = null }) {
+/**
+ * Which connector's destination schema should this draft resolve, and how?
+ * (P13-0 seam #3.)
+ *
+ * EXPORTED, and that is the point. This logic lived as a closure inside
+ * `buildElicitationGraph`, which meant nothing could reach it — and an independent
+ * verifier proved the consequence: reverting it to the literal `['airtable']` left
+ * the ENTIRE suite green. The part of seam #3 that actually runs when a user builds
+ * a workflow was pinned by nothing, while the tests that claimed to cover it only
+ * exercised `CapabilityRegistry.schemaDiscoveryFor`. Untestable code is how a
+ * generalization gets silently reverted, so the fix is to make it reachable.
+ *
+ * Resolves ONE connector per pass: the first DECLARING connector this draft actually
+ * writes to. A draft writing to two schema-bearing connectors resolves them on
+ * successive passes, because the destinations node re-enters until nothing drifts.
+ *
+ * Returns `null` when no connector declares discovery — and null means the ordinary
+ * loop ASKS the user. It must never mean "guess", which would write a customer's
+ * record into a destination that does not exist.
+ *
+ * @param {{schemaDiscoveryFor?: Function, schemaDiscoveryConnectors?: Function}|null} catalog
+ * @param {object[]} nodes
+ * @returns {{connector: string, descriptor: object, targets: object[]}|null}
+ */
+export function resolveSchemaDiscovery(catalog, nodes) {
+  if (!catalog?.schemaDiscoveryFor) return null;
+  for (const connector of (catalog.schemaDiscoveryConnectors?.() ?? [])) {
+    const targets = (nodes ?? []).filter(n => usesConnector(n, connector));
+    if (!targets.length) continue;
+    const descriptor = catalog.schemaDiscoveryFor(connector);
+    if (descriptor) return { connector, descriptor, targets };
+  }
+  return null;
+}
+
+/**
+ * @param {object}   opts
+ * @param {object}   opts.llm
+ * @param {string}   [opts.checkpointerDir]
+ * @param {Function} [opts.invokeCapability] — (id, args) => result; null when no connector is live
+ * @param {object}   [opts.capabilityCatalog] — the CapabilityRegistry (P13-0 seam #3).
+ *   Supplies `schemaDiscoveryFor(connector)` so destination resolution works for ANY
+ *   connector that declares how its schema is read, instead of only Airtable. Omitted
+ *   or null ⇒ no connector declares discovery ⇒ the ordinary loop ASKS the user, which
+ *   is exactly the pre-P13 behaviour for every non-Airtable connector.
+ */
+export function buildElicitationGraph({ llm, checkpointerDir = './memory/converger', invokeCapability = null, capabilityCatalog = null }) {
   // Which generate executions have already STREAMED their thinking. A node that
   // calls interrupt() re-executes from the top on resume (compiled-graph.js), so
   // `generate` would re-stream (and re-narrate) its thinking every time the user
@@ -2062,19 +2119,36 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
   // pass-through and the ordinary propose loop asks the user for the id, exactly as
   // it did before F. Degrading to a question is honest; degrading to a made-up base
   // id would write a customer's lead into nothing.
-  const AIRTABLE_ID_KEYS = { baseId: 'airtable', spreadsheetId: 'sheets' };
+  // ── P13-0 seam #3: WHICH connector, and HOW is its schema read? ──────────────
+  //
+  // This node was hardwired to the literal string 'airtable' in four places, plus the
+  // capability ids `airtable_list_bases` / `airtable_describe_base`. The dead constant
+  // that used to sit here — `{ baseId: 'airtable', spreadsheetId: 'sheets' }` — was an
+  // abandoned attempt at exactly this generalization, declared and never referenced.
+  //
+  // Now: a connector DECLARES how its schema is discovered (capability-registry.js,
+  // `schemaDiscovery`), and this node reads the declaration. A connector that declares
+  // nothing is not guessed at — the ordinary propose loop asks the user, which is what
+  // every non-Airtable connector already did.
+  //
+  // Resolves ONE connector per pass: the first declaring connector that this draft
+  // actually writes to. That matches the node's existing single-destination shape;
+  // a draft writing to two schema-bearing connectors resolves them on successive
+  // passes, because the node re-enters until nothing drifts.
+  const resolveDiscovery = (nodes) => resolveSchemaDiscovery(capabilityCatalog, nodes);
 
   graph.addNode('destinations', async (state, cfg) => {
     const sessionId = cfg?.configurable?.threadId;
     const nodes = state.draft?.nodes ?? [];
 
-    // Which steps write to Airtable? ALL of them are candidates — we do NOT ask
-    // whether the model's base id "looks real" first, because a plausible-looking
-    // hallucination (`appABCDEFGHIJKLMN`) passes any shape test, and gating the whole
-    // node on that test let one guess skip the base lookup, the table lookup and the
-    // column mapping. Ask the connector; it knows. (Found by the test-adversary.)
-    const airtableNodes = nodes.filter(n => usesConnector(n, 'airtable'));
-    if (!airtableNodes.length || !invokeCapability) return { phase: 'gapping' };
+    // Which steps write to a connector whose schema we can read? ALL of them are
+    // candidates — we do NOT ask whether the model's container id "looks real" first,
+    // because a plausible-looking hallucination (`appABCDEFGHIJKLMN`) passes any shape
+    // test, and gating the whole node on that test let one guess skip the container
+    // lookup, the table lookup and the column mapping. Ask the connector; it knows.
+    const resolved = resolveDiscovery(nodes);
+    if (!resolved || !invokeCapability) return { phase: 'gapping' };
+    const { connector: targetConnector, descriptor, targets: writeNodes } = resolved;
 
     // ── THE LATCH STOPS US ASKING AGAIN. IT MUST NOT STOP US CHECKING AGAIN. ──
     //
@@ -2104,7 +2178,7 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
     const cached = state.destination;
     if (cached?.columns) {
       const real = new Set(cached.columns.map(c => String(c.name).toLowerCase()));
-      const drifted = airtableNodes.some((n) => {
+      const drifted = writeNodes.some((n) => {
         const f = readFields(n.config);
         // A `fields` we cannot read AT ALL is drift too: it is a write whose columns
         // nobody has checked, which is the whole thing we are guarding against.
@@ -2116,15 +2190,16 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
       // A column crept back in. Re-map against the columns we already read, and
       // restate the contract — exactly as on the first pass.
       const { fields: mapped, renames, unmapped } = await mapFieldsToColumns({
-        llm, sessionId, nodes: airtableNodes, columns: cached.columns,
+        llm, sessionId, nodes: writeNodes, columns: cached.columns,
         outcome: state.draft?.outcome, table: cached.table,
       });
       return {
         draft: {
           ...state.draft,
-          outcome: rewriteAssertionFields(state.draft?.outcome, renames, cached.columns),
+          outcome: rewriteAssertionFields(state.draft?.outcome, renames, cached.columns, targetConnector),
           nodes: fillDestination(nodes, {
-            baseId: cached.baseId, tableId: cached.table, fields: mapped, columnsRead: true,
+            connector: targetConnector, descriptor,
+            containerId: cached.baseId, tableId: cached.table, fields: mapped, columnsRead: true,
           }),
         },
         confirmationLog: [{ step: state.step, type: 'destination_rechecked', unmapped }],
@@ -2137,7 +2212,13 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
     // ── 1. The base ──────────────────────────────────────────────────────────
     let bases;
     try {
-      bases = (await invokeCapability('airtable_list_bases'))?.bases ?? [];
+      // A connector with no list capability has ONE implicit container: whatever the
+      // draft already names. Declaring `listCapability: null` is how a connector says
+      // "there is nothing to choose between", and it must not become a lookup of the
+      // empty string.
+      bases = descriptor.listCapability
+        ? ((await invokeCapability(descriptor.listCapability))?.[descriptor.listResultKey] ?? [])
+        : [];
     } catch (err) {
       // A connector that cannot be read is not a connector that can be guessed at.
       // Fall through to the ordinary loop, which ASKS.
@@ -2148,7 +2229,7 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
     // A base id the model already put in the draft is honoured ONLY if the tenant
     // actually has it. Anything else is a guess, and a guess writes the customer's
     // lead into a base that does not exist.
-    const already = airtableNodes.map(n => n.config?.baseId).find(b => isKnownBase(b, bases));
+    const already = writeNodes.map(n => n.config?.[descriptor.containerKey]).find(b => isKnownBase(b, bases));
     let base = already ? bases.find(b => b.id === already) : bases[0];
     // ── A QUESTION ALREADY ANSWERED MUST NOT BE ASKED AGAIN ──────────────────
     // `already` is a base the DRAFT names and the tenant genuinely has — which means
@@ -2164,7 +2245,7 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
     if (bases.length > 1 && !already) {
       const answer = await interrupt({
         type: 'clarification',
-        question: 'Which Airtable base should this write to?',
+        question: `Which ${descriptor.containerLabel ?? 'destination'} should this write to?`,
         choices: bases.map((b, i) => ({ id: b.id, label: b.name, selected: i === 0 })),
         step: state.step,
       });
@@ -2174,11 +2255,13 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
     // ── 2. The table, and its REAL columns ───────────────────────────────────
     let tables = [];
     try {
-      tables = (await invokeCapability('airtable_describe_base', { baseId: base.id }))?.tables ?? [];
+      tables = (await invokeCapability(
+        descriptor.describeCapability, { [descriptor.describeArg]: base.id },
+      ))?.[descriptor.describeResultKey] ?? [];
     } catch { /* fall through: we have a base, and the loop can still ask for a table */ }
     if (!tables.length) {
       return {
-        draft: { ...state.draft, nodes: fillDestination(nodes, { baseId: base.id }) },
+        draft: { ...state.draft, nodes: fillDestination(nodes, { connector: targetConnector, descriptor, containerId: base.id }) },
         destinationsResolved: true, step: state.step + 1, phase: 'gapping',
       };
     }
@@ -2186,8 +2269,8 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
     // Same rule as the base: a table the draft already names, which this base really
     // has, is an answer — not a question. Matched on id OR name, because the model
     // writes whichever the user said ("Sheet1").
-    const namedTable = airtableNodes
-      .map(n => String(n.config?.tableId ?? n.config?.table ?? '').trim())
+    const namedTable = writeNodes
+      .map(n => String(n.config?.[descriptor.tableKey] ?? n.config?.table ?? '').trim())
       .filter(Boolean)
       .map(t => tables.find(x => x.id === t || x.name.toLowerCase() === t.toLowerCase()))
       .find(Boolean);
@@ -2195,7 +2278,7 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
     if (tables.length > 1 && !namedTable) {
       const answer = await interrupt({
         type: 'clarification',
-        question: `Which table in "${base.name}"?`,
+        question: `Which ${descriptor.tableLabel ?? 'table'} in "${base.name}"?`,
         choices: tables.map((t, i) => ({ id: t.id, label: t.name, selected: i === 0 })),
         step: state.step,
       });
@@ -2206,9 +2289,9 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
     // One cheap call. The alternative is the model inventing `Budget` when the
     // column is called `Deal Size`, which Airtable accepts by silently ignoring —
     // the record is created, the field is empty, and the run reports success.
-    const columns = table.fields ?? [];
+    const columns = table[descriptor.tableColumnsKey] ?? [];
     const { fields: mapped, renames, unmapped } = await mapFieldsToColumns({
-      llm, sessionId, nodes: airtableNodes, columns,
+      llm, sessionId, nodes: writeNodes, columns,
       outcome: state.draft?.outcome, table: table.name,
     });
 
@@ -2226,13 +2309,16 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
     // own words — and the restatement is logged, because silently editing a user's
     // contract is exactly the sin the outcome exists to prevent.
     // (Found by the test-adversary.)
-    const outcome = rewriteAssertionFields(state.draft?.outcome, renames, columns);
+    const outcome = rewriteAssertionFields(state.draft?.outcome, renames, columns, targetConnector);
 
     return {
       draft: {
         ...state.draft,
         outcome,
-        nodes: fillDestination(nodes, { baseId: base.id, tableId: table.name, fields: mapped, columnsRead: true }),
+        nodes: fillDestination(nodes, {
+          connector: targetConnector, descriptor,
+          containerId: base.id, tableId: table.name, fields: mapped, columnsRead: true,
+        }),
       },
       destination: { baseId: base.id, table: table.name, columns },
       confirmationLog: [{
