@@ -1,5 +1,13 @@
 [
   {
+    "version": "1.6.40",
+    "date": "2026-07-25",
+    "title": "Atlas knows what day it is",
+    "notes": [
+      "Fixes the date in chat. Atlas now reads the real date on every path — chatting, building a workflow, and running one."
+    ]
+  },
+  {
     "version": "1.6.39",
     "date": "2026-07-25",
     "title": "Atlas knows what day it is",

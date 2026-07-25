@@ -156,6 +156,32 @@ export class ChatModel extends Runnable {
     return { system, rest };
   }
 
+
+  /**
+   * The Anthropic `system` parameter, with the clock attached — for EVERY path.
+   *
+   * There are TWO request assemblers on this class (`_call` and `stream`) and I fixed
+   * only `_call` first, so chat — which streams — kept answering with a date from
+   * training data in production. That was the THIRD surface missed in a row: the
+   * engine's llm node, then the converger's prompt, then the streaming path. Per-site
+   * injection loses; this helper is the single place, and any new assembler must use it.
+   *
+   * ORDER IS LOAD-BEARING, and the reason is invisible on inspection. The caller's
+   * system prompt is marked cacheable for 1h because the converger re-sends ~3.9k
+   * tokens of catalog every turn. The clock changes on every call, so if it went
+   * INSIDE that text every request would be a unique prefix and the cache hit rate
+   * would drop to zero — real cost and latency, reported by nothing. Anthropic caches
+   * only up to the `cache_control` marker, so the clock goes in a SEPARATE block
+   * AFTER it and cannot invalidate the stable prefix.
+   */
+  _systemWithClock(system, now) {
+    const clock = { type: 'text', text: currentDateLine(now) };
+    if (!system) return [clock];               // plain chat sends no system prompt
+    return ENABLE_PROMPT_CACHE
+      ? [{ type: 'text', text: system, cache_control: { type: 'ephemeral', ttl: '1h' } }, clock]
+      : [{ type: 'text', text: system }, clock];
+  }
+
   /**
    * Build the Anthropic messages array from a BaseMessage[] (no system messages).
    *
@@ -326,15 +352,7 @@ export class ChatModel extends Runnable {
       // rate to zero — a real cost and latency regression that nothing would report.
       // Anthropic caches only up to the `cache_control` marker, so anything after it
       // is free to change without invalidating the prefix.
-      const clockBlock = { type: 'text', text: currentDateLine(config.now) };
-      if (system) {
-        baseParams.system = ENABLE_PROMPT_CACHE
-          ? [{ type: 'text', text: system, cache_control: { type: 'ephemeral', ttl: '1h' } }, clockBlock]
-          : [{ type: 'text', text: system }, clockBlock];
-      } else {
-        // No caller system prompt (plain chat, some JSON calls) — the clock alone.
-        baseParams.system = [clockBlock];
-      }
+      baseParams.system = this._systemWithClock(system, config.now);
       if (toolRegistry) {
         const tools = Array.isArray(toolRegistry)
           ? toolRegistry
@@ -502,7 +520,9 @@ export class ChatModel extends Runnable {
         max_tokens: maxTokens,
         temperature,
       };
-      if (system) baseParams.system = system;
+      // The path CHAT uses. It had no clock at all, which is why production still
+      // answered with a date from training data after two fixes.
+      baseParams.system = this._systemWithClock(system, config.now);
       if (hasTools) baseParams.tools = isRawTools ? toolRegistry : toolRegistry.toAnthropicSchemas();
       if (config.tool_choice) baseParams.tool_choice = config.tool_choice;
 
