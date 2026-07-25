@@ -1277,6 +1277,45 @@ test panel:
   reproduce it forty times. Credential resolution must come from the connector the
   capability already declares.
 
+  **✅ P13-0 is BUILT and merged (2026-07-25).** All four seams landed, plus two
+  blockers that QA found while using the product. What changed, in plain terms:
+  - Atlas no longer guesses whether a step **changes something in the outside world**
+    from the step's name — the step declares it, and silence from something that can
+    deliver counts as a write. *(`effect` on the capability catalog.)*
+  - A workflow delivering to a step outside a hardcoded twelve-entry table can now
+    **prove it kept its promise** instead of being blocked from going live.
+  - **Picking where a write lands** works for any service that says how its structure
+    can be read, not only Airtable. *(`schemaDiscovery` on the catalog.)*
+  - **Which account credentials a step gets** comes from the service it declares it
+    belongs to, not three hand-typed lists. Six capabilities were silently missing one.
+
+  **Two things a verifier caught that the Builder's own green suite did not**, both
+  recorded because they are the pattern, not the exception:
+  - The claim that declaring a write makes the **duplicate check and the approval
+    check** fire was **false on first ship**. Those two guards ran off a *second*,
+    untouched name-matching rule (`isWritingAction` in `workflow-validator.js`), so
+    `notion_create_page` and `notion_update_page` — the exact shapes P13-A imports —
+    escaped both while the oracle knew they wrote. Now routed through one shared
+    `declaresWrite()`, and a declaration can only ever **ADD** a write, never remove a
+    guard.
+  - The part of the destination fix that **actually runs when a user builds a
+    workflow** was pinned by no test at all: reverting it left the entire suite green.
+    It was a closure nobody could reach, which is *how* a generalization gets silently
+    reverted. Extracted and pinned.
+
+  **Two blockers fixed alongside, neither caused by P13** — both found by using the
+  product, and both silent:
+  - **A workflow writing "today's date" wrote a date over a year wrong**, and Atlas
+    certified it: test panel said the promise was kept, the run said Success, the
+    dashboard said 100%. Nothing told the model what day it is, so it answered from
+    training data. Now every AI step is given the date and told not to guess it.
+    *Residual:* nothing checks the model **used** it — the promise-checker still has no
+    notion of "today".
+  - **The pause button could make a never-tested draft live** — one line promoted any
+    non-active workflow to active, with no verification and no trigger arming. A real
+    draft was live for 42 seconds during QA. Now only a *paused* workflow may resume,
+    and resuming arms its triggers.
+
   **How this phase gets signed off** — decided by the operator, 2026-07-15, and
   deliberately narrower than P12's:
   1. **The backend works** — behavioural tests, plus proof that one customer's
