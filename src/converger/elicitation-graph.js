@@ -728,6 +728,41 @@ function emitBeat(cfg, beat) {
  * @returns {CompiledGraph}
  */
 /**
+ * Which connector's destination schema should this draft resolve, and how?
+ * (P13-0 seam #3.)
+ *
+ * EXPORTED, and that is the point. This logic lived as a closure inside
+ * `buildElicitationGraph`, which meant nothing could reach it — and an independent
+ * verifier proved the consequence: reverting it to the literal `['airtable']` left
+ * the ENTIRE suite green. The part of seam #3 that actually runs when a user builds
+ * a workflow was pinned by nothing, while the tests that claimed to cover it only
+ * exercised `CapabilityRegistry.schemaDiscoveryFor`. Untestable code is how a
+ * generalization gets silently reverted, so the fix is to make it reachable.
+ *
+ * Resolves ONE connector per pass: the first DECLARING connector this draft actually
+ * writes to. A draft writing to two schema-bearing connectors resolves them on
+ * successive passes, because the destinations node re-enters until nothing drifts.
+ *
+ * Returns `null` when no connector declares discovery — and null means the ordinary
+ * loop ASKS the user. It must never mean "guess", which would write a customer's
+ * record into a destination that does not exist.
+ *
+ * @param {{schemaDiscoveryFor?: Function, schemaDiscoveryConnectors?: Function}|null} catalog
+ * @param {object[]} nodes
+ * @returns {{connector: string, descriptor: object, targets: object[]}|null}
+ */
+export function resolveSchemaDiscovery(catalog, nodes) {
+  if (!catalog?.schemaDiscoveryFor) return null;
+  for (const connector of (catalog.schemaDiscoveryConnectors?.() ?? [])) {
+    const targets = (nodes ?? []).filter(n => usesConnector(n, connector));
+    if (!targets.length) continue;
+    const descriptor = catalog.schemaDiscoveryFor(connector);
+    if (descriptor) return { connector, descriptor, targets };
+  }
+  return null;
+}
+
+/**
  * @param {object}   opts
  * @param {object}   opts.llm
  * @param {string}   [opts.checkpointerDir]
@@ -2100,16 +2135,7 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
   // actually writes to. That matches the node's existing single-destination shape;
   // a draft writing to two schema-bearing connectors resolves them on successive
   // passes, because the node re-enters until nothing drifts.
-  const resolveDiscovery = (nodes) => {
-    if (!capabilityCatalog?.schemaDiscoveryFor) return null;
-    for (const connector of (capabilityCatalog.schemaDiscoveryConnectors?.() ?? [])) {
-      const targets = nodes.filter(n => usesConnector(n, connector));
-      if (!targets.length) continue;
-      const descriptor = capabilityCatalog.schemaDiscoveryFor(connector);
-      if (descriptor) return { connector, descriptor, targets };
-    }
-    return null;
-  };
+  const resolveDiscovery = (nodes) => resolveSchemaDiscovery(capabilityCatalog, nodes);
 
   graph.addNode('destinations', async (state, cfg) => {
     const sessionId = cfg?.configurable?.threadId;

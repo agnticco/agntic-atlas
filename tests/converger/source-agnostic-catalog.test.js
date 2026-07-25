@@ -29,6 +29,8 @@ import { ownsConnector, setInjectorCatalog } from '../../src/api/server.js';
 // The REAL guards, imported — these are what WRITE_WITHOUT_IDEMPOTENCY and
 // WEAK_APPROVAL_FOR_WRITE are computed from.
 import { isWritingAction, isWriteNode } from '../../src/workflows/workflow-validator.js';
+// The resolution the destinations node actually calls — not the registry lookup.
+import { resolveSchemaDiscovery } from '../../src/converger/elicitation-graph.js';
 
 /**
  * The synthetic connector. `x_create_page` is chosen deliberately:
@@ -422,5 +424,68 @@ describe('P13-0 (e) — the declaration reaches the guards, not just the oracle'
     assert.equal(isWritingAction('gmail_send'), true);
     assert.equal(isWritingAction('airtable_list_records'), false);
     assert.equal(isWritingAction('notion_update_page'), false);   // the pre-P13 gap, unchanged
+  });
+});
+
+/* ── P13-0 (f) — the seam-#3 PRODUCTION path, not just the registry lookup ────
+ *
+ * The §(c) tests below exercise `CapabilityRegistry.schemaDiscoveryFor`. An
+ * independent verifier proved that was not enough: reverting the resolution used by
+ * the live build loop to the literal `['airtable']` left the entire suite green —
+ * 1119 tests, identical pass/fail with and without the mutant. The generalization
+ * that actually runs when a user builds a workflow was pinned by nothing, while the
+ * tests that claimed to cover it never touched it.
+ *
+ * This drives `resolveSchemaDiscovery`, the function the destinations node calls.
+ */
+describe('P13-0 (f) — destination resolution works for a connector nobody hand-built', () => {
+  const ZETA = {
+    listCapability: 'zeta_list_spaces', listResultKey: 'spaces',
+    describeArg: 'spaceId', describeResultKey: 'collections', tableColumnsKey: 'columns',
+    containerKey: 'spaceId', tableKey: 'collectionId',
+    containerLabel: 'Zeta space', tableLabel: 'collection',
+  };
+  const zetaWrite = { type: 'connector-action', config: { action: 'zeta_create_page' } };
+
+  test('a synthetic connector resolves through the live path', () => {
+    registry.register({ id: 'zeta_describe_space', connector: 'zeta', positions: ['step'], schemaDiscovery: ZETA });
+    registry.register({ id: 'zeta_create_page',    connector: 'zeta', positions: ['step'], effect: 'write' });
+
+    const got = resolveSchemaDiscovery(registry, [zetaWrite]);
+
+    // MUTATION: revert resolveSchemaDiscovery's loop to `for (const connector of
+    // ['airtable'])` — zeta is never considered, the user is asked to paste an id,
+    // and this goes red. Before this test existed that mutation killed NOTHING.
+    assert.ok(got, 'a declaring connector must resolve through the production path');
+    assert.equal(got.connector, 'zeta');
+    assert.equal(got.descriptor.describeCapability, 'zeta_describe_space');
+    assert.equal(got.descriptor.containerKey, 'spaceId', 'the node writes the DECLARED key');
+    assert.deepEqual(got.targets, [zetaWrite]);
+  });
+
+  test('Airtable still resolves — the generalization did not drop what it replaced', () => {
+    registry.register({
+      id: 'airtable_describe_base', connector: 'airtable', positions: ['step'],
+      schemaDiscovery: { listCapability: 'airtable_list_bases', listResultKey: 'bases',
+        describeArg: 'baseId', describeResultKey: 'tables', tableColumnsKey: 'fields',
+        containerKey: 'baseId', tableKey: 'tableId' },
+    });
+    const got = resolveSchemaDiscovery(registry, [
+      { type: 'connector-action', config: { action: 'airtable_create_record' } },
+    ]);
+    assert.equal(got.connector, 'airtable');
+    assert.equal(got.descriptor.containerKey, 'baseId');
+  });
+
+  test('a draft that writes to no declaring connector resolves to null — we ASK, never guess', () => {
+    registry.register({ id: 'zeta_describe_space', connector: 'zeta', positions: ['step'], schemaDiscovery: ZETA });
+
+    // Nothing in this draft touches zeta. Returning a descriptor anyway would send
+    // the build hunting for a destination the workflow never writes to.
+    assert.equal(resolveSchemaDiscovery(registry, [
+      { type: 'connector-action', config: { action: 'slack_post_message' } },
+    ]), null);
+    assert.equal(resolveSchemaDiscovery(registry, []), null);
+    assert.equal(resolveSchemaDiscovery(null, [zetaWrite]), null, 'no catalog ⇒ ask, do not throw');
   });
 });
