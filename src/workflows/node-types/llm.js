@@ -27,6 +27,7 @@
 import { SystemMessage, HumanMessage } from '../../core/message.js';
 import { resolveTransformInput } from './_node-input.js';
 import { pickCategory } from './decision.js';
+import { currentDateLine } from '../../utils/current-time.js';
 
 export const LLM_MODES = ['summarize', 'extract', 'rewrite', 'classify', 'freeform'];
 
@@ -176,7 +177,7 @@ export const llmNodeType = {
     // THE MODEL HAS NO CLOCK. Without this it answers "what is today's date?" from
     // training data — see currentDateLine below. Prepended to the SYSTEM message so
     // it applies to every mode and cannot be displaced by a user's own prompt text.
-    const datedSystem = `${currentDateLine(ctx)}\n\n${system}`;
+    const datedSystem = `${currentDateLine(ctx?.now)}\n\n${system}`;
 
     const timeoutMs = cfg.timeoutMs ?? 120_000;
     const invokeConfig = cfg.maxTokens
@@ -257,38 +258,6 @@ function formatRule(format) {
  * prompts are carried over from the v1 node types they replace, so a lifted v1
  * spec produces the same kind of output it did before the collapse.
  */
-/**
- * Tell the model what day it is.
- *
- * A model has no clock. Asked to write "today's date" it answers from training
- * data — and it does so confidently. Observed live on 2026-07-24: a workflow wrote
- * `2025-07-14` into a customer's real Airtable base, **over a year wrong**, while
- * the test panel reported the promise kept, the run reported Success and the
- * dashboard reported 100%. A second workflow greeted a Friday as "even on a
- * Saturday". Silent at every place a person would check, on every run, corrupting
- * the customer's system of record.
- *
- * Prefer the time the trigger fired (`ctx.now`) so a run and the event that caused
- * it agree; fall back to the wall clock. Injected into the SYSTEM message rather
- * than the user prompt so it applies to every mode and no user-authored prompt can
- * push it out of view.
- *
- * NOT closed by this: nothing verifies the model actually USED the date. If it
- * ignores this line the output is still wrong and the oracle has no notion of
- * "today" to catch it. Recorded as a residual rather than implied to be solved.
- */
-function currentDateLine(ctx) {
-  const at = (ctx?.now instanceof Date && !Number.isNaN(ctx.now.getTime())) ? ctx.now : new Date();
-  const human = at.toLocaleDateString('en-GB', {
-    weekday: 'long', day: 'numeric', month: 'long', year: 'numeric', timeZone: 'UTC',
-  });
-  return [
-    `CURRENT DATE AND TIME: ${human} — ${at.toISOString()} (UTC).`,
-    'Use this for anything relative: today, now, tomorrow, this week, "the date".',
-    'Never infer the date from your training data; it is not today.',
-  ].join('\n');
-}
-
 function buildMessages(mode, cfg, ctx) {
   const fmt = formatRule(cfg.format);
 

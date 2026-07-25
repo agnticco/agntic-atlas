@@ -125,3 +125,63 @@ describe('every llm call is told the current date', () => {
  * the original defect was certified as a kept promise. Closing that needs a
  * freshness assertion in the contract, which is a feature, not a bug fix.
  */
+
+/* ── The CONVERGER needs the clock too ───────────────────────────────────────
+ *
+ * Fixing only the engine would have left half the defect standing. The converger
+ * makes its own model calls: it reasons about "every Monday" and "yesterday's
+ * email", and it invents the sample events its OWN self-test runs against. Those
+ * samples were dated 2025-07-14 and 2025-07-15 on 2026-07-24 — so a build was
+ * verifying the workflow against a world a year out of date and calling it verified.
+ *
+ * One shared helper feeds both surfaces. A second copy of "what time is it" would
+ * drift exactly the way the two copies of "what is a write" drifted, which cost a
+ * shipped defect and an independent verifier to find it.
+ */
+describe('the converger is told the current date', () => {
+  test('its system prompt carries the date', async () => {
+    const { buildSystemPrompt } = await import('../../src/converger/prompts.js');
+    const prompt = buildSystemPrompt({ channels: [] }, new Date('2026-07-25T09:00:00.000Z'));
+
+    // MUTATION: drop the `${currentDateLine(now)}` prefix from buildSystemPrompt —
+    // the converger goes blind again and this goes red. Every build node that uses
+    // this prompt (propose, generate, examples, verify, modify) loses the date at once.
+    assert.match(prompt, /2026-07-25/);
+    assert.match(prompt, /Saturday/);
+    assert.match(prompt, /Never infer the date from your training data/i);
+  });
+
+  test('the date leads the prompt, so nothing below can displace it', async () => {
+    const { buildSystemPrompt } = await import('../../src/converger/prompts.js');
+    const prompt = buildSystemPrompt({ channels: [] }, new Date('2026-07-25T09:00:00.000Z'));
+    assert.ok(prompt.startsWith('CURRENT DATE AND TIME:'),
+      'the clock must lead — a long capability catalog below it must not bury the date');
+  });
+
+  test('with no clock passed it still dates the prompt, from the real one', async () => {
+    // The live path: no call site has a better source than the wall clock today.
+    const { buildSystemPrompt } = await import('../../src/converger/prompts.js');
+    const prompt = buildSystemPrompt({ channels: [] });
+    const iso = prompt.match(/(\d{4}-\d{2}-\d{2}T[\d:.]+Z)/)?.[1];
+    assert.ok(iso, 'the converger must never be left without a date');
+    assert.ok(Math.abs(Date.now() - Date.parse(iso)) < 60_000);
+  });
+
+  test('the engine and the converger read the SAME clock helper', async () => {
+    // Not cosmetic. Two copies of this would drift, and a drifted clock is invisible
+    // until a customer's record is dated wrong — which is how this was found.
+    const { currentDateLine } = await import('../../src/utils/current-time.js');
+    const { buildSystemPrompt } = await import('../../src/converger/prompts.js');
+
+    const now = new Date('2026-07-25T09:00:00.000Z');
+    const shared = currentDateLine(now);
+
+    assert.ok(buildSystemPrompt({ channels: [] }, now).startsWith(shared),
+      'the converger must emit the shared block verbatim, not its own rendering');
+
+    const { seen, services } = captureLLM();
+    await llmNode.run({ mode: 'freeform', prompt: 'x' }, { lastOutput: 'x', now }, services);
+    assert.ok(systemTextOf(seen[0]).startsWith(shared),
+      'the engine must emit the same block, from the same helper');
+  });
+});
