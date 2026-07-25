@@ -28,7 +28,7 @@ import { NON_CONTENT_TYPES } from './node-types/_node-input.js';
 import { normalizeChannels, normalizeDecisions, allowedDecisions, TIMEOUT_DECISION } from './node-types/human.js';
 import { isStrong, FORBIDDEN_CHANNELS } from './approval-channels.js';
 import { parseDuration } from './duration.js';
-import { checkOutcome, missingFields, ASSERTION_KINDS } from './outcome-oracle.js';
+import { checkOutcome, missingFields, ASSERTION_KINDS, declaresWrite } from './outcome-oracle.js';
 import { analyzeTable } from './decision-analysis.js';
 import { tableOf, valuesOf } from './node-types/decision.js';
 
@@ -1723,8 +1723,23 @@ export function deriveWorkflowName(def) {
  * An action that CREATES something in someone else's system. The regex is the
  * one WRITE_WITHOUT_IDEMPOTENCY has always used; it is named here so the approval
  * rules and the idempotency rule cannot drift apart about what "a write" is.
+ *
+ * ── P13-0: the DECLARATION is consulted first ────────────────────────────────
+ * The regex alone was the gap an independent verifier found. P13-0 made the outcome
+ * oracle read a capability's declared effect, but these two guards — the duplicate
+ * check (`WRITE_WITHOUT_IDEMPOTENCY`) and the approval-strength check
+ * (`WEAK_APPROVAL_FOR_WRITE`) — still guessed from the name. So the system KNEW a
+ * step wrote and protected it anyway: `notion_create_page` and
+ * `notion_update_page` both escaped, which is precisely the capability shape the
+ * next increment imports. The comment above feared exactly this drift; it happened.
+ *
+ * The declaration can only ever ADD writes, never remove one. A capability that
+ * declares `effect:'read'` but whose NAME matches the regex stays guarded, because
+ * dropping a guard on the strength of a declaration is the unrecoverable direction —
+ * a spurious idempotency key costs nothing, a missing one loses data. Fail closed.
  */
 export function isWritingAction(action) {
+  if (declaresWrite(action)) return true;
   return /(^|_)(create|append|send|post|add|insert)(_|$)/i.test(String(action ?? ''));
 }
 

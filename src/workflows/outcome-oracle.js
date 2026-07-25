@@ -219,6 +219,28 @@ function capabilityOf(id) {
 }
 
 /**
+ * Does this capability DECLARE that it writes? (P13-0, closing the gap the verifier
+ * found.)
+ *
+ * Exported because `workflow-validator.js` needs the same answer and must not grow a
+ * third copy of "what is a write". There were already two — `WRITE_VERBS` here and
+ * `isWritingAction` there, whose own docstring says it exists "so the approval rules
+ * and the idempotency rule cannot drift apart about what a write is". Making the
+ * oracle declaration-aware and leaving the validator on the regex drifted them
+ * exactly as that comment feared: the oracle knew a step wrote while the two guards
+ * that protect the customer — the duplicate check and the approval-strength check —
+ * still guessed from its name. So `notion_update_page` escaped both.
+ *
+ * ONE catalog, ONE declaration, read from both places.
+ *
+ * @returns {boolean} true only when the capability explicitly declared a write, or
+ *   declared nothing while being able to occupy a delivery position (fail closed).
+ */
+export function declaresWrite(capabilityId) {
+  return declaredEffectOf(String(capabilityId ?? '').trim()) === 'write';
+}
+
+/**
  * Does this capability write, according to what it DECLARED?
  *
  *   'write'     — declared a write, or declared nothing while being able to occupy a

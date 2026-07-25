@@ -26,6 +26,9 @@ import { nodeEffect, setCapabilityCatalog } from '../../src/workflows/outcome-or
 // tautology: revert the seam in server.js and a mirrored test stays green, which is
 // exactly the blind spot this suite exists to close.
 import { ownsConnector, setInjectorCatalog } from '../../src/api/server.js';
+// The REAL guards, imported — these are what WRITE_WITHOUT_IDEMPOTENCY and
+// WEAK_APPROVAL_FOR_WRITE are computed from.
+import { isWritingAction, isWriteNode } from '../../src/workflows/workflow-validator.js';
 
 /**
  * The synthetic connector. `x_create_page` is chosen deliberately:
@@ -364,5 +367,60 @@ describe('P13-0 (d) — credential resolution follows the declared connector', (
     assert.equal(ownsN({ type: 'llm', config: { mode: 'summarize' } }), false);
     assert.equal(ownsN({ type: 'connector-action', config: {} }), false);
     assert.equal(ownsN(null), false);
+  });
+});
+
+/* ── P13-0 (e) — a declared write really DOES get its guards ──────────────────
+ *
+ * This section exists because an independent verifier disproved the claim the rest
+ * of this file was written around. Seams #1/#2 made the OUTCOME ORACLE read a
+ * capability's declared effect — but the two guards that actually protect a customer,
+ * the duplicate check (WRITE_WITHOUT_IDEMPOTENCY) and the approval-strength check
+ * (WEAK_APPROVAL_FOR_WRITE), were driven by a SECOND, untouched name-matching rule
+ * in workflow-validator.js. So the system knew a step wrote and guarded it anyway.
+ *
+ * `notion_create_page` and `notion_update_page` — the canonical shapes the next
+ * increment imports — escaped both. These tests are the ones that were missing.
+ */
+describe('P13-0 (e) — the declaration reaches the guards, not just the oracle', () => {
+  test('a declared write is a write to the validator, whatever it is called', () => {
+    registry.register({
+      id: 'notion_update_page', connector: 'notion', positions: ['step'], effect: 'write',
+    });
+
+    // MUTATION: drop the `declaresWrite(action)` line from isWritingAction in
+    // workflow-validator.js. "update_page" matches none of create/append/send/post/
+    // add/insert, so the step stops counting as a write, loses its duplicate
+    // protection and its approval-strength check, and this goes red.
+    assert.equal(isWritingAction('notion_update_page'), true,
+      'a declared write must be a write to the guards, not only to the oracle');
+    assert.equal(
+      isWriteNode({ type: 'connector-action', config: { action: 'notion_update_page' } }), true,
+      'isWriteNode feeds WEAK_APPROVAL_FOR_WRITE — it must see the declaration too');
+  });
+
+  test('the same id UNDECLARED is still not a write — the control', () => {
+    registry.register({ id: 'notion_update_page', connector: 'notion', positions: ['step'] });
+    // Step-only and silent ⇒ legacy regex ⇒ no verb match. Pins that the DECLARATION
+    // is what did the work above, not something incidental.
+    assert.equal(isWritingAction('notion_update_page'), false);
+  });
+
+  test('a declaration can only ADD a write, never remove a guard', () => {
+    // The unrecoverable direction. `x_create_thing` matches the regex; declaring it a
+    // read must NOT strip its duplicate protection. A spurious idempotency key costs
+    // nothing; a missing one loses data.
+    registry.register({ id: 'x_create_thing', connector: 'x', positions: ['step'], effect: 'read' });
+
+    assert.equal(isWritingAction('x_create_thing'), true,
+      'a declared read whose name says create must STAY guarded — fail closed');
+  });
+
+  test('with no catalog, the guards behave exactly as before P13-0', () => {
+    setCapabilityCatalog(null);
+    assert.equal(isWritingAction('airtable_create_record'), true);
+    assert.equal(isWritingAction('gmail_send'), true);
+    assert.equal(isWritingAction('airtable_list_records'), false);
+    assert.equal(isWritingAction('notion_update_page'), false);   // the pre-P13 gap, unchanged
   });
 });

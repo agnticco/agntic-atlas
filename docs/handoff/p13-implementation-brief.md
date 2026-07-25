@@ -248,7 +248,22 @@ these fixes. Good.
 
 Register a synthetic write capability with **no** code special-casing it anywhere, and
 prove the catalog is genuinely source-agnostic:
-- (a) it classifies as a **write** → gets idempotency + approval gate (seam #1);
+- (a) it classifies as a **write** → gets idempotency + approval gate (seam #1).
+  **⚠️ This is the one claim that was FALSE when first shipped, and it is worth knowing
+  why.** Seam #1 made the outcome *oracle* read the declaration, but the two guards that
+  actually protect a customer — `WRITE_WITHOUT_IDEMPOTENCY` and `WEAK_APPROVAL_FOR_WRITE`
+  — were driven by a **second, untouched** id-regex, `isWritingAction()` in
+  `workflow-validator.js`. Its own docstring said it existed "so the approval rules and
+  the idempotency rule cannot drift apart about what a write is"; making one side
+  declaration-aware and not the other drifted them exactly as feared. `notion_create_page`
+  AND `notion_update_page` — the canonical shapes P13-A imports — escaped both guards
+  while the oracle knew perfectly well they wrote. Found by the independent verifier, not
+  by the Builder or his suite. **Now fixed:** `isWritingAction` consults the declaration
+  first, via one shared `declaresWrite()` in the oracle so a *third* copy of "what is a
+  write" cannot appear. The declaration can only ever **ADD** a write, never remove a
+  guard — a declared read whose name matches the regex stays guarded, because a spurious
+  idempotency key costs nothing and a missing one loses data. Pinned by
+  `source-agnostic-catalog.test.js` §(e), mutation-verified;
 - (b) as a `deliver` node it **satisfies** a `record_exists` assertion and publishes
   (seam #2);
 - (c) it offers **click-to-pick** destination resolution via its connector's declared
