@@ -817,17 +817,34 @@ fixed on the spot. Fold the relevant ones into whatever increment next touches t
 
 ## Agents & gate enforcement
 
-**Builder is this main session** (you), governed by this file — not a subagent. The
-rest are subagents in `.claude/agents/`:
-*(A `test-adversary` was one of these; it was removed 2026-07-19 — see "Mutation
-testing was removed".)*
+**Builder is this main session** (you), governed by this file — not a subagent.
 
-- **`scout`** — read-only explorer; fan out for "where does X live", returns
-  conclusions with `file:line`, never edits.
-- **`verifier`** — fresh, independent gate checker; did *not* write the code.
-- **`adversary`** — Phase 3 only; tries to break the converger.
-The four below are **positions in the agent org**, not local one-offs — see
-"The agent org" at the end of this section before you dispatch one.
+**One subagent lives in `.claude/agents/`:**
+
+- **`verifier`** — fresh, independent gate checker; did *not* write the code. It
+  is invoked by `/gate <phase>`, it may still FAIL a merge, and since the mutation
+  apparatus was removed it is **the only independent check on the Builder's own
+  work**. Do not retire it without replacing what it does.
+
+**Retired, and deliberately (2026-07-25, operator's call):**
+
+- **`scout`** — read-only explorer. Retired as **redundant**: Claude Code now ships
+  a built-in `Explore` agent that does the same fan-out search, and nothing here
+  invoked `scout` — its only mentions were descriptions of itself. Use `Explore`.
+  If you miss its evidence discipline (conclusions with `file:line`, never edits),
+  say so in the dispatch prompt.
+- **`adversary`** — Phase 3 converger stress-tester. Retired because **its problem
+  stopped recurring**: it was scoped "Phase 3 only" and P3 closed long ago. Nothing
+  invoked it. If the converger needs attacking again, that is a fresh hire against
+  the checklist, not a resurrection.
+- **`test-adversary`** — removed 2026-07-19; see "Mutation testing was removed".
+
+Definitions are kept, not deleted, at `~/Desktop/agent-org/provenance/`. A roster
+that shows only the present cannot explain how it got its shape.
+
+**The four below are positions in the agent org**, not local one-offs, and they do
+not live in this repository — see "The agent org" at the end of this section
+before you dispatch one.
 
 - **`qa-manager`** *(added 2026-07-22; split into manager + worker 2026-07-24)* —
   owns product quality. It **no longer does the testing itself**: it decomposes a
