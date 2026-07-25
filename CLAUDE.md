@@ -882,16 +882,30 @@ passing one that was introduced.
 
 ### The agent org
 
-`qa-manager`, `qa-worker`, `coding-manager` and `coding-worker` are **generated
-copies**. Their canonical source is `~/Desktop/agent-org/` — each installed file
-carries a header saying so. **Edit them there**, then:
+`qa-manager`, `qa-worker`, `coding-manager` and `coding-worker` **do not live in
+this repository.** They are defined in `~/Desktop/agent-org/` and installed to
+`~/.claude/agents/`, outside every repo, so they are dispatchable from any session
+and no git operation can remove them.
 
 ```bash
-cd ~/Desktop/agent-org && node scripts/sync-agents.mjs --write   # push changes out
-node scripts/sync-agents.mjs --check                             # detect drift
+cd ~/Desktop/agent-org && node scripts/sync-agents.mjs --check   # verify deployed
+node scripts/sync-agents.mjs --write                             # install/update
 ```
 
-Editing the copy in `.claude/agents/` gets silently overwritten on the next sync.
+**They were moved out because keeping them here broke them.** Installed inside
+`.claude/agents/`, they were inside version control: a branch cleanup dropped the
+commit that added them and silently deleted two positions and reverted a third.
+The org was un-installed by a routine git operation, and nothing announced it —
+the first real run opened by discovering the workers did not exist. Ignoring them
+here would not have been enough, since `git clean -xdf` sweeps ignored files too.
+
+**Never put a copy back in `.claude/agents/`.** A project-scoped agent file takes
+precedence over a user-scoped one, so a stale copy here silently reinstates an old
+definition instead of failing loudly. That is not hypothetical: this repo carried
+the **pre-split `qa-manager`** — the version that did the testing itself and knew
+nothing about workers or the report contract — for several days after the split,
+and an Atlas session dispatching `qa-manager` would have got that one. It is
+deleted in this commit. `sync-agents.mjs --check` reports any that reappear.
 
 Two rules of that org that change how you read what they hand back:
 
