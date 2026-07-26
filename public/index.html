@@ -634,6 +634,39 @@
                       </sc-for>
                     </div>
                   </div>
+                  <!-- WHAT THE STEP ACTUALLY DOES, before anyone is asked to approve it.
+                       The diagram alone gave a person a 58px shape and a name clipped to
+                       18 characters; two testers approved 11 and 13 steps having been
+                       shown nothing else. Everything here comes from `_approvalCard`,
+                       which is pure and pinned — see tests/api/step-approval-card.test.js. -->
+                  <sc-if value="{{ liveGraph.card }}" hint-placeholder-val="{{ false }}">
+                    <div style="margin:2px 0 14px;padding:15px 17px;border:1px solid rgba(231,178,94,.3);background:rgba(231,178,94,.045);border-radius:12px">
+                      <div style="font-family:ui-monospace,SFMono-Regular,monospace;font-size:9px;font-weight:600;letter-spacing:.14em;color:rgba(231,178,94,.7);margin-bottom:7px">{{ liveGraph.card.position }}</div>
+                      <div style="font-size:16px;font-weight:600;line-height:1.3;color:#f6e7cf;word-break:break-word">{{ liveGraph.card.title }}</div>
+                      <div style="font-size:11.5px;color:rgba(255,255,255,.4);margin-top:3px">{{ liveGraph.card.kind }}</div>
+                      <div style="font-size:13.5px;line-height:1.55;color:rgba(255,255,255,.74);margin-top:10px">{{ liveGraph.card.what }}</div>
+                      <sc-for list="{{ liveGraph.card.facts }}" as="cf" hint-placeholder-count="2">
+                        <div style="display:flex;gap:12px;margin-top:8px;align-items:baseline">
+                          <span style="flex:none;width:118px;font-size:11px;letter-spacing:.02em;color:rgba(255,255,255,.36)">{{ cf.k }}</span>
+                          <span style="flex:1;font-size:12.5px;line-height:1.5;color:rgba(255,255,255,.82);word-break:break-word;white-space:pre-wrap">{{ cf.v }}</span>
+                        </div>
+                      </sc-for>
+                      <sc-if value="{{ liveGraph.card.hasRoutes }}" hint-placeholder-val="{{ false }}">
+                        <div style="margin-top:13px;padding-top:11px;border-top:1px solid rgba(255,255,255,.07)">
+                          <div style="font-family:ui-monospace,SFMono-Regular,monospace;font-size:9px;font-weight:600;letter-spacing:.14em;color:rgba(255,255,255,.32);margin-bottom:7px">EVERY PATH IT CAN TAKE</div>
+                          <sc-for list="{{ liveGraph.card.routes }}" as="cr" hint-placeholder-count="2">
+                            <div style="display:flex;gap:10px;margin-top:6px;align-items:baseline">
+                              <span style="flex:none;width:118px;font-size:12px;color:{{ cr.labelColor }};word-break:break-word">{{ cr.label }}</span>
+                              <span style="flex:1;font-size:12.5px;line-height:1.5;color:{{ cr.toColor }};word-break:break-word">{{ cr.to }}<span style="color:#e88f8f"> {{ cr.note }}</span></span>
+                            </div>
+                          </sc-for>
+                        </div>
+                      </sc-if>
+                      <sc-for list="{{ liveGraph.card.alerts }}" as="ca" hint-placeholder-count="1">
+                        <div style="margin-top:12px;padding:11px 13px;border:1px solid rgba(232,120,120,.4);background:rgba(232,120,120,.08);border-radius:10px;font-size:12.5px;line-height:1.55;color:#f2bcbc">{{ ca.text }}</div>
+                      </sc-for>
+                    </div>
+                  </sc-if>
                   <sc-if value="{{ liveGraph.explaining }}" hint-placeholder-val="{{ false }}">
                     <div style="margin:2px 0 14px;padding:13px 15px;border:1px solid rgba(232,120,120,.3);background:rgba(232,120,120,.05);border-radius:12px">
                       <div style="font-size:12.5px;color:rgba(255,255,255,.6);margin-bottom:9px">What should this step do instead?</div>
@@ -7156,6 +7189,440 @@ class Component extends DCLogic {
       icoStop: !!icons.icoStop,
     };
   }
+
+  // ══ WHAT THE STEP ACTUALLY DOES — SHOWN BEFORE ANYONE IS ASKED TO APPROVE IT ══
+  //
+  // Approval is the product's designated HUMAN safety check, and until now it
+  // carried almost no information. A step was a 58px shape, a name clipped to 18
+  // characters ("Extract email fie…", "Post to #nursing-…") and a 19px tick that
+  // only appears on hover. Two testers were walked through approving 11 and 13
+  // steps and were shown no card, no detail and no expansion; they clicked through
+  // every one because there was nothing else to do. That is a rubber stamp with a
+  // progress bar.
+  //
+  // IT IS NOT COSMETIC. In the same session a plan that listed FOUR paths produced
+  // a workflow with THREE, from a classifier that could still emit the fourth
+  // value — and this screen reported "13 / 13 APPROVED · every step approved" with
+  // no hint that anything was missing. The automated check caught it. The screen
+  // whose entire purpose is for a person to catch it did not. So the card carries
+  // the step's FULL name, what it does in plain words, its real configuration, and
+  // — for a step that routes — EVERY route it can take, including the ones that
+  // exist only in the classifier's vocabulary and have no path of their own.
+  //
+  // PURE, AND DELIBERATELY SEPARATE FROM THE RENDERER. `_liveCardFor` is a closure
+  // over layout state that nothing outside the render pass can reach; the part
+  // that decides WHAT A PERSON IS TOLD must be executable on its own or it is
+  // pinned by nothing. Every input arrives as an argument — no `this.state` — so a
+  // check can construct it exactly the way production does. (CLAUDE.md: the
+  // destination fix that actually ran when a user built a workflow was pinned by
+  // no test at all; reverting it left the whole suite green, because it lived in a
+  // closure nobody could reach.)
+  //
+  // NO RAW IDENTIFIERS WHERE THE USER MUST ACT (QA finding 11). A step is named by
+  // what it does. Where a value can only be said in the codebase's vocabulary it
+  // is said in English with the identifier in parentheses after it — the rule
+  // CLAUDE.md sets for talking to the operator, applied to the product's own
+  // screens.
+
+  // English first, identifier in parentheses — never the bare identifier. The
+  // parenthetical is added ONLY when turning it into English actually dropped
+  // something (the underscores), so "urgent" reads as "Urgent" and does not get a
+  // pointless "(urgent)" after it, while "format_message" keeps the id a person
+  // may need in order to find it.
+  _plainId(id) {
+    const raw = String(id == null ? '' : id).trim();
+    if (!raw) return '';
+    const words = raw.replace(/[_-]+/g, ' ').trim();
+    const english = words.charAt(0).toUpperCase() + words.slice(1);
+    return /[_-]/.test(raw) ? (english + ' (' + raw + ')') : english;
+  }
+
+  // A step's own name, NEVER clipped. A name cut off mid-word is not a name, and
+  // it is what a person is being asked to approve.
+  _stepName(node) {
+    if (!node) return 'This step';
+    const label = String(node.label == null ? '' : node.label).trim();
+    if (label) return label;
+    const id = String(node.id == null ? '' : node.id).trim();
+    if (id && id !== '__trigger__') return this._plainId(id);
+    const ty = String((node && node.type) || 'step');
+    return ty.charAt(0).toUpperCase() + ty.slice(1);
+  }
+
+  // What KIND of thing this is, in a phrase a practice manager can read. The
+  // diagram's own tag is the codebase's vocabulary ("CONNECTOR-ACTION",
+  // "LLM · SUMMARIZE"); this is the English one.
+  _stepKind(node) {
+    const ty = effNodeType(node);
+    const K = {
+      trigger: 'What starts it',
+      branch: 'Chooses which path to take',
+      decision: 'Decides a value from a table of rules',
+      human: 'Stops and asks a person',
+      deliver: 'Sends it somewhere',
+      stop: 'Ends this path — nothing is sent or written',
+      assemble: 'Builds one document out of earlier steps',
+      foreach: 'Repeats the same work for each item',
+      summarize: 'AI step — shortens what came in',
+      extract: 'AI step — pulls named details out',
+      rewrite: 'AI step — rewrites what came in',
+      classify: 'AI step — sorts it into one of a fixed set of labels',
+      freeform: 'AI step — follows an instruction you wrote',
+      search_web: 'Searches the web',
+      'search-web': 'Searches the web',
+      'connector-action': 'Uses one of your connected apps',
+      connector_action: 'Uses one of your connected apps',
+    };
+    return K[ty] || (ty ? this._plainId(ty) : 'A step');
+  }
+
+  // The values a step can DECLARE it will produce — the client mirror of the
+  // engine's `closedDomainOf` (src/workflows/workflow-validator.js). Only these
+  // three shapes declare a closed set; everything else returns [] and this screen
+  // then makes no claim about coverage rather than a wrong one.
+  //
+  // Kept honest by `tests/api/step-approval-card.test.js`, which runs the SERVER's
+  // `closedDomainOf` over the same fixtures and fails if the two ever disagree —
+  // CLAUDE.md records a rule grammar living in two functions diverging twice.
+  _routeDomainOf(node) {
+    if (!node || typeof node !== 'object') return [];
+    const cfg = node.config || {};
+    const list = (v) => {
+      if (Array.isArray(v)) return v.map(x => String(x).trim()).filter(Boolean);
+      if (typeof v !== 'string') return [];
+      return v.split(/[\n,]/).map(s => s.trim()).filter(Boolean);
+    };
+    if (node.type === 'llm') {
+      if (String(cfg.mode == null ? 'freeform' : cfg.mode).toLowerCase() !== 'classify') return [];
+      const cats = list(cfg.categories);
+      return cats.length >= 2 ? cats : [];
+    }
+    if (node.type === 'decision') {
+      const out = cfg.output || {};
+      if (String(cfg.hitPolicy || 'FIRST').toUpperCase() === 'COLLECT') return [];
+      const vals = list(out.values);
+      return vals.length >= 2 ? vals : [];
+    }
+    if (node.type === 'human') {
+      const declared = list(cfg.decisions);
+      const base = declared.length ? declared : ['approve', 'reject'];
+      const seen = {}, out = [];
+      base.concat(['timeout']).forEach(v => { if (!seen[v]) { seen[v] = 1; out.push(v); } });
+      return out;
+    }
+    return [];
+  }
+
+  // A branch's cases, tolerating the textarea (JSON string) form the editor writes.
+  _branchCases(node) {
+    let raw = (node && node.config && node.config.cases);
+    if (typeof raw === 'string') { try { raw = JSON.parse(raw); } catch (e) { return []; } }
+    return Array.isArray(raw) ? raw.filter(c => c && typeof c === 'object') : [];
+  }
+
+  // Which step a branch routes ON. Mirrors the engine's ON_REF — `<id>`,
+  // `<id>.output`, `<id>.decision`, with or without {{ }}.
+  _onRefId(on) {
+    const ref = String(on == null ? '' : on).trim().replace(/^\{\{\s*|\s*\}\}$/g, '').trim();
+    const m = /^([a-z0-9_-]+)(?:\.(output|decision))?$/i.exec(ref);
+    return m ? m[1] : null;
+  }
+
+  _normRoute(v) { return String(v == null ? '' : v).trim().toLowerCase(); }
+
+  // EVERY route a branch can take, and where each one actually goes.
+  //
+  // THE MANDATORY CATCH-ALL IS A SILENT-MISROUTE DETECTOR — NEVER LET IT BECOME A
+  // MASKER (CLAUDE.md). A classifier that can answer four ways wired to a branch
+  // with three cases is a VALID workflow: the "*" case swallows the fourth, the
+  // run reports success, and that fourth kind of work quietly takes a path nobody
+  // chose for it. Listing the wired routes is therefore not enough — the value
+  // with no route of its own has to be named, on the screen, before approval.
+  _routesOf(spec, branchNode) {
+    const nodes = (spec && Array.isArray(spec.nodes)) ? spec.nodes : [];
+    const byId = {};
+    nodes.forEach(n => { if (n && n.id) byId[n.id] = n; });
+    const nameOf = (id) => (byId[id] ? this._stepName(byId[id]) : (id ? this._plainId(id) : 'nowhere'));
+
+    const cases = this._branchCases(branchNode);
+    const routes = [];
+    let catchAll = null;
+    cases.forEach(c => {
+      const when = String(c.when == null ? '' : c.when).trim();
+      const isCatch = when === '*';
+      const entry = {
+        label: isCatch ? 'Anything else' : this._plainId(when),
+        to: nameOf(c.to),
+        missing: false,
+        note: '',
+        labelColor: 'rgba(255,255,255,.62)',
+        toColor: 'rgba(255,255,255,.82)',
+      };
+      if (isCatch) catchAll = entry;
+      routes.push(entry);
+    });
+
+    // Values the upstream step can produce that no case names.
+    const srcId = this._onRefId(branchNode && branchNode.config && branchNode.config.on);
+    const src = srcId ? byId[srcId] : null;
+    const domain = this._routeDomainOf(src);
+    const wired = {};
+    cases.forEach(c => { const w = this._normRoute(c.when); if (w && w !== '*') wired[w] = true; });
+
+    const unrouted = [];
+    domain.forEach(v => {
+      if (wired[this._normRoute(v)]) return;
+      const english = this._plainId(v);
+      unrouted.push({
+        value: v,
+        label: english,
+        from: src ? this._stepName(src) : 'an earlier step',
+        fallsTo: catchAll ? catchAll.to : null,
+      });
+      routes.push({
+        label: english,
+        to: catchAll ? ('“Anything else” → ' + catchAll.to) : 'nothing handles it',
+        missing: true,
+        note: '· no path of its own',
+        labelColor: '#e88f8f',
+        toColor: '#e8b0b0',
+      });
+    });
+
+    return { routes, unrouted };
+  }
+
+  // Every unrouted value in the WHOLE workflow, for the status line — so a person
+  // cannot reach "every step approved" without having been told.
+  _unroutedValues(spec) {
+    const nodes = (spec && Array.isArray(spec.nodes)) ? spec.nodes : [];
+    const out = [];
+    nodes.forEach(n => {
+      if (!n || n.type !== 'branch') return;
+      this._routesOf(spec, n).unrouted.forEach(u => out.push(u));
+    });
+    return out;
+  }
+
+  // Where a delivery actually lands. The REAL destination, because that is the
+  // thing a person can spot as wrong.
+  _destinationOf(cfg) {
+    const c = cfg || {};
+    const ch = String(c.channel == null ? '' : c.channel).trim();
+    if (c.target) return String(c.target);
+    if (ch === 'gmail_send' || ch === 'email') return c.to ? String(c.to) : 'no email address set yet';
+    if (ch === 'slack_dm') return c.user ? ('a Slack direct message to ' + c.user) : 'a Slack direct message — nobody set yet';
+    if (ch === 'in_app' || ch === 'inbox_deliver') return 'your Atlas inbox';
+    if (ch === 'webhook') return c.url ? String(c.url) : 'a web address — none set yet';
+    if (ch === 'docs_create') return 'a new Google Doc';
+    if (ch === 'sheets_append') return 'a Google Sheet';
+    if (ch === 'airtable_create_record') return 'a new Airtable record';
+    if (ch === 'airtable_update_record') return 'an existing Airtable record';
+    if (ch === 'calendar_create_event') return 'a new Google Calendar event';
+    if (ch === 'tasks_create') return 'a new Google Task';
+    if (ch.charAt(0) === '#') return ch;
+    if (ch === 'slack' || /^slack:/.test(ch)) return 'Slack — no channel set yet';
+    if (!ch) return 'nowhere yet — no destination is set';
+    return this._plainId(ch);
+  }
+
+  // Which app a connector step uses, in the app's own name.
+  _connectorOf(action) {
+    const a = String(action || '');
+    const map = [['airtable_', 'Airtable'], ['web_', 'the web'], ['slack_', 'Slack'], ['gmail_', 'Gmail'],
+                 ['drive_', 'Google Drive'], ['docs_', 'Google Docs'], ['sheets_', 'Google Sheets'],
+                 ['calendar_', 'Google Calendar'], ['filesystem_', 'your approved folders']];
+    const hit = map.find(p => a.indexOf(p[0]) === 0);
+    return { connector: hit ? hit[1] : null, capability: hit ? a.slice(hit[0].length) : a };
+  }
+
+  _fact(facts, k, v) {
+    const s = (v == null) ? '' : String(v).trim();
+    if (s) facts.push({ k: k, v: s });
+  }
+
+  // THE DETAIL FOR ONE STEP. `node` is a live-graph record (`_liveNodesFromSpec`
+  // strips config down to id/type/label/mode/description), so the real
+  // configuration is looked up from the spec by id — the trigger from
+  // `spec.triggers[0]`, since it has no entry in `spec.nodes`.
+  _stepDetail(spec, node) {
+    const nodes = (spec && Array.isArray(spec.nodes)) ? spec.nodes : [];
+    const isTrigger = !!node && (node.id === '__trigger__' || node.type === 'trigger');
+    const full = isTrigger
+      ? Object.assign({ type: 'trigger', label: node && node.label },
+                      (spec && Array.isArray(spec.triggers) && spec.triggers[0]) || {})
+      : (nodes.find(n => n && node && n.id === node.id) || node || {});
+
+    const facts = [];
+    const cfg = full.config || {};
+    const ty = isTrigger ? 'trigger' : effNodeType(full);
+    let routes = [], unrouted = [];
+    let what = String((full.description == null ? '' : full.description)).trim();
+
+    if (isTrigger) {
+      const tt = String(full.type || (full.cron ? 'schedule' : 'manual')).toLowerCase();
+      if (tt === 'email') {
+        if (!what) what = 'The workflow starts on its own each time a matching email lands in your inbox.';
+        this._fact(facts, 'Watches', 'your email inbox');
+        this._fact(facts, 'Only when it matches', full.filter);
+      } else if (tt === 'schedule') {
+        if (!what) what = 'The workflow starts itself on this schedule — nobody has to press anything.';
+        this._fact(facts, 'Runs', this._humanCron(full.cron) || full.cron);
+      } else if (tt === 'manual') {
+        if (!what) what = 'The workflow runs each time you start it by hand.';
+      } else {
+        if (!what) what = 'This is what starts the workflow.';
+        this._fact(facts, 'Starts on', this._plainId(tt));
+        const f = full.filter;
+        if (f && typeof f === 'object') Object.keys(f).forEach(k => this._fact(facts, this._plainId(k), f[k]));
+        else this._fact(facts, 'Only when it matches', f);
+      }
+    } else if (ty === 'classify') {
+      if (!what) what = 'An AI step reads what came in and answers with exactly one of the labels below. Nothing else can come out of it.';
+      this._fact(facts, 'Instruction', cfg.prompt || cfg.instructions);
+      this._fact(facts, 'Possible answers', this._routeDomainOf(full).join(' · '));
+    } else if (ty === 'summarize') {
+      if (!what) what = 'An AI step shortens what came in.';
+      this._fact(facts, 'Instruction', cfg.instructions || cfg.prompt);
+      this._fact(facts, 'Length', cfg.length);
+      this._fact(facts, 'Style', cfg.style);
+    } else if (ty === 'extract') {
+      if (!what) what = 'An AI step pulls named details out of what came in.';
+      const f = Array.isArray(cfg.fields) ? cfg.fields.map(x => (x && (x.name || x.key)) || x).filter(Boolean).join(' · ') : cfg.fields;
+      this._fact(facts, 'Pulls out', f);
+      this._fact(facts, 'Instruction', cfg.instructions || cfg.prompt);
+    } else if (ty === 'rewrite') {
+      if (!what) what = 'An AI step rewrites what came in.';
+      this._fact(facts, 'Instruction', cfg.instructions || cfg.prompt);
+      this._fact(facts, 'Tone', cfg.tone);
+    } else if (ty === 'freeform') {
+      if (!what) what = 'An AI step follows the instruction below on whatever the previous step produced.';
+      this._fact(facts, 'Instruction', cfg.prompt || cfg.instructions);
+    } else if (ty === 'assemble') {
+      if (!what) what = 'Stitches what earlier steps produced into one document. No AI is involved.';
+      this._fact(facts, 'Document title', cfg.title);
+      let secs = cfg.sections;
+      if (typeof secs === 'string') { try { secs = JSON.parse(secs); } catch (e) { /* leave as text */ } }
+      if (Array.isArray(secs)) this._fact(facts, 'Sections', secs.map(s => (s && (s.heading || s.title || s.from)) || s).filter(Boolean).join(' · '));
+      else this._fact(facts, 'Sections', secs);
+    } else if (ty === 'human') {
+      if (!what) what = 'The workflow stops here and waits for a person to answer. Nothing after this runs until they do.';
+      this._fact(facts, 'Asks', cfg.prompt);
+      this._fact(facts, 'Who is asked', cfg.assignee);
+      const chans = cfg.channels;
+      this._fact(facts, 'Asked in', Array.isArray(chans) ? chans.map(c => (c && (c.type || c)) || c).filter(Boolean).map(c => this._plainId(c)).join(' · ') : (chans && this._plainId(chans)));
+      this._fact(facts, 'Possible answers', this._routeDomainOf(full).join(' · '));
+      const to = cfg.timeout;
+      if (to && typeof to === 'object') {
+        const after = to.after || to.hours || to.minutes || to.seconds;
+        this._fact(facts, 'If nobody answers', (after ? ('after ' + after + ', ') : '') + 'it counts as “' + String(to.then || 'reject') + '”');
+      }
+    } else if (ty === 'deliver') {
+      if (!what) what = 'Sends the result out of Atlas. This is a real send when the workflow is live.';
+      this._fact(facts, 'Sends to', this._destinationOf(cfg));
+      this._fact(facts, 'Subject / title', cfg.title);
+    } else if (ty === 'connector-action' || ty === 'connector_action') {
+      const a = this._connectorOf(cfg.action);
+      if (!what) what = 'Uses one of your connected apps to do a piece of work.';
+      this._fact(facts, 'App', a.connector);
+      this._fact(facts, 'Does', this._plainId(cfg.action));
+      ['target', 'to', 'channel', 'query', 'url', 'baseId', 'tableId', 'folder', 'path', 'spreadsheetId', 'calendarId']
+        .forEach(k => { const v = cfg[k]; if (v != null && typeof v !== 'object') this._fact(facts, this._plainId(k), v); });
+      this._fact(facts, 'Heading', cfg.title);
+    } else if (ty === 'branch') {
+      if (!what) what = 'Sends the work down exactly one of the paths below. Nothing else runs.';
+      const srcId = this._onRefId(cfg.on);
+      const src = srcId ? nodes.find(n => n && n.id === srcId) : null;
+      this._fact(facts, 'Chooses using', src ? ('the answer from “' + this._stepName(src) + '”') : (srcId ? this._plainId(srcId) : 'nothing is set yet'));
+      const r = this._routesOf(spec, full);
+      routes = r.routes; unrouted = r.unrouted;
+    } else if (ty === 'decision') {
+      if (!what) what = 'Works out one value from a table of rules you can read. No AI is involved.';
+      const out = cfg.output || {};
+      this._fact(facts, 'Decides', out.label || (out.key && this._plainId(out.key)));
+      const ins = Array.isArray(cfg.inputs) ? cfg.inputs.map(i => (i && (i.label || i.key)) || i).filter(Boolean) : [];
+      this._fact(facts, 'From', ins.map(i => this._plainId(i)).join(' · '));
+      const rules = Array.isArray(cfg.rules) ? cfg.rules.length : 0;
+      this._fact(facts, 'Rules', rules ? (rules + ' rule' + (rules === 1 ? '' : 's')) : '');
+      this._fact(facts, 'Possible answers', this._routeDomainOf(full).join(' · '));
+    } else if (ty === 'foreach') {
+      if (!what) what = 'Runs the same work once for every item in a list.';
+      this._fact(facts, 'For each item in', cfg.over && this._plainId(cfg.over));
+      this._fact(facts, 'At most', cfg.maxItems && (cfg.maxItems + ' items'));
+    } else if (ty === 'stop') {
+      if (!what) what = 'This path ends here on purpose. Nothing is sent, written or delivered.';
+    } else if (ty === 'search_web' || ty === 'search-web') {
+      if (!what) what = 'Searches the web and passes what it finds to the next step.';
+      this._fact(facts, 'Searches for', cfg.query);
+    } else if (!what) {
+      what = 'Takes what the previous step produced and passes its result on.';
+    }
+
+    const alerts = unrouted.map(u => ({
+      text: '“' + u.label + '” is one of the answers “' + u.from + '” can give, but this workflow has no path for it. '
+          + (u.fallsTo
+              ? ('It would go down the “anything else” path (' + u.fallsTo + ') instead — check that is what you meant.')
+              : ('Nothing handles it.')),
+    }));
+
+    return {
+      id: full.id || (node && node.id) || null,
+      title: this._stepName(isTrigger ? Object.assign({}, full, { label: (node && node.label) || full.label }) : full),
+      kind: this._stepKind(isTrigger ? { type: 'trigger' } : full),
+      what: this._deJargon(what),
+      facts: facts,
+      routes: routes,
+      hasRoutes: routes.length > 0,
+      alerts: alerts,
+      hasAlerts: alerts.length > 0,
+    };
+  }
+
+  // The card for the step the queue is currently asking about. Null while the
+  // build is still running (`ready` is the operator's 2026-07-17 gate: nothing is
+  // approvable, so nothing claims to be).
+  //
+  // ONCE EVERY STEP IS CONFIRMED THE CARD DOES NOT SIMPLY VANISH. If any value the
+  // workflow can produce has no path of its own, the card STAYS, showing the step
+  // that routes — because "13 / 13 APPROVED · every step approved" over a workflow
+  // built with one fewer path than its plan is exactly the reassurance this screen
+  // was shipped to stop giving.
+  _approvalCard(spec, liveNodes, confirmed, ready) {
+    const nodes = Array.isArray(liveNodes) ? liveNodes : [];
+    if (!ready || !nodes.length) return null;
+    const i = Math.max(0, Math.floor(Number(confirmed) || 0));
+    if (i >= nodes.length) {
+      const gap = this._unroutedValues(spec)[0];
+      if (!gap) return null;
+      const specNodes = (spec && Array.isArray(spec.nodes)) ? spec.nodes : [];
+      const branch = specNodes.find(n => n && n.type === 'branch' && this._routesOf(spec, n).unrouted.length);
+      if (!branch) return null;
+      const detail = this._stepDetail(spec, branch);
+      detail.position = 'NEEDS A LOOK';
+      return detail;
+    }
+    const detail = this._stepDetail(spec, nodes[i]);
+    detail.position = 'STEP ' + (i + 1) + ' OF ' + nodes.length;
+    return detail;
+  }
+
+  // THE STATUS LINE UNDER THE PROGRESS BAR. Pure, because the sentence it picks is
+  // the whole point: "13 / 13 APPROVED · every step approved" was printed over a
+  // workflow built with one fewer path than the plan the user signed, and nothing
+  // on the screen disagreed. A value with no path therefore OUTRANKS "done".
+  // A diagram/spec mismatch outranks even that — the picture is not this workflow,
+  // so any reassurance would be about the wrong thing.
+  _approvalHint(mismatch, unroutedCount, done, ready) {
+    if (mismatch) return "this diagram doesn't match this workflow — reopen it from the list";
+    const n = Math.max(0, Math.floor(Number(unroutedCount) || 0));
+    if (n) {
+      return n + (n === 1 ? ' answer this workflow can give has' : ' answers this workflow can give have')
+             + ' no path — see the step marked below';
+    }
+    if (done) return 'every step approved';
+    return ready ? 'hover a node to confirm or reject' : 'building…';
+  }
+
   // Plain-language label for a branch case. The PLAN already phrased each route in the
   // user's words ("if it's a lead" / "otherwise"), so prefer that; fall back to the raw
   // case value, and render the catch-all as "otherwise" rather than "*".
@@ -8475,6 +8942,9 @@ class Component extends DCLogic {
         // `generated_workflow` has landed (`awaitingGraphApproval`). `ready` carries that gate
         // to every card, so no node lights amber or shows a confirm control before then.
         const ready = !!S.awaitingGraphApproval;
+        // Values this workflow can produce that no path handles. Empty while there
+        // is no spec yet, so this says nothing during the build.
+        const unrouted = this._unroutedValues(S.spec);
         // REVEAL CURSOR (operator 2026-07-17): how many nodes have "built" so far during the
         // post-spec reveal animation. `null` ⇒ not animating (a settled or restored build) ⇒
         // everything shown. Clamped to total.
@@ -8515,12 +8985,20 @@ class Component extends DCLogic {
               if (typeof requestAnimationFrame === 'function') requestAnimationFrame(() => this._fitLiveGraph());
             }
           },
+          // THE DETAIL FOR THE STEP BEING APPROVED RIGHT NOW. Approval is the
+          // product's human safety check and it used to show a 58px shape and an
+          // 18-character name; nobody can catch a mistake in that.
+          card: this._approvalCard(S.spec, nodes, confirmed, ready),
           stepCounter: confirmed + ' / ' + total + ' APPROVED',
           // A mismatch outranks every other status line: the picture above is not
           // this workflow, so "every step approved" would be reassurance about the
           // wrong thing.
-          hint: lg.mismatch ? "this diagram doesn't match this workflow — reopen it from the list"
-              : (done ? 'every step approved' : (ready ? 'hover a node to confirm or reject' : 'building…')),
+          //
+          // AND SO DOES A VALUE WITH NO PATH. A plan that listed four paths built
+          // as three still reads "13 / 13 APPROVED · every step approved", because
+          // the branch's mandatory catch-all silently absorbs the fourth. That is
+          // the one thing this screen exists to catch, so it outranks "done".
+          hint: this._approvalHint(lg.mismatch, unrouted.length, done, ready),
           progressW: total ? Math.round((confirmed / total) * 100) + '%' : '0%',
           explaining,
           explainValue: S.liveExplainText || '',

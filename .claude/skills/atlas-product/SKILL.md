@@ -117,6 +117,47 @@ published, with no error shown. Count the cards against the steps. This is the
 single highest-value manual check in the product; re-do it after any change to the
 diagram.
 
+**A person must never be asked to approve a step they have not been shown**
+(2026-07-26). The card sits under the diagram and describes **the one step being
+approved right now**, headed `STEP n OF m`. It must carry, for that step:
+
+- **its full name, not truncated.** The name on the diagram node is clipped to fit
+  a 58px shape; the card's is the whole thing. A name cut off mid-word
+  (`Extract email fie…`, `Post to #nursing-…`) on the card is a finding.
+- **a plain-language sentence** saying what the step does — readable by a practice
+  manager, with no identifiers in it.
+- **its real configuration** — the things that let a person spot a mistake: a
+  delivery's actual destination (the channel or address), an AI step's instruction,
+  an approval's question / who is asked / what a timeout counts as, what a step
+  writes and where.
+- **for a step that routes: every path it can take**, each named by the step it
+  reaches, under "EVERY PATH IT CAN TAKE".
+
+**Identifiers are not English, on this screen either.** A step with no name of its
+own reads as `Format message (format_message)` — English first, identifier in
+parentheses. A bare `format_message` or `slack_post_message` presented as the thing
+to approve is a finding.
+
+**The check this screen exists for: a value with no path of its own.** A workflow
+whose classifier can answer four ways but which only wired three still *runs* — the
+branch's mandatory catch-all silently absorbs the fourth — and it used to report
+`13 / 13 APPROVED · every step approved` with nothing to disagree. Now the routing
+step's card lists that answer in red as having **"no path of its own"**, says which
+path it would silently take instead, and spells it out in a sentence; the status
+line under the progress bar refuses to say "every step approved" and says how many
+answers have no path; and **the card stays on screen after the last step is
+ticked** rather than vanishing.
+
+**To test it:** build a workflow with a classifier and deliberately leave one of its
+answers unrouted (or reopen one that is). Approve every step. **If you reach
+"every step approved" with no red warning anywhere, that is a blocker** — it is the
+product certifying a workflow that does not match the plan the user signed. The
+converse matters too: on a workflow where *every* answer is wired, there must be no
+warning at all. A screen that always warns is a screen nobody reads.
+
+The reveal animation, the flash on confirm and the reject-with-a-note box are
+unchanged (operator's calls of 2026-07-17) and must all still work.
+
 The diagram itself must read **left to right**, with each path labelled, and must
 never draw an edge the workflow does not have.
 
