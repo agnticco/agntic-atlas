@@ -39,6 +39,7 @@ import { FileCheckpointer }  from '../graph/checkpointer/index.js';
 import { interrupt }         from '../graph/interrupt.js';
 import { SystemMessage, HumanMessage } from '../core/message.js';
 import { scoreGap, unansweredGaps } from './gap-scorer.js';
+import { normalizePlanConfidences } from './plan-provenance.js';
 import { applyProposal, assembleSpec, wireEdges } from './spec-assembler.js';
 import { materialiseEscalations } from './escalation.js';
 import { nodeForAssertion, assertableConnectors, splitTarget, canonicalConnector,
@@ -1762,6 +1763,18 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
       } catch { plan = null; }
       if (plan) planCache.set(planKey, plan);
     }
+
+    // CLOSE THE PROVENANCE DOMAIN BEFORE THE PLAN LEAVES THE SERVER.
+    //
+    // `confidence` is a value the MODEL invents, so it can arrive missing, empty,
+    // null, misspelt, or as some phrase the prompt suggested. "You said" is a claim
+    // about the USER and may only be made when the plan explicitly says `stated`;
+    // everything else is Atlas's own inference and is clamped to `inferred` here —
+    // the weaker claim, the one that asks the user for a glance. Done on the server
+    // as well as in the browser so a client that never ran (or a renderer written
+    // later) can never receive an unlabelled item to guess about. See
+    // `plan-provenance.js` for the whole argument.
+    plan = normalizePlanConfidences(plan);
 
     // Unusable projection → skip (fail-safe). A plan with no steps is not worth a turn.
     if (!plan || !Array.isArray(plan.steps) || !plan.steps.length) {

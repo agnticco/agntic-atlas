@@ -132,13 +132,20 @@ describe('the grounding pass surfaces live connector facts in the plan (incremen
     { kind: 'message_sent', target: 'slack:#sales' },
   ] };
 
-  test('a channel that EXISTS is marked grounded; one that does NOT is flagged for creation', () => {
+  // CHANGED 2026-07-26. This used to assert `/Atlas will CREATE the channel/` — it was
+  // pinning the instruction that manufactured the false "YOU SAID" mark a tester saw on
+  // the line "Atlas will create the #ops channel". Naming a channel is not saying what
+  // should happen when it doesn't exist, and that question is asked properly after the
+  // build (create-or-pick). The check is not weakened: it now pins the honest contract,
+  // and the full argument plus the anti-regression cases live in plan-provenance.test.js.
+  test('a channel that EXISTS is marked grounded; one that does NOT is marked as Atlas\'s inference', () => {
     const p = buildPlanPrompt({ intent: 'x', outcome, triggers: [],
       grounding: { slack: { checked: true, known: ['#support'], absent: ['#sales'] } } });
     assert.match(p, /EXIST in the connected workspace: #support/);
     assert.match(p, /tag it confidence "found"/);
     assert.match(p, /do NOT exist in the workspace yet: #sales/);
-    assert.match(p, /Atlas will CREATE the channel/);
+    assert.match(p, /tag it confidence "inferred"/);
+    assert.doesNotMatch(p, /Atlas will CREATE the channel/);
   });
 
   test('no grounding block is emitted when nothing could be verified (no live list)', () => {

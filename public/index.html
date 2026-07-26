@@ -2604,6 +2604,31 @@ function effNodeType(n) {
   return t;
 }
 
+/**
+ * THE PLAN CARD'S PROVENANCE MARK — "you said" is a claim ABOUT THE USER.
+ *
+ * Atlas may only make it when the plan explicitly declares the line was `stated`.
+ * Everything else on the plan is Atlas's own inference and gets the amber "I inferred"
+ * mark — the one that says "worth a glance", which is the whole point of the card.
+ *
+ * `confidence` is written by a MODEL, so it can arrive missing, empty, null, misspelt,
+ * or as a phrase the prompt happened to suggest. This resolution used to fall THROUGH
+ * to "you said", i.e. an unknown provenance produced the strongest possible claim about
+ * a person — so a line Atlas invented ("Atlas will create the #ops channel") was shown
+ * to a tester under their own name for a channel they had only NAMED. The default is
+ * now the WEAKER claim; a mark that is usually right is worse than no mark at all,
+ * because it teaches the user to trust the occasional false one.
+ *
+ * Mirrors `coercePlanConfidence` in src/converger/plan-provenance.js, which closes the
+ * same domain server-side (this file has no module boundary to import across). Both are
+ * pinned by tests/converger/plan-provenance.test.js — change one, change the other.
+ */
+function planProvenanceLabel(conf) {
+  if (conf === "stated") return "you said";
+  if (conf === "found")  return "I found";
+  return "I inferred";
+}
+
 const TUTORIAL_SLIDES = [
   {
     title: 'Welcome to Atlas',
@@ -5471,10 +5496,14 @@ class Component extends DCLogic {
       const p = iv.plan || {};
       const CHIP_BASE = "display:inline-flex;align-items:center;gap:5px;margin-left:8px;padding:1.5px 8px;border-radius:999px;font-size:10px;font-weight:600;letter-spacing:.02em;font-family:ui-monospace,SFMono-Regular,monospace;text-transform:uppercase;white-space:nowrap;vertical-align:middle;";
       const DOT = "width:6px;height:6px;border-radius:50%;flex:none;";
+      // The label decides the colour, and `planProvenanceLabel` decides the label —
+      // so the fallthrough here is the amber "worth a glance" mark, never the claim
+      // about the user. See that function for why.
       const chip = (conf) => {
-        if (conf === "found")    return { label: "I found",    style: CHIP_BASE + "background:rgba(95,199,138,.1);color:#7fd6a0;border:1px solid rgba(95,199,138,.4)",  dotStyle: DOT + "background:#5fc78a" };
-        if (conf === "inferred") return { label: "I inferred", style: CHIP_BASE + "background:rgba(231,178,94,.1);color:#f3cd86;border:1px dashed rgba(231,178,94,.5)", dotStyle: DOT + "background:#e7b25e" };
-        return                          { label: "you said",   style: CHIP_BASE + "background:rgba(255,255,255,.04);color:rgba(255,255,255,.4);border:1px solid rgba(255,255,255,.08)", dotStyle: DOT + "background:rgba(255,255,255,.45)" };
+        const label = planProvenanceLabel(conf);
+        if (label === "you said") return { label, style: CHIP_BASE + "background:rgba(255,255,255,.04);color:rgba(255,255,255,.4);border:1px solid rgba(255,255,255,.08)", dotStyle: DOT + "background:rgba(255,255,255,.45)" };
+        if (label === "I found")  return { label, style: CHIP_BASE + "background:rgba(95,199,138,.1);color:#7fd6a0;border:1px solid rgba(95,199,138,.4)",  dotStyle: DOT + "background:#5fc78a" };
+        return                           { label, style: CHIP_BASE + "background:rgba(231,178,94,.1);color:#f3cd86;border:1px dashed rgba(231,178,94,.5)", dotStyle: DOT + "background:#e7b25e" };
       };
       // Procedure steps are numbered 01, 02, … in the SOP (design system).
       const steps     = (p.steps || []).map((s, i) => ({ idx: String(i + 1).padStart(2, "0"), text: s.text || "", chip: chip(s.confidence) }));

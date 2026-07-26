@@ -665,9 +665,25 @@ ${outcome.statement ? `  "${outcome.statement}"\n` : ''}${lines.join('\n')}${con
 /**
  * The GROUNDING block — facts verified live against the connected tools, so the plan's
  * confidence tags reflect reality instead of the model's guess. A Slack destination the
- * tenant ACTUALLY has is "found" (grounded); one they named but don't have yet is still
- * "you said", with the plan telling them Atlas will create it. This is the grounding pass
- * (agent-contracts increment 2) surfacing what elicitation learned from the tools.
+ * tenant ACTUALLY has is "found" (grounded). This is the grounding pass (agent-contracts
+ * increment 2) surfacing what elicitation learned from the tools.
+ *
+ * A DESTINATION THE USER NAMED BUT DOES NOT HAVE IS **NOT** THE USER'S OWN WORDS.
+ * This block used to say: *keep confidence "you said", and say Atlas will CREATE the
+ * channel.* Both halves were wrong, and together they produced the line a tester saw —
+ * **"Atlas will create the #ops channel", marked YOU SAID** — after which the build
+ * skipped the work because the plan said it was handled. The user said a channel NAME;
+ * they never said Atlas would create one. The mark was attached to the wrong subject: a
+ * commitment Atlas was making about its OWN future behaviour, presented as the user's.
+ * (`"you said"` was not even in the plan's declared set of `stated|found|inferred`, so
+ * it could only ever land in the renderer's unrecognised-value fallback.)
+ *
+ * The plan does not decide this at all any more. Atlas already has a create-or-pick
+ * conversation for a destination that does not exist — `RESOURCE_NOT_FOUND` in
+ * `gap-scorer.js`, resolved in the `gaps` node of `elicitation-graph.js`, which offers
+ * "Create #<name>" or an existing channel to point at. That stage gets a REAL answer
+ * from the user. So the plan states the situation truthfully, marks it as Atlas's own
+ * inference, and leaves the decision where it is actually asked.
  */
 function groundingBlock(grounding) {
   const lines = [];
@@ -676,7 +692,7 @@ function groundingBlock(grounding) {
     if (s.known?.length)
       lines.push(`- These Slack channels EXIST in the connected workspace: ${s.known.join(', ')}. A delivery to one of these is GROUNDED — tag it confidence "found" and say it posts to the EXISTING channel.`);
     if (s.absent?.length)
-      lines.push(`- These Slack channels were named but do NOT exist in the workspace yet: ${s.absent.join(', ')}. Keep confidence "you said", and say in the text that Atlas will CREATE the channel before the workflow runs.`);
+      lines.push(`- These Slack channels were named but do NOT exist in the workspace yet: ${s.absent.join(', ')}. The user named the channel; they did NOT say what should happen about it not existing — so this is YOUR inference, not their words: tag it confidence "inferred". Say in the text only that the channel does not exist yet and that you will confirm what to do about it before the workflow runs. Do NOT state that Atlas will create it, or that it is already handled — that decision has not been made yet and is asked separately, after the build.`);
   }
   const at = grounding?.airtable;
   if (at?.table) {

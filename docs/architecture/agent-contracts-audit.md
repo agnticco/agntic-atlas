@@ -146,6 +146,16 @@ It does four things and emits the result into BOTH the Plan card and the generat
 **Confidence vocabulary** (extends the two-value chip): `you said` (stated cold) · `I found`
 (resolved live from a tool — connector or knowledge, cited) · `I inferred` (a guess to check).
 
+**The vocabulary is a CLOSED domain, and it fails to the weaker claim** (fixed 2026-07-26).
+`stated | found | inferred` is written by a model, so anything else can arrive — missing,
+empty, `null`, a typo, or an invented phrase. Every one of those renders as **`I inferred`**.
+Only the literal `stated` may produce `you said`, because that mark is a claim *about the
+user* and Atlas may only make it when the user actually said the thing. The coercion runs
+**twice on purpose** — server-side where the plan is assembled (`normalizePlanConfidences`,
+`src/converger/plan-provenance.js`, applied in the `plan` node) and again in the browser
+(`planProvenanceLabel`, `public/index.html`) — so a client that never ran still cannot be
+handed an unlabelled item. Pinned by `tests/converger/plan-provenance.test.js`.
+
 ## Increments (revised sequence)
 
 1. **Plan gate + confidence marking + upload nudge** — ✅ BUILT & verified headed (commits
@@ -158,9 +168,16 @@ It does four things and emits the result into BOTH the Plan card and the generat
 2. **Grounding pass** — the plan grounds its DELIVERY destinations against live connectors.
    - ✅ BUILT & verified headed: **Slack channel existence** (`groundPlan` in `elicitation-graph.js`
      → `groundingBlock` in `prompts.js`). A named channel the tenant HAS → tagged `I found` (green,
-     "existing #x"); one they don't → stays `you said` and the plan says Atlas will create it.
-     Returns null (no claim) when there's no live list. Verified: `#agntic-x-slack` (exists) → `I
-     found`; `#support`/`#sales` (absent) → `you said` (no false "found").
+     "existing #x"). Returns null (no claim) when there's no live list. Verified: `#agntic-x-slack`
+     (exists) → `I found`; `#support`/`#sales` (absent) → not `found` (no false "found").
+     **CORRECTED 2026-07-26 — a channel the tenant does NOT have is `I inferred`, and the plan
+     does not say Atlas will create it.** It used to be told to stay `you said` *and* to state
+     that Atlas would create the channel; a tester saw exactly that line ("Atlas will create the
+     #ops channel", marked YOU SAID) for a channel they had only NAMED, and the build then skipped
+     the work because the plan read as settled. Naming a channel is not saying what should happen
+     when it doesn't exist. Atlas already asks that properly after the build — the create-or-pick
+     conversation for `RESOURCE_NOT_FOUND` (`gap-scorer.js` → the `gaps` node) — so the plan
+     describes the situation as its own inference and leaves the decision where it is asked.
    - ✅ BUILT & verified headed: **Airtable schema grounding** (`groundPlan` extended). A
      `record_exists → airtable:<Table>` assertion is resolved against `capabilities.airtableSchema`
      (live base/table/field metadata fetched at session start), so the plan names the REAL base +
