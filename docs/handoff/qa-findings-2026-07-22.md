@@ -12,8 +12,25 @@ closed all four, confirmed by re-measuring the identical build.
 |---|---|---|
 | **3** — uncheckable promise | the workflow's central promise could never be verified | **Fixed** `e922735` |
 | **1** — approver asked 4× | one approval turned into four gates | **Closed with 3** — re-measured: 1 gate |
-| **2** — same questions 3× | answering never took effect; 445s of wasted rebuilds | **Closed with 3** — re-measured: 0 re-asks, 1 build pass |
+| **2** — same questions 3× | answering never took effect; 445s of wasted rebuilds | **RE-OPENED 2026-07-26 — this was only HALF closed. See the note below the table.** |
 | **4** — 22 nodes, 6 hidden | steps drawn on top of each other | **Closed with 3** — re-measured: 13 nodes, all render, queue walked 13/13 |
+
+> ### Correction, 2026-07-26 — finding 2 was closed on half a measurement
+>
+> The disposition above says finding 2 was closed. **It was not.** The defect had two
+> halves and the re-measurement only tested one of them.
+>
+> - **The re-asking is genuinely fixed.** Three independent QA workers on 2026-07-26 were
+>   each asked once, never twice. That half of the original finding stands closed.
+> - **The answer still does not take effect.** A tester gave the destination `#support`
+>   twice — typed once, then clicked it from the offered buttons — and the finished
+>   workflow was built to post to `#ops`. The user is now asked once and ignored once,
+>   which is quieter than the original bug but no less wrong.
+>
+> "0 re-asks, 1 build pass" measured that Atlas stopped repeating itself. It never
+> measured whether the answer changed what got built. Recorded in CLAUDE.md's open list
+> as item 1. Source: `~/Desktop/agent-org/runs/2026-07-26/run-1224-qa/COMPILED.md`,
+> finding 6.
 
 The re-measurement also reached **Run test** and **Go live** for the first time: the
 queue completed, the panel returned a verdict, and Go live stayed correctly locked on

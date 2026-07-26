@@ -5,6 +5,14 @@ still v1.6.11; local is v1.6.27.
 
 ## The open bug — READ THIS FIRST
 
+> **Status as of 2026-07-26:** step 3 below — *"asks the same three questions again,
+> word for word"* — **no longer happens.** Three independent QA testers were each asked
+> once. What is described after it is still true: **the answer does not take effect.**
+> A destination given twice (`#support`, typed then clicked) still produced a workflow
+> posting to `#ops`. So read this section as one live bug and one fixed one, not two live
+> ones. Tracked as item 1 of CLAUDE.md's open list.
+
+
 **Atlas asks the same set-up questions twice, and the second time it asks them the
 answer still does not stick.** This was reproduced twice today on a three-lane
 approval workflow ("classify an email as urgent / normal / spam; ask me on Slack

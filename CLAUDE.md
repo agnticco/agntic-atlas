@@ -1138,7 +1138,25 @@ test panel:
 
 **Still open, roughly in the order they matter:**
 
-1. **The blocking-gap rebuild loop — FIXED (2026-07-24), two ways.** *(a) the specific cause and
+1. **The user's answer does not take effect — RE-OPENED 2026-07-26.** *(Previously
+   recorded as closed. It was HALF closed, and the record said "closed". This entry exists
+   because trusting that record would cost a whole round.)*
+   The original defect had two halves: Atlas **asked the same set-up questions twice**, and
+   **the answer did not stick**. `docs/handoff/qa-findings-2026-07-22.md` marked it
+   *"Closed with 3 — re-measured: 0 re-asks, 1 build pass"*, which measured the FIRST half
+   only.
+   - **Half genuinely fixed:** the re-asking. Three independent QA workers on 2026-07-26
+     were each asked once and never twice. That half stands.
+   - **Half NOT fixed, and it is the half that matters:** the answer still does not change
+     what gets built. A tester gave the destination `#support` **twice** — typed once, then
+     clicked it — and the finished workflow was built to post to `#ops`. So the user is now
+     asked once, politely, and ignored once, silently. From
+     the QA run `~/Desktop/agent-org/runs/2026-07-26/run-1224-qa/COMPILED.md`, finding 6, via
+     `qa-worker-01`.
+   **Not diagnosed yet** — nobody has traced where the answer is dropped between the
+   clarification being answered and the spec being written. That is the next piece of work
+   on this, and it is scoped but not started.
+2. **The blocking-gap rebuild loop — FIXED (2026-07-24), two ways.** *(a) the specific cause and
    (b) the operator's call to remove the wall entirely.*
    **(b) The "Use your suggestions" wall is gone (operator, 2026-07-24).** The converger's gap step
    no longer STOPS the build to make the user rubber-stamp a suggestion — whose default answer was
@@ -1177,13 +1195,13 @@ test panel:
    machinery to apply an answer directly exists; extending it beyond the section case is the
    follow-up (see `hardening-2026-07-22.md`). *(Also: one generate hit 403s — worth checking it
    isn't silently truncating.)*
-2. **Test examples can't reach some workflows.** If a workflow starts by fetching something (say,
+3. **Test examples can't reach some workflows.** If a workflow starts by fetching something (say,
    "read my unread email"), the made-up test cases can't influence what it fetches — so every
    test case runs against the same live data and proves the same one thing. Filed as F3.
    **Overlaps P13's output-schema groundwork.**
-3. **Test runs are counted in the live health dashboard**, so a workflow that has never actually
+4. **Test runs are counted in the live health dashboard**, so a workflow that has never actually
    fired can show "100% success". Cosmetic, but it is the number an operator trusts. Filed as F14.
-4. The rest of the handoff documents — smaller, individually recorded there.
+5. The rest of the handoff documents — smaller, individually recorded there.
 
 ## The phases
 
