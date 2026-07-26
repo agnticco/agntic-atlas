@@ -33,7 +33,7 @@ deciding. Both are failures, and **both are the writer's fault, not theirs.**
 
 This governs **the main session and every subagent**. Agents write their reports
 for the Builder; **the Builder must translate before anything reaches the
-operator.** Never paste a verifier or scout report through raw — those are dense
+operator.** Never paste a verifier or worker report through raw — those are dense
 by design and are written for a machine-adjacent reader.
 
 ### The rules
@@ -817,17 +817,34 @@ fixed on the spot. Fold the relevant ones into whatever increment next touches t
 
 ## Agents & gate enforcement
 
-**Builder is this main session** (you), governed by this file — not a subagent. The
-rest are subagents in `.claude/agents/`:
-*(A `test-adversary` was one of these; it was removed 2026-07-19 — see "Mutation
-testing was removed".)*
+**Builder is this main session** (you), governed by this file — not a subagent.
 
-- **`scout`** — read-only explorer; fan out for "where does X live", returns
-  conclusions with `file:line`, never edits.
-- **`verifier`** — fresh, independent gate checker; did *not* write the code.
-- **`adversary`** — Phase 3 only; tries to break the converger.
-The four below are **positions in the agent org**, not local one-offs — see
-"The agent org" at the end of this section before you dispatch one.
+**One subagent lives in `.claude/agents/`:**
+
+- **`verifier`** — fresh, independent gate checker; did *not* write the code. It
+  is invoked by `/gate <phase>`, it may still FAIL a merge, and since the mutation
+  apparatus was removed it is **the only independent check on the Builder's own
+  work**. Do not retire it without replacing what it does.
+
+**Retired, and deliberately (2026-07-25, operator's call):**
+
+- **`scout`** — read-only explorer. Retired as **redundant**: Claude Code now ships
+  a built-in `Explore` agent that does the same fan-out search, and nothing here
+  invoked `scout` — its only mentions were descriptions of itself. Use `Explore`.
+  If you miss its evidence discipline (conclusions with `file:line`, never edits),
+  say so in the dispatch prompt.
+- **`adversary`** — Phase 3 converger stress-tester. Retired because **its problem
+  stopped recurring**: it was scoped "Phase 3 only" and P3 closed long ago. Nothing
+  invoked it. If the converger needs attacking again, that is a fresh hire against
+  the checklist, not a resurrection.
+- **`test-adversary`** — removed 2026-07-19; see "Mutation testing was removed".
+
+Definitions are kept, not deleted, at `~/Desktop/agent-org/provenance/`. A roster
+that shows only the present cannot explain how it got its shape.
+
+**The four below are positions in the agent org**, not local one-offs, and they do
+not live in this repository — see "The agent org" at the end of this section
+before you dispatch one.
 
 - **`qa-manager`** *(added 2026-07-22; split into manager + worker 2026-07-24)* —
   owns product quality. It **no longer does the testing itself**: it decomposes a
@@ -883,29 +900,36 @@ passing one that was introduced.
 ### The agent org
 
 `qa-manager`, `qa-worker`, `coding-manager` and `coding-worker` **do not live in
-this repository.** They are defined in `~/Desktop/agent-org/` and installed to
-`~/.claude/agents/`, outside every repo, so they are dispatchable from any session
-and no git operation can remove them.
+this repository, on purpose.** They are defined in `~/Desktop/agent-org/` and
+installed to `~/.claude/agents/`, outside every repo — so they are dispatchable
+from any session and no git operation can remove them. They are tools that
+operate *on* Atlas; they are not part of it.
 
 ```bash
 cd ~/Desktop/agent-org && node scripts/sync-agents.mjs --check   # verify deployed
 node scripts/sync-agents.mjs --write                             # install/update
 ```
 
-**They were moved out because keeping them here broke them.** Installed inside
-`.claude/agents/`, they were inside version control: a branch cleanup dropped the
-commit that added them and silently deleted two positions and reverted a third.
-The org was un-installed by a routine git operation, and nothing announced it —
-the first real run opened by discovering the workers did not exist. Ignoring them
-here would not have been enough, since `git clean -xdf` sweeps ignored files too.
+**Why they were moved out (2026-07-24).** They were installed here, inside
+`.claude/agents/`, which is inside git. A branch cleanup dropped the commit that
+added them and **silently deleted two positions and reverted a third** — the org
+was un-installed by a routine git operation and nothing announced it. The first
+real run then opened by discovering the workers did not exist. `git clean -xdf`
+would do the same to an ignored copy, so ignoring them here was not enough; they
+had to leave.
 
-**Never put a copy back in `.claude/agents/`.** A project-scoped agent file takes
-precedence over a user-scoped one, so a stale copy here silently reinstates an old
-definition instead of failing loudly. That is not hypothetical: this repo carried
-the **pre-split `qa-manager`** — the version that did the testing itself and knew
-nothing about workers or the report contract — for several days after the split,
-and an Atlas session dispatching `qa-manager` would have got that one. It is
-deleted in this commit. `sync-agents.mjs --check` reports any that reappear.
+**Never put a copy back in `.claude/agents/`.** A project-scoped file **shadows**
+the user-scoped one, so a stale copy silently reinstates an old definition
+instead of failing loudly — the same failure with a longer fuse. That is not
+hypothetical: this repo carried the **pre-split `qa-manager`** — the version that
+did the testing itself and knew nothing about workers or the report contract —
+for several days after the split, and an Atlas session dispatching `qa-manager`
+would have got that one. `.gitignore` blocks the obvious paths, and
+`sync-agents.mjs --check` reports any that reappear.
+
+`verifier` is **not** part of that org. It is Atlas's own gate machinery, it
+predates the report contract, and it stays here. (`scout` and `adversary` were
+listed here too until they were retired on 2026-07-25 — see the roster above.)
 
 Two rules of that org that change how you read what they hand back:
 
@@ -1049,7 +1073,7 @@ suite green throughout. It never edits code.
 **As of 2026-07-24 it is a manager + workers**, not one agent: `qa-manager` picks the
 journeys and compiles, `qa-worker`s carry one journey each end to end in parallel.
 The sessions below predate the split, so they are the record of *one* agent doing
-both — the findings stand, the shape does not. Running record: 
+both — the findings stand, the shape does not. Running record:
 
 - [`docs/handoff/ui-test-findings-2026-07-19.md`](docs/handoff/ui-test-findings-2026-07-19.md)
   — the original six-workflow sweep. Theme of the serious ones: **the product told
