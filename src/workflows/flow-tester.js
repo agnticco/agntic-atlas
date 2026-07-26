@@ -25,6 +25,7 @@ import { buildAsk } from './node-types/human.js';
 import { ON_REF } from './node-types/branch.js';
 import { isWriteNode } from './workflow-validator.js';
 import { deliveryTarget } from './outcome-oracle.js';
+import { encoderFor } from './template-escape.js';
 
 /**
  * A TERMINAL side-effect node: one whose run() reaches OUT of Atlas — a `deliver`
@@ -955,6 +956,17 @@ export class FlowTester {
    *   {{datetime}}          — ISO timestamp
    *   {{year}} {{month}} {{day}}
    * Operates recursively on objects and arrays.
+   *
+   * SUBSTITUTED TEXT MAY NEVER CHANGE THE STRUCTURE OF THE VALUE IT LANDS IN.
+   * When this config value is a JSON structure whose references sit inside string
+   * literals (`assemble`'s sections, an Airtable `fields` map, Sheets `values`),
+   * every substitution is JSON-string-escaped — otherwise the first line break in
+   * an AI-written summary ends the string literal and the JSON.parse downstream
+   * throws on 100% of runs. For a PLAIN-TEXT field (an llm instruction, a Slack
+   * or email body) `enc` is the identity function and the text arrives byte for
+   * byte as it does today, real line breaks and all. See ./template-escape.js —
+   * escaping unconditionally would put literal `\n` into every message a customer
+   * reads, which is a worse bug than the one being fixed.
    */
   _substitute(value, ctx) {
     if (typeof value === 'string') {
@@ -968,8 +980,11 @@ export class FlowTester {
         month:    pad(now.getMonth() + 1),
         day:      pad(now.getDate()),
       };
+      // Decided ONCE, from the RAW value, before a single reference is resolved —
+      // it is a property of where the text lands, never of the text itself.
+      const enc = encoderFor(value);
       return value
-        .replace(/\{\{\s*prev\s*\}\}/g, () => this._stringifyForDelivery(ctx.lastOutput))
+        .replace(/\{\{\s*prev\s*\}\}/g, () => enc(this._stringifyForDelivery(ctx.lastOutput)))
         // {{stepId.output}} — the whole output — and {{stepId.field}}, ONE named
         // field of it. (P12 Increment F.)
         //
@@ -989,16 +1004,16 @@ export class FlowTester {
           // instead and the key becomes a non-empty string that dedupes on the
           // template text itself, which is a dedupe that never dedupes anything.
           const out = ctx.outputs.get(id);
-          if (field.toLowerCase() === 'output') return this._stringifyForDelivery(out);
+          if (field.toLowerCase() === 'output') return enc(this._stringifyForDelivery(out));
           const v = pickField(out, field);
-          return v === undefined ? '' : this._stringifyForDelivery(v);
+          return v === undefined ? '' : enc(this._stringifyForDelivery(v));
         })
         // {{item}} / {{index}} — the current element inside a `foreach`. Only
         // bound within a loop; the validator rejects them anywhere else, so an
         // empty substitution here means a bug upstream, not a silent default.
-        .replace(/\{\{\s*item\s*\}\}/gi, () => this._stringifyForDelivery(ctx.item))
-        .replace(/\{\{\s*index\s*\}\}/gi, () => (ctx.index == null ? '' : String(ctx.index)))
-        .replace(/\{\{\s*(date|time|datetime|year|month|day)\s*\}\}/gi, (_, key) => vars[key.toLowerCase()] ?? '');
+        .replace(/\{\{\s*item\s*\}\}/gi, () => enc(this._stringifyForDelivery(ctx.item)))
+        .replace(/\{\{\s*index\s*\}\}/gi, () => (ctx.index == null ? '' : enc(String(ctx.index))))
+        .replace(/\{\{\s*(date|time|datetime|year|month|day)\s*\}\}/gi, (_, key) => enc(vars[key.toLowerCase()] ?? ''));
     }
     if (Array.isArray(value)) return value.map(v => this._substitute(v, ctx));
     if (value && typeof value === 'object') {
