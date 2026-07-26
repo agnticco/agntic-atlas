@@ -5108,6 +5108,7 @@ class Component extends DCLogic {
       .then(r => this._readJson(r))
       .then(r => {
         if (!r.ok || (r.data && r.data.error)) return self._apiError(r.data.error);
+        self._undrawableSince = 0;   // a new build starts with a clean stuck-clock
         self.setState({ threadId: r.data.threadId });
         // Subscribe to the build's reasoning stream. The endpoint replays any beats
         // already emitted before this subscribe, then streams new ones.
@@ -5132,6 +5133,9 @@ class Component extends DCLogic {
       .then(r => this._readJson(r))
       .then(r => {
         if (!r.ok || (r.data && r.data.error)) return self._apiError(r.data.error);
+        // The user answered: this is a fresh exchange, so the "how long have we
+        // been unable to draw the reply" clock starts again from here.
+        self._undrawableSince = 0;
         self._pollBuild(tid);
       })
       .catch(e => self._apiError(String(e)));
@@ -5169,6 +5173,14 @@ class Component extends DCLogic {
   // `unknown` means the server restarted and has no memory of what was running; the
   // graph state is still on disk, so the honest move is to tell the user their work
   // is safe and let them continue, never to silently restart the build.
+  //
+  // ON `ready` THE TIMER IS DELIBERATELY NOT RE-ARMED — the handoff to
+  // `_handleInterrupt` is total, and that is why the handler is now accountable for
+  // whether it left the page actionable (see the block above it). It re-enters here
+  // when it could not draw the answer. Note for anyone changing the two limits
+  // below: BOTH clocks live in this call's closure and both restart on every
+  // `_pollBuild()` call, so neither is a backstop against a loop that keeps calling
+  // it — a caller that re-enters must carry its own budget.
   _pollBuild(threadId) {
     const self = this;
     let misses = 0;
@@ -5215,12 +5227,72 @@ class Component extends DCLogic {
     tick();
   }
 
+  // ── AFTER A RESPONSE THE PAGE IS IN ONE OF THREE STATES — NEVER A FOURTH ───
+  //
+  // `_pollBuild` hands `status:"ready"` straight to the interrupt handler and does
+  // NOT re-arm its own timer: from that moment the handler alone decides what
+  // happens next. So a handler branch that returns without drawing anything left
+  // the page with no timer, no request in flight, nothing to click and no error —
+  // silently dead, with the user believing Atlas is still working. Reloading did
+  // not help, because the server's recorded answer was still the one the page
+  // could not draw. That is the fourth state, and it is the bug.
+  //
+  // The rule now: `_renderInterrupt` must RETURN TRUE to claim it left the page
+  // actionable (or showed an error). Anything else — an unknown shape, a null
+  // interrupt, a duplicate-resume no-op — is treated as "not drawn", and the page
+  // goes back to asking. A permanent silent freeze becomes a recoverable wait.
+  //
+  // THREE THINGS THIS MUST NOT BECOME:
+  //   • an invisible REQUEST STORM. `_pollBuild()` fires its first `tick()`
+  //     IMMEDIATELY, so calling it from here would loop at network speed, not at
+  //     1.5s — thousands of requests a minute against a server that keeps giving
+  //     the same undrawable answer. So the retry is SCHEDULED at the normal poll
+  //     interval, exactly like a `running` answer.
+  //   • an invisible FOREVER loop. `_pollBuild`'s own 30-minute stop cannot save
+  //     us either: every `_pollBuild()` call resets that clock, so a re-arm from
+  //     here would disable the very backstop you would be relying on. Hence a
+  //     dedicated budget: UNDRAWABLE_GRACE_MS of *consecutive* undrawable answers
+  //     (~13 polls) — plenty for a duplicate-resume race or a job that has not
+  //     recorded its next question yet, and short enough that a person is TOLD in
+  //     twenty seconds rather than in half an hour. One drawable answer clears it.
+  //   • a false green. Nothing here advances the build, saves a spec or marks a
+  //     step approved. Giving up says the build is stuck and the work is saved —
+  //     it never pretends the step succeeded.
   _handleInterrupt(iv) {
-    if (!iv) return;
-    // A duplicate/racing respond that the server already handled — silently ignore,
-    // so a fast double-click never spawns a stray message or a raw graph error.
-    if (iv.type === "noop") { this.setState({ thinking: false }); return; }
-    if (iv.type === "done") { this.setState({ spec: iv.spec }); this._saveWorkflow(iv.spec, iv.confirmationLog); return; }
+    const threadId = this.state.threadId;
+    if (this._renderInterrupt(iv) === true) { this._undrawableSince = 0; return; }
+    const UNDRAWABLE_GRACE_MS = 20 * 1000;
+    const UNDRAWABLE_RETRY_MS = 1500;
+    const now = Date.now();
+    if (!this._undrawableSince) this._undrawableSince = now;
+    // No thread left to ask (the conversation moved on, or this was a late answer
+    // to a build we already abandoned): polling would 404 forever. Say so instead.
+    if (!threadId || now - this._undrawableSince > UNDRAWABLE_GRACE_MS) {
+      this._undrawableSince = 0;
+      this._buildLost("I couldn't show you the next step of that build. Your work is saved — reopen this workflow from the list to pick it up.");
+      return;
+    }
+    if (this._pollTimer) clearTimeout(this._pollTimer);
+    this._pollTimer = setTimeout(() => {
+      if (this.state.threadId !== threadId) return;   // conversation moved on
+      this._pollBuild(threadId);
+    }, UNDRAWABLE_RETRY_MS);
+  }
+
+  // Draws one interrupt. RETURNS TRUE only when the page has been left in one of
+  // the three permitted states: still working, showing something the user can act
+  // on, or showing an error. Every other exit means "I could not draw this", and
+  // `_handleInterrupt` above turns that into a resumed poll rather than a freeze.
+  _renderInterrupt(iv) {
+    if (!iv) return false;
+    // A duplicate/racing respond that the server already handled. NOT an error and
+    // NOT drawable: the real answer is still on the server, and this reply has
+    // clobbered it in the build record. Claiming nothing keeps the spinner up and
+    // sends the caller back to polling, which is where the real next step arrives.
+    // (This used to stop the spinner and return, which is precisely the freeze: a
+    // second Enter on a typed answer is enough to reach it.)
+    if (iv.type === "noop") return false;
+    if (iv.type === "done") { this.setState({ spec: iv.spec }); this._saveWorkflow(iv.spec, iv.confirmationLog); return true; }
 
     // ── generated_workflow — the WHOLE spec, in one pass (converger v2 rearch,
     // increment 4). The backend clarifies first, then emits ONE complete,
@@ -5268,7 +5340,7 @@ class Component extends DCLogic {
       this.setState(patch);
       if (specNodes.length) this._animateReveal(specNodes.length);
       else this.setState({ awaitingGraphApproval: true });
-      return;
+      return true;
     }
 
     if (iv.type === "clarification") {
@@ -5297,7 +5369,7 @@ class Component extends DCLogic {
         } })) });
       }
       this.setState({ msgs, thinking: false, inputMode: "clarify", phase: "building" });
-      return;
+      return true;
     }
 
     // ── outcome_check — the contract (P12 Increment C) ────────────────────
@@ -5352,7 +5424,7 @@ class Component extends DCLogic {
                  onToggleAlts: () => self.setState({ msgs: self.state.msgs.map(m => (m._id === oid ? { ...m, altsOpen: !m.altsOpen } : m)) }) }],
         thinking: false, inputMode: "clarify", phase: "building",
       });
-      return;
+      return true;
     }
 
     // ── plan_review — THE PRE-BUILD PLAN GATE (agent-contracts increment 1) ──
@@ -5431,7 +5503,7 @@ class Component extends DCLogic {
         // is the one-click accept. Both keep the zero-typing path intact.
         thinking: false, inputMode: "planchange", phase: "building",
       });
-      return;
+      return true;
     }
 
     // examples, gaps and decisions now flow through the ordinary clarification
@@ -5445,7 +5517,7 @@ class Component extends DCLogic {
 
     if (iv.type === "proposal") {
       const p = iv.proposal || {};
-      if (p.component === "edge") { this.setState({ thinking: true, inputMode: "locked" }); this._send({ type: "accept" }); return; }
+      if (p.component === "edge") { this.setState({ thinking: true, inputMode: "locked" }); this._send({ type: "accept" }); return true; }
 
       // Setup action: resource creation before the workflow runs. Different confirm flow.
       if (p.component === "setup_action") {
@@ -5484,14 +5556,17 @@ class Component extends DCLogic {
           onReject: () => { self._slPendingReplace = true; self.setState({ msgs: [...self.state.msgs, { isOperator: true, text: 'Skip this setup step.' }], thinking: true, inputMode: 'locked' }); self._send({ type: 'reject' }); },
           onChange: null, onChangeInput: null, onSubmitChange: null, onChangeKey: null, onUndo: null,
         };
-        if (!self._slId) {
+        // `updSL` is a no-op when `_slId` names a message that is no longer in the
+        // transcript — which would drop this step in silence and leave nothing to
+        // click. Mount a fresh signal line instead of appending into thin air.
+        if (!self._slId || !self.state.msgs.some(m => m._id === self._slId)) {
           const slId = 'sl' + (this._pc = (this._pc || 0) + 1);
           self._slId = slId;
           self.setState({ msgs: [...self.state.msgs, { isSignalLine: true, _id: slId, steps: withConn([step]), complete: false }], thinking: false, inputMode: 'locked', phase: 'building' });
         } else {
           self.setState({ msgs: updSL(sl => ({ ...sl, steps: withConn([...sl.steps, step]) })), thinking: false, inputMode: 'locked', phase: 'building' });
         }
-        return;
+        return true;
       }
 
       const self = this;
@@ -5540,7 +5615,10 @@ class Component extends DCLogic {
         onSubmitChange, onChangeKey: (e) => { if (e.key === 'Enter') { e.preventDefault(); onSubmitChange(); } },
         onUndo: () => self._undoHint(),
       };
-      if (!self._slId) {
+      // See the setup_action branch: an `_slId` whose message has left the
+      // transcript makes `updSL` a no-op, and the step vanishes with nothing to
+      // click. Mount a fresh signal line rather than append into thin air.
+      if (!self._slId || !self.state.msgs.some(m => m._id === self._slId)) {
         const slId = 'sl' + (this._pc = (this._pc || 0) + 1);
         self._slId = slId;
         self.setState({ msgs: [...self.state.msgs, { isSignalLine: true, _id: slId, steps: withConn([step]), complete: false }], thinking: false, inputMode: 'locked', phase: 'building' });
@@ -5550,7 +5628,7 @@ class Component extends DCLogic {
       } else {
         self.setState({ msgs: updSL(sl => ({ ...sl, steps: withConn([...sl.steps, step]) })), thinking: false, inputMode: 'locked', phase: 'building' });
       }
-      return;
+      return true;
     }
 
     if (iv.type === "ratify") {
@@ -5570,10 +5648,23 @@ class Component extends DCLogic {
         awaitingGraphApproval: false, graphReviseOpen: false,
         testState: "idle", runStepIndex: 0, runSteps: [], failIndex: -1, msgs,
       });
-      return;
+      return true;
     }
 
-    this._apiError("Unexpected response from Atlas (" + iv.type + ").");
+    // Genuinely unknown shape. An error IS one of the three permitted states, so
+    // this counts as drawn — but it must not STRAND them either. `_apiError`'s
+    // default advice is "start over with + New workflow", which is the destructive
+    // option; when there is a built workflow to stand on, say the one true thing
+    // and leave them able to keep working from it (the same landing `_apiError`
+    // already gives a timed-out session, and the same landing `_buildLost` gives a
+    // dropped connection — one message, not two opposite ones).
+    const _S = this.state;
+    if (_S.spec && Array.isArray(_S.spec.nodes) && _S.spec.nodes.length) {
+      this._buildLost("Atlas sent back something this page can't show (" + iv.type + "). Your workflow is saved — tell me what to change and I'll carry on from here.");
+    } else {
+      this._apiError("Unexpected response from Atlas (" + iv.type + ").");
+    }
+    return true;
   }
 
   _submitCardChange(pid) {

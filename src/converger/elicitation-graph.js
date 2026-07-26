@@ -3222,15 +3222,38 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
   // to `analyze`, which re-scores the now-complete draft and sends it on to the tail.
   //
   // EVERY "the spec must change" route REGENERATES; `propose` is retired from the flow.
-  // The client retired `propose`'s per-node `{type:'proposal'}` UI surface, so any route
-  // that reaches `propose` post-generate emits an interrupt no client can render and the
-  // build HANGS at phase:'building'. So a blocking gap with an answer, a sufficiency-named
-  // missing component, and a ratify request-changes all route back to `generate`, which
-  // reads the accumulated `clarifications` (+ `_missingNote`) and rebuilds the whole,
-  // updated, still-validated spec. `propose` and its guards remain in the source but are
-  // no longer routed to from anywhere — it is deliberately unreachable in production.
-  // The regenerate loop is bounded (MAX_REGEN_ROUNDS + MAX_GAP_ROUNDS + the sufficiency
-  // cap), so a spec the model cannot complete ends at `ratify` with its blockers shown.
+  // A blocking gap with an answer, a sufficiency-named missing component, and a ratify
+  // request-changes all route back to `generate`, which reads the accumulated
+  // `clarifications` (+ `_missingNote`) and rebuilds the whole, updated, still-validated
+  // spec. The regenerate loop is bounded (MAX_REGEN_ROUNDS + MAX_GAP_ROUNDS + the
+  // sufficiency cap), so a spec the model cannot complete ends at `ratify` with its
+  // blockers shown.
+  //
+  // `propose` IS STILL UNREACHABLE, AND THAT PART IS TRUE — re-verified 2026-07-26:
+  // `graph.addNode('propose', …)` and `graph.addEdge('propose','analyze')` are the ONLY
+  // two mentions of it in this file, so it has an edge OUT and none IN, and the entry
+  // point is `outcome`. It stays retired because whole-spec regeneration replaced the
+  // one-component drip, NOT because the client cannot draw it.
+  //
+  // ⚠ THE REASON THIS COMMENT USED TO GIVE WAS WRONG, AND THE WRONG REASON IS WHY THE
+  // REAL HAZARD WENT UNGUARDED FOR SO LONG. It claimed "the client retired `propose`'s
+  // per-node `{type:'proposal'}` UI surface, so any route that reaches `propose`
+  // post-generate emits an interrupt no client can render and the build HANGS at
+  // phase:'building'." Both halves are false:
+  //   · The client's `{type:'proposal'}` surface was never retired. `_renderInterrupt`
+  //     in `public/index.html` still draws proposals — `component:'edge'`,
+  //     `component:'setup_action'`, and a default step card with Confirm / Change /
+  //     Reject.
+  //   · That surface is LIVE IN PRODUCTION today, from a different node: `resourceSetup`
+  //     (above) emits `{ type:'proposal', proposal:{ component:'setup_action', … } }`
+  //     whenever a user picks "Create #<channel>" for a missing destination.
+  // So routing to `propose` would not hang the build — and, more importantly, the class
+  // of bug this sentence warned about was REAL but lived somewhere else entirely: a
+  // client that receives a reply it cannot draw used to stop polling and go silently
+  // dead (no spinner, no error, nothing to click). That is now guarded on the client
+  // side, in `_handleInterrupt`, which must be told it drew something or it goes back to
+  // polling. Do NOT re-derive "the client can't render X" from this file; check
+  // `_renderInterrupt` in `public/index.html`.
   //
   // `decisions` (Increment E) sits immediately BEFORE `gaps`, and that order is
   // load-bearing: the gap list must be about the table AS CORRECTED. Review the
