@@ -43,6 +43,10 @@ import { randomBytes } from 'node:crypto';
 import { EventEmitter } from 'node:events';
 // Drips whitespace so a >100s build isn't cut by the proxy (524). See the module.
 import { keepAlive } from './keep-alive.js';
+// Deterministic backstop: strips invented Atlas navigation out of a chat reply
+// before the user can act on it. See the module for why the prompt rule alone
+// is not enough.
+import { scrubInventedNavigation } from './chat-navigation-guard.js';
 
 // Retry an LLM call up to maxRetries times on transient provider errors (500/529/503).
 async function withLLMRetry(fn, maxRetries = 2) {
@@ -438,6 +442,7 @@ BEHAVIOR:
 - YOU BUILD IT. Building a workflow from a plain-language description is exactly what you do. Never tell the user you can't build it, that it needs a developer, or that a separate human team will take it from here — when they confirm, YOU assemble it. The only thing that happens after ready_to_build:true is the system turning YOUR build_intent into a running workflow.
 - FILE ACCESS: if the intent involves reading files, documents, PDFs, or attachments — check the connectors list. If Filesystem is listed, name the folder. If not, surface the gap before building: e.g. "To read that file in the workflow you'd need a folder connected under Knowledge. Set that up first?"
 - MAILBOX / SOURCE GROUNDING: only promise to read a source that is actually CONNECTED. An email workflow reads the ONE Gmail account this workspace has connected — it cannot open a different mailbox. If the user names another address (support@…, sales@…, a shared mailbox or group) that isn't the connected account, do NOT say you'll "read support@…" or "watch that inbox". Either treat it as a filter on the connected inbox and say so plainly ("I'll watch your connected inbox for mail addressed to support@… — that works if support@ forwards there"), or, if it's a separate mailbox, name the gap: "That looks like a separate mailbox — the workflow reads the Gmail account you've connected. Does support@ forward into it?" Never claim to read, access, or monitor a source that isn't a connected connector; when unsure, ask.
+- ATLAS'S OWN SCREENS — NEVER DESCRIBE THEM FROM MEMORY. You do not have this interface in front of you. Any screen, settings page, menu, tab, section or setup procedure you describe from your own knowledge is invented, and it sends a non-technical user hunting for something that does not exist. There is exactly ONE place in Atlas you are allowed to name: Connections, in the left sidebar. When someone asks how to connect a service, say "open Connections in the left sidebar" — and STOP. Do NOT describe what is inside it, do NOT name a section, heading, tab or button within it, and do NOT invent a "workspace settings" screen, an "Integrations" or "Connectors" section, or a "Settings → …" path: none of those exist here. If a service is not in the connectors list above, say plainly that Atlas cannot connect to it yet, offer whatever genuinely workable alternatives you can (forwarding the content in, pasting it into the chat, a connected app that gets close) — that part is useful, keep doing it — and point at the same one place, Connections in the left sidebar. If you do not know where something lives in Atlas, say you are not sure and point at Connections; never guess, and never name a second screen.
 - SLACK CHANNELS: your job is to understand and REWRITE the intent, not to resolve resources. Do NOT interrogate whether a named Slack channel exists or ask "should I create it or pick another?" — you don't have the live channel list, and after the spec is built the builder verifies every channel against the real account and offers, with buttons, to create the missing one or pick an existing one. Just carry the channel the user named through into build_intent; the deterministic step owns the create/pick question. (This is only about channel existence — keep asking your legitimate clarifying questions about the inbox/source, trigger, and destination.)
 - ready_to_build stays false until the user clearly signals they want to build (e.g. "let's do it", "set it up", "yes, build it", "go ahead"). At that point set ready_to_build:true and write build_intent: one clear paragraph covering trigger + steps + destination, folding in everything discussed.
 - If they seem close but haven't confirmed, gently offer ("Want me to set this up?") but keep ready_to_build:false.
@@ -1159,6 +1164,42 @@ Rules:
       let clientHasPartial = false;
       // One prose-instead-of-JSON retry per request, never a loop.
       let envelopeRetried = false;
+      // Exactly the text the client has been sent as `chunk` events — i.e. what the
+      // USER can read on screen. Every chunk goes through sendChunk so this stays
+      // truthful; it is cleared whenever a partial is withdrawn (`reset`), because
+      // the client clears its bubble on that event too.
+      let visibleText = '';
+
+      const sendChunk = (text) => {
+        if (!text || closed) return;
+        visibleText += text;
+        sseWrite({ type: 'chunk', text });
+        clientHasPartial = true;
+      };
+
+      // Withdraw whatever is on screen: the client empties the streaming bubble.
+      const withdrawPartial = () => {
+        if (closed) return;
+        sseWrite({ type: 'reset' });
+        visibleText = '';
+        clientHasPartial = false;
+      };
+
+      // ── NAVIGATION BACKSTOP ────────────────────────────────────────────────
+      // Last thing before `done`: if the reply the user is reading points them at
+      // an Atlas screen that does not exist, withdraw it and re-send the corrected
+      // text. The prompt rule (ATLAS'S OWN SCREENS) is the mechanism; this is what
+      // makes it enforceable. Uses the SAME withdraw-and-replace path the mid-stream
+      // tool case already relies on, so the user ends up with one clean bubble.
+      const correctInventedNavigation = () => {
+        if (closed || !visibleText) return false;
+        const scrubbed = scrubInventedNavigation(visibleText);
+        if (!scrubbed.changed) return false;
+        withdrawPartial();
+        sendChunk(scrubbed.text);
+        logEvent('chat.navigation.corrected', { tenant: req.tenant?.id ?? null });
+        return true;
+      };
 
       const processStreamChar = (ch) => {
         if (escapeNext) {
@@ -1192,7 +1233,7 @@ Rules:
             processStreamChar(ch);
           }
         }
-        if (replyBuf && !closed) { sseWrite({ type: 'chunk', text: replyBuf }); replyBuf = ''; clientHasPartial = true; }
+        if (replyBuf) { sendChunk(replyBuf); replyBuf = ''; }
       };
 
       // Tool-use + streaming loop.
@@ -1246,7 +1287,7 @@ Rules:
           // raw error leaked to the operator (R17). Mirror the clean-round path (above).
           // If we already streamed a reply this round, tell the client to drop it so the
           // re-run's reply replaces it rather than doubling it.
-          if (clientHasPartial && !closed) { sseWrite({ type: 'reset' }); clientHasPartial = false; }
+          if (clientHasPartial) withdrawPartial();
           extractState = 'searching'; searchBuf = ''; replyBuf = ''; streamedText = ''; escapeNext = false;
           for (const tc of midStreamToolCalls) sseWrite({ type: 'tool', name: tc.name });
           msgArray.push(new AIMessage(midStreamChunk?.content ?? '', midStreamChunk?.additionalKwargs ?? { toolCalls: midStreamToolCalls }));
@@ -1273,14 +1314,13 @@ Rules:
         if (!parsedMeta?.reply && !envelopeRetried) {
           envelopeRetried = true;
           logEvent('chat.envelope.retry', { tenant: req.tenant?.id ?? null, turns: messages.length });
-          if (clientHasPartial && !closed) { sseWrite({ type: 'reset' }); clientHasPartial = false; }
+          if (clientHasPartial) withdrawPartial();
           msgArray.push(new AIMessage(streamedText));
           msgArray.push({ role: 'user', content: 'Send that same message again, formatted EXACTLY as this JSON and nothing else: {"reply":"<your message>","ready_to_build":<true or false>,"build_intent":<a string or null>} — and inside the reply text use SINGLE quotes only. A double-quote inside it ends the string early and loses the rest of your message, which is what just went wrong.' });
           extractState = 'searching'; searchBuf = ''; replyBuf = ''; streamedText = ''; escapeNext = false;
           try {
             for await (const chunk of llm.stream(msgArray, { configurable: invokeConfig.configurable })) {
               processToken(typeof chunk.content === 'string' ? chunk.content : '');
-              if (replyBuf && !closed) { sseWrite({ type: 'chunk', text: replyBuf }); replyBuf = ''; clientHasPartial = true; }
             }
             try { parsedMeta = JSON.parse(extractJsonLoose(streamedText)); } catch { parsedMeta = null; }
           } catch (err) {
@@ -1295,9 +1335,11 @@ Rules:
         if (extractState === 'searching' && streamedText && !closed) {
           const CHUNK = 40;
           for (let i = 0; i < streamedText.length; i += CHUNK) {
-            sseWrite({ type: 'chunk', text: streamedText.slice(i, i + CHUNK) });
+            sendChunk(streamedText.slice(i, i + CHUNK));
           }
         }
+
+        correctInventedNavigation();
 
         const readyToBuild = parsedMeta ? !!parsedMeta.ready_to_build : false;
         const buildIntent  = (parsedMeta && typeof parsedMeta.build_intent === 'string' && parsedMeta.build_intent.trim()) ? parsedMeta.build_intent.trim() : null;
@@ -1324,8 +1366,9 @@ Rules:
         }
         if (extractState === 'searching' && streamedText && !closed) {
           const CHUNK = 40;
-          for (let i = 0; i < streamedText.length; i += CHUNK) sseWrite({ type: 'chunk', text: streamedText.slice(i, i + CHUNK) });
+          for (let i = 0; i < streamedText.length; i += CHUNK) sendChunk(streamedText.slice(i, i + CHUNK));
         }
+        correctInventedNavigation();
         let parsedMeta = null;
         try { parsedMeta = JSON.parse(extractJsonLoose(streamedText)); } catch {}
         const readyToBuild = parsedMeta ? !!parsedMeta.ready_to_build : false;
