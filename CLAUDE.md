@@ -455,6 +455,61 @@ as load-bearing.*
   swallows 100% of traffic, and the run reports `run_completed`. Every routed-on value must
   have a **closed, declared domain checked at build time**.
 
+- **A function that switches off the thing keeping a page alive must make its callee
+  accountable for what happens next (2026-07-26).** The build page's status check hands a
+  ready reply to one handler and cancels its own timer, so any handler branch that returned
+  without drawing anything left the page permanently dead — no spinner, no error, nothing to
+  click, and a reload reproduced it. Both of that function's safety limits (30-min build cap,
+  90-s offline grace) were unreachable: they live inside the closure of the timer that no
+  longer existed **and they reset on every call**, so the obvious fix — "just call the poller
+  again" — would have destroyed the very backstop it relied on. The rule: the render step must
+  RETURN TRUE to claim it left the page actionable, and a caller that re-enters a polling loop
+  carries its own budget. Pinned by `tests/api/build-poll-watchdog.test.js` (15), all guards
+  hand-mutated red→green.
+- **A label that makes a claim about the USER must fail toward the WEAKER claim
+  (2026-07-26).** The plan card's marks (`you said` / `I found` / `I inferred`) resolved
+  anything unrecognised — missing, empty, `null`, a typo, a value the model invented — to
+  **"you said"**, the strongest possible claim about a person. A tester was shown *"Atlas will
+  create the #ops channel — YOU SAID"* for a channel they had only NAMED, and the build then
+  skipped the work because the plan read as settled. **Two causes compounded:** the renderer's
+  fallback was the strongest claim, and the grounding prompt literally instructed the model to
+  *"keep confidence 'you said'"* — a value not even in the plan's own declared
+  `stated|found|inferred` set, so it could ONLY ever land in that fallback. **A mark that is
+  usually right is worse than no mark** — it teaches the user to trust the occasional false
+  one. The domain is now closed in one place (`src/converger/plan-provenance.js`) and applied
+  **twice on purpose**: server-side in the `plan` node so a client that never ran cannot
+  receive an unlabelled item, and in the browser. **And the plan must not settle a question
+  another stage asks properly** — a destination that does not exist is the create-or-pick
+  conversation's decision, not the plan's to pre-announce. Pinned by
+  `tests/converger/plan-provenance.test.js` (20), four mutations red→green.
+- **Never let the model describe Atlas's own screens (2026-07-26).** The chat assistant may
+  talk freely about the user's work; it may not say where anything lives in Atlas. It invented
+  a "workspace settings" screen with a "Connectors / Integrations" section — neither exists
+  anywhere in `src/` or `public/` — and sent a non-technical user hunting, immediately after
+  giving a genuinely good refusal. **Bar the description; do not supply a better one:** any
+  accurate account of the UI goes stale the moment the UI changes and then lies with
+  authority. (Proof it drifts: the QA report's own description of that screen was already
+  wrong within hours.) There is exactly one place the assistant may name — **Connections, in
+  the left sidebar** — and it says nothing about what is inside it. Backed by
+  `scrubInventedNavigation` (`src/api/chat-navigation-guard.js`), which rewrites an invented
+  instruction before the user reads it; **the prompt rule alone is a belief about model
+  behaviour and is pinned by nothing.** Known blind spot, deliberate: an invented instruction
+  that never names the product is not caught by the backstop.
+- **A person must never be asked to approve a step they have not been shown (2026-07-26).**
+  Step approval was a 58px shape, a name clipped to 18 characters and a 19px tick on hover;
+  two QA testers approved 11 and 13 steps having been shown no card, no detail, no expansion.
+  **That is why a worse defect got through:** a plan listing FOUR paths, built as THREE,
+  reported `13 / 13 APPROVED · every step approved` — the branch's mandatory catch-all
+  silently absorbed the fourth answer. The step being approved now carries a card with its
+  FULL untruncated name, a plain-language sentence, its real configuration, and for a routing
+  step **every path it can take**. A value the upstream step can produce that no path names is
+  shown in red with the path it would silently take instead, the status line refuses to say
+  "every step approved" while one exists, and the card stays after the last tick. The
+  derivation is **pure and separate from the renderer on purpose** — the render closure is
+  unreachable from outside the render pass, the same trap that let the destination fix revert
+  silently. Pinned by `tests/api/step-approval-card.test.js` (28), four mutations red→green;
+  `.claude/skills/atlas-product/SKILL.md` §5 extended in the same commit.
+
 **On the control-flow / promise engine**
 
 - **A check scoped to the PRODUCER is wrong; scope it to the VALUE.** Denylists ("its parent
@@ -591,6 +646,28 @@ This is a stronger check than byte-for-byte comparison because it proves the
 spec is actually executable, not just structurally similar to the frozen file.
 
 ## Known gotchas
+
+- **Text substituted into a `{{…}}` template may never change the STRUCTURE of the value it
+  lands in (2026-07-26).** A workflow that had an AI write a summary and then assembled it
+  into a document died on **twelve of twelve** runs across two builds with `assemble sections
+  is invalid JSON: Bad control character in string literal`. The stored config was valid JSON
+  — `[{"heading":"…","content":"{{format_emergency.output}}"}]` — and the build-time probe in
+  `node-types/assemble.js` is RIGHT to pass it: the value is not knowable until the workflow
+  runs. At run time the placeholder was replaced with what the AI wrote, RAW, so the first
+  line break ended the JSON string literal. Passed every build-time check, then failed 100% of
+  the time. Fixed at the ONE run-time interpolation site (`FlowTester._substitute`), not
+  inside `assemble`, because the same shape reaches every config value parsed as JSON
+  downstream — an Airtable `fields` map and Sheets `values` both `JSON.parse` a config string
+  and were broken identically. **The escape is CONDITIONAL on where the value lands and must
+  stay that way:** almost every interpolation goes into plain text (an AI step's instructions,
+  a Slack or email body) and must keep receiving real line breaks — escaping unconditionally
+  would put literal `\n` into every message a customer reads, which is worse than the bug
+  being fixed. `src/workflows/template-escape.js` decides it by neutralising every `{{…}}` to
+  a bare word and parsing: object or array ⇒ structured. That is exact, not a heuristic — a
+  bare word is legal JSON only inside a string literal. Requiring object-or-array is
+  deliberate: a body of `"{{prev}}"` with the quotes typed by a person parses as a bare JSON
+  string, and escaping it would be the over-escaping regression itself. Pinned by
+  `tests/workflows/interpolation-escape.test.js` (12); **both halves hand-mutated red→green.**
 
 - **Delivery nodes need context-aware output formatting (unbuilt, P10+).** The
   `deliver` node and connector-action delivery capabilities pass output through as-is,
@@ -812,6 +889,42 @@ fixed on the spot. Fold the relevant ones into whatever increment next touches t
 - **The `decision_review` UI can edit cells / outputs / hit policy but cannot ADD or DELETE a
   rule** — deliberate for now; a user who spots a rule that shouldn't exist has to say so in
   chat.
+- **A duplicate answer can overwrite the question Atlas was about to ask.** Submitting the
+  same answer twice makes the second (no-op) result replace the first one's real next question
+  in the build record (`src/api/builder.js:257`, `startBuildJob`'s success handler). The client
+  no longer freezes on it (2026-07-26), so this is now recoverable rather than fatal — but the
+  real question is still lost. Fix is two parts: don't let a no-op overwrite a recorded ready
+  value, and guard the composer against a second Return while an answer is in flight
+  (`submitInput`'s `if (S.thinking) return` is defeated by `setState` being asynchronous).
+- **`POST /api/builder/chat` decides "the client hung up" on a one-tick race.**
+  `express.json()` consumes the request body and Node then fires `close` on the request while
+  the socket is still open; the handler treats that as a disconnect and suppresses the whole
+  SSE stream. **It works today only because `requireAuth` is `async`**, so the handler attaches
+  its listener after the spurious event goes by. Make auth synchronous, memoise the session
+  lookup, or add a fast path, and chat returns HTTP 200 with an empty body and no error.
+  Proved on Node 22 + Express 5 (the deployed pairing) 2026-07-26; not reachable today. Fix:
+  treat the request as closed only when the socket is actually destroyed.
+- **The second step-approval mechanism in `public/index.html` is DEAD** —
+  `_approveCurrentStep` / `_approveAllSteps` / `_graphOrder` / `graphCanvas` and their state
+  are reachable only from each other; the `graphCanvas` view-model is recomputed on **every
+  render** and no template binds it (`grep -n "{{ *graphCanvas" public/index.html` returns
+  nothing). ~120 lines. Deleting it needs old saved slices (which still persist
+  `graphApproved` / `graphSelNode`) to keep loading cleanly.
+- **The plan's grounding speaks about a Slack workspace the tenant may not have connected.**
+  The create-or-pick question requires `connectors.slack.connected` (`gap-scorer.js:286,296`);
+  the plan's grounding checks only that a channel list loaded
+  (`elicitation-graph.js:1700`), and `builder.js:1585-1596` can populate that list from
+  `SLACK_BOT_TOKEN` without the per-tenant guard. So Atlas can promise a confirmation nobody
+  ever asks for. Made benign for the "you said" invariant 2026-07-26, not closed.
+- **Two copies of the "what counts as a template reference" rule** — the build-time probe
+  (`node-types/assemble.js`) and the run-time escaper (`template-escape.js`) each carry their
+  own `\{\{[^}]+\}\}`. They agree today because the second was written to match. This repo
+  has already paid twice for this shape on the decision-table grammar. Collapse them when
+  anything next touches either.
+- **The diagram's type tag is still jargon** — `CONNECTOR-ACTION` / `LLM · SUMMARIZE`
+  (`_nodeShape`) sit beside the approval card that now says the same thing in English.
+  `_nodeShape` reaches five surfaces including the exported procedure document, so changing
+  it outright is wider than it looks.
 - **Approval-channel availability (`email`) is deployment-wide, not per-tenant** — fine today
   (one deployment, one mailer); revisit if tenants ever bring their own sending domain.
 
@@ -1135,6 +1248,21 @@ test panel:
   are in the same suite). **Status: code-proven (919 tests green, server restarted on the new
   code); a clean end-to-end LIVE witness is still pending** — the first live re-build got stuck
   in the *separate* gap-loop below before it reached verify.
+
+**Fixed by the coding run of 2026-07-26** (agent-org `run-1346-coding`, five packets,
+integrated and suite-green at `bef1f9b`, **not merged to `main` and not deployed**). All five
+are **code-proven only — none has been witnessed in a browser**, and a headed QA pass is the
+pending confirmation for every one:
+
+- **A workflow no longer dies whenever the AI writes more than one line.** The
+  summarise-then-post / digest shape failed 100% of the time; the same flaw also broke writing
+  an AI answer into an Airtable column or a Sheets row. See *Known gotchas*.
+- **The build page can no longer go silently dead.** See *Hard-won lessons → On silent
+  failure*.
+- **The plan no longer claims "you said" about things nobody said.**
+- **A step is shown before you are asked to approve it**, and an answer with no path is
+  called out instead of being absorbed by the catch-all.
+- **The chat no longer invents Atlas's own screens.**
 
 **Still open, roughly in the order they matter:**
 
