@@ -907,6 +907,56 @@ export function deliveryTarget(node) {
   };
 }
 
+/**
+ * WHY A RECEIPT DID NOT GO THROUGH, IN THE RUN'S OWN WORDS.
+ *
+ * A dry run does not merely record "no": `_dryRunDeliver` (flow-tester.js) records
+ * WHICH of five conditions failed — `{hasBody, bodyWellFormed, targetPresent,
+ * capabilityConnected, destinationReachable}` — and, when a connector `probe`
+ * positively refused the destination, an `unreachableReason` in plain English
+ * ("no Slack user matches \"charles@agntic.co\"").
+ *
+ * `normalizeDelivery` spreads all of that straight through, so every receipt the
+ * runtime oracle sees is already carrying its own diagnosis. The loop below used
+ * to `continue` past a `delivered:false` receipt without ever reading it, and the
+ * check then reported the generic `nothing reached <target>` — a person was told
+ * the destination was not reached and never told that Atlas knew exactly why.
+ *
+ * Composed, never narrated: every clause is a field off the receipt, and the
+ * order mirrors `_dryRunDeliver`'s own `wouldDeliver` conjunction so the sentence
+ * names the FIRST condition that failed rather than an arbitrary one. A receipt
+ * that carries no diagnosis at all yields null, and the caller says so — filling
+ * that gap with a plausible cause is the defect this whole file guards against.
+ */
+function undeliveredReason(d) {
+  if (typeof d?.unreachableReason === 'string' && d.unreachableReason.trim()) {
+    return d.unreachableReason.trim();
+  }
+  const c = d?.checks;
+  if (c && typeof c === 'object') {
+    if (c.hasBody === false)             return 'there was no content to send';
+    if (c.bodyWellFormed === false)      return 'the message still had an unfilled {{…}} placeholder in it';
+    if (c.targetPresent === false)       return 'no destination was filled in';
+    if (c.capabilityConnected === false) return `${deliveryPlace(d)} is not connected`;
+    if (c.destinationReachable === false) return 'the destination could not be reached';
+  }
+  return null;
+}
+
+/** The connector a receipt belongs to, in the words a person would use. */
+function deliveryPlace(d) {
+  return describeTarget(deliveryConnector(d));
+}
+
+/** Where a delivery actually landed, for "it went here instead". */
+function deliveryWhere(d) {
+  const loc = (Array.isArray(d?.locators) ? d.locators : [])
+    .find(l => typeof l === 'string' && l.trim() && l !== d.channel)
+    ?? d?.target ?? d?.to ?? d?.user ?? d?.slackChannel ?? null;
+  const place = deliveryPlace(d);
+  return loc ? `${loc} (${place})` : place;
+}
+
 /** Did this run produce the effect this assertion promises? */
 export function checkAssertionAtRuntime(assertion, deliveries = []) {
   const defect = assertionDefect(assertion);
@@ -918,9 +968,23 @@ export function checkAssertionAtRuntime(assertion, deliveries = []) {
 
   const locatorFree = isLocatorFree(connector);
 
+  // The diagnosis this run already holds, gathered as we go — see undeliveredReason.
+  const blocked   = [];   // receipts for THIS connector that did not go through
+  const landed    = [];   // deliveries that DID happen, but somewhere else
+
   for (const d of deliveries) {
-    if (!d?.delivered) continue;
-    if (deliveryConnector(d) !== wantConnector) continue;
+    if (!d?.delivered) {
+      // A receipt that refused itself. It is not a match — but it is the single
+      // most useful thing this run knows about why the promise was not kept, and
+      // reading it is the whole difference between "nothing reached them" and
+      // "nothing reached them because no Slack user matches that address".
+      if (deliveryConnector(d) === wantConnector) {
+        const why = undeliveredReason(d);
+        blocked.push(why ? `${deliveryPlace(d)}: ${why}` : `${deliveryPlace(d)}: the run did not record why`);
+      }
+      continue;
+    }
+    if (deliveryConnector(d) !== wantConnector) { landed.push(deliveryWhere(d)); continue; }
     // No locator on the assertion, a template locator (resolved at run time), or a
     // locator-free connector (the inbox — its "locator" is a label, not an address)
     // ⇒ "some delivery to this connector" is enough.
@@ -940,8 +1004,40 @@ export function checkAssertionAtRuntime(assertion, deliveries = []) {
       return got && (got === wantLocator || got.includes(wantLocator) || wantLocator.includes(got));
     });
     if (hit) return { ok: true, detail: describeDelivery(d) };
+    // Right connector, wrong address. That is a different failure from "nothing
+    // was sent", and the person needs to be told where it actually went.
+    landed.push(deliveryWhere(d));
   }
-  return { ok: false, reason: `nothing reached ${describeTarget(assertion.target)}` };
+  return { ok: false, reason: `nothing reached ${describeTarget(assertion.target)}${becauseOf(blocked, landed)}` };
+}
+
+/**
+ * The clause that turns "nothing reached them" into something a person can act on.
+ *
+ * Three distinct situations, and telling them apart is the entire point — they
+ * lead to three different fixes:
+ *
+ *   · nothing was even attempted            → the workflow has no step that does this
+ *   · it was attempted and refused, because → the step is right, the destination is not
+ *   · things were delivered, elsewhere      → the step is right, it is pointed somewhere else
+ *
+ * Every clause is assembled from the run's own receipts. Nothing is inferred and
+ * nothing is worded by a model — when the run recorded no diagnosis, this says so
+ * rather than supplying one.
+ */
+function becauseOf(blocked, landed) {
+  if (blocked.length) return ` — ${listOfUpTo(blocked, 3)}`;
+  if (landed.length)  return ` — this run delivered to ${listOfUpTo(landed, 3)}, and nothing else`;
+  return ' — no step in this run attempted it';
+}
+
+/** "a", "a and b", "a, b and 2 more" — bounded, so one clause cannot swamp the sentence. */
+function listOfUpTo(items, max) {
+  const xs = [...new Set(items.filter(Boolean))];
+  const shown = xs.slice(0, max);
+  const rest  = xs.length - shown.length;
+  const head  = shown.length > 1 ? `${shown.slice(0, -1).join(', ')} and ${shown[shown.length - 1]}` : shown[0];
+  return rest > 0 ? `${head} and ${rest} more` : head;
 }
 
 /** A one-line, human description of what a delivery did — shown in the test panel. */
@@ -1347,6 +1443,91 @@ export function assertionApplicability(assertion, routeInfo) {
 }
 
 /**
+ * ── THE RUN-TIME TWIN OF `askSatisfiesAssertion` (the flagship-shape defect) ──
+ *
+ * THE DEFECT. The two halves of this one oracle disagreed about one node type. At
+ * BUILD time an approval step's question satisfies a `slack:<someone>` promise —
+ * `satisfiesAssertion` routes `type:'human'` into `askSatisfiesAssertion`, and it
+ * must, or "DM me to approve" can only be kept by a second `deliver` node sending
+ * the question twice. At RUN time `checkAssertionAtRuntime` reads the run's
+ * DELIVERIES and nothing else, and a `human` node produces no delivery at all
+ * (`isDeliveryNode` is false for it, and both delivery-assembly sites drop it).
+ * So the promise fell through the loop and came back `nothing reached
+ * charles@agntic.co on Slack` — deterministically, on every run, for a workflow
+ * that was built correctly. The flagship shape (draft → a person approves → send)
+ * passed every build check and could never be published, and the person was given
+ * a sentence with no cause and no action in it.
+ *
+ * WHY THIS IS NOT A PASS. The honest answer to "did this run show the question
+ * reach that person?" in a pre-publish test is **no, and it never can**:
+ *
+ *   · deliveries are forced dry on that path (`dryRunDeliveries: true`,
+ *     server.js — the ONE real delivery is go-live), so nothing is sent;
+ *   · the gate is PRE-ANSWERED by the panel, so the run never even pauses; and
+ *   · the only code that issues an ask — `ApprovalService.deliverAsk` — is
+ *     reachable solely from `WorkflowScheduler` (`registerAskDeliverer`), a module
+ *     the test path never enters. No Slack call happens, so no Slack setup can
+ *     change the outcome.
+ *
+ * A dry run also holds no Slack credential for a `human` node's channels (token
+ * injection covers connector-action config, not `human.config.channels`), so it
+ * cannot even probe the destination the way `_dryRunDeliver` probes a delivery's.
+ * There is therefore no evidence to certify on, and manufacturing a would-ask
+ * receipt here would be a second copy of `deliverAsk`'s channel dispatch — a proof
+ * about a program nobody runs.
+ *
+ * So the verdict is the THIRD one: **not exercised**. Not a pass, not a failure.
+ * Refusing to certify stays available; certifying without checking does not.
+ *
+ * WHAT KEEPS THIS FROM BEING A BLANKET EXCUSE — four narrowings, all load-bearing:
+ *
+ *  1. It is consulted ONLY after the ordinary delivery check has already said no,
+ *     so a genuine delivery always wins and this can never mask one.
+ *  2. The promise must be one an approval ask could keep, decided by
+ *     `askSatisfiesAssertion` — the SAME function the build-time half uses, so the
+ *     two halves now share one definition and cannot drift apart again.
+ *  3. The ask step must have RUN ON THIS SAMPLE — present in the run's steps. Not
+ *     "a `human` node exists in the spec": a sample that routed away from the gate
+ *     gets nothing, exactly as a `deliver` node that never ran gets nothing.
+ *  4. If the run records that the answer came back OVER THE PROMISED CONNECTOR,
+ *     the ask WAS issued and it counts as kept — you cannot answer a question you
+ *     were never asked. That is the positive half, and it is the production shape:
+ *     a real Slack approval resumes with `{by:'slack:U…', channel:'slack'}`
+ *     (approval-service.js), while both test-panel paths stamp
+ *     `channel:'test_panel'`, which matches no connector and so can never pass.
+ *
+ * @returns {null | {issued:true, detail:string} | {issued:false, reason:string}}
+ */
+export function approvalAskEvidence(assertion, spec, runResult) {
+  const asks = (spec?.nodes ?? []).filter(n => n?.type === 'human' && askSatisfiesAssertion(assertion, n));
+  if (!asks.length) return null;
+
+  // RUN EVIDENCE, not spec presence: which of them actually executed on this sample.
+  const outputs = new Map();
+  for (const s of (runResult?.steps ?? [])) outputs.set(s?.nodeId, s?.output);
+  const ran = asks.filter(n => outputs.has(n.id));
+  if (!ran.length) return null;
+
+  const wantConnector = canonicalConnector(splitTarget(assertion.target).connector);
+
+  for (const n of ran) {
+    let o = outputs.get(n.id);
+    if (typeof o === 'string') { try { o = JSON.parse(o); } catch { o = null; } }
+    const over = String((o && typeof o === 'object' ? o.channel : '') ?? '').trim();
+    if (over && canonicalConnector(over) === wantConnector) {
+      return { issued: true, detail: `"${n.label ?? n.id}" asked, and the answer came back over ${describeTarget(over)}` };
+    }
+  }
+
+  const label = ran[0].label ?? ran[0].id;
+  return {
+    issued: false,
+    reason: `"${label}" is where this workflow asks a person, and this test answers that question itself `
+      + `instead of sending it — so whether the question reaches ${describeTarget(assertion.target)} was not checked here`,
+  };
+}
+
+/**
  * Evaluate one example's RUN against the outcome contract. (P12 Increment G.)
  *
  * The CONTRACT is machine-checkable and generic — every workflow has one, and it
@@ -1388,7 +1569,19 @@ export function evaluateExampleRun(spec, example, runResult) {
     }
     // Unconditional, or its lane was taken: enforce the delivery (unchanged path —
     // this is the anti-weakening core; a real miss here is still a real failure).
-    return { ...base, applicable: true, ...checkAssertionAtRuntime(a, deliveries) };
+    const rt = checkAssertionAtRuntime(a, deliveries);
+    if (rt.ok) return { ...base, applicable: true, ...rt };
+
+    // ── ONLY NOW: is this a promise that an APPROVAL QUESTION keeps? ──────────
+    // Consulted strictly AFTER the delivery check has said no, so a real delivery
+    // always wins and this can never mask one. See approvalAskEvidence for why an
+    // unissued ask is "not exercised" rather than broken — and for the four
+    // narrowings that stop it becoming a blanket excuse.
+    const ask = approvalAskEvidence(a, spec, runResult);
+    if (ask?.issued) return { ...base, applicable: true, ok: true, detail: ask.detail };
+    if (ask) return { ...base, applicable: false, skipped: true, ok: true, detail: ask.reason };
+
+    return { ...base, applicable: true, ...rt };
   });
 
   // CONTENT-ERROR GUARD. `message_sent → inbox` is a FLOOR — any delivery satisfies
