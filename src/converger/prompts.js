@@ -782,6 +782,75 @@ category instead of the email. The plan says WHAT each step does; your grammar s
 }
 
 /**
+ * WHAT THE SYSTEM ALREADY FIXED IN THE LAST DRAFT — rendered into the next build.
+ *
+ * THE LOOP THIS CLOSES. `generate` rebuilds the WHOLE spec on every "the spec must
+ * change" route, and the previous draft reaches it as ids, types and labels ONLY
+ * (`existing`, below) — no config, no edges. So a blank the deterministic repairs had
+ * already filled in (`autoRepairStructural`: a missing `sections` list, an unwired
+ * route edge, a missing name) was INVISIBLE to the pass that came next, which
+ * re-emitted the identical blank, which fired the identical repair. The build could
+ * not retain a fix it had already made — a loop that cannot make progress by
+ * construction.
+ *
+ * On the record (memory/logs/atlas-events.log): build `build-agntic-1785087187289`,
+ * 2026-07-26, logged `converger.pre_regen_repair [DIGEST_MISSING_SECTIONS]` after
+ * EVERY one of three consecutive whole-spec passes — 155s + 130s + 203s, eight
+ * minutes of a person waiting — and two other builds that afternoon repeated it twice
+ * each.
+ *
+ * WHY THIS AND NOT THE WHOLE PREVIOUS DRAFT. Serialising every node's full config
+ * would also close it, and it is the worse trade on three counts:
+ *   · COST — the observed builds are 13–26 nodes; their configs run to thousands of
+ *     tokens, on the most expensive tier, inside the SAME `max_tokens` budget the
+ *     answer has to fit in (see GENERATE_MAX_TOKENS: running out of that room mid-JSON
+ *     is a live, documented failure that discards the entire pass).
+ *   · ANCHORING — handing the model back the draft it just produced invites it to
+ *     return the same thing. `generate` already has a guard for exactly that outcome
+ *     (`converger.regen_noop`); making the no-op MORE likely on the expensive path is
+ *     the wrong direction.
+ *   · PRECISION — a rebuild is worth running only when it is told something actionable.
+ *     "this step needs a sections list, and here is the list we computed" is a
+ *     correction a model can act on in one pass; a full spec dump is not a correction
+ *     at all.
+ * So we carry the REPAIRS: what was wrong, in the validator's own words, and the exact
+ * value now sitting in the draft — which is bounded by the number of things that were
+ * actually broken, not by the size of the workflow.
+ */
+function repairsBlock(repairs, draft) {
+  const list = (repairs ?? []).filter(Boolean);
+  if (!list.length) return '';
+  const byId = new Map(((draft?.nodes) ?? []).map(n => [n.id, n]));
+  const lines = [];
+  for (const r of list) {
+    const why = r.message ? ` — it was rejected for: ${r.message}` : '';
+    if (r.op === 'set_config' && r.nodeId) {
+      const node = byId.get(r.nodeId);
+      const cfg  = node ? JSON.stringify(node.config ?? {}, null, 2) : null;
+      lines.push(`- "${r.nodeId}"${why}\n  Its config is now, and must come back as:\n${(cfg ?? '{}').split('\n').map(l => `  ${l}`).join('\n')}`);
+    } else if (r.op === 'add_edge') {
+      lines.push(`- the edge ${r.from} → ${r.to} was missing and has been added${why}. Emit it.`);
+    } else if (r.op === 'remove_edge') {
+      lines.push(`- the edge ${r.from} → ${r.to} was wrong and has been removed${why}. Do not emit it.`);
+    } else if (r.op === 'set_name') {
+      lines.push(`- the workflow had no name; it is now "${r.name}"${why}. Emit that name.`);
+    } else if (r.op === 'set_assertion_when') {
+      lines.push(`- a promise's condition was restated as "${r.when}"${why}. Build the route that satisfies it.`);
+    } else {
+      lines.push(`- ${r.code ?? 'a defect'} was repaired${why}.`);
+    }
+  }
+  return `
+ALREADY FIXED FOR YOU — DO NOT UNDO THIS. The last build left these blank or wrong and
+the system filled them in itself. The values below are CORRECT and are already in the
+workflow. Carry every one of them into this rebuild verbatim. Emitting them empty again
+is what makes this build loop: the repair fires, you cannot see it, and you write the
+same blank back.
+${lines.join('\n')}
+`;
+}
+
+/**
  * Ask the model for the COMPLETE spec in ONE structured JSON object —
  * `{ triggers, nodes, edges }` — instead of one component per round.
  *
@@ -797,7 +866,7 @@ category instead of the email. The plan says WHAT each step does; your grammar s
  * @param {{ intent, clarifications, outcome, draft, capabilities, setupResults }} args
  * @returns {string} the user-message prompt
  */
-export function buildGeneratePrompt({ intent, clarifications, outcome, draft, capabilities, setupResults, plan } = {}) {
+export function buildGeneratePrompt({ intent, clarifications, outcome, draft, capabilities, setupResults, plan, repairs } = {}) {
   const prior = (clarifications ?? []).map(({ q, a }) => `  Q: ${q}\n  A: ${a}`).join('\n');
   const contract = outcome ?? draft?.outcome ?? null;
   const existing = JSON.stringify({
@@ -813,6 +882,7 @@ INTENT: "${intent}"
 ${prior ? `\nCLARIFICATIONS:\n${prior}\n` : ''}${setupResultsSummary(setupResults)}${approvedPlanBlock(plan)}${outcomeBlock(contract)}
 ALREADY DERIVED (reuse these exact ids and triggers where present — do not contradict them):
 ${existing}
+${repairsBlock(repairs, draft)}
 
 A derived "deliver" step is a PLACEHOLDER for a promise, not a fixed part of the design: keep its id
 when a delivery is genuinely what that promise needs, but you may REPLACE it with a different step that
