@@ -302,8 +302,25 @@ describe('the sentence and the panel cannot disagree — both read `verdict`', (
       spec: SPEC, verdict: 'passed', outcomeResults: [asKept],
       laneCoverage: { applicable: true, total: 2, uncovered: [] },
     });
-    assert.match(s, /every promise it makes held/,
+    // RE-POINTED 2026-07-27, and STRENGTHENED rather than loosened. The property
+    // this test owns is "the sentence follows the field": move `verdict` and the
+    // sentence must move with it. It used to be checked by matching one literal
+    // phrase, "every promise it makes held". That phrase is now conditional — the
+    // pass sentence narrows its own claim to what the run could actually check,
+    // and names what it could not (run-summary.js `uncheckedTargets`), which is
+    // what stops the flagship approval shape from reading "every promise held"
+    // over a promise no example was able to look at.
+    //
+    // So the assertion is now on the PROPERTY, not the wording: this reads as a
+    // pass, cleared to go live — and, because every assertion on this fixture is
+    // a skip, it must ALSO name the gap rather than certify over it. Both halves
+    // must hold, so this pins strictly more than the single regex it replaces.
+    assert.match(s, /\bheld\b/,
       'a result the oracle calls kept must read as kept — the sentence follows the field, not a second rule');
+    assert.match(s, /It's cleared to go live/,
+      'and it must carry the pass stance, not merely the word "held"');
+    assert.match(s, /still unproved/,
+      'every assertion on this fixture is a skip, so the sentence must name what went unchecked instead of claiming every promise held');
   });
 
   test('a caller claiming more than the evidence supports is refused, not obeyed', () => {

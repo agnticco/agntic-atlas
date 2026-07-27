@@ -172,6 +172,37 @@ function skippedTargets(results, marks) {
 }
 
 /**
+ * Promises NO example in this run checked — aggregated across the whole set.
+ *
+ * A skipped assertion on ONE example is normally not a gap: a three-lane router's
+ * spam sample skips the delivery promise, and the normal sample proves it. What
+ * matters is a promise that *nothing* in the run ever enforced.
+ *
+ * That case became reachable on the flagship approval shape: the promise "ask
+ * charles@agntic.co on Slack" is kept by the approval step's QUESTION, and a test
+ * run answers that question itself rather than sending it, so no example can
+ * prove it (outcome-oracle.js, `approvalAskEvidence`). Without this clause the
+ * sentence read "every promise it makes held" over a promise nothing had looked
+ * at — the exact vacuous certification this module exists to refuse.
+ *
+ * It NAMES the gap; it does not re-decide the verdict. The stance is the panel's,
+ * read off the same `verdict` field, and a second opinion computed here is how
+ * two surfaces start to disagree.
+ */
+function uncheckedTargets(results) {
+  const proved = new Set();
+  const skipped = [];
+  results.forEach((o) => {
+    (o.contract || []).forEach(c => {
+      if (!c) return;
+      if (c.applicable === false) skipped.push(describeTarget(c.target));
+      else if (c.ok) proved.add(describeTarget(c.target));
+    });
+  });
+  return unique(skipped).filter(t => !proved.has(t));
+}
+
+/**
  * Compose the sentence a person reads in chat after pressing Run test.
  *
  * @param {object}   evidence
@@ -251,10 +282,14 @@ function failedSummary({ name, results, marks, total, broke, runError }) {
 }
 
 function passedSummary({ name, results, marks, total, kept }) {
-  const proven = provenTargets(results, marks);
+  const proven    = provenTargets(results, marks);
+  const unchecked = uncheckedTargets(results);
+  // NEVER "every promise held" over a promise nothing in the run looked at. The
+  // claim is narrowed to what was actually enforced, and the gap is named below.
+  const every = unchecked.length ? 'every promise it was able to check' : 'every promise it makes';
   const first = proven.length
-    ? `${ranClause(name, total)} and every promise it makes held — what came back reached ${listOf(proven)}.`
-    : `${ranClause(name, total)} and every promise it makes held.`;
+    ? `${ranClause(name, total)} and ${every} held — what came back reached ${listOf(proven)}.`
+    : `${ranClause(name, total)} and ${every} held.`;
 
   // A mixed run: some examples proved the promise, others took a path that does
   // not cover it. Their silence is reported AS silence, by name — never folded
@@ -268,7 +303,13 @@ function passedSummary({ name, results, marks, total, kept }) {
       } didn't exercise the promise, so ${quiet.length === 1 ? 'it proved' : 'they proved'} nothing either way.`
     : '';
 
-  return `${first}${middle} It's cleared to go live.`;
+  // The gap, named. Taken from the run's own contract entries — no example proved
+  // these, and saying so is the difference between a verification and a shrug.
+  const gap = unchecked.length
+    ? ` Nothing in this run could check ${listOf(unchecked)}, so that part is still unproved.`
+    : '';
+
+  return `${first}${middle}${gap} It's cleared to go live.`;
 }
 
 function unverifiedSummary({ name, results, marks, total, uncovered }) {
