@@ -37,6 +37,13 @@
  *      tests/api/chat-navigation-guard.test.js, including the ASYNC auth stub —
  *      see the note on it below, it is load-bearing.
  *
+ *   1b. THE SAME MECHANISM ON THE SECOND PATH (strong, behavioural; added
+ *      2026-07-27). The endpoint writes that `done` event in TWO places: the
+ *      ordinary one inside the tool-round loop, and the FORCED-FINAL one taken
+ *      when the model burns the whole tool budget without replying. Section 1
+ *      pinned only the first. See the long note above that section for why the
+ *      second is not hypothetical — it has fired for a real user.
+ *
  *   2. THE PROMPT RULE (weak, textual). Whether the model actually complies is a
  *      BELIEF about model behaviour and no test can prove it. Asserting on prompt
  *      text only stops the instruction being silently reverted — which is exactly
@@ -55,6 +62,7 @@ import http    from 'node:http';
 import express from 'express';
 
 import { mountBuilderRoutes, buildChatSystem } from '../../src/api/builder.js';
+import { CapabilityRegistry } from '../../src/connectors/capability-registry.js';
 
 // ── Harness ───────────────────────────────────────────────────────────────────
 
@@ -148,6 +156,26 @@ function bubbleTextFrom(events) {
   return text;
 }
 
+/**
+ * Replay the terminal `done` event through the CLIENT'S OWN button rule and return
+ * the Build it message a person would be looking at, or null if there isn't one.
+ *
+ * This mirrors `twTick` in public/index.html: on `done`, `if (twDone.readyToBuild)`
+ * it pushes `{ isCta:true, ctaAction:'build', buildIntent, btn:'Build it →' }` and
+ * the click handler calls `startBuild(buildIntent)`. Nothing else on the event can
+ * produce that button — there is no text parser for "yes"/"go ahead" anywhere in
+ * the client (a recorded decision), so the flag IS the button.
+ *
+ * Asserting on this rather than on the raw flag is the difference between "a field
+ * had the right value" and "the user has something to press".
+ */
+function clientBuildCtaFrom(events) {
+  const done = events.filter((e) => e.type === 'done').at(-1);
+  if (!done) return null;
+  if (!done.readyToBuild) return null;
+  return { isCta: true, ctaAction: 'build', buildIntent: done.buildIntent || null, btn: 'Build it →' };
+}
+
 // ── 1. THE MECHANISM: the flag that draws the button actually reaches the browser ──
 
 describe('POST /api/builder/chat — the turn that offers to build carries the Build it button', () => {
@@ -239,6 +267,244 @@ describe('POST /api/builder/chat — the turn that offers to build carries the B
     const { events } = await postChat(port, {
       messages: [{ role: 'user', content: 'go on then' }],
     });
+    const done = events.at(-1);
+    assert.equal(done.readyToBuild, true);
+    assert.equal(done.buildIntent, null);
+  });
+});
+
+// ── 1b. THE SAME MECHANISM ON THE QUIETER PATH: the forced final reply ────────
+
+/**
+ * There are TWO places a chat turn can end with the ready-to-build flag set, and
+ * until now only one of them was pinned.
+ *
+ *   ORDINARY PATH — the model produces its text reply inside the tool-round loop
+ *   (src/api/builder.js, the `sseWrite({type:'done'…})` at the end of the loop
+ *   body). Covered by the suite above.
+ *
+ *   FORCED-FINAL PATH — the model burns the whole tool-round budget
+ *   (`MAX_TOOL_ROUNDS`) without ever producing a text reply. Rather than dumping
+ *   an error on the user, the endpoint takes one more turn with tools DISABLED
+ *   ("You now have enough information. Do NOT call any more tools…") and ends the
+ *   turn from whatever comes back. It reads `ready_to_build`, normalises
+ *   `build_intent` and writes its own `done` event — a SECOND, independent copy of
+ *   the mechanism.
+ *
+ * This is the shape CLAUDE.md warns about in as many words: "a new control type is
+ * not done until it is in both sets — this exact line has been the defect three
+ * times." A fix applied to one copy and not the other is invisible until a user
+ * lands on the quiet one.
+ *
+ * AND IT IS NOT HYPOTHETICAL. Measured across all four memory/logs/atlas-events.log*
+ * files on 2026-07-27: `forcedFinal:true` appears on a real `chat.reply` line, once
+ * — 2026-07-15T12:31:44.826Z — the same day the path landed (601cb34). So a real
+ * user's turn HAS ended here. (That one carried readyToBuild:false, so the offer
+ * case on this path is unobserved; nothing here claims otherwise. Compare the
+ * envelope retry, which has fired zero times ever.)
+ *
+ * THIS SECTION ADDS NO BEHAVIOUR. It only pins what the forced-final path already
+ * does.
+ */
+
+/**
+ * A model that will not answer while it still has tools, exactly like the one that
+ * produced the real forced-final line: it calls a tool on every round until the
+ * endpoint takes the budget away, and only then replies.
+ *
+ * It decides which turn it is on from the endpoint's OWN forced-final instruction
+ * rather than by counting to six, so the guard does not quietly stop exercising the
+ * path if `MAX_TOOL_ROUNDS` is ever retuned.
+ */
+function fakeToolLoopLLM(replyText, { ready = false, buildIntent = null, toolName = 'slack_list_channels' } = {}) {
+  const envelope = JSON.stringify({
+    reply: replyText,
+    ready_to_build: ready,
+    build_intent: buildIntent,
+  });
+  const state = { streamCalls: 0, toolRounds: 0, forcedFinalSeen: false, toolsOnForcedTurn: null, toolsOnRounds: null };
+
+  const isForcedFinalTurn = (msgs) => {
+    const last = Array.isArray(msgs) ? msgs[msgs.length - 1] : null;
+    const content = typeof last?.content === 'string' ? last.content : '';
+    return content.includes('Do NOT call any more tools');
+  };
+
+  return {
+    _state: state,
+    invoke: async () => ({ content: envelope }),
+    async *stream(msgs, config) {
+      state.streamCalls++;
+      if (isForcedFinalTurn(msgs)) {
+        state.forcedFinalSeen = true;
+        state.toolsOnForcedTurn = Array.isArray(config?.tools) ? config.tools.length : 0;
+        // Same 7-character dribble as the other fake, so the endpoint's
+        // character-by-character envelope extractor runs for real here too.
+        for (let i = 0; i < envelope.length; i += 7) yield { content: envelope.slice(i, i + 7) };
+        return;
+      }
+      state.toolRounds++;
+      state.toolsOnRounds = Array.isArray(config?.tools) ? config.tools.length : 0;
+      // The shape a real Anthropic tool round yields: one summary chunk carrying
+      // toolCalls and no usable text. `id` is load-bearing — the executor pairs its
+      // ToolMessage result to it, and a missing one makes the next turn 400.
+      yield {
+        content: '',
+        additionalKwargs: {
+          toolCalls: [{ name: toolName, id: `call_${state.toolRounds}`, args: { query: 'order confirmation' } }],
+        },
+      };
+    },
+  };
+}
+
+describe('POST /api/builder/chat — a turn that ends on the FORCED-FINAL path still carries the button', () => {
+  let server, port, spine;
+
+  const OFFER_REPLY =
+    "I've had a look through the inbox — every order confirmation that lands there, " +
+    "I'll pull out the order number and the total and post a one-line summary into " +
+    '#orders. Want me to set this up?';
+  const BUILD_INTENT =
+    'When an email arrives in the connected inbox that looks like an order confirmation, ' +
+    'extract the order number and the total, and post a one-line summary to the Slack ' +
+    'channel #orders.';
+
+  before(async () => {
+    const app = express();
+    app.use(express.json());
+    // THIS HARNESS MUST CARRY REAL TOOLS, and that is not decoration.
+    //
+    // The forced-final path is only REACHABLE when the model has tools to burn the
+    // round budget on — a tool-less turn answers on round one every time. A fixture
+    // with an empty tool list would therefore be exercising a path production
+    // cannot take, and worse, it would make the "the forced turn is issued with
+    // tools DISABLED" assertion below unfalsifiable: with no tools anywhere, that
+    // turn is tool-less no matter what the endpoint does.
+    //
+    // So: the REAL CapabilityRegistry, a real read-only capability on a connected
+    // connector, and the credential path the executor actually walks
+    // (injectCapabilityCredentials → getSlackToken → cipher.decrypt), so the tool
+    // rounds run through the real executor with a real handler and no error branch.
+    const registry = new CapabilityRegistry();
+    registry.register({
+      id:          'slack_list_channels',
+      connector:   'slack',
+      name:        'List Slack channels',
+      description: 'List the channels the bot can see.',
+      positions:   ['step'],
+      effect:      'read',
+      configSchema: [{ key: 'query', label: 'Query', type: 'text' }],
+      isReady: () => true,
+      handle: async () => ({ channels: ['#orders', '#ops'] }),
+    });
+
+    spine = {
+      llm: fakeToolLoopLLM(''),
+      engine:   { capabilityRegistry: registry },
+      slack:    { resolveForTenant: async () => ({ connected: true }) },
+      google:   { resolveForTenant: async () => ({ connected: false }) },
+      airtable: { resolveForTenant: () => ({ connected: false }) },
+      auth: {
+        oauthTokenStore: { get: () => ({ access_token_enc: 'enc', scope: 'channels:read', account: 'acme' }) },
+        tokenCipher:     { decrypt: () => 'xoxb-test-token' },
+      },
+    };
+    mountBuilderRoutes(app, {
+      spine,
+      requireActiveTenant: tenantMiddleware,
+      requireAuth: tenantMiddleware,
+    });
+    await new Promise((r) => { server = app.listen(0, () => { port = server.address().port; r(); }); });
+  });
+
+  after(() => { try { server?.close(); } catch { /* ignore */ } });
+
+  test('flag SET on the forced final reply → the browser gets a drawable Build it button', async () => {
+    const llm = fakeToolLoopLLM(OFFER_REPLY, { ready: true, buildIntent: BUILD_INTENT });
+    spine.llm = llm;
+
+    const { status, events } = await postChat(port, {
+      messages: [{ role: 'user', content: 'Summarise my order confirmation emails into Slack' }],
+    }, { timeoutMs: 10000 });
+    assert.equal(status, 200);
+
+    // ── First prove we are on the path we think we are on ──────────────────────
+    // Without this, a model that simply answered on round one would pass every
+    // assertion below and the forced-final copy would still be pinned by nothing.
+    assert.ok(llm._state.toolRounds >= 2,
+      `the tool-round budget was never exhausted (${llm._state.toolRounds} round(s)) — this turn did not reach the forced-final path`);
+    assert.equal(llm._state.forcedFinalSeen, true,
+      'the endpoint never issued its tools-disabled final turn');
+    assert.ok(llm._state.toolsOnRounds > 0,
+      'the fixture handed the model no tools, so this turn could not have burned a tool budget the way production does');
+    assert.equal(llm._state.toolsOnForcedTurn, 0,
+      'the forced final turn was issued WITH tools — the model could start another round instead of answering');
+    const toolEvents = events.filter((e) => e.type === 'tool');
+    assert.equal(toolEvents.length, llm._state.toolRounds,
+      'the user was not shown one tool indicator per round the model actually took');
+
+    // ── Now the invariant ──────────────────────────────────────────────────────
+    const done = events.at(-1);
+    assert.equal(done?.type, 'done', 'the stream did not finish with a done event');
+    assert.equal(done.readyToBuild, true,
+      'the model said ready_to_build:true on the forced final reply and the browser was told false — no Build it button');
+    assert.equal(done.buildIntent, BUILD_INTENT,
+      'the build_intent was dropped on the forced-final path');
+
+    // What the person is actually looking at, by the client's own rule.
+    const cta = clientBuildCtaFrom(events);
+    assert.ok(cta, 'the reply reached the browser with nothing to press');
+    assert.equal(cta.btn, 'Build it →');
+    assert.equal(cta.buildIntent, BUILD_INTENT,
+      'the button is there but would start the build from a reconstruction instead of the intent Atlas wrote');
+
+    // The offer and the button are ONE act here too.
+    assert.equal(bubbleTextFrom(events), OFFER_REPLY);
+    assert.ok(bubbleTextFrom(events).includes('Want me to set this up?'),
+      'the offer sentence itself never reached the user');
+  });
+
+  test('flag CLEAR on the forced final reply → no button, and nothing to press', async () => {
+    // The anti-false-pass half. An endpoint hardwired to true on this path would
+    // put a Build it button under every tool-heavy turn that merely reported what
+    // it found.
+    const REPORT =
+      "I looked through the last week of mail and found 14 order confirmations. " +
+      'Which Slack channel should the summaries go to?';
+    const llm = fakeToolLoopLLM(REPORT, { ready: false });
+    spine.llm = llm;
+
+    const { status, events } = await postChat(port, {
+      messages: [{ role: 'user', content: 'Have a look at my order emails' }],
+    }, { timeoutMs: 10000 });
+    assert.equal(status, 200);
+
+    assert.ok(llm._state.toolRounds >= 2, 'this turn did not reach the forced-final path');
+    assert.equal(llm._state.forcedFinalSeen, true, 'the endpoint never issued its tools-disabled final turn');
+
+    const done = events.at(-1);
+    assert.equal(done?.type, 'done');
+    assert.equal(done.readyToBuild, false,
+      'a turn that only reported findings drew a Build it button');
+    assert.equal(done.buildIntent, null);
+    assert.equal(clientBuildCtaFrom(events), null,
+      'the client would draw a Build it button on a turn that never offered to build');
+    assert.equal(bubbleTextFrom(events), REPORT);
+  });
+
+  test('a blank build_intent on the forced final reply is reported as null, never as an empty string', async () => {
+    // The same normalisation the ordinary path has, in its second copy. An empty
+    // string is a truthy-looking absence that would be handed onward as the whole
+    // brief instead of letting startBuild() derive one from the conversation.
+    const llm = fakeToolLoopLLM('Want me to set this up?', { ready: true, buildIntent: '   ' });
+    spine.llm = llm;
+
+    const { events } = await postChat(port, {
+      messages: [{ role: 'user', content: 'go on then' }],
+    }, { timeoutMs: 10000 });
+
+    assert.equal(llm._state.forcedFinalSeen, true, 'this turn did not reach the forced-final path');
     const done = events.at(-1);
     assert.equal(done.readyToBuild, true);
     assert.equal(done.buildIntent, null);
