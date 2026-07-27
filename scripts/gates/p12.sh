@@ -29,6 +29,11 @@
 set -eu
 cd "$(git rev-parse --show-toplevel)"
 
+# THE GATE CANNOT SEND REAL EMAIL. Load-bearing here above all: increment D's
+# forgery check (scripts/checks/approval-adversarial.mjs, below) parks two runs on
+# a `human` node with an `email` approval channel and really does reach the mailer.
+. scripts/gates/_no-mail.sh
+
 fail() { echo "p12 FAIL: $*" >&2; exit 1; }
 
 # `next` = this increment is not built yet. Not a defect — the phase is simply
@@ -67,6 +72,9 @@ run_test() {
 # 0. REGRESSION — must hold at EVERY increment, not just at the end.
 #    §11.1–§11.5. These are the things v2 is forbidden to break.
 # ─────────────────────────────────────────────────────────────────────────────
+echo "p12: [regression] the gate cannot send real email..."
+run_test tests/gates/gate-cannot-send-mail.test.js "§11.0 no-mail lockout"
+
 echo "p12: [regression] P3 — converger still reproduces the frozen canonical spec..."
 bash scripts/gates/p3.sh >/tmp/p12-p3.log 2>&1 \
   || { tail -40 /tmp/p12-p3.log >&2; fail "§11.1 P3 regressed — the converger no longer reproduces docs/specs/canonical-ups-slack.json"; }
