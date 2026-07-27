@@ -420,7 +420,7 @@ function closeReasoningHub(threadId) {
 export { reasoningHubs, openReasoningHub, narrate, closeReasoningHub, REASONING_BUFFER_CAP };
 // `buildChatSystem` is exported for the same reason: the rule that a build OFFER must
 // carry the Build it button lives only in prompt text, so the only pin available for it
-// is an assertion on that text (same idiom as tests/converger/plan-provenance.test.js).
+// is an assertion on that text (same idiom as tests/converger/plan-grounding-prompt.test.js).
 export { buildChatSystem };
 
 function pubUser(u) {
@@ -1718,21 +1718,11 @@ Rules:
 
   // ── POST /api/builder/sessions ───────────────────────────────────────────────
   // Start a new converger session from a plain-language intent.
-  // Body: { intent: string, typedTurns?: string[] }
+  // Body: { intent: string }
   // Returns: { threadId, interrupt }
-  //
-  // `typedTurns` is WHAT THE CUSTOMER ACTUALLY TYPED — the chat turns they composed,
-  // verbatim. The plan card's "you said" mark is checked against it and nothing else
-  // (`src/converger/said-words.js`). It must NOT be confused with `intent`: `intent`
-  // is written by a MODEL (the chat prompt asks it to "write build_intent: one clear
-  // paragraph… folding in everything discussed"), so proving the model's plan against
-  // the model's own paraphrase would certify nothing. Absent or empty ⇒ the check
-  // certifies nothing and every line falls to the weaker mark, which is the honest
-  // outcome, not a degradation to be papered over.
   app.post('/api/builder/sessions', requireActiveTenant, async (req, res) => {
     const { intent } = req.body ?? {};
     if (!intent?.trim()) return res.status(400).json({ error: 'intent is required' });
-    const typedTurns = Array.isArray(req.body?.typedTurns) ? req.body.typedTurns : [];
 
     // Slow builds must not be cut by the proxy — see keepAlive() below.
     const alive = keepAlive(res);
@@ -1759,7 +1749,7 @@ Rules:
     // START the build; do not hold the request open for it. The graph can run for
     // minutes, and a socket is the wrong thing to hang that on — see `builds` above.
     startBuildJob(threadId, async () => {
-      await converger.run(threadId, intent, { typedTurns });
+      await converger.run(threadId, intent);
       return { type: 'done' };
     });
     logEvent('session.start', { tenant: req.tenant?.id ?? null, threadId, background: true });

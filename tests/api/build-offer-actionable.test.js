@@ -48,7 +48,7 @@
  *      BELIEF about model behaviour and no test can prove it. Asserting on prompt
  *      text only stops the instruction being silently reverted — which is exactly
  *      the failure that produced the QA finding. Same idiom as
- *      tests/converger/plan-provenance.test.js (the grounding prompt guard).
+ *      tests/converger/plan-grounding-prompt.test.js (the grounding prompt guard).
  *
  * DELIBERATELY NOT ASSERTED: that a user who answers "yes please" gets a button.
  * Every QA tester typed "build it" specifically; nobody ever tested a softer
