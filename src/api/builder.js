@@ -32,6 +32,9 @@ import {
   syncAirtableWebhooksForTenant, isAirtableRecordChangedTrigger, checkAirtableTriggersArmable,
 } from '../connectors/airtable/webhook-sync.js';
 import { sumTimeSavedMinutes, timeSavedMinutesForRun, isValueRun, isLiveRun } from '../workflows/time-saved.js';
+// The test-run sentence is COMPOSED from the run's evidence, never written by a
+// model. See the module header, and POST /api/builder/test-summary below.
+import { composeRunSummary } from '../workflows/run-summary.js';
 import { APP_VERSION } from '../version.js';
 import { notesSince } from '../release-notes.js';
 import { sendMail } from '../utils/mailer.js';
@@ -1432,67 +1435,52 @@ Rules:
   });
 
   // ── POST /api/builder/test-summary ──────────────────────────────────────────
-  // Generate a conversational summary of a completed test run for the chat UI.
-  // Body:    { spec, result: { completed, steps, deliveries, output, error } }
+  // The sentence a person reads in chat after pressing Run test.
+  //
+  // THIS NO LONGER ASKS A MODEL. It used to: it built a context string and told the
+  // model to "be specific — say what the workflow actually did". The only per-run
+  // material it handed over was `deliveries[0]` (from the LAST example of the
+  // sequence) and an output excerpt, so the model never learned which example,
+  // which lane, or that a sample's verdict was `not_exercised` — and it filled the
+  // gap. Live, after a PASSING test, it told a tester the workflow "classified it
+  // as spam, routed it to the correct path, and then summarized and delivered it to
+  // both the #ops channel and to charles@agntic.co as promised". Spam is the branch
+  // whose entire promise is to do NOTHING, and the panel two inches above said so.
+  //
+  // The operator's rule: the product does not describe its own run results in free
+  // prose. The sentence is COMPOSED, deterministically, from the same objects the
+  // panel renders — `outcomeResults` (each carrying the oracle's three-way
+  // `verdict`) and `laneCoverage` — so the two surfaces cannot disagree. The
+  // composer is a pure module so the sentence itself can be asserted; see
+  // src/workflows/run-summary.js for why it is not a closure in here.
+  //
+  // Body:    { spec, result: { verdict, completed, outcomeResults, laneCoverage, error } }
   // Returns: { summary }
-  app.post('/api/builder/test-summary', requireActiveTenant, async (req, res) => {
+  app.post('/api/builder/test-summary', requireActiveTenant, (req, res) => {
     const { spec, result } = req.body ?? {};
     if (!spec || !result) return res.status(400).json({ error: 'spec and result are required' });
     try {
-      const llm = spine.llm;
-      if (!llm?.invoke) return res.status(503).json({ error: 'LLM unavailable' });
-      const summarySessionId = `test-summary-${req.user?.id ?? 'anon'}-${Date.now()}`;
-      spine.costTracker?.setSessionUser?.(summarySessionId, req.user?.id);
-
-      const name = spec.name || 'this workflow';
-      const triggerLabel = ((spec.triggers || [])[0]?.label) || ((spec.triggers || [])[0]?.type) || 'trigger';
-      const nodeList = (spec.nodes || []).map(n => `${n.label || n.type} (${n.type})`).join(' → ');
-      const { completed, steps = [], deliveries = [], output, error, uncoveredLanes = [] } = result;
-
-      // THREE OUTCOMES, NOT TWO. A run can pass, break, or run cleanly while proving
-      // nothing (an untaken lane, no worked examples). This was a boolean, so the
-      // third case arrived as FAILED with no error attached — and the prompt below
-      // asks for "what went wrong", so the model invented a cause, twice, in one
-      // message, directly under a panel saying nothing had broken.
       // Older clients send no `verdict`; fall back to the boolean so they still work.
-      const verdict = result.verdict ?? (completed ? 'passed' : 'failed');
+      // The composer weakens this against the evidence anyway — it can never claim
+      // more than the run's own results support.
+      const verdict = result.verdict ?? (result.completed ? 'passed' : 'failed');
+      const summary = composeRunSummary({
+        spec,
+        verdict,
+        outcomeResults: result.outcomeResults,
+        laneCoverage:   result.laneCoverage,
+        // Attached for the failed stance only, inside the composer. Deliberately
+        // the ONLY run-level field passed: `steps`, `deliveries` and `output` are
+        // not handed over at all, so no sentence can narrate one example's
+        // delivery as the whole run's.
+        runError: result.error,
+      });
 
-      let ctx = `Workflow: "${name}"\nTrigger: ${triggerLabel}\nNodes: ${nodeList}\nResult: ${
-        verdict === 'passed'     ? 'ALL STEPS PASSED AND THE WORKFLOW KEPT ITS PROMISES'
-      : verdict === 'unverified' ? 'RAN CLEANLY — NOTHING BROKE — BUT THE TEST DID NOT PROVE THE WORKFLOW WORKS'
-                                 : 'FAILED'}`;
-      if (verdict === 'unverified') {
-        ctx += uncoveredLanes.length
-          ? `\nWhy it proved nothing: the sample runs never went down these paths: ${uncoveredLanes.join(', ')}. A workflow that routes is only proved on the routes actually tested.`
-          : `\nWhy it proved nothing: there was no worked example to check the workflow's promises against.`;
-      }
-      if (deliveries.length > 0) {
-        const d = deliveries[0];
-        ctx += `\nDelivery: message sent to ${d.channel || 'the destination channel'}${d.ts ? ' ✓' : ''}`;
-      }
-      if (output && typeof output === 'string')   ctx += `\nOutput excerpt: ${output.slice(0, 350)}`;
-      if (output && typeof output === 'object')   ctx += `\nOutput: ${JSON.stringify(output).slice(0, 350)}`;
-      if (verdict === 'failed' && error)          ctx += `\nError: ${String(error).slice(0, 250)}`;
-      if (verdict === 'failed' && steps.length > 0) ctx += `\nCompleted ${steps.length} step(s) before failure`;
-
-      // The last rule is load-bearing. Without it the model is asked to explain a
-      // failure that did not occur, and it complies — inventing a broken step, and
-      // contradicting the panel the user is looking at while it does so.
-      const SYSTEM = `You are Atlas, an AI workflow assistant. The user just ran a test of their workflow. Write a 2-3 sentence summary of what happened, in plain language a non-technical person would understand. Be specific — say what the workflow actually did (or what broke), not just "the test passed/failed". Don't use quotes around the workflow name. If it passed, be warm and specific. If it failed, be clear about what went wrong.
-
-CRITICAL: if the result says the run did NOT prove the workflow works, then NOTHING WENT WRONG. Do not say it failed, do not say a step broke, timed out, was rejected or was cut off, and do not speculate about a cause — there is no failure to explain. Say plainly that the workflow ran without errors but the test could not confirm it does what it promises, and give the reason stated in the result. Suggest testing the paths that were not covered.`;
-
-      const raw = await withLLMRetry(() => llm.invoke(
-        [{ role: 'system', content: SYSTEM }, { role: 'user', content: `Summarize this test run:\n\n${ctx}` }],
-        { configurable: { modelTier: 'fast', sessionId: summarySessionId, costContext: 'chat.test-summary' } },
-      ));
-      const summary = (typeof raw === 'string' ? raw : raw?.content ?? '').trim();
-
-      logEvent('test.summary', { tenant: req.tenant?.id ?? null, completed, verdict, chars: summary.length });
+      logEvent('test.summary', { tenant: req.tenant?.id ?? null, verdict, chars: summary.length });
       return res.json({ summary });
     } catch (err) {
       logEvent('test.summary.error', { tenant: req.tenant?.id ?? null, ...errFields(err) });
-      res.status(500).json({ error: cleanLLMError(err) });
+      res.status(500).json({ error: err?.message ?? String(err) });
     }
   });
   // ── CAPABILITIES, IN ONE PLACE ─────────────────────────────────────────────
