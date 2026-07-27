@@ -75,8 +75,29 @@ mentioning two of the three has already lost.
 
 **Must** show: the trigger; every step in order; a **Routes to** section listing
 every path *including* the catch-all Atlas inferred; a failure policy; and a
-**"you said this" / "I inferred this"** mark on each line. That provenance mark is
+**"you said" / "I found" / "I inferred"** mark on each line. That provenance mark is
 load-bearing — it is how a non-technical person knows what to check.
+
+**The marking is WORD BY WORD, not one badge per line (2026-07-27).** A single
+sentence can mix something the user typed with something Atlas chose — *"runs every
+morning at 8:00 AM"* when they said "every morning" and never named a time — and one
+badge per line could only ever carry the stronger claim. So **the user's own words
+are highlighted inside the line** (brighter, on a faint plate) and the rest takes the
+line's own colour. Atlas checks this mechanically against what the customer actually
+typed, and **a line whose content they did not type loses its "you said" mark
+entirely.** A legend above the card says so in words.
+
+**To test it:** say something deliberately vague ("send me a digest every morning")
+and let Atlas fill in the specifics. On the plan card, **only the words you actually
+typed may be highlighted.** Three things are findings, every time:
+
+- a whole line marked **you said** that you never said — the top defect this
+  replaces, seen on three builds;
+- a specific Atlas chose (a time, a mailbox name, "unread", a channel) highlighted
+  as **your** words;
+- the opposite failure — **nothing at all highlighted on a plan you gave plenty of
+  detail for.** A screen that always warns is a screen nobody reads, so an
+  all-amber card is as much a finding as a falsely confident one.
 
 Then **Approve & build** or **Request a change**.
 

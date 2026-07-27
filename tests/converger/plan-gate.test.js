@@ -33,6 +33,14 @@ const CAPS = () => ({
   slackChannels: ['ops', 'general'],
 });
 
+// WHAT THE CUSTOMER TYPED. Re-pointed 2026-07-27, NOT weakened: the plan node now
+// checks every "you said" against the customer's own words (`said-words.js`), and
+// `builder.js` posts them with the build — so a harness that omitted them would be
+// driving a program nobody runs, and every `stated` line below would (correctly)
+// arrive demoted. Supplying them makes these assertions STRICTER than before: the
+// trigger and step lines keep their mark only because these words were really typed.
+const TYPED = ['when a new email arrives in my Gmail, summarize the email into my inbox'];
+
 // A stub model that builds a simple linear email → summarize → inbox workflow, and —
 // crucially — answers the PLAN projection prompt with a real, confidence-tagged plan.
 const PLAN = {
@@ -73,7 +81,7 @@ function makeLLM({ planResponse } = {}) {
 }
 
 /** Drive the loop; collect every interrupt seen. `onPlan` picks the reply to plan_review. */
-async function drive({ llm, onPlan = () => ({ type: 'accept' }) }) {
+async function drive({ llm, onPlan = () => ({ type: 'accept' }), typedTurns = TYPED }) {
   const conv = createConverger({ llm, capabilities: CAPS(), invokeCapability: null, checkpointerDir: scratch() });
   const seen = [];
   const replyFor = (iv) => {
@@ -88,7 +96,7 @@ async function drive({ llm, onPlan = () => ({ type: 'accept' }) }) {
   };
 
   let iv;
-  try { await conv.run('g1', 'summarize my emails to my inbox'); iv = { type: 'done' }; }
+  try { await conv.run('g1', 'summarize my emails to my inbox', { typedTurns }); iv = { type: 'done' }; }
   catch (err) { iv = err.interruptValue ?? err; }
   for (let i = 0; i < 60 && iv?.type !== 'done'; i++) {
     seen.push(iv);
@@ -107,6 +115,14 @@ describe('the plan gate fires once, before the build, and does not block it', ()
     assert.equal(planIv.plan.trigger.confidence, 'stated');
     assert.equal(planIv.plan.steps[0].confidence, 'stated');
     assert.equal(planIv.plan.error_handling.confidence, 'inferred');
+    // …and it says "you said" only because the customer's words back it. Drop the
+    // typed turns and the same plan must lose the claim about them. This is the half
+    // the confidence-set clamp could never see: the LABEL was always well formed.
+    let unbacked = null;
+    await drive({ llm: makeLLM(), typedTurns: [], onPlan: (iv) => { unbacked = iv; return { type: 'accept' }; } });
+    assert.equal(unbacked.plan.trigger.confidence, 'inferred',
+      'with no record of what the customer typed, no line may be shown as their words');
+    assert.equal(unbacked.plan.steps[0].confidence, 'inferred');
     // Every interrupt carries a default so Enter is always valid (§11.9).
     assert.ok(Array.isArray(planIv.choices) && planIv.choices.some(c => c.selected),
       'the plan interrupt must carry a pre-selected default choice');

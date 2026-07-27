@@ -447,7 +447,14 @@
                   <div style="flex:none;width:32px;height:32px"></div>
                   <div style="min-width:0;flex:1">
                     <div style="font-size:15px;line-height:1.5;color:#fff;font-weight:500">Before I build, here's the plan — approve it and I'll get started.</div>
-                    <div style="font-size:13px;line-height:1.55;color:rgba(255,255,255,.5);margin-top:6px;max-width:56ch">The amber items are things I filled in — worth a glance.</div>
+                    <!-- THE LEGEND. It has to describe what is actually on the screen.
+                         "The amber items are things I filled in" was item-scoped and went
+                         wrong the moment the marks became word-level: a single line now
+                         carries both the customer's words and Atlas's. The wording is
+                         DATA, not a fixed string, because when the words-you-typed check
+                         did not run the highlight means nothing and the legend must not
+                         claim it does. -->
+                    <div style="font-size:13px;line-height:1.55;color:rgba(255,255,255,.5);margin-top:6px;max-width:56ch">{{ item.legend }}</div>
 
                     <div style="margin-top:14px;border:1px solid rgba(127,194,138,.3);border-radius:18px;overflow:hidden;background:#0A0A0A;box-shadow:0 0 0 1px rgba(127,194,138,.08)">
                       <div style="background-image:radial-gradient(rgba(255,255,255,.05) 1px,transparent 1px);background-size:16px 16px;padding:30px 30px 26px">
@@ -469,14 +476,14 @@
                           <!-- TRIGGER -->
                           <div style="display:flex;gap:18px;align-items:baseline;padding:15px 0;border-top:1px solid rgba(255,255,255,.1)">
                             <div style="flex:none;width:96px;font-family:ui-monospace,monospace;font-size:9px;font-weight:700;letter-spacing:.16em;color:rgba(255,255,255,.4)">TRIGGER</div>
-                            <div style="flex:1;font-size:14px;line-height:1.55;color:rgba(255,255,255,.86)">{{ item.trigger.text }}<span style="{{ item.trigger.chip.style }}"><span style="{{ item.trigger.chip.dotStyle }}"></span>{{ item.trigger.chip.label }}</span></div>
+                            <div style="flex:1;font-size:14px;line-height:1.55;color:rgba(255,255,255,.86)"><sc-for list="{{ item.trigger.spans }}" as="sp" hint-placeholder-count="1"><span style="{{ sp.style }}">{{ sp.text }}</span></sc-for><span style="{{ item.trigger.chip.style }}"><span style="{{ item.trigger.chip.dotStyle }}"></span>{{ item.trigger.chip.label }}</span></div>
                           </div>
                           <!-- PROCEDURE -->
                           <div style="display:flex;gap:18px;align-items:flex-start;padding:15px 0;border-top:1px solid rgba(255,255,255,.1)">
                             <div style="flex:none;width:96px;font-family:ui-monospace,monospace;font-size:9px;font-weight:700;letter-spacing:.16em;color:rgba(255,255,255,.4);padding-top:1px">PROCEDURE</div>
                             <div style="flex:1;display:flex;flex-direction:column;gap:10px">
                               <sc-for list="{{ item.steps }}" as="st" hint-placeholder-count="2">
-                                <div style="font-size:14px;line-height:1.55;color:rgba(255,255,255,.86)"><span style="font-family:ui-monospace,monospace;color:rgba(255,255,255,.35);font-size:11px;margin-right:9px">{{ st.idx }}</span>{{ st.text }}<span style="{{ st.chip.style }}"><span style="{{ st.chip.dotStyle }}"></span>{{ st.chip.label }}</span></div>
+                                <div style="font-size:14px;line-height:1.55;color:rgba(255,255,255,.86)"><span style="font-family:ui-monospace,monospace;color:rgba(255,255,255,.35);font-size:11px;margin-right:9px">{{ st.idx }}</span><sc-for list="{{ st.spans }}" as="sp" hint-placeholder-count="1"><span style="{{ sp.style }}">{{ sp.text }}</span></sc-for><span style="{{ st.chip.style }}"><span style="{{ st.chip.dotStyle }}"></span>{{ st.chip.label }}</span></div>
                               </sc-for>
                             </div>
                           </div>
@@ -486,7 +493,7 @@
                               <div style="flex:none;width:96px;font-family:ui-monospace,monospace;font-size:9px;font-weight:700;letter-spacing:.16em;color:rgba(255,255,255,.4);padding-top:1px">ROUTES TO</div>
                               <div style="flex:1;display:flex;flex-direction:column;gap:9px">
                                 <sc-for list="{{ item.branches }}" as="br" hint-placeholder-count="2">
-                                  <div style="font-size:14px;line-height:1.5;color:rgba(255,255,255,.86)"><span style="font-family:'Instrument Serif',Georgia,serif;font-style:italic;color:#efc892;margin-right:8px">{{ br.when }}</span>{{ br.then }}<span style="{{ br.chip.style }}"><span style="{{ br.chip.dotStyle }}"></span>{{ br.chip.label }}</span></div>
+                                  <div style="font-size:14px;line-height:1.5;color:rgba(255,255,255,.86)"><span style="font-family:'Instrument Serif',Georgia,serif;font-style:italic;margin-right:8px"><sc-for list="{{ br.whenSpans }}" as="wp" hint-placeholder-count="1"><span style="{{ wp.style }}">{{ wp.text }}</span></sc-for></span><sc-for list="{{ br.thenSpans }}" as="sp" hint-placeholder-count="1"><span style="{{ sp.style }}">{{ sp.text }}</span></sc-for><span style="{{ br.chip.style }}"><span style="{{ br.chip.dotStyle }}"></span>{{ br.chip.label }}</span></div>
                                 </sc-for>
                               </div>
                             </div>
@@ -495,7 +502,7 @@
                           <sc-if value="{{ item.hasError }}" hint-placeholder-val="{{ false }}">
                             <div style="display:flex;gap:18px;align-items:baseline;padding:15px 0;border-top:1px solid rgba(255,255,255,.1);border-bottom:1px solid rgba(255,255,255,.1)">
                               <div style="flex:none;width:96px;font-family:ui-monospace,monospace;font-size:9px;font-weight:700;letter-spacing:.16em;color:rgba(231,178,94,.7)">ON FAILURE</div>
-                              <div style="flex:1;font-size:14px;line-height:1.55;color:rgba(255,255,255,.86)">{{ item.errorText }}<span style="{{ item.errorChip.style }}"><span style="{{ item.errorChip.dotStyle }}"></span>{{ item.errorChip.label }}</span></div>
+                              <div style="flex:1;font-size:14px;line-height:1.55;color:rgba(255,255,255,.86)"><sc-for list="{{ item.errorSpans }}" as="sp" hint-placeholder-count="1"><span style="{{ sp.style }}">{{ sp.text }}</span></sc-for><span style="{{ item.errorChip.style }}"><span style="{{ item.errorChip.dotStyle }}"></span>{{ item.errorChip.label }}</span></div>
                             </div>
                           </sc-if>
                         </div>
@@ -2627,6 +2634,62 @@ function planProvenanceLabel(conf) {
   if (conf === "stated") return "you said";
   if (conf === "found")  return "I found";
   return "I inferred";
+}
+
+/**
+ * DID THE WORDS-THE-CUSTOMER-TYPED CHECK ACTUALLY RUN ON THIS PLAN?
+ *
+ * The server sets this when it has matched every line against what the customer typed
+ * (`src/converger/said-words.js`, applied in the `plan` node). A plan without it has
+ * been checked by NOTHING — an old persisted slice, a build started before this
+ * shipped, a future caller that forgot. That is not a reason to trust the model's own
+ * label; it is a reason to distrust it, so `stated` falls to the weaker mark below.
+ */
+function planSaidChecked(plan) {
+  return !!(plan && plan.saidWordsChecked === true);
+}
+
+/**
+ * THE MARK A LINE MAY ACTUALLY BE SHOWN WITH — the browser's own second line.
+ *
+ * The demotion already happened server-side, which is what stops a client that never
+ * ran from receiving an unverified strong claim. This is the mirror of that, applied
+ * again here on purpose (the same reasoning as `planProvenanceLabel` mirroring
+ * `coercePlanConfidence`): if nothing proved the claim, Atlas does not make it.
+ * "You said" is a claim ABOUT THE USER and it fails toward the WEAKER claim.
+ */
+function planSaidConfidence(item, checked) {
+  var conf = (item && item.confidence) || "";
+  if (conf === "stated" && !checked) return "inferred";
+  return conf;
+}
+
+/**
+ * ONE PLAN LINE, SPLIT INTO THE CUSTOMER'S WORDS AND EVERYTHING ELSE.
+ *
+ * Provenance used to be one badge per line, but a line bundling "every morning" (which
+ * the tester said) with "at 8:00 AM" (which Atlas chose) can carry only one mark and
+ * carried the stronger one. The spans are derived SERVER-SIDE from what the customer
+ * typed and rendered here; this function is where the client refuses to overstate them.
+ *
+ * FAILS CLOSED, three ways — each returns the whole line as NOT the customer's:
+ *   · the check did not run on this plan;
+ *   · the spans are missing or are not a list;
+ *   · the spans do not reconstruct the line exactly. That last one matters: a payload
+ *     whose pieces do not add back up to the sentence could otherwise drop or invent
+ *     words on screen while still looking marked-up.
+ */
+function planSaidSpans(item, textField, spanField, checked) {
+  var raw = (item && typeof item[textField] === "string") ? item[textField] : "";
+  if (!raw) return [];
+  var spans = (item && Array.isArray(item[spanField])) ? item[spanField] : null;
+  if (!checked || !spans || !spans.length) return [{ text: raw, said: false }];
+  var joined = "";
+  for (var i = 0; i < spans.length; i++) {
+    joined += (spans[i] && typeof spans[i].text === "string") ? spans[i].text : "";
+  }
+  if (joined !== raw) return [{ text: raw, said: false }];
+  return spans.map(function (s) { return { text: s.text, said: s.said === true }; });
 }
 
 const TUTORIAL_SLIDES = [
@@ -4869,7 +4932,7 @@ class Component extends DCLogic {
       // not fall into generic chat — which would wrongly refuse ("I can't edit an
       // already-running workflow"). Route it to the spec-based editor (S7-10/S7-12).
       if (!S.threadId && S.spec && Array.isArray(S.spec.nodes) && S.spec.nodes.length) {
-        this.setState({ msgs: [...S.msgs, { isOperator: true, text: t }], inputValue: "", thinking: true, phase: "building", testState: "idle", runStepIndex: 0, runSteps: [], failIndex: -1 });
+        this.setState({ msgs: [...S.msgs, { isOperator: true, text: t, typed: true }], inputValue: "", thinking: true, phase: "building", testState: "idle", runStepIndex: 0, runSteps: [], failIndex: -1 });
         this._applyEditChange(t);
         return;
       }
@@ -4877,7 +4940,7 @@ class Component extends DCLogic {
       return;
     }
     if (S.inputMode === "clarify") {
-      this.setState({ msgs: [...S.msgs, { isOperator: true, text: t }], inputValue: "", thinking: true, inputMode: "locked" });
+      this.setState({ msgs: [...S.msgs, { isOperator: true, text: t, typed: true }], inputValue: "", thinking: true, inputMode: "locked" });
       this._send({ type: "clarification", answer: t });
       return;
     }
@@ -4885,12 +4948,12 @@ class Component extends DCLogic {
     // The plan node folds it in as a clarification and re-shows the plan (bounded), so
     // the user iterates on the plan CHEAPLY, before the expensive build.
     if (S.inputMode === "planchange") {
-      this.setState({ msgs: [...S.msgs, { isOperator: true, text: t }], inputValue: "", thinking: true, inputMode: "locked", phase: "building" });
+      this.setState({ msgs: [...S.msgs, { isOperator: true, text: t, typed: true }], inputValue: "", thinking: true, inputMode: "locked", phase: "building" });
       this._send({ type: "change", text: t });
       return;
     }
     if (S.inputMode === "change") {
-      this.setState({ msgs: [...S.msgs, { isOperator: true, text: t }], inputValue: "", thinking: true, inputMode: "locked", phase: "building", testState: "idle", runStepIndex: 0, runSteps: [], failIndex: -1 });
+      this.setState({ msgs: [...S.msgs, { isOperator: true, text: t, typed: true }], inputValue: "", thinking: true, inputMode: "locked", phase: "building", testState: "idle", runStepIndex: 0, runSteps: [], failIndex: -1 });
       if (!S.threadId) { this._applyEditChange(t); return; }
       this._send({ type: "request_changes", feedback: t });
       return;
@@ -4913,7 +4976,13 @@ class Component extends DCLogic {
     const gen = (this._chatGen = (this._chatGen || 0) + 1); // this turn's generation
     const ac = new AbortController();
     this._chatAbort = ac;
-    const msgs = [...this.state.msgs, { isOperator: true, text: t }];
+    // `typed: true` = these are the customer's OWN KEYSTROKES. It is not decoration:
+    // `_typedTurns()` sends exactly these to the build, and the plan card's "you said"
+    // mark is proved against them. `isOperator` alone will NOT do — several messages
+    // wear the user's avatar but were composed by Atlas and merely clicked ("Build
+    // it", "Skip this setup step.", a suggested clarification chip). Letting those in
+    // would have Atlas certifying its own words as the customer's.
+    const msgs = [...this.state.msgs, { isOperator: true, text: t, typed: true }];
     this.setState({ msgs, inputValue: "", thinking: true, mentionOpen: false });
     const history = msgs.map(m =>
       m.isOperator ? { role: "user", content: m.text } : (m.isAtlas ? { role: "assistant", content: m.text } : null)).filter(Boolean);
@@ -5162,7 +5231,7 @@ class Component extends DCLogic {
     // The build no longer lives in this request. The POST starts it and returns a
     // thread id; the work happens on the server and we poll. A closed tab, a refresh,
     // a locked phone or a deploy no longer takes the build with it.
-    fetch("/api/builder/sessions", { method: "POST", headers: this._H(), body: JSON.stringify({ intent: intent, workflowId: this.state.workflowId || null }) })
+    fetch("/api/builder/sessions", { method: "POST", headers: this._H(), body: JSON.stringify({ intent: intent, typedTurns: this._typedTurns(), workflowId: this.state.workflowId || null }) })
       .then(r => this._readJson(r))
       .then(r => {
         if (!r.ok || (r.data && r.data.error)) return self._apiError(r.data.error);
@@ -5182,6 +5251,25 @@ class Component extends DCLogic {
   _deriveBuildIntent() {
     const ops = (this.state.msgs || []).filter(m => m.isOperator && m.text).map(m => m.text.trim()).filter(Boolean);
     return ops.length ? ops.join("\n") : "Build the workflow we just discussed.";
+  }
+
+  // WHAT THE CUSTOMER ACTUALLY TYPED, verbatim — sent with the build so the plan card
+  // can prove its "you said" marks against it (src/converger/said-words.js). The
+  // browser is the only place these exist: nothing server-side stores the chat turns,
+  // and `intent` is a MODEL's paraphrase of them, so checking a model-written plan
+  // against it would prove nothing.
+  //
+  // `typed === true`, NOT `isOperator`. A message wearing the user's avatar is not the
+  // same as a message the user wrote: "Build it", "Skip this setup step.", "Not this —
+  // show me another option." and every suggested clarification chip are Atlas's own
+  // sentences, appended when a BUTTON was pressed. Admitting them would let Atlas
+  // certify its own words as the customer's — the laundering hop this check exists to
+  // close. An allowlist by construction: anything not positively marked as typed is
+  // simply absent, and absence means "not proved", which demotes.
+  _typedTurns() {
+    return (this.state.msgs || [])
+      .filter(m => m && m.typed === true && m.isOperator === true && typeof m.text === "string" && m.text.trim())
+      .map(m => m.text.trim());
   }
 
   _send(resp) {
@@ -5491,9 +5579,28 @@ class Component extends DCLogic {
     // zero-typing safe default); a typed change folds a correction back in. The
     // `you said / I found / I inferred` chips direct attention to exactly what
     // Atlas inferred, so the eye goes to the guesses, not the whole card.
+    //
+    // WORD BY WORD (2026-07-27). The chip is a summary of the line and stays, but the
+    // truth is now marked on the WORDS: the customer's own words are highlighted as
+    // theirs and everything else takes the line's own colour, because a sentence
+    // bundling "every morning" (said) with "at 8:00 AM" (Atlas's choice) can carry
+    // only one chip and used to carry the stronger one. The spans come from the
+    // server, which matched the line against what the customer actually typed; this
+    // renderer only colours them, and refuses to mark anything when they are absent.
     if (iv.type === "plan_review") {
       const self = this;
       const p = iv.plan || {};
+      const saidChecked = planSaidChecked(p);
+      // The customer's own words: brighter, weighted, on a faint plate — the ONE thing
+      // on this card that makes a claim about them, so it is the one thing that looks
+      // quoted. Everything else takes the colour of the line's own mark, so an amber
+      // line reads "these are the words I filled in" at a glance.
+      const SAID_STYLE = "color:rgba(255,255,255,.97);font-weight:600;background:rgba(255,255,255,.10);border-radius:3px;padding:0 2px;box-decoration-break:clone;-webkit-box-decoration-break:clone";
+      const restStyle  = (conf) => (conf === "found" ? "color:#7fd6a0" : conf === "stated" ? "color:rgba(255,255,255,.86)" : "color:#f3cd86");
+      // One plan line → the list of coloured pieces the template renders in order.
+      const lineSpans = (item, textField, spanField, conf) =>
+        planSaidSpans(item, textField, spanField, saidChecked)
+          .map((s) => ({ text: s.text, style: s.said ? SAID_STYLE : restStyle(conf) }));
       const CHIP_BASE = "display:inline-flex;align-items:center;gap:5px;margin-left:8px;padding:1.5px 8px;border-radius:999px;font-size:10px;font-weight:600;letter-spacing:.02em;font-family:ui-monospace,SFMono-Regular,monospace;text-transform:uppercase;white-space:nowrap;vertical-align:middle;";
       const DOT = "width:6px;height:6px;border-radius:50%;flex:none;";
       // The label decides the colour, and `planProvenanceLabel` decides the label —
@@ -5506,8 +5613,22 @@ class Component extends DCLogic {
         return                           { label, style: CHIP_BASE + "background:rgba(231,178,94,.1);color:#f3cd86;border:1px dashed rgba(231,178,94,.5)", dotStyle: DOT + "background:#e7b25e" };
       };
       // Procedure steps are numbered 01, 02, … in the SOP (design system).
-      const steps     = (p.steps || []).map((s, i) => ({ idx: String(i + 1).padStart(2, "0"), text: s.text || "", chip: chip(s.confidence) }));
-      const branches  = (p.branches || []).filter(b => b && (b.when || b.then)).map((b) => ({ when: b.when || "otherwise", then: b.then || "", chip: chip(b.confidence) }));
+      const steps     = (p.steps || []).map((s, i) => {
+        const conf = planSaidConfidence(s, saidChecked);
+        return { idx: String(i + 1).padStart(2, "0"), text: s.text || "", spans: lineSpans(s, "text", "spans", conf), chip: chip(conf) };
+      });
+      const branches  = (p.branches || []).filter(b => b && (b.when || b.then)).map((b) => {
+        const conf = planSaidConfidence(b, saidChecked);
+        return {
+          when: b.when || "otherwise", then: b.then || "",
+          // A branch is two pieces of prose and each is marked on its own; the "when"
+          // keeps its italic serif treatment, so only its non-said words take the mark.
+          whenSpans: planSaidSpans(b, "when", "whenSpans", saidChecked)
+            .map((s) => ({ text: s.text, style: s.said ? SAID_STYLE : "color:#efc892" })),
+          thenSpans: lineSpans(b, "then", "thenSpans", conf),
+          chip: chip(conf),
+        };
+      });
       // The SOP title — a short serif headline. Use the workflow name the plan derived,
       // else fall back to a trimmed summary. The trailing word is italicised amber in the
       // template, so split off the last word for that accent.
@@ -5551,12 +5672,22 @@ class Component extends DCLogic {
           summary: p.summary || (p.trigger && p.trigger.text) || "Here's the plan.",
           titleHead, titleAccent,
           stamp,
-          trigger: { text: (p.trigger && p.trigger.text) || "", chip: chip(p.trigger && p.trigger.confidence) },
+          // Describes what the reader can actually see. When the check did not run,
+          // nothing on the card is marked as theirs and the legend says exactly that
+          // rather than pointing at a highlight that is not there.
+          legend: saidChecked
+            ? "Your own words are highlighted. Everything in amber is something I filled in — worth a glance."
+            : "I could not check this against what you typed, so nothing here is marked as your words. Everything in amber is something I filled in — worth a glance.",
+          trigger: (() => {
+            const tConf = planSaidConfidence(p.trigger, saidChecked);
+            return { text: (p.trigger && p.trigger.text) || "", spans: lineSpans(p.trigger, "text", "spans", tConf), chip: chip(tConf) };
+          })(),
           steps,
           hasBranches: branches.length > 0, branches,
           hasError: !!(p.error_handling && p.error_handling.text),
           errorText: (p.error_handling && p.error_handling.text) || "",
-          errorChip: chip(p.error_handling && p.error_handling.confidence),
+          errorSpans: lineSpans(p.error_handling, "text", "spans", planSaidConfidence(p.error_handling, saidChecked)),
+          errorChip: chip(planSaidConfidence(p.error_handling, saidChecked)),
           hasKnowledge: knowledge.length > 0, knowledge,
           hasUpload: !!up, upload: up || { artifact: "", reason: "" },
           onBuild, onChange,

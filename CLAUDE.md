@@ -578,6 +578,56 @@ as load-bearing.*
   dropped: crediting a "should not fire" example's real delivery as proof was invisible while
   both lanes delivered to the same place.
 
+- **Closing the SET a label may come from does not make the label TRUE — check the claim
+  against the evidence, and mark it WORD BY WORD (2026-07-27, operator's call, two parts
+  shipped together).** The plan card's marks were closed to `stated|found|inferred` on
+  2026-07-26 and that held: the `#ops` case never came back. It also missed the real defect,
+  on all three builds QA looked at. *"Runs every morning at 8:00 AM local time"* — **YOU
+  SAID**, over a tester who said "every morning" and never named a time. *"non-urgent
+  emails… the workflow ends silently"* — **YOU SAID**, never mentioned, sitting beside a
+  correctly amber line for equally unstated content. The trigger's *"unread"* and *"Gmail"*
+  specifics — **YOU SAID**. Every one of those labels was a well-formed member of the closed
+  set. **The set check validates the label's VOCABULARY, not its TRUTH, so the model became
+  the laundering hop** — the shape this file warns about four defects deep: *a check scoped to
+  WHO PRODUCED the value rather than WHAT THE VALUE CAN BE*.
+  **The fix is ONE mechanism doing two jobs**, which is why they could not ship apart: the
+  plan line's words are matched against what the customer actually typed
+  (`src/converger/said-words.js`), and the match answers both *which spans are theirs*
+  (the highlighting) and *whether the claim is supportable at all* (the demotion). A strict
+  per-line check ALONE turns most of the card amber and teaches people to ignore it;
+  word-level marking is what makes it readable. Applied server-side in the `plan` node so a
+  client that never ran cannot receive an unverified strong claim, with the browser refusing
+  to mark anything on a plan carrying no spans, or spans that do not reconstruct the line.
+  **The corpus was the trap, and it is an ALLOWLIST.** Nothing server-side stored what the
+  customer typed — the browser had it and the POST threw it away — so `typedTurns` now rides
+  on `POST /api/builder/sessions` into a `humanTurns` state channel. Three near-misses,
+  recorded because each looks reasonable: **`intent` is written by a MODEL** (`build_intent`),
+  so checking the plan against it is a second laundering hop; **`clarifications[]` is partly
+  MACHINE-authored** — the `gaps` node pushes the model's own suggested answers, plus
+  `(setup: …)` and `(still missing)` — so it would have Atlas proving a claim against its own
+  output; and **`isOperator` is not "typed"** — "Build it", "Skip this setup step." and every
+  suggested chip wear the user's avatar and were written by Atlas. Only free prose a person
+  composed is admitted, and **an empty corpus certifies NOTHING** rather than everything.
+  Fails toward the weaker claim throughout: the check only ever DEMOTES (a `found` line is a
+  claim about a tool and is untouched; an `inferred` line is never promoted), a line with no
+  content words of its own proves nothing, and **a stopword can never certify** — "the" is in
+  every corpus. The legend was reworded, not removed (the operator considered removing the
+  marks and the legend and rejected it), and it says something different when the check could
+  not run. Pinned by `tests/converger/plan-said-words.test.js` (34, including the REAL
+  `POST /api/builder/sessions` driven end to end to the plan card, because "computed and
+  dropped at the POST" is exactly how the run-summary defect worked); `plan-gate` and
+  `plan-provenance` were **re-pointed to supply the typed turns production now sends**, which
+  makes their `stated` assertions stricter, not weaker. **Thirteen mutations, TWO survived the
+  first pass and the fixtures were strengthened rather than the mutations dropped:** admitting
+  `clarifications` into the corpus changed nothing in a graph-driven test because the plan gate
+  fires *before* the elicitation that fills that array, and coercing a non-string turn with
+  `String(t)` was invisible until a test asked what `"[object Object]"` certifies. A third
+  find: the stopword rule had been written twice and **the second copy was dead** — deleting it
+  changed no output and no test noticed — so it was collapsed to one place, the same
+  two-copies-of-one-rule shape already on the residual ledger. **Not yet witnessed in a
+  browser**; the matcher's segmentation also rests on a BELIEF that the model keeps writing
+  plan lines as ordinary prose, which no test can prove.
+
 ## Support tickets (in-app feedback / bug reporting) — added 2026-07-08
 
 Users submit bugs/ideas/requests from a floating **Feedback** button in the operator

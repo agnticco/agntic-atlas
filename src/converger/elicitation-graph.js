@@ -40,6 +40,7 @@ import { interrupt }         from '../graph/interrupt.js';
 import { SystemMessage, HumanMessage } from '../core/message.js';
 import { scoreGap, unansweredGaps } from './gap-scorer.js';
 import { normalizePlanConfidences } from './plan-provenance.js';
+import { markPlanSaidWords, saidCorpusFrom } from './said-words.js';
 import { applyProposal, assembleSpec, wireEdges } from './spec-assembler.js';
 import { materialiseEscalations } from './escalation.js';
 import { nodeForAssertion, assertableConnectors, splitTarget, canonicalConnector,
@@ -946,6 +947,29 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
         reducer: (prev, additions) => [...(prev ?? []), ...(additions ?? [])],
       },
 
+      // WHAT THE CUSTOMER ACTUALLY TYPED — the corpus the plan card's "you said" mark
+      // is checked against (`said-words.js`). An ALLOWLIST, and that is the whole
+      // point: only text a human's own keystrokes produced may enter, because a claim
+      // proved against Atlas's own output is the laundering hop wearing a new hat.
+      //
+      // NOT `clarifications`. That array LOOKS like a corpus of user answers and is
+      // partly machine-authored — the `gaps` node pushes the MODEL's suggested answers
+      // (`{ q: g.message, a: String(suggestionFor(g.id)) }`), and `resourceSetup` /
+      // the missing-note route push `q:'(setup: …)'` with a JSON-stringified result and
+      // `q:'(still missing)'`. Building the corpus from it would let Atlas certify its
+      // own words as the user's. Nor is an answer CHOSEN from a suggestion typing: the
+      // zero-typing path means Enter accepts Atlas's own default, so only free text a
+      // person composed lands here.
+      //
+      // Seeded from the browser's typed chat turns at `run()`; appended to at the one
+      // other place a person composes free prose that a re-shown plan can quote (the
+      // typed plan change, below). Empty ⇒ nothing can be certified as theirs, which
+      // is the correct answer, not a failure.
+      humanTurns: {
+        default:  [],
+        reducer:  (prev, additions) => [...(prev ?? []), ...(additions ?? [])],
+      },
+
       // Accumulator fields (reducer: append)
       clarifications: {
         default:  [],
@@ -1776,6 +1800,25 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
     // `plan-provenance.js` for the whole argument.
     plan = normalizePlanConfidences(plan);
 
+    // NOW CHECK THE CLAIM, NOT JUST THE LABEL.
+    //
+    // The clamp above closes the SET of labels; it cannot tell whether a well-formed
+    // `stated` is TRUE. So match every line against what the customer actually typed:
+    // the matched words are marked as theirs (the card highlights them), and a line
+    // whose content they did not type loses its claim about them entirely. QA saw
+    // "Runs every morning at 8:00 AM local time — YOU SAID" over a tester who said
+    // "every morning" and never named a time. Both halves come out of the one match,
+    // and they ship together: the strict per-line demotion is only readable BECAUSE
+    // the words that really are theirs stay highlighted inside the amber line.
+    //
+    // Applied here, server-side, so a client that never ran the check cannot receive
+    // an unverified strong claim — the same "twice on purpose" reasoning as the clamp.
+    // `saidCorpusFrom` decides what out of the whole state counts as the customer's
+    // own words, and it is a named function on purpose — see its header. Inline here
+    // it would be unreachable from any test, and the one edit that breaks this feature
+    // ("`clarifications` is full of answers, put it in the corpus") would go unnoticed.
+    plan = markPlanSaidWords(plan, saidCorpusFrom(state));
+
     // Unusable projection → skip (fail-safe). A plan with no steps is not worth a turn.
     if (!plan || !Array.isArray(plan.steps) || !plan.steps.length) {
       return { _planShown: true, phase: 'proposing' };
@@ -1802,6 +1845,11 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
     if (change && (state.planRounds ?? 0) < MAX_PLAN_ROUNDS) {
       return {
         clarifications:  [{ q: '(plan change)', a: String(change) }],
+        // FREE PROSE A PERSON COMPOSED — the composer is in `planchange` mode and this
+        // is what they typed into it. The re-shown plan may legitimately quote it back,
+        // so it joins the corpus. (The clarification entry beside it is NOT read as a
+        // corpus; see the `humanTurns` note in the state schema for why.)
+        humanTurns:      [String(change)],
         planRounds:      (state.planRounds ?? 0) + 1,
         confirmationLog: [{ step: state.step, type: 'plan_review', changed: true, change }],
         step:            state.step + 1,

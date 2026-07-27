@@ -233,14 +233,24 @@ function makeLLM(plan) {
   } };
 }
 
+// WHAT THE CUSTOMER TYPED. Re-pointed 2026-07-27, NOT weakened. The plan node now also
+// checks whether a `stated` claim is TRUE, by matching the line against the customer's
+// own words (`said-words.js`); `builder.js` posts them with the build. A harness that
+// omitted them would be testing a program nobody runs, and every `stated` line below
+// would arrive (correctly) demoted. Supplying them makes these cases STRICTER: the
+// lines keep their mark only because these words were really typed. The complementary
+// direction — a well-formed `stated` over content nobody said — is the whole of
+// plan-said-words.test.js, which is where that argument lives.
+const TYPED = ['when a new email arrives, summarize the email and post it to my inbox'];
+
 /** Drive the loop until the plan card is raised; hand back the interrupt the client gets. */
-async function planInterrupt(plan) {
+async function planInterrupt(plan, typedTurns = TYPED) {
   const conv = createConverger({ llm: makeLLM(plan), capabilities: CAPS(), invokeCapability: null, checkpointerDir: scratch() });
   const thread = `t${Math.random().toString(36).slice(2)}`;
   const replyFor = (iv) => (iv.type === 'outcome_check' ? { id: 'c1' } : { type: 'accept' });
 
   let iv;
-  try { await conv.run(thread, 'summarize my emails to my inbox'); iv = { type: 'done' }; }
+  try { await conv.run(thread, 'summarize my emails to my inbox', { typedTurns }); iv = { type: 'done' }; }
   catch (err) { iv = err.interruptValue ?? err; }
   for (let i = 0; i < 60 && iv?.type !== 'done'; i++) {
     if (iv?.type === 'plan_review') return iv;
