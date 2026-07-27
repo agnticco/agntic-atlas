@@ -103,30 +103,16 @@ mentioning two of the three has already lost.
 ### 2. The plan
 
 **Must** show: the trigger; every step in order; a **Routes to** section listing
-every path *including* the catch-all Atlas inferred; a failure policy; and a
-**"you said" / "I found" / "I inferred"** mark on each line. That provenance mark is
-load-bearing — it is how a non-technical person knows what to check.
+every path *including* the catch-all Atlas added itself; and a failure policy.
 
-**The marking is WORD BY WORD, not one badge per line (2026-07-27).** A single
-sentence can mix something the user typed with something Atlas chose — *"runs every
-morning at 8:00 AM"* when they said "every morning" and never named a time — and one
-badge per line could only ever carry the stronger claim. So **the user's own words
-are highlighted inside the line** (brighter, on a faint plate) and the rest takes the
-line's own colour. Atlas checks this mechanically against what the customer actually
-typed, and **a line whose content they did not type loses its "you said" mark
-entirely.** A legend above the card says so in words.
+**The card shows the plan's text, and nothing on it labels where each detail came
+from** (operator's call, 2026-07-27 — that labelling was removed). There is no
+per-line or per-word marking on this screen to check, so **do not file findings
+about it**, in either direction.
 
-**To test it:** say something deliberately vague ("send me a digest every morning")
-and let Atlas fill in the specifics. On the plan card, **only the words you actually
-typed may be highlighted.** Three things are findings, every time:
-
-- a whole line marked **you said** that you never said — the top defect this
-  replaces, seen on three builds;
-- a specific Atlas chose (a time, a mailbox name, "unread", a channel) highlighted
-  as **your** words;
-- the opposite failure — **nothing at all highlighted on a plan you gave plenty of
-  detail for.** A screen that always warns is a screen nobody reads, so an
-  all-amber card is as much a finding as a falsely confident one.
+**Must:** the plan still covers *every* branch the user described, in their terms —
+the same bar as the restatement in §1, applied to the finished plan. A plan that
+quietly drops a branch, or adds a route the user never described, is a finding.
 
 Then **Approve & build** or **Request a change**.
 
@@ -216,14 +202,40 @@ never draw an edge the workflow does not have.
 **Must:** the panel reaches a verdict and the timer stops. If it sits on "Testing…"
 forever, that is a blocker — there is no escape but a page reload.
 
-Verdicts you should see, and what each means:
+Verdicts you should see, and what each means. **Each verdict is about ONE EXAMPLE**
+— one row, one sample input. None of them is the verdict on the run:
 
-- **kept** — the promise held, and something was actually checked.
-- **broken** — it ran and did the wrong thing.
-- **not exercised** — it ran but proved nothing. **This must NOT unlock Go live.**
-  A sample that took a do-nothing path, a workflow with no promises, or a negative
-  example ("should not trigger") all land here. The whole point is that Atlas
-  refuses to certify rather than certifying blind.
+- **kept** — the promise held on that example, and something was actually checked.
+- **broken** — that example ran and did the wrong thing.
+- **not exercised** — that example ran but proved nothing. A sample that took a
+  do-nothing path, a workflow with no promises, or a negative example ("should not
+  trigger") all land here. The whole point is that Atlas refuses to certify rather
+  than certifying blind.
+
+**A single example that proves nothing neither certifies nor blocks.** On its own,
+one row reading *not exercised* does nothing to Go live — it is not a pass and it is
+not a failure, and it is **not** a finding. Read it as one piece of evidence, not as
+a verdict. (2026-07-27: a tester applied the run-level rule below to a single row and
+filed a blocker that did not exist. The product was behaving correctly.)
+
+**The rule governs THE RUN AS A WHOLE.** The test passes — and Go live unlocks —
+only when **three things hold together**:
+
+1. **nothing broke** — no example landed on *broken*;
+2. **at least one example genuinely proved a promise** — at least one *kept*;
+3. **every path was covered** — no route of the workflow was left untaken by every
+   example between them.
+
+Miss any one of the three and the panel says **not verified** and Go live stays
+locked. That is not a failure either: nothing broke, but nothing was proved.
+
+So read the panel as a set, not row by row. Several rows reading *not exercised*
+beside one *kept*, with every path covered, is a **pass**, and it is correct. Zero
+*kept* is not — however clean the run looked.
+
+*(One carve-out, taken from the code: condition 2 applies to a workflow that
+promises something. A spec carrying no promise at all has nothing to prove, so the
+older bar stands for it — it ran cleanly and every path was covered.)*
 
 **Approval steps no longer pause the test** (2026-07-24). Pressing Run test authorizes
 the whole run; Atlas answers each approval gate itself and runs a gate-reaching example
