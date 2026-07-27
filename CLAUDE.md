@@ -550,6 +550,34 @@ as load-bearing.*
   session rehydrates from it and builds on the lie. If the code is right and the doc is wrong,
   that is a doc bug, and it is yours.
 
+- **The product does not narrate its own run results in prose — the sentence is COMPOSED from
+  the run's evidence (2026-07-27, operator's call).** After a PASSING test the chat told a
+  tester the workflow *"classified it as spam, routed it to the correct path, and then
+  summarized and delivered it to both the #ops channel and to charles@agntic.co as promised"* —
+  **spam is the branch whose entire promise is to do nothing**, and two inches above, in the
+  same screenshot, the evidence panel said it correctly (*"it took a path that doesn't cover…
+  Nothing was proved either way."*). This is the SECOND round of one defect: the first
+  (2026-07-22, an unverified run described as a failure with an invented cause) was patched at
+  the prompt and came back through a different door, because **the boundary stayed lossy in the
+  same way**. The client computed `outcomeResults` — one per-example verdict carrying
+  `kept | broken | not_exercised` — and dropped it at the POST, sending instead `deliveries`
+  from the LAST run of the sequence. A model handed a delivery receipt and told to "be
+  specific" fills the gap it was left; **a sterner prompt cannot supply evidence that was never
+  sent**. Now `src/workflows/run-summary.js` composes the sentence deterministically from the
+  same objects the panel renders, and the endpoint calls it instead of a model. The
+  "cannot disagree" property comes from **both surfaces reading the same `verdict` field**, not
+  from two hand-written paths that agree today; `contractPassed` is deliberately NOT read (it is
+  `true` over a set of skips, by design). The composer **never receives the run's deliveries,
+  steps or output**, so it cannot narrate them, and it **fails closed** — a caller claiming
+  `passed` over evidence with nothing `kept` in it gets the honest sentence. Scope: prose that
+  narrates **what a run did**. The interview, the plan's reasoning and the refusals are
+  deliberately NOT in scope — the operator drew that boundary himself. Pinned by
+  `tests/api/test-summary-verdict.test.js` (24 — the 2026-07-22 suite re-pointed; its pins now
+  assert THE SENTENCE, not merely what the narrator was told), six mutations red→green. **One
+  mutation survived the first pass** and the test was strengthened rather than the mutation
+  dropped: crediting a "should not fire" example's real delivery as proof was invisible while
+  both lanes delivered to the same place.
+
 ## Support tickets (in-app feedback / bug reporting) — added 2026-07-08
 
 Users submit bugs/ideas/requests from a floating **Feedback** button in the operator

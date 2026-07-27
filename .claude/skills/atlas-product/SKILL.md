@@ -187,6 +187,16 @@ certify (the safety net holds), but you should not see one.
 **Must:** if the workflow has three paths and the samples only exercised one, Atlas
 says so and blocks. A router is only proved on the routes you test.
 
+**The sentence in chat must agree with the panel** (2026-07-27). After the run, Atlas
+posts a short summary into the chat. It is **composed from the same evidence the panel
+shows**, not written by the model — so read them together and treat any disagreement as
+a blocker. **Must:** an example the panel marks *not exercised* (`○`) is named in the
+chat as having proved nothing, and the chat **never says it delivered, sent, posted,
+routed or kept anything**. This was a real defect: after a passing test the chat said a
+spam sample had been "routed to the correct path… summarized and delivered to both the
+#ops channel and to charles@agntic.co as promised", while the panel two inches above
+said the opposite. Spam is the path whose whole promise is to do nothing.
+
 ### 7. Go live
 
 Locked until the test actually passed. A published workflow appears in the sidebar

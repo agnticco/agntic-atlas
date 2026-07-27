@@ -6262,29 +6262,31 @@ class Component extends DCLogic {
       }
     }
 
-    // Ask the LLM to narrate what happened in the chat
+    // Have the server COMPOSE what happened, from the evidence this panel just used.
     if (!spec) return;
-    // THE NARRATOR MUST BE TOLD WHICH OF THE THREE THINGS HAPPENED, not a boolean.
-    // This sent `completed: passed`, so an UNVERIFIED run — nothing broke, nothing
-    // was proved — arrived at the narrator as FAILED with no error to describe, and
-    // it duly invented one. Observed live: the panel read "Nothing broke, but nothing
-    // was proved either" while the chat directly beneath it said the workflow "failed
-    // when it tried to ask Charles for approval… got cut off mid-message", and then
-    // offered a second, different cause in the next paragraph. A person reads that and
-    // concludes their approval step is broken. It is not.
-    // We already compute the three-way verdict ten lines above and were discarding it
-    // at the boundary; the uncovered lanes ride along so the narration can say WHAT
-    // went unproved instead of guessing.
+    // THE SENTENCE IS BUILT FROM THE SAME EVIDENCE THE PANEL RENDERS. It used to be
+    // written by a model that was handed a delivery receipt and told to "be
+    // specific", and it duly invented: after a PASSING test of a spam-triage
+    // workflow the chat said it "classified it as spam, routed it to the correct
+    // path, and then summarized and delivered it to both the #ops channel and to
+    // charles@agntic.co as promised" — while the panel two inches above said "it
+    // took a path that doesn't cover… Nothing was proved either way." Spam is the
+    // branch whose whole promise is to do nothing.
+    // The cause was at THIS boundary: `outcomeResults` — the per-example verdicts
+    // the panel's rows are drawn from, each carrying `not_exercised` where nothing
+    // was proved — was computed here and then dropped, and `deliveries` was sent
+    // from the LAST run of the sequence as though it were the whole run's.
+    // Now the evidence goes over intact and NOTHING ELSE DOES: no steps, no
+    // deliveries, no output. The panel and the sentence read the same `verdict`
+    // field off the same objects, so they cannot disagree.
     const verdict = passed ? 'passed' : (unverified ? 'unverified' : 'failed');
     const payload = {
       spec: spec,
       result: {
         completed: passed,
         verdict: verdict,
-        uncoveredLanes: (coverage.uncovered || []).map(function(l) { return l.label; }),
-        steps: d.steps || [],
-        deliveries: d.deliveries || [],
-        output: d.output || null,
+        outcomeResults: outcomeResults,
+        laneCoverage: coverage,
         error: (d.error && (d.error.message || d.error)) || null,
       },
     };
