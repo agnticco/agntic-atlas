@@ -7436,6 +7436,116 @@ class Component extends DCLogic {
     return this._plainId(ch);
   }
 
+  // ══ A STORED SENTENCE MUST NOT NAME A CHANNEL THIS WORKFLOW DOES NOT POST TO ══
+  //
+  // Two testers were each offered a Slack channel that does not exist, both DECLINED
+  // creating it, and both picked a real one instead. Both got a workflow that sends
+  // to the right place while five sentences on the screen still named the channel
+  // they had just rejected: the diagram's label, the approval card's title, the
+  // approval card's description, the description of the step BEFORE it, and the
+  // workflow's own promise.
+  //
+  // THE ASYMMETRY IS THE WHOLE BUG. `applyResourcePick`
+  // (src/converger/elicitation-graph.js) repoints the real configuration —
+  // `config.target`, and the outcome's assertion targets — and nothing regenerates
+  // the prose, deliberately: after a pick the build re-enters gap scoring rather
+  // than `generate`, because regenerating would re-hallucinate the very channel that
+  // does not exist. So "Sends to" was right (it DERIVES from `config.target` at
+  // render time) and everything beside it was a stale copy written in one earlier
+  // pass. The promise card even contradicted itself — its headline named the
+  // rejected channel while its own bullets underneath, which read the repointed
+  // assertions, named the real one.
+  //
+  // THE STALE COPIES ARE RECONCILED HERE, AT RENDER TIME, rather than a sixth copy
+  // being written somewhere. A stored sentence sitting beside a derived one is what
+  // produced this, and it would drift again the next time a destination moves.
+  //
+  // FAIL CLOSED — NEVER GUESS A CHANNEL. A name is only replaced when the live
+  // configuration says what it should be: this step's own destination, or, for a
+  // sentence on a step that delivers nothing, the workflow's single Slack
+  // destination. Where a workflow posts to MORE than one channel there is no way to
+  // know which one a sentence meant, so it says "a Slack channel" rather than name
+  // the wrong one — vaguer, but never false. Where NOTHING is known (the outcome
+  // contract is written before the graph exists) the sentence is left exactly as the
+  // user ratified it.
+
+  // Where this one node really delivers, when that is a Slack channel. The same
+  // field `_destinationOf` reads.
+  _ownChannelOf(node) {
+    const t = String((node && node.config && node.config.target) || '').trim();
+    return t.charAt(0) === '#' ? t : '';
+  }
+
+  // Every Slack channel this workflow ACTUALLY posts to, read from the live
+  // configuration. Steps nested inside a `foreach` are included, because that is
+  // also where `applyResourcePick` repoints.
+  _realChannelsOf(spec) {
+    const out = [];
+    const walk = (list) => {
+      (Array.isArray(list) ? list : []).forEach((n) => {
+        if (!n) return;
+        const own = this._ownChannelOf(n);
+        if (own && out.indexOf(own) < 0) out.push(own);
+        if (n.config && Array.isArray(n.config.steps)) walk(n.config.steps);
+      });
+    };
+    walk(spec && spec.nodes);
+    return out;
+  }
+
+  // One stored sentence, reconciled against the real configuration. The pattern is
+  // deliberately narrow — a leading "#", Slack's own character set, and it must END
+  // on a letter or digit so a sentence's full stop is not swallowed. A token with no
+  // letter in it ("#1", "#2024") is a number in prose, not a channel.
+  _trueChannelText(text, real, own) {
+    const s = String(text == null ? '' : text);
+    if (!s || s.indexOf('#') < 0) return s;
+    const known = (Array.isArray(real) ? real : []).filter(Boolean);
+    const mine = String(own || '');
+    if (!known.length && !mine) return s;          // nothing known ⇒ nothing provably stale
+    const lower = known.map((c) => c.toLowerCase());
+    return s.replace(/#[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?/g, (m) => {
+      if (!/[A-Za-z]/.test(m)) return m;                   // "#2024" is not a channel
+      if (lower.indexOf(m.toLowerCase()) >= 0) return m;   // one it really posts to
+      if (mine) return mine;                               // this step's own destination
+      if (known.length === 1) return known[0];             // the one place it posts
+      return 'a Slack channel';                            // more than one — do not guess
+    });
+  }
+
+  // One node's stored sentences, made true. Pure: the node is returned UNCHANGED
+  // when nothing was stale. `own` is passed in for a live-graph record, which
+  // carries no config — its destination has to be looked up in the spec by id.
+  _nodeSaidTruly(node, real, own) {
+    if (!node) return node;
+    const mine = (own == null) ? this._ownChannelOf(node) : own;
+    const t = (v) => (v == null ? v : this._trueChannelText(v, real, mine));
+    const label = t(node.label), description = t(node.description);
+    if (label === node.label && description === node.description) return node;
+    const out = Object.assign({}, node);
+    if ('label' in node) out.label = label;
+    if ('description' in node) out.description = description;
+    return out;
+  }
+
+  // THE WORKFLOW'S OWN PROMISE, reconciled the same way. Falls back to the outcome's
+  // ASSERTION targets when there is no graph yet: a pick repoints those too, and
+  // they are what renders directly under this sentence — which is exactly what the
+  // sentence was contradicting.
+  _outcomeStatementTruly(outcome, spec) {
+    const s = String((outcome && outcome.statement) || '');
+    if (!s) return s;
+    let real = this._realChannelsOf(spec);
+    if (!real.length) {
+      ((outcome && outcome.assertions) || []).forEach((a) => {
+        const m = /^(?:[A-Za-z_]+:)?(#[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?)$/
+          .exec(String((a && a.target) || '').trim());
+        if (m && real.indexOf(m[1]) < 0) real.push(m[1]);
+      });
+    }
+    return this._trueChannelText(s, real, '');
+  }
+
   // Which app a connector step uses, in the app's own name.
   _connectorOf(action) {
     const a = String(action || '');
@@ -7456,12 +7566,25 @@ class Component extends DCLogic {
   // configuration is looked up from the spec by id — the trigger from
   // `spec.triggers[0]`, since it has no entry in `spec.nodes`.
   _stepDetail(spec, node) {
+    // THE NAME AND THE DESCRIPTION ARE STORED SENTENCES; "Sends to" is derived. When
+    // a user rejects a proposed Slack channel and picks a real one, only the derived
+    // field followed — so the card named the rejected channel while sending to the
+    // right one. Every stored sentence in the spec is reconciled against the live
+    // configuration ONCE here, so the title, the description, the description of the
+    // step upstream, and the names routes use for the steps they reach are all read
+    // off the same reconciled nodes. See `_trueChannelText`.
+    const real = this._realChannelsOf(spec);
+    if (spec && Array.isArray(spec.nodes)) {
+      spec = Object.assign({}, spec, { nodes: spec.nodes.map(n => this._nodeSaidTruly(n, real)) });
+    }
     const nodes = (spec && Array.isArray(spec.nodes)) ? spec.nodes : [];
     const isTrigger = !!node && (node.id === '__trigger__' || node.type === 'trigger');
+    const liveLabel = this._trueChannelText(node && node.label, real, '');
     const full = isTrigger
-      ? Object.assign({ type: 'trigger', label: node && node.label },
-                      (spec && Array.isArray(spec.triggers) && spec.triggers[0]) || {})
-      : (nodes.find(n => n && node && n.id === node.id) || node || {});
+      ? this._nodeSaidTruly(
+          Object.assign({ type: 'trigger', label: liveLabel },
+                        (spec && Array.isArray(spec.triggers) && spec.triggers[0]) || {}), real)
+      : (nodes.find(n => n && node && n.id === node.id) || this._nodeSaidTruly(node, real) || {});
 
     const facts = [];
     const cfg = full.config || {};
@@ -7577,7 +7700,7 @@ class Component extends DCLogic {
 
     return {
       id: full.id || (node && node.id) || null,
-      title: this._stepName(isTrigger ? Object.assign({}, full, { label: (node && node.label) || full.label }) : full),
+      title: this._stepName(isTrigger ? Object.assign({}, full, { label: liveLabel || full.label }) : full),
       kind: this._stepKind(isTrigger ? { type: 'trigger' } : full),
       what: this._deJargon(what),
       facts: facts,
@@ -7815,6 +7938,17 @@ class Component extends DCLogic {
     // is absolutely positioned and contributes no layout width), and the slack is spent
     // on NODESEP instead, where it is free — the graph is far shorter than it is wide.
     const CARD = 58, RANKSEP = 46, NODESEP = 54, TITLE_H = 46;
+    // THE DIAGRAM'S LABELS ARE STORED SENTENCES TOO. `nodes` is build-session state
+    // (`S.liveNodes`) that can predate a destination the user repointed after it was
+    // written, so each label is reconciled against the spec's live configuration
+    // before a card is built. A live record carries no config, so the node's own
+    // destination is looked up in the spec by id — the same lookup `_stepDetail`
+    // does. Every diagram card comes through here, so there is one place to correct.
+    const realChans = this._realChannelsOf(spec);
+    const specById = {};
+    ((spec && spec.nodes) || []).forEach((n) => { if (n && n.id) specById[n.id] = n; });
+    nodes = (Array.isArray(nodes) ? nodes : []).map((n) =>
+      this._nodeSaidTruly(n, realChans, this._ownChannelOf(specById[n && n.id])));
     const idxOf = new Map(nodes.map((n, i) => [n.id, i]));
     const cardOf = (n, i) => {
       const c = this._liveCardFor(n, i, confirmed, flashIdx, explaining, ready, revealed);
@@ -8457,9 +8591,14 @@ class Component extends DCLogic {
         bodyDisplay: open ? "block" : "none",
         toggle: () => this.setState({ contractOpenRow: open ? null : i }) };
     };
-    // The deal: the outcome statement, verbatim (the converger already writes it
-    // in plain English for the pinned "what this must deliver" card).
-    const deal = (S.outcome && S.outcome.statement) || (S.spec && S.spec.outcome && S.spec.outcome.statement) || "";
+    // The deal: the outcome statement — the SAME sentence the pinned "what this must
+    // deliver" card shows, and it is rendered through the same reconciliation for the
+    // same reason. This card takes the right panel the moment a test run starts, so a
+    // statement left raw here would go on naming a Slack channel the user rejected at
+    // exactly the point they are being asked to certify the workflow. Not a sixth
+    // copy: one derivation, two places that read it. See `_outcomeStatementTruly`.
+    const dealOutcome = (S.outcome && S.outcome.statement) ? S.outcome : ((S.spec && S.spec.outcome) || null);
+    const deal = this._outcomeStatementTruly(dealOutcome, S.spec);
 
     // TWO-MODE PANEL (#24): reasoning owns the right panel until a test run STARTS.
     // At "idle" — including the whole `proposed` review — the CoT transcript shows
@@ -9055,8 +9194,16 @@ class Component extends DCLogic {
       // as a mistake rather than as two lanes sharing a destination. The contract
       // keeps both assertions (they are checked per lane); the SUMMARY shows each
       // distinct promise once.
+      // THE STATEMENT IS DERIVED, NOT ECHOED. It is the one sentence here written in
+      // the user's own framing, and it was the only part of this card that did not
+      // follow a repointed destination — so the headline named the channel the user
+      // REJECTED while the bullets right underneath it, which read the repointed
+      // assertions, named the one they picked. The card contradicted itself. It is
+      // reconciled against the live configuration at render time rather than the
+      // ratified contract being rewritten in the store; see `_trueChannelText` for
+      // why, and for the rule that refuses to guess.
       outcomePin: (S.outcome && S.outcome.statement && !testStarted) ? {
-        statement: S.outcome.statement,
+        statement: this._outcomeStatementTruly(S.outcome, S.spec),
         assertions: (function (self) {
           const seen = {}, out = [];
           (S.outcome.assertions || []).forEach(function (a) {
