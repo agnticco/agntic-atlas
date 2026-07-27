@@ -2,13 +2,19 @@
  * The PRE-BUILD PLAN GATE (agent-contracts increment 1).
  *
  * Drives `createConverger` → run → resume the way builder.js does, proving:
- *   · a `plan_review` interrupt fires ONCE, BEFORE the first build, carrying the
- *     confidence-tagged plan projection;
+ *   · a `plan_review` interrupt fires ONCE, BEFORE the first build, carrying the plan
+ *     projection and a pre-selected default (the zero-typing accept path);
  *   · approving it converges to a spec (the plan does not block the build);
  *   · it fires EXACTLY ONCE — never again on the silent regenerations the tail drives;
  *   · FAIL-SAFE: when the projection is unusable (the stub returns {}), no plan_review
  *     is raised and the build proceeds unchanged — which is why all pre-existing
  *     converger tests (whose stubs return {} for this prompt) keep their behaviour.
+ *
+ * Plus the grounding block of the plan prompt, including the ONE rule that survived the
+ * removal of the plan card's marks on 2026-07-27: the plan must NOT announce that Atlas
+ * will create a channel the tenant does not have. That decision belongs to the
+ * create-or-pick conversation, after the build. This file and
+ * `tests/converger/plan-grounding-prompt.test.js` are the only two places that pin it.
  */
 
 import { test, describe, after } from 'node:test';
@@ -33,22 +39,14 @@ const CAPS = () => ({
   slackChannels: ['ops', 'general'],
 });
 
-// WHAT THE CUSTOMER TYPED. Re-pointed 2026-07-27, NOT weakened: the plan node now
-// checks every "you said" against the customer's own words (`said-words.js`), and
-// `builder.js` posts them with the build — so a harness that omitted them would be
-// driving a program nobody runs, and every `stated` line below would (correctly)
-// arrive demoted. Supplying them makes these assertions STRICTER than before: the
-// trigger and step lines keep their mark only because these words were really typed.
-const TYPED = ['when a new email arrives in my Gmail, summarize the email into my inbox'];
-
 // A stub model that builds a simple linear email → summarize → inbox workflow, and —
-// crucially — answers the PLAN projection prompt with a real, confidence-tagged plan.
+// crucially — answers the PLAN projection prompt with a real, readable plan.
 const PLAN = {
   summary: 'Summarize each incoming email into your Atlas inbox',
-  trigger: { text: 'A new email arrives in your Gmail', confidence: 'stated' },
-  steps: [{ text: 'Summarize the email', confidence: 'stated' }],
+  trigger: { text: 'A new email arrives in your Gmail' },
+  steps: [{ text: 'Summarize the email' }],
   branches: [],
-  error_handling: { text: 'Retry once, then flag it to you', confidence: 'inferred' },
+  error_handling: { text: 'Retry once, then flag it to you' },
   knowledge: [],
   upload_suggestion: null,
 };
@@ -81,7 +79,7 @@ function makeLLM({ planResponse } = {}) {
 }
 
 /** Drive the loop; collect every interrupt seen. `onPlan` picks the reply to plan_review. */
-async function drive({ llm, onPlan = () => ({ type: 'accept' }), typedTurns = TYPED }) {
+async function drive({ llm, onPlan = () => ({ type: 'accept' }) }) {
   const conv = createConverger({ llm, capabilities: CAPS(), invokeCapability: null, checkpointerDir: scratch() });
   const seen = [];
   const replyFor = (iv) => {
@@ -96,7 +94,7 @@ async function drive({ llm, onPlan = () => ({ type: 'accept' }), typedTurns = TY
   };
 
   let iv;
-  try { await conv.run('g1', 'summarize my emails to my inbox', { typedTurns }); iv = { type: 'done' }; }
+  try { await conv.run('g1', 'summarize my emails to my inbox'); iv = { type: 'done' }; }
   catch (err) { iv = err.interruptValue ?? err; }
   for (let i = 0; i < 60 && iv?.type !== 'done'; i++) {
     seen.push(iv);
@@ -106,23 +104,16 @@ async function drive({ llm, onPlan = () => ({ type: 'accept' }), typedTurns = TY
 }
 
 describe('the plan gate fires once, before the build, and does not block it', () => {
-  test('a plan_review interrupt is raised carrying the confidence-tagged plan', async () => {
+  test('a plan_review interrupt is raised carrying a readable plan', async () => {
     let planIv = null;
     const { spec } = await drive({ llm: makeLLM(), onPlan: (iv) => { planIv = iv; return { type: 'accept' }; } });
     assert.ok(planIv, 'a plan_review interrupt must be surfaced before the build');
     assert.ok(planIv.plan && Array.isArray(planIv.plan.steps) && planIv.plan.steps.length,
       'the interrupt MUST carry a plan with at least one step');
-    assert.equal(planIv.plan.trigger.confidence, 'stated');
-    assert.equal(planIv.plan.steps[0].confidence, 'stated');
-    assert.equal(planIv.plan.error_handling.confidence, 'inferred');
-    // …and it says "you said" only because the customer's words back it. Drop the
-    // typed turns and the same plan must lose the claim about them. This is the half
-    // the confidence-set clamp could never see: the LABEL was always well formed.
-    let unbacked = null;
-    await drive({ llm: makeLLM(), typedTurns: [], onPlan: (iv) => { unbacked = iv; return { type: 'accept' }; } });
-    assert.equal(unbacked.plan.trigger.confidence, 'inferred',
-      'with no record of what the customer typed, no line may be shown as their words');
-    assert.equal(unbacked.plan.steps[0].confidence, 'inferred');
+    assert.equal(planIv.plan.trigger.text, 'A new email arrives in your Gmail',
+      'the line the TRIGGER row draws must survive the trip');
+    assert.equal(planIv.plan.steps[0].text, 'Summarize the email');
+    assert.equal(planIv.plan.error_handling.text, 'Retry once, then flag it to you');
     // Every interrupt carries a default so Enter is always valid (§11.9).
     assert.ok(Array.isArray(planIv.choices) && planIv.choices.some(c => c.selected),
       'the plan interrupt must carry a pre-selected default choice');
@@ -152,15 +143,18 @@ describe('the grounding pass surfaces live connector facts in the plan (incremen
   // pinning the instruction that manufactured the false "YOU SAID" mark a tester saw on
   // the line "Atlas will create the #ops channel". Naming a channel is not saying what
   // should happen when it doesn't exist, and that question is asked properly after the
-  // build (create-or-pick). The check is not weakened: it now pins the honest contract,
-  // and the full argument plus the anti-regression cases live in plan-provenance.test.js.
-  test('a channel that EXISTS is marked grounded; one that does NOT is marked as Atlas\'s inference', () => {
+  // build (create-or-pick). The check is not weakened: it pins the honest contract, and
+  // the full argument plus the anti-regression cases live in plan-grounding-prompt.test.js.
+  // RE-POINTED 2026-07-27 when the plan card's marks were removed: the `confidence`
+  // half of these assertions went with the feature; the create-or-pick rule did NOT,
+  // and this is one of only two places pinning it.
+  test('a channel that EXISTS is described as existing; one that does NOT is left undecided', () => {
     const p = buildPlanPrompt({ intent: 'x', outcome, triggers: [],
       grounding: { slack: { checked: true, known: ['#support'], absent: ['#sales'] } } });
     assert.match(p, /EXIST in the connected workspace: #support/);
-    assert.match(p, /tag it confidence "found"/);
+    assert.match(p, /say it posts to the EXISTING channel/);
     assert.match(p, /do NOT exist in the workspace yet: #sales/);
-    assert.match(p, /tag it confidence "inferred"/);
+    assert.match(p, /Do NOT state that Atlas will create it/);
     assert.doesNotMatch(p, /Atlas will CREATE the channel/);
   });
 
@@ -176,7 +170,7 @@ describe('the grounding pass surfaces live connector facts in the plan (incremen
       grounding: { airtable: { base: 'CRM', table: 'Leads', columns: ['Name', 'Email', 'Budget'] } } });
     assert.match(p, /base "CRM" has a table "Leads"/);
     assert.match(p, /columns: Name, Email, Budget/);
-    assert.match(p, /tag confidence "found"/);
+    assert.match(p, /name the REAL table and its columns in the step text/);
   });
 });
 

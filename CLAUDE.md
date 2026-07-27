@@ -476,12 +476,20 @@ as load-bearing.*
   *"keep confidence 'you said'"* — a value not even in the plan's own declared
   `stated|found|inferred` set, so it could ONLY ever land in that fallback. **A mark that is
   usually right is worse than no mark** — it teaches the user to trust the occasional false
-  one. The domain is now closed in one place (`src/converger/plan-provenance.js`) and applied
-  **twice on purpose**: server-side in the `plan` node so a client that never ran cannot
-  receive an unlabelled item, and in the browser. **And the plan must not settle a question
-  another stage asks properly** — a destination that does not exist is the create-or-pick
-  conversation's decision, not the plan's to pre-announce. Pinned by
-  `tests/converger/plan-provenance.test.js` (20), four mutations red→green.
+  one. The domain was closed in one place (`plan-provenance.js`) and applied **twice on
+  purpose**: server-side in the `plan` node so a client that never ran could not receive an
+  unlabelled item, and in the browser. **And the plan must not settle a question another
+  stage asks properly** — a destination that does not exist is the create-or-pick
+  conversation's decision, not the plan's to pre-announce.
+  **THE FEATURE THIS DESCRIBES WAS REMOVED ON 2026-07-27 — see the entry at the end of this
+  section. The two rules above outlived it and still hold:** *a label that makes a claim
+  about the USER must fail toward the WEAKER claim*, and *the plan must not settle a question
+  another stage asks properly.* The second is still IN THE CODE and still pinned, in two
+  places — `tests/converger/plan-grounding-prompt.test.js` and
+  `tests/converger/plan-gate.test.js` (put "Atlas will CREATE the channel" back into
+  `prompts.js` and both go red; measured 2026-07-27). The first is now advice, because there
+  is no longer a label on the plan card to get wrong; **apply it to the next label anyone
+  designs.**
 - **Never let the model describe Atlas's own screens (2026-07-26).** The chat assistant may
   talk freely about the user's work; it may not say where anything lives in Atlas. It invented
   a "workspace settings" screen with a "Connectors / Integrations" section — neither exists
@@ -611,22 +619,70 @@ as load-bearing.*
   Fails toward the weaker claim throughout: the check only ever DEMOTES (a `found` line is a
   claim about a tool and is untouched; an `inferred` line is never promoted), a line with no
   content words of its own proves nothing, and **a stopword can never certify** — "the" is in
-  every corpus. The legend was reworded, not removed (the operator considered removing the
-  marks and the legend and rejected it), and it says something different when the check could
-  not run. Pinned by `tests/converger/plan-said-words.test.js` (34, including the REAL
-  `POST /api/builder/sessions` driven end to end to the plan card, because "computed and
-  dropped at the POST" is exactly how the run-summary defect worked); `plan-gate` and
-  `plan-provenance` were **re-pointed to supply the typed turns production now sends**, which
-  makes their `stated` assertions stricter, not weaker. **Thirteen mutations, TWO survived the
-  first pass and the fixtures were strengthened rather than the mutations dropped:** admitting
-  `clarifications` into the corpus changed nothing in a graph-driven test because the plan gate
-  fires *before* the elicitation that fills that array, and coercing a non-string turn with
-  `String(t)` was invisible until a test asked what `"[object Object]"` certifies. A third
-  find: the stopword rule had been written twice and **the second copy was dead** — deleting it
-  changed no output and no test noticed — so it was collapsed to one place, the same
-  two-copies-of-one-rule shape already on the residual ledger. **Not yet witnessed in a
-  browser**; the matcher's segmentation also rests on a BELIEF that the model keeps writing
-  plan lines as ordinary prose, which no test can prove.
+  every corpus. The legend was reworded, not removed. Pinned by `plan-said-words.test.js`
+  (34, including the REAL `POST /api/builder/sessions` driven end to end to the plan card,
+  because "computed and dropped at the POST" is exactly how the run-summary defect worked).
+  **Thirteen mutations, TWO survived the first pass and the fixtures were strengthened rather
+  than the mutations dropped:** admitting `clarifications` into the corpus changed nothing in
+  a graph-driven test because the plan gate fires *before* the elicitation that fills that
+  array, and coercing a non-string turn with `String(t)` was invisible until a test asked what
+  `"[object Object]"` certifies. A third find: the stopword rule had been written twice and
+  **the second copy was dead**. **Never witnessed in a browser — and it never will be: the
+  whole feature was removed the same day. See directly below.**
+
+- **THE PLAN CARD'S MARKS WERE REMOVED ENTIRELY (2026-07-27, Charles's call — this reverses
+  the decision recorded in the entry directly above, made the same morning).** Both halves
+  went: the word-level highlighting of the customer's own words AND the per-line
+  `you said / I found / I inferred` badges. **The reason is not that it was broken — it
+  worked, and QA confirmed the demotion half held on every build. The reason is that the
+  complexity was not worth what it delivered.** Charles: *"I don't want badges at all. And so
+  if I can't have badges or if I can't have highlighting that works properly, just get rid of
+  it entirely."* The QA manager's recommendation — keep the badge, drop only the highlighting
+  — was **put to him and rejected in the room**. Do not re-add a reduced version, and do not
+  treat this entry as an invitation to design a better mark. **The plan card now shows its
+  trigger, numbered steps, routes and failure line as plain text, and nothing on it makes a
+  claim about who said what.**
+  **Deleted:** `src/converger/said-words.js`, `src/converger/plan-provenance.js`. **Removed
+  from live code:** the `humanTurns` state channel and the whole `typedTurns` path
+  (browser → `POST /api/builder/sessions` → `converger.run` → the graph), the per-line
+  `confidence` field the plan prompt used to demand, the card's legend, chips and spans, and
+  the four client helpers that coloured them.
+  **THE LESSONS OUTLIVE THE FEATURE AND ARE STILL BINDING — they are why this entry is long
+  instead of a one-line deletion note:**
+  · **A label that makes a claim about the USER must fail toward the WEAKER claim.** A mark
+    that is usually right is worse than no mark, because it teaches the reader to trust the
+    occasional false one. There is no such label on the plan card now; **apply this to the
+    next one anyone designs, anywhere in the product.**
+  · **A check scoped to WHO PRODUCED a value, rather than to WHAT THE VALUE CAN BE, is a
+    laundering hop.** Closing the SET a label may come from validates its vocabulary, not its
+    truth — which is exactly how a well-formed `"stated"` over invented content sailed
+    through. This is the same shape as the moat's `LLM_INPUT_NOT_ENUM` rule and the
+    `isWritingAction` name-matching defect; it is now on its third appearance in this file.
+  · **An allowlist of "what a human actually typed" is not reconstructible after the fact.**
+    `intent` is model-written, `clarifications[]` is partly machine-authored, and `isOperator`
+    is not "typed" — every message Atlas composes and the user merely clicks wears their
+    avatar. Anyone tempted to prove a claim about a customer against server-side state should
+    read the entry above first: there was nothing on the server that qualified.
+  **What deliberately did NOT come out with it, and is still pinned:** the plan must not
+  pre-announce that Atlas will create a Slack channel the tenant does not have — that is the
+  create-or-pick conversation's decision, after the build (it was welded into the same prompt
+  string as the confidence instruction). Two pins, both hand-mutated red on 2026-07-27:
+  `tests/converger/plan-grounding-prompt.test.js` and `tests/converger/plan-gate.test.js`.
+  **Test files re-pointed, not deleted:** `plan-provenance.test.js` →
+  `plan-grounding-prompt.test.js` (it now pins only that surviving rule, plus that the prompt
+  never grows the marks back); `plan-said-words.test.js` → `plan-card-e2e.test.js` (its
+  assertions were feature-specific but its HARNESS is the only one in the tree that drives the
+  real `POST /api/builder/sessions` through a background build and polls `/status` to the plan
+  card — it now proves the card is reached and every row arrives renderable). `plan-gate.test.js`
+  was edited in place; its four unrelated guards (fires exactly once; the approved plan
+  reaches the build; the fail-safe skip on an unusable projection; the pre-selected default)
+  were each hand-mutated red→green.
+  **One residual, found by mutation and NOT fixed (out of the packet's scope):** the "the plan
+  is shown exactly once" property is guarded twice — the `_planShown` latch on the plan node
+  and the `_generated` check in the `analyze` router (`elicitation-graph.js`) — and **removing
+  either one alone changes nothing observable, so neither is individually pinned.** Only
+  removing both turns the guard red. It is belt-and-braces where the record implies one
+  load-bearing latch.
 
 ## Support tickets (in-app feedback / bug reporting) — added 2026-07-08
 
@@ -1098,7 +1154,7 @@ fixed on the spot. Fold the relevant ones into whatever increment next touches t
   the plan's grounding checks only that a channel list loaded
   (`elicitation-graph.js:1700`), and `builder.js:1585-1596` can populate that list from
   `SLACK_BOT_TOKEN` without the per-tenant guard. So Atlas can promise a confirmation nobody
-  ever asks for. Made benign for the "you said" invariant 2026-07-26, not closed.
+  ever asks for. Made benign for the "you said" invariant 2026-07-26; that invariant went with the marks on 2026-07-27, so this residual now stands on its own and is still not closed.
 - **Two copies of the "what counts as a template reference" rule** — the build-time probe
   (`node-types/assemble.js`) and the run-time escaper (`template-escape.js`) each carry their
   own `\{\{[^}]+\}\}`. They agree today because the second was written to match. This repo
@@ -1442,7 +1498,7 @@ pending confirmation for every one:
   an AI answer into an Airtable column or a Sheets row. See *Known gotchas*.
 - **The build page can no longer go silently dead.** See *Hard-won lessons → On silent
   failure*.
-- **The plan no longer claims "you said" about things nobody said.**
+- **The plan no longer claims "you said" about things nobody said.** *(Superseded 2026-07-27: the plan card's marks were removed entirely — see Hard-won lessons.)*
 - **A step is shown before you are asked to approve it**, and an answer with no path is
   called out instead of being absorbed by the catch-all.
 - **The chat no longer invents Atlas's own screens.**

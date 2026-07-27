@@ -642,16 +642,14 @@ ${outcome.statement ? `  "${outcome.statement}"\n` : ''}${lines.join('\n')}${con
 
 /**
  * THE PRE-BUILD PLAN (agent-contracts increment 1). Project the gathered contract +
- * trigger into a human-legible plan, tagged by confidence, BEFORE the expensive
+ * trigger into a human-legible plan, in plain language, BEFORE the expensive
  * whole-spec build — so the user catches a misread in one glance instead of after a
  * 3-5 min Opus pass, and the approved plan gives `generate` an explicit skeleton to
  * fill (fewer regenerations, same-intent → same-structure).
  *
- * Confidence is the honesty layer, and it is the ONLY thing that asks for attention:
- *   stated   — the user said this outright in the intent.
- *   found    — grounded in a tool: a connector resource listed in the system prompt,
- *              or the KNOWLEDGE BASE CONTENT in the system prompt (cite the source).
- *   inferred — a reasonable guess the user should check (a step added, a safe default).
+ * The plan carries NO per-line provenance mark (removed 2026-07-27, operator's call —
+ * see CLAUDE.md). Every line is plain prose the reader judges for themselves; nothing
+ * on the card makes a claim about who said what.
  *
  * `upload_suggestion` turns an ungrounded JUDGMENT into an invitation: when a step
  * makes a policy/criteria/tone decision with NO knowledge to ground it, name ONE
@@ -664,43 +662,41 @@ ${outcome.statement ? `  "${outcome.statement}"\n` : ''}${lines.join('\n')}${con
  */
 /**
  * The GROUNDING block — facts verified live against the connected tools, so the plan's
- * confidence tags reflect reality instead of the model's guess. A Slack destination the
- * tenant ACTUALLY has is "found" (grounded). This is the grounding pass (agent-contracts
- * increment 2) surfacing what elicitation learned from the tools.
+ * wording reflects reality instead of the model's guess. This is the grounding pass
+ * (agent-contracts increment 2) surfacing what elicitation learned from the tools.
  *
- * A DESTINATION THE USER NAMED BUT DOES NOT HAVE IS **NOT** THE USER'S OWN WORDS.
- * This block used to say: *keep confidence "you said", and say Atlas will CREATE the
- * channel.* Both halves were wrong, and together they produced the line a tester saw —
- * **"Atlas will create the #ops channel", marked YOU SAID** — after which the build
- * skipped the work because the plan said it was handled. The user said a channel NAME;
- * they never said Atlas would create one. The mark was attached to the wrong subject: a
- * commitment Atlas was making about its OWN future behaviour, presented as the user's.
- * (`"you said"` was not even in the plan's declared set of `stated|found|inferred`, so
- * it could only ever land in the renderer's unrecognised-value fallback.)
- *
- * The plan does not decide this at all any more. Atlas already has a create-or-pick
- * conversation for a destination that does not exist — `RESOURCE_NOT_FOUND` in
+ * THE RULE THAT MUST NOT LEAVE THIS BLOCK: **the plan must not settle a question
+ * another stage asks properly.** A destination the user NAMED but does not have is the
+ * create-or-pick conversation's decision, not the plan's to pre-announce. This block
+ * used to say *say Atlas will CREATE the channel*, and a tester was shown "Atlas will
+ * create the #ops channel" — after which the build SKIPPED the work, because the plan
+ * read as settled. Atlas already has that conversation: `RESOURCE_NOT_FOUND` in
  * `gap-scorer.js`, resolved in the `gaps` node of `elicitation-graph.js`, which offers
- * "Create #<name>" or an existing channel to point at. That stage gets a REAL answer
- * from the user. So the plan states the situation truthfully, marks it as Atlas's own
- * inference, and leaves the decision where it is actually asked.
+ * "Create #<name>" or an existing channel to point at, and gets a REAL answer from the
+ * user. So the plan states the situation truthfully and leaves the decision where it is
+ * actually asked. Pinned by `tests/converger/plan-grounding-prompt.test.js` and
+ * `tests/converger/plan-gate.test.js`.
+ *
+ * (The per-line confidence tags this block used to set were removed 2026-07-27 with the
+ * rest of the plan card's marks — operator's call. The grounding FACTS stay: they change
+ * what the plan says, not how it is labelled.)
  */
 function groundingBlock(grounding) {
   const lines = [];
   const s = grounding?.slack;
   if (s?.checked) {
     if (s.known?.length)
-      lines.push(`- These Slack channels EXIST in the connected workspace: ${s.known.join(', ')}. A delivery to one of these is GROUNDED — tag it confidence "found" and say it posts to the EXISTING channel.`);
+      lines.push(`- These Slack channels EXIST in the connected workspace: ${s.known.join(', ')}. A delivery to one of these is GROUNDED — say it posts to the EXISTING channel.`);
     if (s.absent?.length)
-      lines.push(`- These Slack channels were named but do NOT exist in the workspace yet: ${s.absent.join(', ')}. The user named the channel; they did NOT say what should happen about it not existing — so this is YOUR inference, not their words: tag it confidence "inferred". Say in the text only that the channel does not exist yet and that you will confirm what to do about it before the workflow runs. Do NOT state that Atlas will create it, or that it is already handled — that decision has not been made yet and is asked separately, after the build.`);
+      lines.push(`- These Slack channels were named but do NOT exist in the workspace yet: ${s.absent.join(', ')}. The user named the channel; they did NOT say what should happen about it not existing. Say in the text only that the channel does not exist yet and that you will confirm what to do about it before the workflow runs. Do NOT state that Atlas will create it, or that it is already handled — that decision has not been made yet and is asked separately, after the build.`);
   }
   const at = grounding?.airtable;
   if (at?.table) {
     const cols = at.columns?.length ? ` with columns: ${at.columns.join(', ')}` : '';
-    lines.push(`- Airtable: the base "${at.base}" has a table "${at.table}"${cols} — verified in the connected workspace. A write to it is GROUNDED — tag confidence "found" and name the REAL table${at.columns?.length ? ' and its columns' : ''} in the step text.`);
+    lines.push(`- Airtable: the base "${at.base}" has a table "${at.table}"${cols} — verified in the connected workspace. A write to it is GROUNDED — name the REAL table${at.columns?.length ? ' and its columns' : ''} in the step text.`);
   }
   if (!lines.length) return '';
-  return `\nGROUNDING — verified live against the connected tools. Reflect this in the confidence tags and the wording; do NOT contradict it:\n${lines.join('\n')}\n`;
+  return `\nGROUNDING — verified live against the connected tools. Reflect this in the wording; do NOT contradict it:\n${lines.join('\n')}\n`;
 }
 
 export function buildPlanPrompt({ intent, outcome, triggers, clarifications, grounding } = {}) {
@@ -724,12 +720,8 @@ ${assertions || '  (none)'}
 TRIGGER (already derived):
 ${trig || '  (none derived yet)'}
 ${groundingBlock(grounding)}${prior ? `\nWHAT THE USER HAS CLARIFIED / CHANGED (reflect this — it overrides your first read):\n${prior}\n` : ''}
-Tag EVERY item with a confidence:
-  "stated"   — the user said this outright in the intent above.
-  "found"    — grounded in a tool: a connector resource listed in your system prompt, or the
-               KNOWLEDGE BASE CONTENT in your system prompt. When "found" from the knowledge base,
-               ALSO add it to "knowledge" below with its source label.
-  "inferred" — a reasonable guess the user should check (a step you added, a safe default).
+When a step uses something from the KNOWLEDGE BASE CONTENT in your system prompt, ALSO add that fact
+to "knowledge" below with its source label.
 
 Keep each item to ONE short plain-language line — no jargon, no node types, no config. Describe what
 happens the way you'd tell a coworker.
@@ -742,10 +734,10 @@ Only for genuine judgment calls, at most one, and null when nothing qualifies �
 Return JSON only:
 {
   "summary": "<one plain sentence: the whole workflow>",
-  "trigger": { "text": "<when it starts>", "confidence": "stated|found|inferred" },
-  "steps":   [ { "text": "<what happens, in order>", "confidence": "..." } ],
-  "branches":[ { "when": "<condition, plain words>", "then": "<what happens>", "confidence": "..." } ],
-  "error_handling": { "text": "<what happens if a step fails>", "confidence": "inferred" },
+  "trigger": { "text": "<when it starts>" },
+  "steps":   [ { "text": "<what happens, in order>" } ],
+  "branches":[ { "when": "<condition, plain words>", "then": "<what happens>" } ],
+  "error_handling": { "text": "<what happens if a step fails>" },
   "knowledge": [ { "text": "<the relevant fact you used>", "source": "<the document label>" } ],
   "upload_suggestion": { "artifact": "<what to upload>", "reason": "<the concrete benefit>" }
 }

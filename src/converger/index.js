@@ -30,31 +30,10 @@
 import { GraphInterrupt, Command } from '../graph/index.js';
 import { buildElicitationGraph, DRAFT_DEFAULT } from './elicitation-graph.js';
 
-/**
- * Keep only what a person can actually have typed.
- *
- * FAIL-CLOSED on shape: anything that is not a non-empty string is dropped rather
- * than coerced. The corpus decides whether Atlas may claim words as the customer's,
- * so a `[object Object]` finding its way in would certify nonsense as their speech.
- * Bounded too — the corpus is a set of words, so a caller cannot make it a payload.
- */
-function sanitizeTypedTurns(turns) {
-  if (!Array.isArray(turns)) return [];
-  return turns
-    .filter(t => typeof t === 'string' && t.trim())
-    .slice(0, 200)
-    .map(t => t.slice(0, 20000));
-}
-
-function initialState(intent, capabilities, typedTurns) {
+function initialState(intent, capabilities) {
   return {
     intent,
     capabilities:     capabilities ?? {},
-    // WHAT THE CUSTOMER ACTUALLY TYPED. The plan card's "you said" mark is checked
-    // against this and against nothing else — see `said-words.js`. Absent ⇒ the check
-    // certifies NOTHING, which is the honest answer: with no record of what they
-    // typed, no line can be shown as their words.
-    humanTurns:       sanitizeTypedTurns(typedTurns),
     draft:            { ...DRAFT_DEFAULT },
     clarifications:   [],
     confirmationLog:  [],
@@ -118,18 +97,12 @@ export function createConverger({
   /**
    * @param {string} threadId
    * @param {string} intent
-   * @param {{ typedTurns?: string[] }} [opts] `typedTurns` is the customer's own
-   *   keystrokes — the chat turns they composed. It is the ONLY thing the plan card's
-   *   "you said" mark may be proved against. Omit it and nothing is claimed as theirs;
-   *   `intent` is deliberately NOT used as a substitute, because `intent` is written
-   *   by a MODEL (`build_intent` in `src/api/builder.js`) and checking the model's
-   *   plan against the model's own paraphrase is a second laundering hop.
    */
-  async function run(threadId, intent, opts = {}) {
+  async function run(threadId, intent) {
     if (interactionStore && tenantId) {
       try { interactionStore.startSession(tenantId, threadId, { intent, userId }); } catch { /* ignore */ }
     }
-    return graph.invoke(initialState(intent, capabilities, opts?.typedTurns), cfg(threadId));
+    return graph.invoke(initialState(intent, capabilities), cfg(threadId));
   }
 
   async function resume(threadId, response) {

@@ -143,18 +143,28 @@ It does four things and emits the result into BOTH the Plan card and the generat
    the `I inferred` becomes an `I found`.
 4. **Inbox examples** — already done (`fetchRealExamples`); keep.
 
-**Confidence vocabulary** (extends the two-value chip): `you said` (stated cold) · `I found`
-(resolved live from a tool — connector or knowledge, cited) · `I inferred` (a guess to check).
+**⚠️ THE CONFIDENCE MARKING DESCRIBED BELOW WAS REMOVED ON 2026-07-27 (operator's call).**
+The section is kept as the record of what was built and why, because the reasoning outlived
+the feature — but **none of it is in the code any more**. `plan-provenance.js`,
+`said-words.js`, the `you said / I found / I inferred` chips, the word-level highlighting,
+the legend, the `typedTurns` channel and the per-line `confidence` field are all gone. The
+plan card renders plain text. Anything in this file that reads as a live description of the
+marks is history. What survives in code, and must: the plan **states** a missing Slack
+destination truthfully and does **not** pre-announce that Atlas will create it — that is the
+create-or-pick step's decision (pinned by `tests/converger/plan-grounding-prompt.test.js` and
+`tests/converger/plan-gate.test.js`). See CLAUDE.md for the lessons that were kept.
 
-**The vocabulary is a CLOSED domain, and it fails to the weaker claim** (fixed 2026-07-26).
-`stated | found | inferred` is written by a model, so anything else can arrive — missing,
-empty, `null`, a typo, or an invented phrase. Every one of those renders as **`I inferred`**.
-Only the literal `stated` may produce `you said`, because that mark is a claim *about the
-user* and Atlas may only make it when the user actually said the thing. The coercion runs
-**twice on purpose** — server-side where the plan is assembled (`normalizePlanConfidences`,
-`src/converger/plan-provenance.js`, applied in the `plan` node) and again in the browser
-(`planProvenanceLabel`, `public/index.html`) — so a client that never ran still cannot be
-handed an unlabelled item. Pinned by `tests/converger/plan-provenance.test.js`.
+*(Historical, as built 2026-07-26.)* **Confidence vocabulary** (extended the two-value chip):
+`you said` (stated cold) · `I found` (resolved live from a tool — connector or knowledge,
+cited) · `I inferred` (a guess to check).
+
+*(Historical.)* **The vocabulary was a CLOSED domain, and it failed to the weaker claim**
+(fixed 2026-07-26). `stated | found | inferred` is written by a model, so anything else can
+arrive — missing, empty, `null`, a typo, or an invented phrase. Every one of those rendered
+as **`I inferred`**. Only the literal `stated` could produce `you said`, because that mark is
+a claim *about the user* and Atlas may only make it when the user actually said the thing.
+The coercion ran **twice on purpose** — server-side where the plan is assembled, and again in
+the browser — so a client that never ran still could not be handed an unlabelled item.
 
 ## Increments (revised sequence)
 
