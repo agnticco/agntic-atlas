@@ -12,6 +12,12 @@
 set -eu
 cd "$(git rev-parse --show-toplevel)"
 
+# THE GATE CANNOT SEND REAL EMAIL — blanks every mail credential for this script's
+# children and refuses to run if the mailer is still live. scripts/gate.sh sources it
+# too, but this script is runnable directly (`bash scripts/gates/p0.sh`), and that
+# path bypasses gate.sh entirely.
+. scripts/gates/_no-mail.sh
+
 SERVER="src/api/server.js"
 PORT="${P0_GATE_PORT:-3987}"
 LOG="$(mktemp -t atlas-p0-gate.XXXXXX)"

@@ -21,6 +21,14 @@
 # still prints APPROVAL-ADVERSARIAL-PASS and exits 0 — `Promise.allSettled` in
 # `deliverAsk` swallows the outcome either way, so the send is SILENT.
 #
+# Precisely who receives it, verified 2026-07-27: `ops@acme.test` is the ONLY
+# recipient in any gate-reachable check, and `.test` is a reserved, non-routable
+# TLD (RFC 2606) — so no person is emailed *today*. The exposure is still real and
+# is not about the recipient: an outbound send leaves this machine carrying LIVE
+# single-use approval magic links, and nothing anywhere checks the address, so a
+# fixture that names a real one at any point in future mails a real person on the
+# same code path with no further warning.
+#
 # ── Why blanking the shell environment is enough ─────────────────────────────
 #
 # Measured on Node v22.22.2, in this worktree, both directions: a variable already
@@ -66,8 +74,15 @@ if ! _nomail_out=$(node --env-file-if-exists=.env \
   echo "" >&2
   echo "GATE REFUSED TO RUN: real email could be sent from this gate run." >&2
   echo "  A gate step (scripts/checks/approval-adversarial.mjs) reaches the real" >&2
-  echo "  mailer, so a live mail credential here means the checkpoint emails real" >&2
-  echo "  people — silently, and it still reports PASS." >&2
+  echo "  mailer, so a live mail credential here means the checkpoint really sends —" >&2
+  echo "  silently (Promise.allSettled swallows the outcome) and it still reports" >&2
+  echo "  PASS. The only recipient in any gate-reachable check today is" >&2
+  echo "  ops@acme.test, which is reserved and non-routable (RFC 2606), so no person" >&2
+  echo "  receives it. That is NOT the reassurance it sounds like: the send still" >&2
+  echo "  leaves this machine carrying LIVE single-use approval magic links, it burns" >&2
+  echo "  provider reputation on undeliverable mail, and the day any fixture names a" >&2
+  echo "  real address the same code path emails a real person with no further" >&2
+  echo "  warning. Nothing about the address is checked by anything." >&2
   echo "  scripts/gates/_no-mail.sh blanks the mail credentials for every child of" >&2
   echo "  the gate; something is putting one back. Do not delete this check to get" >&2
   echo "  a green run." >&2
