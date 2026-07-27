@@ -787,6 +787,42 @@ spec is actually executable, not just structurally similar to the frozen file.
   server.js, so this only bites when copying logic out of the salvage file.)
   Full map: [`docs/salvage-map.md`](docs/salvage-map.md).
 
+- **A build OFFER with no Build it button was SPECIFIED, not broken — and the envelope retry
+  was never involved (2026-07-27).** Five builds by four testers all hit the same thing:
+  Atlas's first restatement ended *"Want me to set this up?"* with **no button**, every tester
+  escaped by typing the literal phrase **"build it"**, and that produced a *second* restatement
+  plus a real button. Redundant, not severe (operator's call) — but the diagnosis matters more
+  than the fix, because the obvious suspect was innocent.
+  **The retry is healthy and has NEVER FIRED.** `envelopeRetried` in `src/api/builder.js` (landed
+  2026-07-21, `3901745`) re-asks the model for the JSON envelope with tools disabled, and its
+  result *can* set the flag. Measured at `7858ef9`: `chat.envelope.retry` appears **0** times
+  across all four `memory/logs/atlas-events.log*` files, ever; of **263** `chat.reply` events
+  exactly **4** carry `parsed:false`, dated 2026-07-04, 2026-07-15 (×2) and 2026-07-16 — **all
+  four predate the retry landing**. The whole QA session logged `parsed:true, retried:false` on
+  every turn. **Nothing was recovering, because nothing was broken to recover.** CLAUDE.md
+  previously documented only the JSON-format reminder for tool turns and never mentioned the
+  retry at all; that was the doc gap that let the retry look like the suspect.
+  **The cause was the prompt obeying its own instruction.** `buildChatSystem()` carried
+  *"gently offer ('Want me to set this up?') **but keep ready_to_build:false**"* — the offer
+  sentence as a literal string, paired with an order to withhold the flag. And
+  `ready_to_build:true` is the *only* thing the button is gated on (`if (twDone.readyToBuild)`
+  in `public/index.html`, a recorded decision — do not add a text parser for "yes"/"go ahead";
+  none exists anywhere today). So the product asked a question it gave the user no way to
+  answer, and the answer turned out to be a password.
+  **Changed:** the prompt now sets `ready_to_build:true` **and** writes a `build_intent` in
+  both cases — the user asking, *and* Atlas offering — and forbids an offer while the flag is
+  false outright. The flag is described as what puts the button on screen, explicitly **not**
+  as consent already given (the user still presses it, then approves every step).
+  **Pinned by `tests/api/build-offer-actionable.test.js` (8), four mutations red→green.** Read
+  the honest split in that file's header: the behavioural half drives the real
+  `POST /api/builder/chat` and pins the **mechanism** (`ready_to_build:true` → SSE `done`
+  `readyToBuild:true` with the intent riding along), which **nothing anywhere asserted before**
+  — `grep -rn "readyToBuild" tests/` returned nothing at `7858ef9`. The prompt half only pins
+  the **instruction**; whether the model complies is a belief no test can prove.
+  **Still unproven in both directions:** every tester typed "build it" *specifically*, so
+  whether answering "yes please" ever produced a button was never tested. Do not assert either
+  way; a headed QA pass is the pending confirmation.
+
 ## Production & deploying (the pilot is LIVE)
 
 Atlas runs in production at **https://atlas.agntic.co** — a single Node process
