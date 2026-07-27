@@ -75,6 +75,12 @@ const METHODS = [
   '_fact', '_stepDetail', '_approvalCard', '_approvalHint',
   '_deJargon', '_humanCron', '_titleCase', '_clip',
   '_liveNodesFromSpec', '_triggerNodeFrom',
+  // A step's NAME and DESCRIPTION are stored sentences; "Sends to" is derived. When a
+  // user rejects a proposed Slack channel and picks a real one, only the derived field
+  // followed, so the card named the rejected channel while sending to the right one.
+  // `_stepDetail` now reconciles the stored sentences against the live configuration
+  // through these. Pinned by tests/api/rejected-channel-naming.test.js.
+  '_ownChannelOf', '_realChannelsOf', '_trueChannelText', '_nodeSaidTruly',
 ];
 
 /**
