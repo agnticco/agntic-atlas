@@ -891,12 +891,32 @@ spec is actually executable, not just structurally similar to the frozen file.
   both cases — the user asking, *and* Atlas offering — and forbids an offer while the flag is
   false outright. The flag is described as what puts the button on screen, explicitly **not**
   as consent already given (the user still presses it, then approves every step).
-  **Pinned by `tests/api/build-offer-actionable.test.js` (8), four mutations red→green.** Read
+  **Pinned by `tests/api/build-offer-actionable.test.js` (11), eight mutations red→green.** Read
   the honest split in that file's header: the behavioural half drives the real
   `POST /api/builder/chat` and pins the **mechanism** (`ready_to_build:true` → SSE `done`
   `readyToBuild:true` with the intent riding along), which **nothing anywhere asserted before**
   — `grep -rn "readyToBuild" tests/` returned nothing at `7858ef9`. The prompt half only pins
   the **instruction**; whether the model complies is a belief no test can prove.
+  **BOTH copies of the mechanism are now pinned, because there are two (2026-07-27).** The
+  endpoint writes that `done` event in two places: the ordinary one inside the tool-round loop,
+  and the **forced-final** one taken when the model burns `MAX_TOOL_ROUNDS` without replying
+  (landed `601cb34`, 2026-07-15) — one more turn with tools switched off, reading
+  `ready_to_build` and normalising `build_intent` all over again. The first fix's four guards
+  were **blind to the second copy**: hardwiring the forced-final flag to `false`, to `true`,
+  dropping its `build_intent`, or leaving tools on that final turn all left the original eight
+  green. Unlike the retry, **this path is not hypothetical** — `forcedFinal:true` appears on a
+  real `chat.reply` line, once, at `2026-07-15T12:31:44.826Z` (it carried `readyToBuild:false`,
+  so the *offer* case on that path remains unobserved; do not claim it either way). Its fixture
+  must hand the endpoint **real tools** — with an empty tool list the budget can never be burned,
+  so the test would exercise a path production cannot take *and* the "the final turn is issued
+  with tools DISABLED" assertion could not fail.
+  **The contract doc taught the workaround, and that is why the defect survived QA.**
+  `.claude/skills/atlas-product/SKILL.md` §1 said in as many words *"the user's only escape is
+  to type 'build it'"*, and the QA report records all four testers recovering by typing it
+  *"which they knew only because the product's own contract document told them."* A tester
+  handed the password cannot report the lock. §1 is rewritten (same commit): an offer with no
+  button is the finding, nobody is told to type anything, and the retry is described as a path
+  never yet taken rather than as the normal recovery.
   **Still unproven in both directions:** every tester typed "build it" *specifically*, so
   whether answering "yes please" ever produced a button was never tested. Do not assert either
   way; a headed QA pass is the pending confirmation.

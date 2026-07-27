@@ -61,11 +61,40 @@ The two most useful:
 
 `+` (top of the sidebar) → a composer. Type the job, press Return.
 
-**Must:** Atlas replies with either a clarifying question or a restatement plus a
-**Build it** button. **The button is the tell** — if the reply is prose with no
-button, the model drifted out of its required format and the conversation
-dead-ends. The user's only escape is to type "build it". Atlas retries once
-automatically; a second failure is a finding.
+**Must:** Atlas replies with exactly one of two things — a **clarifying question**,
+or an **offer to build that carries a Build it button**. There is no acceptable
+third reply. An offer and its button are one act: if Atlas says "Want me to set this
+up?" and there is nothing on screen to press, **that is the finding**, and it is a
+blocker — the person has been asked a question the product gives them no way to
+answer.
+
+**Do not work around it, and do not type your way past it.** Until 2026-07-27 the
+chat prompt itself told the model to make that offer while withholding the button,
+so the missing button was *specified*, not a malfunction. Four testers each escaped
+by typing the literal phrase "build it" — which they knew only because this document
+used to tell them. **A tester who has been given the password cannot report the
+lock.** If you meet an offer with no button, stop there and report it.
+
+**What draws the button is one flag on the reply** (`ready_to_build`), and nothing
+else: the browser adds the button only when the turn ends with that flag set
+(`public/index.html`, the `twDone.readyToBuild` branch — the only place the Build it
+message is created). There is no parser anywhere that reads "yes" or "go ahead" out
+of the user's text, so typing an agreement cannot substitute for the button.
+
+**The automatic retry is NOT the normal recovery route — seeing it fire is itself
+worth reporting.** If the model answers in prose instead of the format Atlas needs,
+the chat endpoint re-asks once, with tools off (`chat.envelope.retry` in the event
+log; the following `chat.reply` line carries `retried:true`). Measured across all
+four `memory/logs/atlas-events.log*` files on 2026-07-27: that retry has fired
+**zero** times, ever, and of **263** replies exactly **4** were unreadable — all four
+dated before the retry was built. So a retry in the log is a first, not a hiccup:
+say so rather than treating it as Atlas recovering normally.
+
+One turn in the log has ended by a quieter route (`forcedFinal:true` on the
+`chat.reply` line): the model used connectors until it ran out of tool rounds, so
+Atlas made it answer with tools switched off. **The rule above is unchanged on that
+route** — flag set means a button, flag clear means none. Pinned by
+`tests/api/build-offer-actionable.test.js`.
 
 **Must:** the restatement covers *every* branch the user described. A user who says
 "urgent goes to Slack, normal goes to my inbox, ignore spam" and gets a restatement
