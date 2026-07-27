@@ -856,6 +856,33 @@ Deploying is outward-facing: do it only when the operator asks. Committing/pushi
   in the commit.
 - **Don't parallelize the converger.** Phases 0–3 + the spine are serial.
   Worktree-isolate only the independent connectors and the greenfield UI surfaces.
+- **THE GATE CANNOT SEND REAL EMAIL (2026-07-27, operator: remove sending from the gate
+  rather than guard it).** It could, and it did: `scripts/checks/approval-adversarial.mjs`
+  boots the real server and parks two runs on a `human` node whose channels include
+  `{type:'email', to:'ops@acme.test'}`, and `deliverAsk` dispatches every declared channel —
+  so with a mail credential in the environment that gate step delivers **two real approval
+  emails, each carrying a live single-use approval magic link**, still prints
+  `APPROVAL-ADVERSARIAL-PASS` and exits 0. `Promise.allSettled` swallows the outcome, so the
+  send is silent. It got away with it only because that one invocation happens to omit
+  `--env-file` while every other `node` call in `p12.sh` has it — "no gate step sends mail"
+  was an accident of a list, not an invariant. (Measured against a local SMTP catcher,
+  2026-07-27: 2 messages without the lockout, 0 with it, same env file and port.)
+  **The mechanism is `scripts/gates/_no-mail.sh`**, sourced by `scripts/gate.sh` and by
+  `p3.sh` / `p12.sh` / `p13.sh` after their `cd`. It exports `RESEND_API_KEY`, `MAIL_FROM`,
+  `SMTP_*` and `GMAIL_*` **empty**, which wins: measured on Node v22.22.2, `--env-file` and
+  `--env-file-if-exists` do **not** overwrite a variable already in the environment, and an
+  empty string counts as present. So every descendant of the gate is covered — including a
+  step added later that nobody remembered to guard, and one invoked *without* `--env-file`
+  that would otherwise inherit a key exported in the operator's own shell. It then **proves
+  it and refuses to run** if `mailerConfigured()` is still true, rather than running and
+  hoping. **`ANTHROPIC_API_KEY` is deliberately untouched** — the gate loads `.env` for
+  exactly that key (`full-journey.test.js` self-skips the converger test without it; that is
+  how P11 was nearly closed on a false pass) and the lockout must stay targeted at mail.
+  Pinned by `tests/gates/gate-cannot-send-mail.test.js` (5), run first in `p12.sh` and
+  `p13.sh`, hand-mutated red→green. **No product code guards sending** — `mailer.js` gained
+  only a corrected doc comment. **Accepted consequence:** the gate no longer exercises the
+  email approval channel at all. That is *not exercised*, not *passing* — sending is known
+  to work from the operator's own use, which is not a measured result.
 
 ## Open residuals carried forward
 

@@ -9,6 +9,13 @@ set -eu
 
 cd "$(git rev-parse --show-toplevel)"
 
+# THE GATE CANNOT SEND REAL EMAIL — blanks the mail credentials for every child of
+# this run and refuses to start if the mailer is still live. See the file for the
+# measured reason (a P12 step really does reach the mailer). Sourced here because
+# this is the entrypoint the pre-push hook and the verifier both call; the gates
+# that load .env source it themselves too, for a direct `bash scripts/gates/pN.sh`.
+. scripts/gates/_no-mail.sh
+
 phase="${1:-}"
 case "$phase" in
   0|1|2|3|4|5|6|7|8|9|10|11|12|13) ;;

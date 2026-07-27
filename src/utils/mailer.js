@@ -76,7 +76,18 @@ async function sendViaResend({ from, to, subject, text, html }) {
   if (!res.ok) throw new Error(`resend send failed: ${res.status} ${(await res.text()).slice(0, 300)}`);
 }
 
-/** True when real email can be sent (Gmail-SA or SMTP configured). */
+/**
+ * True when real email can be sent — i.e. ANY sender is configured: Resend
+ * (the currently active mode), Gmail service-account, or SMTP. The old comment
+ * here listed only Gmail-SA and SMTP and so read as "Resend is not covered",
+ * which is the opposite of the truth (2026-07-27).
+ *
+ * This is also a SAFETY ASSERTION, not only a capability flag: the test gate
+ * requires it to be false in every process it starts (scripts/gates/_no-mail.sh,
+ * tests/gates/gate-cannot-send-mail.test.js). Any new sending mode must be added
+ * to `mode()` above AND to that script's blanked variable list, or the gate can
+ * silently email real people again.
+ */
 export function mailerConfigured() { return mode() !== 'none'; }
 
 // ── Gmail API (service account, domain-wide delegation) ──────────────────────

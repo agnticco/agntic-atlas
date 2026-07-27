@@ -72,6 +72,10 @@
 set -eu
 cd "$(git rev-parse --show-toplevel)"
 
+# THE GATE CANNOT SEND REAL EMAIL. P13's regression section will wire in the P12
+# functional suites, which is exactly how a mail-touching step arrives here.
+. scripts/gates/_no-mail.sh
+
 fail() { echo "p13 FAIL: $*" >&2; exit 1; }
 
 # Run a node test file; fail with its tail on error.
@@ -106,6 +110,12 @@ next() {
 # The moat (LLM_INPUT_NOT_ENUM) and complete⇒publishable must hold for the NEW
 # capability sources too — that is increment D's adversarial gate.
 # (Nothing to regress until P13-0 exists; the gate still fails closed below.)
+
+# THE GATE CANNOT SEND REAL EMAIL (2026-07-27, operator: remove sending from the
+# gate rather than guard it). _no-mail.sh sourced at the top establishes it; this
+# suite is what pins it, and it is red the moment the lockout is gone.
+echo "p13: [regression] the gate cannot send real email..."
+run_test tests/gates/gate-cannot-send-mail.test.js "regression: no-mail lockout"
 
 # ── P13-0. The converger seams are generalized (catalog is source-agnostic) ────
 # Contract (behavioral, line-independent — see the brief): a SYNTHETIC write capability

@@ -7,6 +7,10 @@
 set -eu
 cd "$(git rev-parse --show-toplevel)"
 
+# THE GATE CANNOT SEND REAL EMAIL. Load-bearing here because line 19 below uses a
+# HARD --env-file=.env, and p12.sh runs this script as its first regression step.
+. scripts/gates/_no-mail.sh
+
 fail() { echo "p3 FAIL: $*" >&2; exit 1; }
 
 # ── 1. Frozen spec exists ─────────────────────────────────────────────────────
