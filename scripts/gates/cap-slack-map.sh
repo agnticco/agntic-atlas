@@ -10,6 +10,13 @@
 set -eu
 cd "$(git rev-parse --show-toplevel)"
 
+# THE GATE CANNOT SEND REAL EMAIL — blanks every mail credential for this script's
+# children and refuses to run if the mailer is still live. Load-bearing here because
+# the capability checks are NOT reachable through scripts/gate.sh, so nothing else
+# establishes it for them. No check below sends mail today; this keeps that true for
+# the one added later that nobody remembered to guard.
+. scripts/gates/_no-mail.sh
+
 fail() { echo "cap-slack-map FAIL: $*" >&2; exit 1; }
 
 [ -f src/connectors/slack/capabilities.json ] || fail "capabilities.json missing"
