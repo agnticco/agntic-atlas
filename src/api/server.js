@@ -98,7 +98,7 @@ import { ApprovalService } from '../approvals/approval-service.js';
 import { availableApprovalChannels, approvalChannelView } from '../workflows/approval-channels.js';
 import { evaluateExampleRun, deliveriesForStep, setCapabilityCatalog } from '../workflows/outcome-oracle.js';
 import { runSpecDryRun } from '../workflows/dry-run-runner.js';
-import { oauthRedirectBase } from '../connectors/oauth-redirect.js';
+import { oauthRedirectBase, redirectReachableFrom } from '../connectors/oauth-redirect.js';
 import { entitlementsFor, PUBLIC_PLANS, PLAN_META, isSelfServe } from '../entitlements/index.js';
 import { BillingEventStore } from '../billing/billing-event-store.js';
 import { handleStripeLifecycle } from '../billing/lifecycle.js';
@@ -2002,6 +2002,31 @@ export function createApp(spine) {
     } catch (err) {
       res.status(500).json({ error: `capabilities failed: ${err.message ?? String(err)}` });
     }
+  });
+
+  // ── REFUSE AN OAUTH ROUND-TRIP THAT CANNOT COME BACK ───────────────────────
+  // One middleware over every connector's start route, not a check per connector:
+  // the failure is a property of the DEPLOYMENT's redirect base, identical for all
+  // of them, and a per-connector copy is how the next connector ships without it.
+  //
+  // Observed 2026-07-28: a local run carried OAUTH_REDIRECT_BASE=https://dev.agntic.co.
+  // Pressing Connect on http://localhost:3000 handed the user to Airtable, which
+  // answered "invalid client_id or mismatched redirect_uri" — the provider's error
+  // page, in the provider's words, for our misconfiguration. Atlas said nothing at
+  // any point, Airtable could not be connected at all, and every table-shaped
+  // workflow was untestable locally until the cause was traced back to config.
+  //
+  // Fail closed and name both values: the round trip provably cannot return, so
+  // sending the browser to a provider that will reject it helps nobody.
+  app.get(/^\/connectors\/[^/]+\/(authorize|oauth\/start)$/, (req, res, next) => {
+    const proto  = req.get('x-forwarded-proto') || req.protocol || 'http';
+    const host   = req.get('x-forwarded-host')  || req.get('host');
+    const check  = host ? redirectReachableFrom(`${proto}://${host}`) : { ok: true };
+    if (check.ok) return next();
+    logEvent('connector.oauth_unreachable_base', {
+      tenant: req.tenant?.id ?? null, path: req.path, base: check.base, origin: check.origin,
+    });
+    return res.status(409).json({ error: check.message, base: check.base, origin: check.origin });
   });
 
   // ── Slack connector OAuth (client authorizes the Atlas app; per-tenant token) ──

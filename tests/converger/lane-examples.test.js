@@ -93,8 +93,25 @@ describe('when the top-up runs, and what it must not break', () => {
   const src = verifySource();
 
   test('only when there are fewer samples than paths', () => {
-    assert.match(src, /lanes\.length > have\.length/,
+    // The comparison moved into `skipReason` on 2026-07-28 so the SKIP is logged too
+    // — see below. The invariant is unchanged: enough samples ⇒ no model call.
+    assert.match(src, /lanes\.length <= have\.length/,
       'a workflow that does not branch must not pay for a model call it does not need');
+  });
+
+  test('a skipped top-up says WHY it was skipped', () => {
+    // Measured on a `classify→route` build (2026-07-28): the top-up correctly did not
+    // run, and established that took a database query, because only the failure
+    // branches logged and the GATE did not. "Correctly skipped" and "silently did
+    // nothing" must not look identical — a loop whose observations need a database
+    // query is not observable.
+    const i = src.indexOf('const skipReason');
+    assert.ok(i > 0, 'the gate must name its reason');
+    const around = src.slice(i, i + 900);
+    for (const reason of ['no_dry_runner', 'no_contract_to_prove', 'enough_samples_already']) {
+      assert.match(around, new RegExp(reason), `the skip reason ${reason} must be distinguishable`);
+    }
+    assert.match(around, /lane_examples_skipped/);
   });
 
   test('the extra samples get fresh, non-colliding ids', () => {
