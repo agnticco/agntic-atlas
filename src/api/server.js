@@ -96,7 +96,7 @@ import { renderResetEmail } from '../auth/reset-email.js';
 import { ApprovalStore } from '../approvals/approval-store.js';
 import { ApprovalService } from '../approvals/approval-service.js';
 import { availableApprovalChannels, approvalChannelView } from '../workflows/approval-channels.js';
-import { evaluateExampleRun, normalizeDelivery, isDeliveryNode, setCapabilityCatalog } from '../workflows/outcome-oracle.js';
+import { evaluateExampleRun, deliveriesForStep, setCapabilityCatalog } from '../workflows/outcome-oracle.js';
 import { runSpecDryRun } from '../workflows/dry-run-runner.js';
 import { oauthRedirectBase } from '../connectors/oauth-redirect.js';
 import { entitlementsFor, PUBLIC_PLANS, PLAN_META, isSelfServe } from '../entitlements/index.js';
@@ -2588,15 +2588,12 @@ export function createApp(spine) {
       // a bare `o.delivered` dropped gmail/airtable entirely and left inbox with no
       // channel — the runtime oracle could then confirm only Slack. normalizeDelivery
       // derives channel + destination from the node config, which always has them.
+      // `deliveriesForStep` is the ONE rule (outcome-oracle.js) — including the
+      // approval step's ask, which the build-time check has always counted and this
+      // one used to drop, leaving a DM the run really sent reported as "unproven".
       const nodeById = new Map((spec.nodes ?? []).map((n) => [n.id, n]));
       const deliveries = steps
-        .map((s) => {
-          const node = nodeById.get(s.nodeId);
-          const o = coerce(s.output);
-          if (!isDeliveryNode(node) && !(o && o.delivered === true)) return null;
-          return normalizeDelivery(node, o);
-        })
-        .filter(Boolean);
+        .flatMap((s) => deliveriesForStep(nodeById.get(s.nodeId), coerce(s.output)));
       // R14: a step can "complete" (not throw) yet emit the ERROR sentinel that
       // prompts.js instructs LLM nodes to return when required upstream data is
       // missing ("ERROR: required data not found — do not compose content."). That

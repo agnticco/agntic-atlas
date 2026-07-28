@@ -988,6 +988,56 @@ function deliveryWhere(d) {
   return loc ? `${loc} (${place})` : place;
 }
 
+/**
+ * THE ONE RULE FOR "WHAT COUNTS AS A DELIVERY THIS RUN MADE".
+ *
+ * Both places that assemble a run's deliveries — `dry-run-runner.js` and
+ * `POST /workflows/run` — used to carry their own copy of this rule, each a
+ * comment apart, and each one blind to the approval step. That duplication is
+ * how the build-time and runtime checks came to disagree in the first place.
+ *
+ * ── Why an approval step's ask belongs here (2026-07-28) ─────────────────────
+ *
+ * `satisfiesAssertion` has always known that a `human` node's question IS a
+ * message — see `askSatisfiesAssertion`, and the long note above it explaining
+ * that folding the DM into the approval step is the CORRECT shape, because a
+ * separate delivery node would message the person twice. So a spec promising
+ * *"DM me asking to approve"* passes the build.
+ *
+ * At runtime it did not. Deliveries were collected as
+ * `isDeliveryNode(node) || output.delivered === true`, and a `human` node is
+ * neither — so the ask was invisible to the oracle. Witnessed on prod
+ * (2026-07-28, v1.6.48) on an otherwise passing run: *"Nothing in this run could
+ * check hello@agntic.co on Slack, so that part is still unproven."* One of the
+ * workflow's three promises went live unverified, on a run that did send it.
+ *
+ * The narrowing is inherited whole from `humanAskTargets`: slack and inbox only
+ * (an `email` ask is a platform magic link, not the tenant's connector, so it
+ * must not satisfy a gmail promise), and each channel matched as its own
+ * connector+target pair rather than pooled.
+ *
+ * REACHING THE NODE IS THE EVIDENCE. `steps` contains only nodes that executed,
+ * so an ask receipt exists exactly when the workflow actually got to the point of
+ * asking — the same standard every other dry delivery is held to.
+ */
+export function askDeliveriesOf(node) {
+  return humanAskTargets(node).map(t => ({
+    delivered: true,
+    ask:       true,
+    channel:   t.connector === 'slack' ? 'slack' : 'inbox_deliver',
+    target:    t.locator || null,
+    locators:  t.locator ? [t.locator] : [],
+  }));
+}
+
+/** Every delivery one executed step produced — 0, 1, or (for a multi-channel ask) more. */
+export function deliveriesForStep(node, output) {
+  const asks = askDeliveriesOf(node);
+  if (asks.length) return asks;
+  if (!isDeliveryNode(node) && !(output && output.delivered === true)) return [];
+  return [normalizeDelivery(node, output)];
+}
+
 /** Did this run produce the effect this assertion promises? */
 export function checkAssertionAtRuntime(assertion, deliveries = []) {
   const defect = assertionDefect(assertion);

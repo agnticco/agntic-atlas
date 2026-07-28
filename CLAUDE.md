@@ -1705,6 +1705,26 @@ did not exist. Both now log (`converger.lane_examples_empty` /
 not producing per-path samples on prod, and the cause is still unknown. Next build's log
 will name it.
 
+**The approval step's DM went live unverified — FIXED (2026-07-28).** On an
+otherwise PASSING prod run: *"Nothing in this run could check hello@agntic.co on
+Slack, so that part is still unproven."* The workflow did send it — the approval step
+is what sends it, which is the whole reason there is no separate delivery node (a
+second one would message the person twice). **The same build-time/runtime asymmetry
+as the Airtable id above:** `satisfiesAssertion` has always counted a `human` node's
+ask (`askSatisfiesAssertion`), while a run's deliveries were assembled as
+`isDeliveryNode(node) || output.delivered === true` — and a `human` node is neither,
+so the ask was invisible to the oracle. One of three promises certified as unproven on
+a run that kept it. **Both collection sites now call one shared `deliveriesForStep`**
+(`dry-run-runner.js` and `POST /workflows/run` each carried their own copy of the rule,
+a comment apart — that duplication is how build and runtime drifted). The narrowing is
+inherited whole from `humanAskTargets`: slack/inbox only (an `email` ask is a platform
+magic link, not the tenant's connector), each channel matched as its own
+connector+target pair, never pooled. Reaching the node is the evidence — `steps`
+contains only nodes that executed. Pinned by
+`tests/workflows/ask-counts-at-runtime.test.js` (9, mutation-verified red→green;
+anti-false-pass cases prove a different person, an email ask, a record promise, a
+channel-less ask and cross-channel pooling all still fail).
+
 **Still open, roughly in the order they matter:**
 
 0. **Table-shaped destinations must be settled BEFORE the plan, for every connector

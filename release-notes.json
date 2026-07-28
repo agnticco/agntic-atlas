@@ -1,5 +1,13 @@
 [
   {
+    "version": "1.6.49",
+    "date": "2026-07-28",
+    "title": "The approval message now counts as proof",
+    "notes": [
+      "When a workflow asks you to approve something on Slack, that message is now counted as one of the promises it kept. It was being sent but not checked, so a workflow could go live with Atlas saying that part was 'still unproven' — on a run that had actually sent it."
+    ]
+  },
+  {
     "version": "1.6.48",
     "date": "2026-07-28",
     "title": "Approval workflows can pass their own test",

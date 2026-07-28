@@ -23,7 +23,7 @@
  * (a recording registry that must stay empty).
  */
 
-import { evaluateExampleRun, normalizeDelivery, isDeliveryNode } from './outcome-oracle.js';
+import { evaluateExampleRun, deliveriesForStep } from './outcome-oracle.js';
 
 /**
  * @param {object} args
@@ -93,15 +93,12 @@ export async function runSpecDryRun({
     if (typeof o === 'string') { try { return JSON.parse(o); } catch { /* not json */ } }
     return null;
   };
+  // `deliveriesForStep` is the ONE rule (outcome-oracle.js) — including the approval
+  // step's ask, which the build-time check has always counted and this one used to
+  // drop, leaving a DM the run really sent reported as "still unproven".
   const nodeById = new Map((spec?.nodes ?? []).map((n) => [n.id, n]));
   const deliveries = steps
-    .map((s) => {
-      const node = nodeById.get(s.nodeId);
-      const o = coerce(s.output);
-      if (!isDeliveryNode(node) && !(o && o.delivered === true)) return null;
-      return normalizeDelivery(node, o);
-    })
-    .filter(Boolean);
+    .flatMap((s) => deliveriesForStep(nodeById.get(s.nodeId), coerce(s.output)));
 
   // Judge against the outcome contract — the loop's pass/fail. Absent an outcome
   // (v1 spec, or a bare run) there is nothing to gate on, so oracleResult is null and
