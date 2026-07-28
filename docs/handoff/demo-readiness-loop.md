@@ -113,6 +113,62 @@ Unifying only the first two produced a worse failure than the original — the b
 ENABLED and pressing it did nothing at all: no request, no error, no feedback. A
 disabled button at least explains itself. All three now read one derivation.
 
+## Round 2 probe — `digest` (two sources, web + Gmail)
+
+Chosen to exercise machinery nothing else had: two content sources combined into one
+document, a live web connector, and the multi-source `assemble` path that CLAUDE.md
+records as having caused an 11½-minute rebuild loop.
+
+| Measure | Value |
+|---|---|
+| Generate passes | **1** (51.4s) |
+| Build total (Approve & build → built) | **3m 56s** |
+| `verify` | **180.8s — 77% of the build** |
+| Test run | 3 samples × ~85s each ≈ **4m** |
+| **Approve & build → a verdict** | **≈ 8 minutes** |
+| Verdict | **Contract kept**, 3 examples, 2 exercised the deal |
+
+**THE LATENCY FINDING, AND IT INVERTS THE ASSUMPTION.** The worry was that easy shapes
+would flatter a pooled average. The real distortion is the opposite: a shape that
+*fetches* is ~3× the approval shape and ~6× the linear one, and **the cost is not in
+building — it is in checking**. `generate` was 51s; the self-test was 181s, because a
+dry run executes the real web search. Each test-panel sample then repeats it at ~85s.
+Optimising the converger would barely move this number.
+
+- **The build does not say why it is slow.** For 3 minutes the screen reads
+  "Building…" with an empty chain of thought and no diagram. The *test panel* handles
+  this honestly — *"this can take a few minutes for web search or multi-source
+  steps"* — and the build says nothing. Same wait, one screen explains it.
+- **`assemble` still untested.** The converger chose an **AI compose step** over an
+  `assemble` node, so the multi-source section trap was never reached. The probe did
+  not test what it was aimed at; that path remains unexercised.
+
+### Findings, in order of how much they mislead
+
+1. **A confirmed time window became an approximation, silently.** Atlas asked, and the
+   user confirmed, *"unread messages that arrived between Friday evening and Monday
+   morning"*. The step card repeats that sentence — and the query beneath it is
+   `is:unread newer_than:3d`, a rolling window that shifts with run time and, on a
+   Monday 8am run, reaches back to Friday *morning*. The English and the query
+   disagree, and the English is the part a person checks.
+2. **The offer promised a Google Doc; the plan and the build dropped it.** Atlas
+   introduced it unprompted (*"summarise both into a single Google Doc"*), then hedged
+   (*"post the doc (or its content)"*), then never built one. Nothing the user asked
+   for was lost, but two Atlas screens disagree.
+3. **The trigger silently defaulted to UTC.** No timezone was asked for here, though an
+   earlier build in the same session *did* ask. 8am UTC is not 8am to a UK user.
+4. **Raw templates on a step card** — `{{search_news.output}}`, `{{search_emails.output}}`
+   shown to the person. Recurring; seen on prod too.
+5. **Panel "4 steps" vs the queue's "5"** — the `steps` half of the shape-of-truth gap,
+   left deliberately as the operator's call. Still visible.
+6. **Sample names are plain English here** ("Monday with web headlines but no unread
+   email") and raw identifiers on classify shapes (`urgent_complaint`). Same screen,
+   two conventions.
+
+**Confirmed working in real use:** `converger.lane_examples_skipped` fired with
+`reason: enough_samples_already` — the round-1 instrumentation gap is closed, and the
+skip was legible without opening the database.
+
 ## Backlog (operator, not priority)
 
 - **Node-by-node progress during a test run.** When a test runs, the workflow nodes
@@ -126,3 +182,4 @@ disabled button at least explains itself. All three now read one derivation.
 |---|---|---|---|---|
 | 0 | 2026-07-28 | baseline captured; scorecard + verdict logging added | classify→approve→route | see above |
 | 1 | 2026-07-28 | column facts not regenerable; paths count every branch; timeout warning; columns settled pre-plan; skip reasons logged; OAuth origin refused; test gate unified across 3 call sites | linear, classify→route | 3/3 single-pass; classify→route certified |
+| 2 | 2026-07-28 | probe only — no code change | digest (web + Gmail) | 1 pass, 3m56s build, ≈8min to verdict, contract kept; 6 findings |
