@@ -379,6 +379,13 @@ export function scoreGap(spec = {}, { capabilities = {}, validator = null } = {}
       severity: issue.severity,
       message:  issue.message,
       hint:     issue.hint ?? null,
+      // WHICH PART OF THE NODE IS WRONG. Carried through because one code can mean
+      // two different KINDS of problem, and they need opposite treatment: an
+      // UNSATISFIED_ASSERTION on `config.fields` is a fact about the user's real
+      // table (a column that does not exist), which no rebuild can change, while the
+      // same code elsewhere means a step is genuinely missing, which a rebuild CAN
+      // fix. Without this the two were indistinguishable and both bought an Opus pass.
+      field:    issue.field ?? null,
       // A deterministic, machine-applicable repair the validator computed for a
       // STRUCTURAL defect (a missing branch/route edge to add, an ambiguous extra
       // edge to remove). Present only on codes whose fix is unambiguous. The gaps

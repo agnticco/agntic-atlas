@@ -7455,9 +7455,30 @@ class Component extends DCLogic {
     const wired = {};
     cases.forEach(c => { const w = this._normRoute(c.when); if (w && w !== '*') wired[w] = true; });
 
+    // ── A TIMEOUT THE SYSTEM RESOLVES IS NOT AN UNROUTED ANSWER ──────────────
+    // A human step may declare `timeout: { after: "48h", then: "reject" }`, and the
+    // sweeper honours it: `decision = (then && allowed.has(then)) ? then : 'timeout'`
+    // (workflow-scheduler.js). So when `then` names another allowed answer that this
+    // branch already wires, the branch NEVER sees `timeout` — and flagging it in red
+    // as having "no path of its own" contradicts the approval card two screens
+    // earlier, which says in plain words "after 48h, it counts as reject".
+    //
+    // Two screens disagreeing about one configured behaviour is worse than either
+    // being wrong alone: this screen exists so a non-technical person can catch a
+    // mistake by READING, and it was manufacturing one.
+    //
+    // Deliberately narrow — suppressed ONLY when `then` names a decision this branch
+    // actually wires. If it names nothing, or names something unwired, `timeout` can
+    // still reach the catch-all and the warning is true, so it stays.
+    var timeoutThen = (src && src.type === 'human' && src.config && src.config.timeout
+                       && src.config.timeout.then != null)
+      ? this._normRoute(String(src.config.timeout.then)) : null;
+    var timeoutResolved = !!(timeoutThen && wired[timeoutThen]);
+
     const unrouted = [];
     domain.forEach(v => {
       if (wired[this._normRoute(v)]) return;
+      if (timeoutResolved && this._normRoute(v) === 'timeout') return;
       const english = this._plainId(v);
       unrouted.push({
         value: v,
@@ -8802,7 +8823,22 @@ class Component extends DCLogic {
     // and the graph cannot disagree about the same spec. Reading `cases` here instead
     // would report 0 paths for a fan-out, which HAS lanes and no cases — and several
     // cases (including the catch-all) routing to one node is ONE lane, not several.
+    // ── PATHS MEANS EVERY PATH, NOT THE FIRST BRANCH'S ───────────────────────
+    // This counted lanes off the FIRST split only, so it structurally could not see
+    // an approval gate downstream of a classifier. Measured on a real 12-node,
+    // 2-branch workflow (2026-07-28): the panel said "3 paths" while the oracle
+    // certified against 5 — and the oracle's number is the one that decides whether
+    // Go live unlocks. A person reading "3 paths" was reading a different workflow
+    // from the one being checked.
+    //
+    // `laneInventoryOf` (outcome-oracle.js) is the authority: per branch, the
+    // DISTINCT targets of its cases. Mirrored here — several cases converging on one
+    // node are one lane, which is why it counts distinct targets rather than cases.
     const targets = this._splitTargetsOf(src, edges);
+    const allPaths = nodes.reduce((sum, n) => {
+      if (!n || n.type !== 'branch') return sum;
+      return sum + this._splitTargetsOf(n, edges).length;
+    }, 0);
     const parallel = !this._isExclusiveSplit(src);
     // "paths" only means alternatives. A fan-out's lanes ALL run, so calling them
     // paths tells the user a choice is being made when nothing is choosing.
@@ -8813,9 +8849,15 @@ class Component extends DCLogic {
     // only the trunk would report "1 step" for a workflow the plan card correctly
     // calls "3 STEPS", widening the very step-count disagreement that is already on
     // record as a defect.
+    // `steps` is left alone deliberately. After a router only ONE lane runs, so the
+    // lane nodes are not steps this workflow always takes — that is a product
+    // decision on the record above, not a bug, and changing it is the operator's
+    // call rather than something to slip in beside a correctness fix. It does still
+    // disagree with the approval queue's "STEP n OF 12"; recorded, not silently
+    // altered. `paths` is different: it was provably counting the wrong thing.
     return {
       steps: parallel ? nodes.length : brIdx + 1,
-      paths: targets.length,
+      paths: parallel ? targets.length : (allPaths || targets.length),
       parallel,
     };
   }

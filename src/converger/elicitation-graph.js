@@ -210,6 +210,25 @@ export function sufficiencyClaimAlreadyCovered(missing, draft) {
   return false;
 }
 
+/**
+ * Is this blocker a FACT ABOUT THE WORLD rather than a defect in the spec?
+ *
+ * A missing Slack channel, an unverifiable base, a column the table does not have —
+ * none of these can be resolved by regenerating the workflow, because no amount of
+ * rewriting creates a channel or a column in someone else's account. They have to be
+ * taken to the person. Anything else is the builder's own output being wrong, which a
+ * rebuild genuinely can fix.
+ *
+ * Keyed on `field`, not on the code alone: UNSATISFIED_ASSERTION means "a promised
+ * column is missing" when it points at `config.fields`, and "a step that delivers
+ * this is missing" everywhere else — opposite treatments, one code.
+ */
+export function isNotRegenerable(gap) {
+  if (!gap || typeof gap !== 'object') return false;
+  if (gap.code === 'RESOURCE_NOT_FOUND' || gap.code === 'RESOURCE_UNVERIFIED') return true;
+  return gap.code === 'UNSATISFIED_ASSERTION' && gap.field === 'config.fields';
+}
+
 /** Fingerprint of a sufficiency complaint, for "it said the same thing again". */
 export function missingKeyOf(missing) {
   return String(missing ?? '').toLowerCase().replace(/\s+/g, ' ').trim().slice(0, 200);
@@ -1472,8 +1491,26 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
     // `gaps`, where it is resolved conversationally. If there are OTHER blockers too,
     // regenerate as usual — those may close, leaving the resource gap to be handled
     // on the next pass.
+    // A COLUMN THAT DOES NOT EXIST IS THE SAME KIND OF FACT AS A MISSING CHANNEL.
+    // `destinations` maps the promised fields onto the table's REAL columns and
+    // records whatever it could not place (`unmapped`), deliberately leaving it to
+    // fail rather than dropping it silently. That failure arrives here as
+    // UNSATISFIED_ASSERTION on `config.fields` — and a whole-spec rebuild cannot
+    // resolve it, because no amount of regenerating creates a column in someone
+    // else's Airtable. Measured on prod 2026-07-28 (`build-platform-1785255582744`):
+    // two of that build's three generate passes — 112s + 152s — were spent on
+    // exactly this, and it still ended up asking the user.
+    //
+    // So it joins the resource gaps: not a spec defect, not regenerable, taken to the
+    // person conversationally. Deliberately keyed on `field`, not on the code alone —
+    // the SAME code means "a step is genuinely missing" elsewhere, and that one a
+    // rebuild really can fix.
     const blockers = unansweredGaps(gap);
-    if (blockers.length && blockers.every(g => g.code === 'RESOURCE_NOT_FOUND' || g.code === 'RESOURCE_UNVERIFIED')) {
+    if (blockers.length && blockers.every(isNotRegenerable)) {
+      logEvent('converger.regen_skipped', {
+        ...who(cfg), reason: 'not_regenerable', blockers: blockers.length,
+        key: blockers.map(g => `${g.code}:${g.field ?? ''}`).sort().join('|').slice(0, 200),
+      });
       return { ...carryRepair, phase: 'gapping' };
     }
 
