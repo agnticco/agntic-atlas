@@ -475,6 +475,35 @@ function isTemplate(s) {
 }
 
 /**
+ * An OPAQUE PROVIDER ID — `tblbQ0PmkA2o1P17Q` — as opposed to a name a person
+ * wrote. Whether it names the same table as `Table 1` is a question only a network
+ * call to the provider can answer, so string comparison must not answer it, and
+ * must never answer it "mismatch". Same judgement already made for a template.
+ *
+ * Deliberately NARROW: the documented Airtable id prefixes with their exact 14-char
+ * body. `Sheet1`, `#general`, `ops@acme.com` are unaffected, so a genuinely wrong
+ * human-named destination still fails.
+ *
+ * WHY IT IS SHARED (2026-07-28, witnessed on prod). This rule existed only inside
+ * `satisfiesAssertion` — the BUILD-time check — while `checkAssertionAtRuntime`
+ * compared the same two strings without it, under a comment claiming it "mirrors
+ * the build-time check". It did not. A live approval workflow whose Airtable write
+ * SUCCEEDED was reported to the user as:
+ *
+ *   "nothing reached "Table 1" in Airtable — this run delivered to
+ *    tblbQ0PmkA2o1P17Q (Airtable), and nothing else."
+ *
+ * — a sentence that names the delivery it says did not happen, and which locked
+ * Go live on a workflow that had done exactly what it promised. The guarantee is
+ * not weakened by letting the id through: the dry-run `probe` independently reads
+ * the base's schema and fails the run when the table genuinely is not there, so
+ * existence is still proven — by the mechanism equipped to prove it.
+ */
+export function isOpaqueProviderId(s) {
+  return /^(app|tbl|rec|fld|viw)[A-Za-z0-9]{14}$/.test(String(s ?? '').trim());
+}
+
+/**
  * Is this assertion well-formed? An assertion we cannot check must never pass
  * silently — that is precisely how a requested delivery gets dropped.
  *
@@ -610,13 +639,15 @@ export function satisfiesAssertion(assertion, node) {
   // Deliberately NARROW: only the documented Airtable id prefixes with their exact
   // 14-char body. `Sheet1`, `#general`, `ops@acme.com` are all unaffected, so a
   // genuinely wrong human-named destination still fails.
-  const isOpaqueId = (s) => /^(app|tbl|rec|fld|viw)[A-Za-z0-9]{14}$/.test(String(s ?? '').trim());
-
+  //
+  // Hoisted to module scope (2026-07-28) so the RUNTIME check shares it — see
+  // `isOpaqueProviderId` and `checkAssertionAtRuntime`. It lived here as a local,
+  // which is precisely how the two checks came to disagree.
   if (locator && !isTemplate(locator)) {
     const want = normLocator(locator);
     const hit = eff.locators.some((l) => {
-      if (isTemplate(l)) return true;          // resolved at run time — undecidable here, so not a mismatch
-      if (isOpaqueId(l)) return true;          // a provider id — undecidable here, same reason (see below)
+      if (isTemplate(l)) return true;                  // resolved at run time — undecidable here, so not a mismatch
+      if (isOpaqueProviderId(l)) return true;          // a provider id — undecidable here, same reason (see below)
       const have = normLocator(l);
       return have === want || have.includes(want) || want.includes(have);
     });
@@ -1000,6 +1031,11 @@ export function checkAssertionAtRuntime(assertion, deliveries = []) {
       ? d.locators
       : [d.target ?? d.to ?? d.user ?? d.channelName ?? d.slackChannel ?? ''];
     const hit = cands.some((c) => {
+      // An opaque provider id cannot be string-compared with a human table name —
+      // see `isOpaqueProviderId`. The build-time check has always treated this as
+      // undecidable; omitting it HERE is what reported a successful Airtable write
+      // as "nothing reached Table 1 — this run delivered to tblbQ0PmkA2o1P17Q".
+      if (isOpaqueProviderId(c)) return true;
       const got = normLocator(c);
       return got && (got === wantLocator || got.includes(wantLocator) || wantLocator.includes(got));
     });

@@ -1,5 +1,14 @@
 [
   {
+    "version": "1.6.47",
+    "date": "2026-07-28",
+    "title": "Faster builds, and Airtable workflows can pass their test",
+    "notes": [
+      "Building a workflow no longer rebuilds itself several times over. A build that was already correct could be sent back up to four times — around ten minutes — because a second check disagreed with one that had already passed. Builds should now finish in a single pass, and the extra time no longer eats into generating a test example for each path.",
+      "A workflow that writes to Airtable can now pass its own test. A record that was created successfully was reported as never delivered, which kept Go live locked on a workflow that had done exactly what it promised."
+    ]
+  },
+  {
     "version": "1.6.42",
     "date": "2026-07-25",
     "title": "Scheduled workflows run at the right hour",

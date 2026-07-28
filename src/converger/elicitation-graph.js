@@ -170,6 +170,51 @@ export function autoRepairStructural(draft, gaps) {
   return { draft: d, applied };
 }
 
+// ── AN UNVERIFIED OPINION MAY NOT OVERRULE A PASSING CHECK ────────────────────
+// The sufficiency check is a fast-tier "is this finished?" question asked AFTER
+// `scoreGap` has already returned `complete: true` — i.e. after the validator and
+// the contract-coverage check have both agreed every promise is satisfied. It
+// exists only to catch what the outcome cannot express, so a `complete: false`
+// that names a destination the CONTRACT ALREADY ASSERTS is not new information:
+// it is the weaker checker contradicting the stronger one, and acting on it costs
+// a whole-spec Opus rebuild.
+//
+// Measured on prod (2026-07-28, `build-platform-1785252448380`): a
+// classify→approve→route build ordered FOUR rebuilds, each one naming
+// "Slack DM delivery to Charles (hello@agntic.co)" as missing. It was never
+// missing — the `human` approval step sends that DM itself (which is why there is
+// no separate delivery node; a second one would message the person twice). The
+// generate pass reasoned "the human step satisfies a1 ✓" and was overruled anyway.
+// Cost: ~10 minutes of dead air, and the regenerate budget was spent before the
+// build reached `verify` — which is where per-path test examples are topped up, so
+// the run ended with ONE example and could not cover a five-path workflow.
+//
+// Deliberately narrow. This only discards a complaint whose text names the locator
+// half of an assertion target (`slack:hello@agntic.co` → "hello@agntic.co"), and
+// only when `scoreGap` said the spec was complete. A complaint about something the
+// contract does NOT cover — the case this check exists for — is untouched.
+export function sufficiencyClaimAlreadyCovered(missing, draft) {
+  const text = String(missing ?? '').toLowerCase();
+  if (!text.trim()) return false;
+  const assertions = Array.isArray(draft?.outcome?.assertions) ? draft.outcome.assertions : [];
+  for (const a of assertions) {
+    const target = String(a?.target ?? '').trim();
+    if (!target) continue;
+    // Assertion targets are `<kind>:<locator>`; a person names the locator, not the
+    // scheme. Match on the locator alone so "slack:#ops" is found in "post to #ops",
+    // and require some length so a one-character locator can't match everything.
+    const locator = (target.includes(':') ? target.slice(target.indexOf(':') + 1) : target)
+      .trim().toLowerCase();
+    if (locator.length >= 3 && text.includes(locator)) return true;
+  }
+  return false;
+}
+
+/** Fingerprint of a sufficiency complaint, for "it said the same thing again". */
+export function missingKeyOf(missing) {
+  return String(missing ?? '').toLowerCase().replace(/\s+/g, ' ').trim().slice(0, 200);
+}
+
 /** Strip markdown fences and extract raw JSON from LLM output. */
 function extractJson(text) {
   const fenced = text.match(/```(?:json)?\s*([\s\S]*?)```/);
@@ -903,6 +948,14 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
       // a rebuild that comes back with the identical blocker set has proven it
       // cannot fix them, and rebuilding again just buys the same spec twice.
       _lastBlockerKey:   null,
+      // Fingerprint of the SUFFICIENCY complaint that caused the last rebuild. The
+      // blocking-gap route above has had `_lastBlockerKey` since 2026-07-26; the
+      // sufficiency route had no equivalent, and it is the route that orders the most
+      // rebuilds. Measured on prod (`build-platform-1785252448380`, 2026-07-28): four
+      // whole-spec passes — 221s + 126s + 142s + 120s ≈ 10 minutes — every one ordered
+      // by `sufficiency` naming the SAME missing thing, on a spec `scoreGap` had
+      // already returned `complete: true` for.
+      _lastMissingKey:   null,
       _missingNote:      null,
       // ── WHAT THE SYSTEM ALREADY FIXED, SO THE NEXT PASS DOES NOT UNDO IT ─────
       // The deterministic repairs (`autoRepairStructural`) fill blanks the model left
@@ -1371,11 +1424,36 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
       ], tierCfg('fast', sessionId));
 
       if (verdict?.complete === false && verdict.missing) {
+        // Two ways this verdict has already been disproven — see
+        // `sufficiencyClaimAlreadyCovered`. Either the contract already asserts the
+        // destination it names (and `scoreGap` just said every assertion holds), or
+        // it is word-for-word the complaint that ordered the LAST rebuild, which
+        // therefore demonstrably cannot fix it. Both mirror the blocking-gap route's
+        // `_lastBlockerKey` guard: a rebuild that provably cannot converge is not
+        // bought twice. Latch `sufficiencyChecks` so the same question isn't re-asked
+        // on the next pass round.
+        const missingKey = missingKeyOf(verdict.missing);
+        const covered    = sufficiencyClaimAlreadyCovered(verdict.missing, draft);
+        const repeated   = !!missingKey && missingKey === state._lastMissingKey;
+        if (covered || repeated) {
+          logEvent('converger.sufficiency_overruled', {
+            ...who(cfg),
+            reason: covered ? 'contract_already_covers_it' : 'same_complaint_as_last_rebuild',
+            detail: String(verdict.missing).slice(0, 200),
+          });
+          return {
+            ...carryRepair,
+            phase:             'gapping',
+            sufficiencyChecks: MAX_SUFFICIENCY_CHECKS,
+            _lastMissingKey:   missingKey,
+          };
+        }
         return {
           ...carryRepair,
           phase:             'proposing',
           proposeRounds:     (state.proposeRounds ?? 0) + 1,
           sufficiencyChecks: (state.sufficiencyChecks ?? 0) + 1,
+          _lastMissingKey:   missingKey,
           _missingNote:      String(verdict.missing),
           // THE ROUTE THAT DROVE THE MOST REBUILDS AND RECORDED THE FEWEST. On the
           // record (2026-07-26) this branch ordered 5 of the 7 whole-spec rebuilds

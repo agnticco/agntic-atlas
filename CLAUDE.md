@@ -1626,6 +1626,55 @@ pending confirmation for every one:
   called out instead of being absorbed by the catch-all.
 - **The chat no longer invents Atlas's own screens.**
 
+**The rebuild loop was diagnosed, and it was never the model's first draft
+(2026-07-28, QA on prod v1.6.46). Code-proven; a live witness is still pending.**
+
+The question that had been asked repeatedly — *"is the first generation just not good
+enough?"* — has an answer, and it is **no**. Measured on prod, build
+`build-platform-1785252448380`: **four** whole-spec passes, 221s + 126s + 142s + 120s
+≈ **10 minutes**, on a spec `scoreGap` had already returned `complete: true` for. Every
+one of the four was ordered by the **sufficiency** route — the fast-tier *"is this
+finished?"* opinion asked AFTER the validator and contract-coverage checks have both
+passed — and every one named the same thing missing: the Slack DM to the approver. It
+was never missing. **The `human` approval step sends that DM itself**, which is exactly
+why there is no separate delivery node for it (a second one would message the person
+twice). The Opus pass even reasoned *"the human step satisfies a1 ✓"* and was overruled
+anyway.
+
+- **Why it also broke the test panel.** The per-path example top-up lives in the
+  `verify` node. The build spent its regenerate budget in the sufficiency loop and went
+  `analyze → walkthrough`, never reaching `verify` — so a five-path router was handed to
+  the panel with **one** example and could not possibly cover its own routes. *The
+  "only one test example" symptom and the "why is it regenerating" symptom were one bug.*
+- **Fix.** The blocking-gap route has had a "the complaint didn't change ⇒ the rebuild
+  can't fix it ⇒ stop" guard (`_lastBlockerKey`) since 2026-07-26. The sufficiency route —
+  which orders the most rebuilds — had no equivalent. It now has `_lastMissingKey`, plus
+  the stronger rule that **an unverified opinion may not overrule a passing check**: a
+  `complete:false` naming a destination the *contract already asserts* is discarded
+  (`sufficiencyClaimAlreadyCovered`), because `scoreGap` has just said that assertion
+  holds. Logged as `converger.sufficiency_overruled` — the route that drove the most
+  rebuilds and recorded the fewest now records both. Pinned by
+  `tests/converger/sufficiency-overrule.test.js` (10, mutation-verified red→green two
+  ways; the anti-false-pass cases prove a genuinely missing component still rebuilds).
+
+**A successful Airtable write was reported as a broken promise — FIXED (2026-07-28).**
+Witnessed on prod: the record was created, and the panel said *"nothing reached "Table 1"
+in Airtable — this run delivered to tblbQ0PmkA2o1P17Q (Airtable), and nothing else."*
+Both halves name the same table. Go live stayed locked on a workflow that had done
+exactly what it promised. **Root cause: two checkers disagreeing about identical data.**
+`satisfiesAssertion` (build time) has always treated an opaque provider id as
+*undecidable* — you cannot know whether `tblbQ0PmkA2o1P17Q` is `Table 1` without asking
+Airtable — while `checkAssertionAtRuntime` compared the same two strings **without** that
+rule, under a comment claiming it mirrored the build-time check. So the build published
+the workflow and the run then failed it. The rule is now one shared, exported
+`isOpaqueProviderId` used by both. **The guarantee is not weakened:** the dry-run `probe`
+independently reads the base schema and fails a table that genuinely is not there, so
+existence is still proven — by the mechanism equipped to prove it. Pinned by
+`tests/workflows/airtable-id-vs-name.test.js` (7, mutation-verified; a wrong
+*human-named* table, a refused write, a wrong connector and no delivery at all all still
+fail). **Only reachable when Airtable actually works** — a dead connector fails earlier,
+which is why local testing never saw it.
+
 **Still open, roughly in the order they matter:**
 
 1. **The user's answer does not take effect — RE-OPENED 2026-07-26.** *(Previously
