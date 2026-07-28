@@ -75,6 +75,10 @@ const METHODS = [
   '_fact', '_stepDetail', '_approvalCard', '_approvalHint',
   '_deJargon', '_humanCron', '_titleCase', '_clip',
   '_liveNodesFromSpec', '_triggerNodeFrom',
+  // `_triggerNodeFrom` delegates its fallback wording and its icon decision to these
+  // (2026-07-27). Extracting it without them yields a half-built component that throws
+  // — which is the point of extracting the REAL sources rather than copying them.
+  '_triggerCaption', '_triggerIsMail',
   // A step's NAME and DESCRIPTION are stored sentences; "Sends to" is derived. When a
   // user rejects a proposed Slack channel and picks a real one, only the derived field
   // followed, so the card named the rejected channel while sending to the right one.

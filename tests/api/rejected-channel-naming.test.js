@@ -87,6 +87,10 @@ const METHODS = [
   '_fact', '_approvalCard', '_approvalHint', '_liveShapeOf', '_nodeShape',
   '_deJargon', '_humanCron', '_titleCase', '_clip', '_dealSegments',
   '_liveNodesFromSpec', '_triggerNodeFrom',
+  // `_triggerNodeFrom` delegates its fallback wording and its icon decision to these
+  // (2026-07-27). Extracting it without them yields a half-built component that throws
+  // — which is the point of extracting the REAL sources rather than copying them.
+  '_triggerCaption', '_triggerIsMail',
 ];
 
 function component() {

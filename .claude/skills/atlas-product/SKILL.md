@@ -153,6 +153,26 @@ published, with no error shown. Count the cards against the steps. This is the
 single highest-value manual check in the product; re-do it after any change to the
 diagram.
 
+**The sentence describing the trigger must describe THIS workflow** (2026-07-27).
+Two QA runs found the first card — the one you tick to confirm what starts the
+workflow — reading **"A new email arrives"**, with an envelope icon, for a workflow
+that watches an **Airtable base**. The wrong sentence was inside the confirm control
+itself, and there was no second, correct field on the card to catch it against. The
+canvas had the mirror-image bug, calling every connector event *"A message is
+posted"* — Slack's wording — including Airtable record changes.
+
+In both cases **the workflow underneath was wired correctly.** Only the English was
+wrong, which is the worst place for it to be: this screen exists so a non-technical
+person can catch a mistake *by reading*.
+
+So, when the workflow starts from a connected app, the trigger card must **name that
+app** — "Something changes in Airtable", "A message is posted in Slack" — and must
+**not** show the envelope. Email keeps the envelope and the email wording. If Atlas
+genuinely cannot tell what starts a workflow, it must say so plainly rather than
+borrow the wording of a trigger it does know. **A caption naming the wrong app, or an
+envelope on something that is not mail, is a finding — report it even though the
+workflow may run correctly.**
+
 **A person must never be asked to approve a step they have not been shown**
 (2026-07-26). The card sits under the diagram and describes **the one step being
 approved right now**, headed `STEP n OF m`. It must carry, for that step:

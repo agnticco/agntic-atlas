@@ -571,6 +571,44 @@ as load-bearing.*
   preserved at `~/Desktop/agent-org/runs/2026-07-27/evidence-workflow-dbs/`.
   **Never witnessed in a browser** — proved by tests and by reading the stored data.
 
+- **A CAPTION IS A CLAIM. AN UNRECOGNISED VALUE MUST NOT BORROW THE WORDING OF THE ONE
+  YOU KNOW (2026-07-27).** The companion to the entry above, and reported by **two
+  independent QA runs** before it was fixed. The step-approval card — the product's
+  designated human safety check — presented an **Airtable**-triggered workflow as
+  *"A new email arrives"*, envelope icon included, with the wrong sentence **inside the
+  confirm control itself** (`Confirm this step: A new email arriv…`) and **no second,
+  correct field on the card to catch it against**. The canvas had the mirror-image bug:
+  `_specTriggerTitle` called **every** connector event *"A message is posted"* — Slack's
+  wording — including a record change in Airtable.
+  **Both were pure-display defects over CORRECT configuration.** The workflow did the
+  right thing; only the English was wrong. That inverts the usual shape here and is worse
+  than it sounds, because that screen exists precisely so a non-technical person can catch
+  a mistake *by reading it*.
+  **Two causes, and both are the same mistake:** the approval caption mapped `email` **and**
+  the unrunnable `connector_event` to the email wording (and to `mode:'email'`, which is what
+  draws the envelope), while the canvas caption had one branch for `event` carrying Slack's
+  sentence for every connector that would ever exist. **Each guessed toward the case it
+  happened to know.**
+  **Fixed as ONE function** — `_triggerCaption` in `public/index.html`, with
+  `_triggerIsMail` deciding the icon, and `_specTriggerTitle` reduced to a call into it.
+  Written as one on purpose: two copies of a labelling rule is a shape this file already
+  records paying for twice (the decision-table grammar, the template-reference rule), and
+  **these two had already drifted apart** — which is how the same screen managed to be
+  wrong in two different directions at once. The event id is preferred over the connector
+  because it is more specific; an `event` with **no** connector says *"a connected app"*
+  rather than naming one; and the legacy `connector_event` now says *"Something starts this
+  workflow"* — honest — instead of claiming email.
+  Pinned by `tests/api/trigger-caption.test.js` (12), which **extracts and executes the real
+  method sources** out of the page rather than copying them (the same harness as
+  `step-approval-card.test.js` — a copy is exactly what would drift, and a grep would pass
+  against broken code). **Three mutations red→green:** restoring the email caption for the
+  legacy type (1 red), giving connector events the envelope again (2 red), restoring the
+  blanket Slack wording (2 red). One test asserts **no second hardcoded caption exists
+  anywhere outside the helper**, so the drift cannot silently come back.
+  `.claude/skills/atlas-product/SKILL.md` §5 extended in the same commit, because a stale
+  behavioural contract is what let two QA runs disagree about whether this was worth
+  reporting. **Never witnessed in a browser.**
+
 **On the control-flow / promise engine**
 
 - **A check scoped to the PRODUCER is wrong; scope it to the VALUE.** Denylists ("its parent

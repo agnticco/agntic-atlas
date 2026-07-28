@@ -6808,13 +6808,61 @@ class Component extends DCLogic {
   // spec.nodes). Nodes are placed in TOPOLOGICAL order (Kahn); a single clean
   // 2-case branch fans out into labeled lanes, otherwise we fall back to a
   // topological-linear rail — always truthful, never dropping a node.
-  _specTriggerTitle(t) {
-    const ty = (t && t.type) || (t && t.cron ? 'schedule' : '');
-    if (ty === 'email') return t.label || 'A new email arrives';
-    if (ty === 'schedule') return t.label || this._humanCron(t.cron) || 'On a schedule';
-    if (ty === 'event') return t.label || 'A message is posted';
-    return (t && t.label) || this._titleCase(ty || 'Trigger');
+  // ── ONE sentence for what starts a workflow. Used by every surface. ────────
+  //
+  // Two captions used to disagree with the workflow they described, and both
+  // were on screens a person reads in order to catch mistakes:
+  //
+  //   · the step-approval card called an Airtable-triggered workflow "A new
+  //     email arrives", envelope icon and all, because the caption mapped BOTH
+  //     `email` and the (unrunnable) `connector_event` to the email wording;
+  //   · the canvas called EVERY connector event "A message is posted" — Slack's
+  //     wording, on an Airtable record change.
+  //
+  // Reported by two independent QA runs. The trigger underneath was correctly
+  // wired both times, so the English was the only thing that was wrong — which
+  // is worse than it sounds on the one screen whose entire job is to let a
+  // non-technical person spot a mistake by reading it.
+  //
+  // Written as ONE function on purpose. Two copies of a labelling rule is a
+  // shape this repo has paid for repeatedly (the decision-table grammar; the
+  // template-reference rule) and these two had already drifted apart.
+  //
+  // NEVER GUESS TOWARD THE CONFIDENT ANSWER. An unrecognised trigger says so
+  // plainly rather than borrowing the wording of the one we happen to know —
+  // the same rule as `trigger-runnable.js`: unrecognised is not "the usual one".
+  _triggerCaption(t) {
+    if (t && t.label) return t.label;
+    const ty = String((t && t.type) || (t && t.cron ? 'schedule' : '') || '').toLowerCase();
+
+    if (ty === 'email')    return 'A new email arrives';
+    if (ty === 'schedule') return this._humanCron(t && t.cron) || 'On a schedule';
+    if (ty === 'manual')   return 'When you run it';
+
+    if (ty === 'event') {
+      // The event id is more specific than the connector, so prefer it.
+      const ev = String((t && (t.event || t.eventId)) || '').toLowerCase();
+      if (ev.includes('record'))  return 'A record changes in Airtable';
+      if (ev.includes('mention')) return 'Someone mentions Atlas in Slack';
+      if (ev.includes('message')) return 'A message is posted in Slack';
+      const conn = String((t && t.connector) || '').trim();
+      // Never name a connector we were not given — say what we actually know.
+      return conn ? `Something changes in ${this._titleCase(conn)}` : 'Something changes in a connected app';
+    }
+
+    // Includes the legacy `connector_event`, which nothing could ever run. It
+    // must NOT read as email; the honest sentence is that we cannot say.
+    return 'Something starts this workflow';
   }
+
+  // Does this trigger deserve the ENVELOPE? Only actual mail — the icon is a
+  // claim too, and it was wrong for exactly as long as the caption was.
+  _triggerIsMail(t) {
+    const ty = String((t && t.type) || '').toLowerCase();
+    return ty === 'email';
+  }
+
+  _specTriggerTitle(t) { return this._triggerCaption(t); }
   _laneLabel(w) {
     const s = String(w == null ? '' : w).trim();
     return (s === '*' || s === '') ? 'otherwise' : ('if ' + s);
@@ -7820,16 +7868,12 @@ class Component extends DCLogic {
       || (this.state._approvedPlanCache && this.state._approvedPlanCache.trigger
           ? { type: (this.state._approvedPlanCache.trigger.type || 'trigger'), _planText: this.state._approvedPlanCache.trigger.text } : null);
     if (!t) return null;
-    const ty = String(t.type || 'trigger').toLowerCase();
-    let label = t.label || t._planText || '';
-    if (!label) {
-      if (ty === 'email' || ty === 'connector_event') label = 'A new email arrives';
-      else if (ty === 'schedule') label = t.cron ? 'On schedule' : 'On a schedule';
-      else if (ty === 'manual') label = 'When you run it';
-      else label = this._titleCase(ty);
-    }
+    // `_planText` is the plan's own sentence for this trigger and is the most
+    // specific thing available, so it still wins — but the FALLBACK is now the
+    // one shared caption, not a second copy that said "email" for everything.
+    const label = t.label || t._planText || this._triggerCaption(t);
     return { id: '__trigger__', type: 'trigger', label,
-             mode: (ty === 'email' || ty === 'connector_event') ? 'email' : null };
+             mode: this._triggerIsMail(t) ? 'email' : null };
   }
   // Everything from the entry node up to and INCLUDING the first branch. Derived from the
   // spec's real edges. The trigger is already the first entry in `nodes` (it is a real
