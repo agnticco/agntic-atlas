@@ -1109,7 +1109,14 @@ never committed); the operator manages them — agents never enter or echo secre
 1. **Bump the version** — every prod push moves `package.json` (the single source of
    truth for `/health` + the What's-New modal): `./scripts/release.sh patch` (silent)
    or `./scripts/release.sh patch --title "…" "user-facing note"` (adds a What's-New
-   entry shown once per user on next login). Stages the change to commit *with* the code.
+   entry shown once per user on next login). Stages the change to commit *with* the code —
+   `package.json` **and `package-lock.json`** (both are rewritten by `npm version`), plus
+   `release-notes.json` when notes are given. **The lockfile was omitted until 2026-07-27
+   and drifted six versions** (committed lock said 1.6.36 against a 1.6.42 manifest) before
+   anyone noticed; `npm ci` does not fail on that mismatch, so nothing broke — the repo
+   simply disagreed with itself about what version it was. Pinned by
+   `tests/gates/release-stages-lockfile.test.js`, which runs the real script in a throwaway
+   repo.
 2. **Commit + push `main`** (conventional message + `Phase:` trailer). If the push is
    rejected because a parallel session pushed first, `git pull --rebase origin main`
    then push — never force.

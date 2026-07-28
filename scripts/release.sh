@@ -41,11 +41,28 @@ arr.unshift({
 fs.writeFileSync(file, JSON.stringify(arr, null, 2) + '\n');
 console.log(`release-notes.json: added v${process.env.NEW} (${notes.length} note(s))`);
 NODE
-  git add package.json release-notes.json
+  git add package.json package-lock.json release-notes.json
 else
   echo "(no notes — silent version bump; nothing added to release-notes.json)"
-  git add package.json
+  git add package.json package-lock.json
 fi
+
+# WHY package-lock.json IS STAGED HERE — do not drop it again.
+#
+# `npm version` above rewrites the version in BOTH package.json and
+# package-lock.json (in `version` and in `packages[""].version`). This script
+# used to stage only package.json, so every release left the lockfile's version
+# behind in the working tree — where it was either committed later by accident or
+# discarded. Measured 2026-07-27: the committed lockfile said 1.6.36 while the
+# committed package.json said 1.6.42, SIX releases of drift, and the gap had to be
+# closed by hand on three consecutive releases that day before this was fixed.
+#
+# `npm ci` on the box does NOT fail on that mismatch (verified against exactly
+# what was on origin/main: 345 packages, clean), so this was never a broken
+# deploy. It is a repository that quietly disagrees with itself about what
+# version it is — which is the kind of thing someone later debugs for an hour.
+#
+# Pinned by tests/gates/release-stages-lockfile.test.js.
 
 echo "✓ version is now $NEW and staged."
 echo "  Next: git commit → git push origin main → (on VPS) ./scripts/deploy.sh"
