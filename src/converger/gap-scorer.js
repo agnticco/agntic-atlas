@@ -500,8 +500,49 @@ export function scoreGap(spec = {}, { capabilities = {}, validator = null } = {}
   const specNodes = Array.isArray(spec.nodes) ? spec.nodes : [];
   for (const [i, a] of (Array.isArray(spec.outcome?.assertions) ? spec.outcome.assertions : []).entries()) {
     if (!a?.when) continue;
-    const gated = routeDomain.has(String(a.when).trim().toLowerCase());
-    if (gated) continue;   // a branch routes on this value — the condition is checked
+    const whenNorm = String(a.when).trim().toLowerCase();
+    const gated = routeDomain.has(whenNorm);
+
+    const owner     = specNodes.find(n => satisfiesAssertion(a, n));
+    const gate      = owner ? gatingRouteFor(spec, owner.id) : null;
+    const gateOne   = (gate && gate.values.length === 1) ? String(gate.values[0]).trim().toLowerCase() : null;
+    const gateNames = (gate?.values ?? []).map(v => String(v).trim().toLowerCase());
+
+    // ── A REAL ROUTE VALUE, BUT NOT THE ONE THAT GATES THIS STEP ──────────────
+    // Asking "does SOME branch route on this value?" is the laundering hop from
+    // CLAUDE.md's trap list: it answers a question about the VOCABULARY when the
+    // question is about THIS STEP. On the canonical classify→approve→route shape the
+    // contract said the channel post happens `when: "urgent_complaint"` — a real
+    // route value, so this check passed it — but the post sits behind the APPROVAL
+    // gate, two branches down. `gatingRouteFor`'s own comment already names the
+    // consequence: enforcing the outer gate "would enforce the promise on runs that
+    // went urgent and were REJECTED, i.e. a false failure on a workflow behaving
+    // exactly as designed."
+    //
+    // That is not hypothetical. Witnessed 2026-07-28 on a build whose test panel then
+    // read "Contract not met · 4 of 9 promises fell short": three of those four were
+    // the deliberate REJECT passes, each marked broken for not posting the message
+    // that rejecting exists to withhold. Go live was locked on a correct workflow.
+    //
+    // The deepest gate implies every gate above it (the approval branch is reachable
+    // only from the urgent lane), so restating it is exact, not a narrowing. It is a
+    // mechanical rewrite of the machine-checkable `when` only — the user's own words
+    // in `statement` are untouched — and it is applied by `autoRepairStructural`
+    // without a question, a model call or a rebuild.
+    if (gated) {
+      if (!gateOne) continue;                    // nothing, or nothing single, gates it
+      if (gateNames.includes(whenNorm)) continue; // already names its own gate — correct
+      gaps.push({
+        id: `gap_conditional_misstated_${a.id ?? a.target}`.toLowerCase(),
+        class: 'coverage', nodeId: owner?.id ?? null,
+        code: 'CONDITIONAL_MISSTATED', severity: 'warning',
+        message: `You said this should only reach ${describeTarget(a.target)} when the email is ${describeValue(a.when)}, but the step that does it only runs after the "${gate.values[0]}" decision — so that is what really decides whether it happens.`,
+        hint: `Checking it against "${gate.values[0]}" instead, so a run that took the other answer isn't marked as breaking the promise.`,
+        resolution: 'escalated', decidable: false, blocking: false,
+        fix: { op: 'set_assertion_when', index: i, when: gate.values[0] },
+      });
+      continue;
+    }
 
     // A `when` outside the route vocabulary is USUALLY a conjunction the field
     // cannot hold — "urgent AND approved" written as the invented word
@@ -518,9 +559,7 @@ export function scoreGap(spec = {}, { capabilities = {}, validator = null } = {}
     // Everything else still raises the gap honestly: guessing between two candidate
     // gates would silently narrow a promise the user made, which is worse than
     // saying we cannot prove it.
-    const owner = specNodes.find(n => satisfiesAssertion(a, n));
-    const gate  = owner ? gatingRouteFor(spec, owner.id) : null;
-    const fix   = (gate && gate.values.length === 1 && routeDomain.has(String(gate.values[0]).trim().toLowerCase()))
+    const fix = (gateOne && routeDomain.has(gateOne))
       ? { op: 'set_assertion_when', index: i, when: gate.values[0] }
       : null;
 

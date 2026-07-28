@@ -104,8 +104,22 @@ describe('when the top-up runs, and what it must not break', () => {
 
   test('a failed top-up falls through instead of failing the build', () => {
     const i = src.indexOf('buildLaneExamplesPrompt');
-    const around = src.slice(i - 900, i + 1400);
-    assert.match(around, /catch\s*\{/, 'a build must never die because an extra sample could not be drafted');
+    const around = src.slice(i - 900, i + 2600);
+    // The invariant is that the top-up is CAUGHT, not that the catch is parameterless.
+    // It became `catch (err)` on 2026-07-28 so the failure can be logged — see below.
+    assert.match(around, /catch\s*(\([^)]*\)\s*)?\{/,
+      'a build must never die because an extra sample could not be drafted');
+  });
+
+  test('a top-up that adds nothing says so, instead of vanishing', () => {
+    // Witnessed on prod 2026-07-28: `verify` ran for 19.2s and a five-path workflow
+    // still reached the test panel with ONE example, with nothing in the log to say
+    // why — the catch was bare and the "returned zero" path did not exist at all.
+    // A run that proves nothing about four of five paths must never be silent.
+    const i = src.indexOf('buildLaneExamplesPrompt');
+    const around = src.slice(i - 900, i + 2200);
+    assert.match(around, /lane_examples_empty/, 'a zero-example top-up must be recorded');
+    assert.match(around, /lane_examples_failed/, 'a thrown top-up must be recorded');
   });
 
   test('EVERY return from verify carries the draft', () => {

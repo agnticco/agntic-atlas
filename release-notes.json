@@ -1,5 +1,13 @@
 [
   {
+    "version": "1.6.48",
+    "date": "2026-07-28",
+    "title": "Approval workflows can pass their own test",
+    "notes": [
+      "A workflow with an approval step could never pass its own test. Atlas tries each approval both ways — approving and rejecting — but it was checking the 'post it' promise against the wrong decision, so every reject run was counted as a broken promise for not posting the thing that rejecting exists to withhold. Go live stayed locked on workflows that were behaving exactly as designed."
+    ]
+  },
+  {
     "version": "1.6.47",
     "date": "2026-07-28",
     "title": "Faster builds, and Airtable workflows can pass their test",

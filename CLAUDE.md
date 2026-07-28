@@ -1675,7 +1675,61 @@ existence is still proven — by the mechanism equipped to prove it. Pinned by
 fail). **Only reachable when Airtable actually works** — a dead connector fails earlier,
 which is why local testing never saw it.
 
+**A correct approval workflow could never pass its own test — FIXED (2026-07-28).**
+The converger wrote the channel-post promise as `when: "urgent_complaint"` — the
+CLASSIFIER lane — when the post actually sits behind the APPROVAL gate two branches
+down. Atlas deliberately runs every gated example both ways, so each **reject** pass
+was scored as a broken promise for not posting the message that rejecting exists to
+withhold. Witnessed: *"Contract not met · 4 of 9 promises fell short"*, three of the
+four being reject passes, Go live locked on a workflow behaving exactly as designed.
+**The old check was the laundering hop** (trap #3): it asked *"does SOME branch route
+on this value?"* — a question about the vocabulary — when the question is *"is this
+what gates THIS step?"*. `gatingRouteFor` has always computed the right answer and its
+own comment names this exact failure; it was simply never consulted once `when` looked
+like a valid route. Now a `when` that is a real route value but not the gating one
+raises `CONDITIONAL_MISSTATED` carrying a `set_assertion_when` fix, applied by
+`autoRepairStructural` with **no question, no model call, no rebuild**. The deepest
+gate implies every gate above it, so this is exact, not a narrowing — and the user's
+own `statement` is untouched; only the machine-checkable `when` is restated. Pinned by
+`tests/converger/conditional-misstated.test.js` (6, mutation-verified red→green;
+anti-false-pass cases prove a promise that already names its gate, one gated only by
+the classifier, and an unconditional one are all left alone).
+*Measured across the workspace beforehand: **7 of 16** approval-shaped workflows carried
+a mis-stated or uncheckable condition — this was a coin flip, not an edge case.*
+
+**The lane-example top-up now says when it adds nothing.** `verify` ran for 19.2s on
+prod and a five-path workflow still reached the panel with ONE example, with nothing in
+the log to say why: the failure path was a bare `catch {}` and the "returned zero" path
+did not exist. Both now log (`converger.lane_examples_empty` /
+`lane_examples_failed`). **This is instrumentation, not a fix** — the top-up is still
+not producing per-path samples on prod, and the cause is still unknown. Next build's log
+will name it.
+
 **Still open, roughly in the order they matter:**
+
+0. **Table-shaped destinations must be settled BEFORE the plan, for every connector
+   (operator, 2026-07-28).** Today Atlas asks which base/table, builds the whole
+   workflow, and only then discovers the columns don't match — two of three generate
+   passes on the last prod build were spent on exactly that, and no amount of
+   regenerating can create a column in someone's account. Atlas already reads the real
+   schema; it just learns it too late. **Decided:** at the clarification turn, read the
+   destination's real columns and show them — *"Table 1 has Name, Notes and Date. I'll
+   put the sender in Name and the subject + summary in Notes — or tell me to add Subject
+   and Summary columns."* One question, answer applied directly, no rebuild.
+   **This is a per-capability trait, never a per-connector special case** (operator:
+   *"every table style data source regardless of connector"*) — Sheets, Notion and
+   anything later must get it from the same mechanism, in line with the closed decision
+   that the codebase is workflow-agnostic.
+
+0b. **One workflow, four different published shapes.** Measured on the prod build
+   (12 nodes, 2 branches): the test panel says **3 steps · 3 paths**, step approval says
+   **13**, the plan card said **8 steps · 4 paths**, the oracle counts **5 lanes**. The
+   panel's count stops at the FIRST branch, so it structurally cannot see an approval
+   gate downstream of a classifier. Each surface recomputes the shape with its own rule
+   and they disagree — so the number a person reads is not the number the oracle
+   certifies against. Needs one derivation of "what shape is this workflow" that every
+   surface reads. *(Does NOT explain the missing test examples — that is the separate
+   silent top-up above. Do not conflate them; it has already been done once.)*
 
 1. **The user's answer does not take effect — RE-OPENED 2026-07-26.** *(Previously
    recorded as closed. It was HALF closed, and the record said "closed". This entry exists

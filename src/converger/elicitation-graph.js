@@ -3061,8 +3061,26 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
         if (extra.length) {
           draft = { ...draft, outcome: { ...draft.outcome, examples: [...have, ...extra] } };
           logEvent('converger.lane_examples', { ...who(cfg), lanes: lanes.length, had: have.length, added: extra.length });
+        } else {
+          // A TOP-UP THAT SILENTLY ADDS NOTHING IS INDISTINGUISHABLE FROM ONE THAT
+          // NEVER RAN. Witnessed on prod 2026-07-28: `verify` executed for 19.2s and
+          // the finished five-path workflow still reached the panel with ONE example,
+          // with nothing in the log to say why — the branch below swallowed it and
+          // this branch did not exist. A run that proves nothing about four of five
+          // paths is the exact shape this product exists to refuse, so its cause must
+          // be on the record.
+          logEvent('converger.lane_examples_empty', {
+            ...who(cfg), lanes: lanes.length, had: have.length,
+            returned: Array.isArray(parsed?.examples) ? parsed.examples.length : null,
+          });
         }
-      } catch { /* keep the examples we have — never fail a build over a top-up */ }
+      } catch (err) {
+        // Keep the examples we have — never fail a build over a top-up — but say so.
+        logEvent('converger.lane_examples_failed', {
+          ...who(cfg), lanes: lanes.length, had: have.length,
+          error: String(err?.message ?? err).slice(0, 200),
+        });
+      }
     }
 
     // Every return from this node must carry the draft, or the lane examples we just
