@@ -10323,26 +10323,26 @@ class Component extends DCLogic {
   function getResetParam() { try { return new URLSearchParams(location.search).get("reset"); } catch (e) { return null; } }
   function clearResetParam() { try { var u = new URL(location.href); u.searchParams.delete("reset"); history.replaceState({}, "", u.pathname + (u.search || "") + u.hash); } catch (e) {} }
 
-  // Platform admins (the reserved 'platform' tenant) operate the whole system,
-  // not a workflow workspace — send them straight to the /admin dashboard rather
-  // than the builder. Both surfaces are same-origin, so we hand the admin app the
-  // session by writing its token key before redirecting (it auto-restores from
-  // atlas_admin_token on boot) — no second login.
+  // Platform admins (the reserved 'platform' tenant) operate the whole system AND
+  // may want the builder, so signing in no longer forces them to /admin (operator's
+  // call, 2026-07-28 — the forced redirect made the real app unreachable for them
+  // without signing out first). The session handoff is KEPT: both surfaces are
+  // same-origin, so we still write the admin app's token key, and /admin auto-restores
+  // from atlas_admin_token on boot — reaching it is now a navigation, not a redirect,
+  // and still needs no second login.
   function isPlatformAdmin(user, tenant) {
     return !!(user && tenant && tenant.id === "platform" && user.role === "admin");
   }
-  function gotoAdminIfPlatform(token, user, tenant) {
-    if (!isPlatformAdmin(user, tenant)) return false;
+  function shareAdminSession(token, user, tenant) {
+    if (!isPlatformAdmin(user, tenant)) return;
     try { localStorage.setItem("atlas_admin_token", token); if (user.email) localStorage.setItem("atlas_admin_email", user.email); } catch (e) {}
-    window.location = "/admin";
-    return true;
   }
 
   function applyToken(token, user, tenant) {
-    if (user && tenant) { if (gotoAdminIfPlatform(token, user, tenant)) return; hide(); (window.__atlasInitAuth || function() {})(token, user, tenant); return; }
+    if (user && tenant) { shareAdminSession(token, user, tenant); hide(); (window.__atlasInitAuth || function() {})(token, user, tenant); return; }
     fetch("/api/builder/me", { headers: { "Authorization": "Bearer " + token } })
       .then(function (r) { if (!r.ok) throw new Error("unauthorized"); return r.json(); })
-      .then(function (d) { if (gotoAdminIfPlatform(token, d.user, d.tenant)) return; hide(); (window.__atlasInitAuth || function () {})(token, d.user, d.tenant); })
+      .then(function (d) { shareAdminSession(token, d.user, d.tenant); hide(); (window.__atlasInitAuth || function () {})(token, d.user, d.tenant); })
       .catch(function () { try { localStorage.removeItem(TOKEN_KEY); } catch (e) {} showLogin(); show(); err(loginErr, "Session expired — sign in again."); });
   }
 
