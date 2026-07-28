@@ -1479,7 +1479,29 @@ Rules:
         runError: result.error,
       });
 
-      logEvent('test.summary', { tenant: req.tenant?.id ?? null, verdict, chars: summary.length });
+      // ── THE GO-LIVE INDICATOR, ON THE RECORD ────────────────────────────────
+      // "Did this workflow pass?" was only ever a sentence on a screen. To run a
+      // test→observe→fix loop over repeated builds you need it as data, tied to a
+      // workflow, alongside HOW MUCH was actually proven — a pass with one sample
+      // and a pass with every lane covered are not the same result, and pooling
+      // them is how "it works" survives a shape that only works sometimes.
+      const marks = Array.isArray(result.outcomeResults)
+        ? result.outcomeResults.map(o => String(o?.verdict ?? o?.outcome ?? '')).filter(Boolean)
+        : [];
+      const lanes = result.laneCoverage ?? {};
+      logEvent('test.summary', {
+        tenant:     req.tenant?.id ?? null,
+        workflowId: req.body?.workflowId ?? null,
+        workflow:   typeof spec?.name === 'string' ? spec.name.slice(0, 80) : null,
+        verdict,
+        examples:   Array.isArray(result.outcomeResults) ? result.outcomeResults.length : 0,
+        kept:       marks.filter(m => m === 'kept').length,
+        broken:     marks.filter(m => m === 'broken').length,
+        lanesCovered: Number.isFinite(lanes.applicable) && Number.isFinite(lanes.total)
+          ? lanes.total - (Array.isArray(lanes.uncovered) ? lanes.uncovered.length : 0) : null,
+        lanesTotal:   Number.isFinite(lanes.total) ? lanes.total : null,
+        chars: summary.length,
+      });
       return res.json({ summary });
     } catch (err) {
       logEvent('test.summary.error', { tenant: req.tenant?.id ?? null, ...errFields(err) });
