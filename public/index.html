@@ -5940,7 +5940,14 @@ class Component extends DCLogic {
   }
   runTest() {
     const S = this.state;
-    if (S.phase !== "proposed" || !S.spec || S.testState === "running") return;
+    // THE THIRD COPY OF THIS RULE. The contract panel and the footer each carried
+    // their own; this handler carried a third, and unifying only the first two
+    // produced the worst version of the bug: the button ENABLED and pressing it did
+    // nothing at all — no request, no error, no feedback (witnessed 2026-07-28, no
+    // `/workflows/run` in the log). A disabled button at least explains itself.
+    // All three now read `_testUnlocked`, so the button and the action cannot
+    // disagree about whether a workflow can be tested.
+    if (!this._testUnlocked() || S.testState === "running") return;
     const self = this;
     const stepCount = this._pipeline().length || 1;
 
@@ -8666,14 +8673,42 @@ class Component extends DCLogic {
   //   passed    (sage)  — testState==="passed": every promise held.
   //   failed    (clay)  — testState==="failed": a promise broke.
   // (testState==="running" is the build-narration pipeline, handled separately.)
+  // ── WHAT THE PERSON DID OUTRANKS A FLAG A DROPPED RESPONSE CAN STRAND ──────
+  // One derivation, read by both the contract panel and the footer. They carried
+  // separate copies of this expression, which is how two things that must agree
+  // come to disagree.
+  //
+  // `awaitingGraphApproval` and `phase` are both cleared by a server round-trip at
+  // the end of the approval walkthrough. Kill the server mid-session — a deploy
+  // does this — and the round-trip never lands, so both stay stranded at their
+  // mid-build values. Witnessed 2026-07-28: a workflow reading **7 / 7 APPROVED ·
+  // every step approved** on the canvas, with the panel beside it saying
+  // "Building" and Run test greyed out under "Confirm every step to start
+  // testing". It survived a full page reload. Every step confirmed, nothing
+  // testable, Go live unreachable, and no error anywhere — the product telling
+  // someone to do the thing they had just finished doing.
+  //
+  // So the gate now also accepts the OBSERVABLE FACT: a spec exists and the person
+  // has confirmed every step of it. That is the same thing the status line already
+  // says out loud, and unlike a flag it cannot be lost in transit.
+  //
+  // `!S.thinking` keeps it honest mid-build: while steps are still streaming in,
+  // confirmed-equals-revealed is a transient coincidence, not a finished
+  // walkthrough. Once the stream stops, the two are equal only when the last step
+  // has actually been ticked — which is exactly when testing should unlock.
+  _testUnlocked() {
+    const S = this.state;
+    if (!S.spec) return false;
+    if (!S.awaitingGraphApproval && S.phase === "proposed") return true;
+    const total = Array.isArray(S.liveNodes) ? S.liveNodes.length : 0;
+    const done  = Number(S.liveConfirmed || 0);
+    return total > 0 && done >= total && !S.thinking;
+  }
+
   _contractPanel() {
     const S = this.state;
     const TS = S.testState;
-    // Testing unlocks ONLY once the whole spec is built and approved: a real spec
-    // exists, the step-by-step approval walkthrough is finished (not mid-approval),
-    // and the converger has ratified the draft (phase === proposed). Any of these
-    // false ⇒ the panel stays locked ("Confirm every step to start testing").
-    const testUnlocked = !!S.spec && !S.awaitingGraphApproval && S.phase === "proposed";
+    const testUnlocked = this._testUnlocked();
     const SAGE = "#9fd6a8", CLAY = "#f0a896", SLATE = "#fff", DIM = "rgba(255,255,255,.35)";
     const openIdx = (S.contractOpenRow == null) ? null : S.contractOpenRow;
     const rowFrom = (i, mark, chipColor, simpleLine, simpleDetail) => {
@@ -8903,11 +8938,8 @@ class Component extends DCLogic {
     const published = S.phase === "published";
     const SVG_PLAY  = `url('data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 10 12%27%3E%3Cpolygon points=%271,0.5 9.5,6 1,11.5%27 fill=%27%237fc28a%27/%3E%3C/svg%3E') no-repeat center/contain`;
     const SVG_PAUSE = `url('data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 10 12%27%3E%3Crect x=%271%27 y=%271%27 width=%273.5%27 height=%2710%27 rx=%271%27 fill=%27%23e87461%27/%3E%3Crect x=%275.5%27 y=%271%27 width=%273.5%27 height=%2710%27 rx=%271%27 fill=%27%23e87461%27/%3E%3C/svg%3E') no-repeat center/contain`;
-    // Testing unlocks ONLY once the whole spec is built and approved: a real spec
-    // exists, the step-by-step approval walkthrough is finished (not mid-approval),
-    // and the converger has ratified the draft (phase === proposed). Any of these
-    // false ⇒ the panel stays locked ("Confirm every step to start testing").
-    const testUnlocked = !!S.spec && !S.awaitingGraphApproval && S.phase === "proposed";
+    // One derivation, shared with the contract panel — see `_testUnlocked`.
+    const testUnlocked = this._testUnlocked();
     const TS = S.testState;
     const contract = this._contractPanel();
     // Thinking stream (right panel). Lives inside modeBuild (phase chat/building/

@@ -81,8 +81,48 @@ Carried in from the QA pass, ordered by which indicator they move.
    timeout has "no path of its own". Two screens disagreeing about the same
    configured behaviour.
 
+## Round 1 results
+
+| Shape | Latency | Passes | Rebuilds | Verdict |
+|---|---|---|---|---|
+| `linear` | **37s** | 1 | none | not run |
+| `classify→route` | **64s** | 1 | none | **passed** (4 examples, 2 exercised the deal) |
+| `classify→approve→route` (prod) | **163s** | 1 | none | **passed** (3/3 promises) |
+
+- **Indicator 1** — 37s / 64s / 163s. The spread is the point: a pooled median
+  across these would be meaningless, which is why the scorecard refuses to compute one.
+- **Indicator 2** — **3/3 single-pass across three different shape classes.** The
+  target holds beyond the one prompt it was first measured on.
+- **Indicator 3** — 2 of 3 shapes certified; `linear` still unmeasured.
+
+### The bug that round 1's own testing found
+
+**A fully approved workflow could be permanently untestable, with no error shown.**
+Witnessed after a mid-session server restart — which is what every deploy does to
+anyone building at the time. The canvas read `7 / 7 APPROVED · every step approved`
+while the panel beside it read "Building" with Run test greyed out under *"Confirm
+every step to start testing"*. It survived a full page reload.
+
+`awaitingGraphApproval` and `phase` are cleared by a server round-trip at the end of
+the approval walkthrough; if that never lands they stay stranded, and the gate read
+only those flags. The gate now also accepts the observable fact — a spec exists and
+every step is confirmed — which cannot be lost in transit.
+
+**The rule had THREE copies**: the contract panel, the footer, and `runTest` itself.
+Unifying only the first two produced a worse failure than the original — the button
+ENABLED and pressing it did nothing at all: no request, no error, no feedback. A
+disabled button at least explains itself. All three now read one derivation.
+
+## Backlog (operator, not priority)
+
+- **Node-by-node progress during a test run.** When a test runs, the workflow nodes
+  in the conversation pane should fire one at a time — every branch, every path —
+  each toggling on as it passes. Today the canvas is static while the run happens
+  and the evidence only appears at the end.
+
 ## Log
 
 | Round | Date | Change | Shape(s) re-measured | Result |
 |---|---|---|---|---|
 | 0 | 2026-07-28 | baseline captured; scorecard + verdict logging added | classify→approve→route | see above |
+| 1 | 2026-07-28 | column facts not regenerable; paths count every branch; timeout warning; columns settled pre-plan; skip reasons logged; OAuth origin refused; test gate unified across 3 call sites | linear, classify→route | 3/3 single-pass; classify→route certified |
