@@ -3900,7 +3900,10 @@ class Component extends DCLogic {
     }
     if (t.type === 'webhook')  return { glyph: '⇗', label: 'Webhook' + (t.path ? ': ' + t.path : ''), type: 'webhook' };
     if (t.type === 'one_time') return { glyph: '◉', label: 'One-time run', type: 'one_time' };
-    return { glyph: '◯', label: t.type, type: t.type };
+    // The fallback used to show the RAW type as the label, which is how a chip
+    // reading "connector_event" ended up next to the status on a customer's
+    // screen. `type` is kept raw on purpose — it is styling/filtering, not prose.
+    return { glyph: this._triggerGlyph(t), label: this._triggerCaption(t), type: t.type };
   }
 
   runWorkflowFromSidebar(wfId) {
@@ -5867,10 +5870,17 @@ class Component extends DCLogic {
     (keys || []).forEach(k => { const v = obj[k]; if (v != null && typeof v !== "object") out.push({ k, v: String(v) }); });
     return out.slice(0, 4);
   }
+  // Used by the pipeline strip and the draft list. It used to title-case the RAW
+  // type when it did not recognise one — so the legacy trigger read as
+  // "Connector_event" to a customer — and it knew nothing about connector events
+  // at all. One rule now; the email filter is kept because it is real detail the
+  // strip has nowhere else to show.
   _triggerTitle(t) {
-    if (t.type === "email") return "Watch email" + (t.filter ? (" · " + t.filter) : "");
-    if (t.type === "schedule" || t.cron) return "On a schedule";
-    return this._titleCase(t.type || "Trigger");
+    const base = this._triggerCaption(t);
+    const filter = t && t.filter;
+    return (this._triggerIsMail(t) && typeof filter === 'string' && filter)
+      ? base + ' · ' + filter
+      : base;
   }
   _titleCase(s) { s = String(s || ""); return s.charAt(0).toUpperCase() + s.slice(1); }
 
@@ -6860,6 +6870,24 @@ class Component extends DCLogic {
   _triggerIsMail(t) {
     const ty = String((t && t.type) || '').toLowerCase();
     return ty === 'email';
+  }
+
+  // The GLYPH, from the same knowledge as the caption. It used to be decided
+  // separately on each surface, which is how the console rail ended up giving a
+  // CLOCK to an Airtable record change — the reader is told "schedule" twice,
+  // once in words and once in a picture, and neither is true.
+  _triggerGlyph(t) {
+    const ty = String((t && t.type) || '').toLowerCase();
+    if (ty === 'email')    return '✉';
+    if (ty === 'schedule') return '⏱';
+    if (ty === 'manual')   return '▶';
+    if (ty === 'event') {
+      const conn = String((t && t.connector) || '').toLowerCase();
+      return conn === 'airtable' ? '⊞' : '⚡';
+    }
+    // Unknown — a hollow circle says "we cannot tell", which is the truth. It
+    // must never borrow the clock or the envelope.
+    return '◯';
   }
 
   _specTriggerTitle(t) { return this._triggerCaption(t); }
@@ -9893,7 +9921,12 @@ class Component extends DCLogic {
         const wf = S.consoleWf; if (!wf) return [];
         const items = [];
         const trg = (wf.triggers || [])[0];
-        if (trg) items.push({ glyph: trg.type === "email" ? "✉" : "⏱", typeLabel: (trg.type || "trigger").toUpperCase(), label: trg.label || (trg.type === "email" ? "Email trigger" : "Schedule"), showArrow: false });
+        // Was: a CLOCK for anything that is not email, the raw type as the tag
+        // (so a customer read "CONNECTOR_EVENT"), and the word "Schedule" as the
+        // label for every non-email trigger — which called an Airtable record
+        // change a schedule, in words and in a picture at once. All three now
+        // come from the shared rule.
+        if (trg) items.push({ glyph: this._triggerGlyph(trg), typeLabel: "TRIGGER", label: this._triggerCaption(trg), showArrow: false });
         (wf.nodes || []).forEach((n, i) => {
           const et = effNodeType(n);
           const tl = { summarize: "SUMMARIZE", freeform: "AI STEP", extract: "EXTRACT", rewrite: "REWRITE", classify: "CLASSIFY", assemble: "ASSEMBLE", deliver: "DELIVER" };

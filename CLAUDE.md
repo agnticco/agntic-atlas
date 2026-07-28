@@ -598,16 +598,41 @@ as load-bearing.*
   because it is more specific; an `event` with **no** connector says *"a connected app"*
   rather than naming one; and the legacy `connector_event` now says *"Something starts this
   workflow"* — honest — instead of claiming email.
-  Pinned by `tests/api/trigger-caption.test.js` (12), which **extracts and executes the real
+  **THERE WERE FIVE RENDERERS, NOT TWO, AND ONLY DRIVING THE APP FOUND THE OTHER THREE.**
+  The canvas and approval card were fixed first and looked complete. Testing in a headed
+  browser then showed the **console view** — the screen you land on *before* the builder —
+  still calling the same Airtable workflow **"Schedule"**, with a **clock icon**, and showing
+  the raw string **`connector_event`** to the customer as a status chip. Three more places
+  were each deciding this independently: the console rail (inline in `renderVals`, which gave
+  a clock to anything non-email and hardcoded the word "Schedule"), `_triggerTitle` (which
+  title-cased the RAW type, so the legacy trigger read as *"Connector_event"*, and knew
+  nothing about connector events at all), and `_getTriggerInfo`'s fallback (which used
+  `label: t.type` — the chip). All now route through the one rule, and the ICON does too, via
+  `_triggerGlyph`: the clock and the envelope are claims, and an unknown trigger gets a
+  hollow circle that says *we cannot tell* rather than borrowing either.
+  Pinned by `tests/api/trigger-caption.test.js` (18), which **extracts and executes the real
   method sources** out of the page rather than copying them (the same harness as
   `step-approval-card.test.js` — a copy is exactly what would drift, and a grep would pass
-  against broken code). **Three mutations red→green:** restoring the email caption for the
-  legacy type (1 red), giving connector events the envelope again (2 red), restoring the
-  blanket Slack wording (2 red). One test asserts **no second hardcoded caption exists
-  anywhere outside the helper**, so the drift cannot silently come back.
+  against broken code). **Six mutations, and ONE SURVIVED THE FIRST PASS — the test was
+  strengthened rather than the mutation dropped.** Reverting the console rail to the clock,
+  the raw tag and "Schedule" left **all 17 other tests green**, because that rail is inline
+  inside a ~1,000-line render method that cannot be extracted and executed. That is the
+  "generalisation silently reverted in a closure nobody can reach" shape this file already
+  records. It now has a **SOURCE-level pin, and the test says in its own header that this is
+  weaker than the rest and why** — replace it with a behavioural check if that rail is ever
+  made extractable.
   `.claude/skills/atlas-product/SKILL.md` §5 extended in the same commit, because a stale
   behavioural contract is what let two QA runs disagree about whether this was worth
-  reporting. **Never witnessed in a browser.**
+  reporting.
+  **WITNESSED IN A BROWSER (2026-07-27), and here is exactly how far that goes.** Proved
+  live: the Airtable workflow's canvas, console rail and status chip all stopped saying email
+  or schedule; a real Gmail workflow kept its envelope and its wording, so the fix did not win
+  by making everything generic. **NOT proved live, and do not claim it:** the *"names the
+  app"* path — *"Something changes in Airtable"* — was never rendered, because **not one of
+  the 59 stored workflows carries a properly-shaped `event` trigger**, so the browser could
+  only ever show the fallback. And the **step-approval card itself** — the surface QA actually
+  reported — was not seen, because every workflow on hand is fully approved and no confirm
+  control exists to look at. Both need one fresh build to close.
 
 **On the control-flow / promise engine**
 
