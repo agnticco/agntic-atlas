@@ -31,6 +31,9 @@ import { getAirtableAccessToken } from '../connectors/airtable/oauth.js';
 import {
   syncAirtableWebhooksForTenant, isAirtableRecordChangedTrigger, checkAirtableTriggersArmable,
 } from '../connectors/airtable/webhook-sync.js';
+// Refuses a publish whose trigger nothing could ever run. Must be checked BEFORE
+// the connector-specific arming checks — see that module's header for why.
+import { checkTriggersRunnable } from '../workflows/trigger-runnable.js';
 import { sumTimeSavedMinutes, timeSavedMinutesForRun, isValueRun, isLiveRun } from '../workflows/time-saved.js';
 // The test-run sentence is COMPOSED from the run's evidence, never written by a
 // model. See the module header, and POST /api/builder/test-summary below.
@@ -2506,6 +2509,17 @@ Rules:
       return res.status(404).json({ ok: false, error: 'Workflow not found' });
     }
 
+    // A trigger nothing can run must be refused BEFORE the connector-specific
+    // checks, because those only recognise their own shape — a malformed trigger
+    // matches none of them and would sail through as "nothing to arm".
+    {
+      const runnable = checkTriggersRunnable(spec);
+      if (!runnable.ok) {
+        logEvent('builder.update.trigger_not_runnable', { tenant: req.tenant?.id ?? null, workflowId: id, code: runnable.code });
+        return res.status(422).json({ ok: false, code: runnable.code, error: runnable.error });
+      }
+    }
+
     // Same fail-closed rule as first publish: this route IS the publish path for
     // most workflows. An edit that cannot be armed must not be accepted, or the
     // user is left with a live-looking workflow that stopped being able to fire.
@@ -2706,6 +2720,18 @@ Rules:
     // Checked BEFORE anything is written, so the common failures (no base named,
     // Airtable not connected) never produce a workflow at all. 422 rather than 400:
     // the request is well-formed, the world just isn't ready for it.
+    // Refused first, and for every trigger — the connector checks below only
+    // recognise their own shape, so a trigger they cannot parse reads to them as
+    // "nothing to arm" and publishes. That is how a workflow ends up live and
+    // unable to fire.
+    {
+      const runnable = checkTriggersRunnable(spec);
+      if (!runnable.ok) {
+        logEvent('persist.trigger_not_runnable', { tenant: req.tenant?.id ?? null, code: runnable.code });
+        return res.status(422).json({ ok: false, code: runnable.code, error: runnable.error });
+      }
+    }
+
     const needsAirtableWatch = (spec.triggers ?? []).some(isAirtableRecordChangedTrigger);
     if (needsAirtableWatch) {
       const armable = await checkAirtableTriggersArmable(spine, req.tenant.id, spec);

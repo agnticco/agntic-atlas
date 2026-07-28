@@ -43,6 +43,9 @@ import { applyProposal, assembleSpec, wireEdges } from './spec-assembler.js';
 import { materialiseEscalations } from './escalation.js';
 import { nodeForAssertion, assertableConnectors, splitTarget, canonicalConnector,
          laneInventoryOf } from '../workflows/outcome-oracle.js';
+// ONE definition of "could anything ever start a workflow from this trigger",
+// shared with the publish guard — so the merge and the refusal cannot disagree.
+import { isRunnableTrigger } from '../workflows/trigger-runnable.js';
 import { analyzeTable } from '../workflows/decision-analysis.js';
 import { deriveWorkflowName } from '../workflows/workflow-validator.js';
 import { tableOf, valuesOf, HIT_POLICIES, HIT_POLICY_LABELS, DECISION_MAX_INPUTS } from '../workflows/node-types/decision.js';
@@ -351,7 +354,26 @@ export function mergeGeneratedSpec(draft, generated) {
 
   const existingTriggers = Array.isArray(base.triggers) ? base.triggers : [];
   const genTriggers      = Array.isArray(g.triggers)    ? g.triggers    : [];
-  const triggers = existingTriggers.length ? existingTriggers : genTriggers;
+
+  // THE DRAFT STILL WINS — with one exception, and only one.
+  //
+  // This used to be `existingTriggers.length ? existingTriggers : genTriggers`,
+  // i.e. precedence by ORIGIN. The draft beating the model is right and must
+  // stay: a whole-spec regenerate must never overwrite what the user actually
+  // said. But it also meant that when the interview had gathered a thin,
+  // unrunnable trigger early and the model later produced the complete shape
+  // (connector, event, base and table), the COMPLETE one was discarded and the
+  // broken one survived to publish.
+  //
+  // So: keep the draft, unless the draft could never run and the generated one
+  // could. That is not "prefer the model" — it never promotes the model over a
+  // usable answer, and a draft with even one runnable trigger is left untouched.
+  // It only refuses to throw a working trigger away for a broken one.
+  const draftHasRunnable = existingTriggers.some(isRunnableTrigger);
+  const genHasRunnable   = genTriggers.some(isRunnableTrigger);
+  const triggers = existingTriggers.length
+    ? ((!draftHasRunnable && genHasRunnable) ? genTriggers : existingTriggers)
+    : genTriggers;
 
   const merged = {
     ...base,
@@ -1214,7 +1236,16 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
         new SystemMessage('You pick the event that STARTS a workflow. JSON only.'),
         new HumanMessage(
           `Intent: "${state.intent}"\nOutcome: ${draft.outcome?.statement ?? ''}\n\n` +
-          'What starts this workflow? Return {"trigger":{"type":"email"|"schedule"|"manual"|"connector_event","filter":"<a Gmail search query, for an email trigger — e.g. to:leads@acme.com>","cron":"<for a schedule>"}}. ' +
+          // "connector_event" USED TO BE OFFERED HERE AND NOTHING COULD RUN IT.
+          // It appeared in exactly one place in all of src/ — this string — and no
+          // scheduler, poller or dispatcher ever matched it, so a workflow built on
+          // it saved, showed as live, and could never fire. The runnable shape for a
+          // pushed connector is {"type":"event","connector":"<id>"}; every dispatcher
+          // matches on that connector field. `checkTriggersRunnable` now refuses
+          // anything outside the runnable set, so this prompt is no longer the only
+          // thing standing between a model's guess and an unrunnable workflow.
+          'What starts this workflow? Return {"trigger":{"type":"email"|"schedule"|"manual"|"event","connector":"<for an event trigger, the app to watch — e.g. airtable, slack>","filter":"<a Gmail search query, for an email trigger — e.g. to:leads@acme.com>","cron":"<for a schedule>"}}. ' +
+          'Use "event" ONLY for a change in a connected app, and it MUST name the connector; if you cannot name one, do not use "event". ' +
           'For an email trigger the filter is a REAL Gmail search query: it is used to find the actual messages this workflow will run on. ' +
           'The trigger fires on mail ARRIVING in the inbox: for a generic "new email arrives" with no specific sender named, use "is:unread" — NEVER "from:<the operator\'s own address>", which matches mail they SENT. Use "from:<sender>" only when the user names a specific sender.',
         ),

@@ -518,6 +518,59 @@ as load-bearing.*
   silently. Pinned by `tests/api/step-approval-card.test.js` (28), four mutations red→green;
   `.claude/skills/atlas-product/SKILL.md` §5 extended in the same commit.
 
+- **A GUARD THAT DOES NOT RECOGNISE A VALUE MUST NOT READ THAT AS "NOTHING TO CHECK"
+  (2026-07-27, Charles: "fix the reason why malformed triggers keep happening").** QA found
+  an Airtable-triggered workflow whose first approval card read *"A new email arrives"*. The
+  caption was the visible half and the cheap half. The real defect was underneath: its stored
+  trigger was `{"type":"connector_event"}` — **no connector, no event, no baseId, no
+  tableId** — and **it published anyway**. Across 59 stored workflows, **zero** carried a
+  properly-shaped `type:"event"` connector trigger and **eight** carried this one.
+  **The fail-closed publishing rule of 2026-07-24 was not weakened — it was BYPASSED**, and
+  the mechanism is the lesson: `checkAirtableTriggersArmable` filters with
+  `isAirtableRecordChangedTrigger` (`type==='event' && connector==='airtable'`), a malformed
+  trigger matches nothing, the filtered list is empty, and the function returns `{ok:true}` —
+  *"nothing to arm"*. **Absent and unrecognised were the same answer.** So the workflow saved,
+  showed as live, and could never fire: the exact silent failure that rule exists to prevent,
+  reopened through a door it did not cover. Slack dispatch has the identical blind spot.
+  **The bitter detail: the right refusal already existed three lines below** —
+  `TRIGGER_NO_BASE` says *"it does not say which base to watch — so it could never start."*
+  That is precisely the condition these workflows were in. They never reached it.
+  **Where they came from, and this is the part to remember:** `connector_event` was never a
+  runnable type. It appeared in **exactly one place in all of `src/`** — the elicitation
+  prompt at `elicitation-graph.js`, listing it among the types the model may return. Nothing
+  consumed it: not the scheduler (`type==='email'`), not the Gmail poller, not the Slack or
+  Airtable dispatchers. **The interview was asking the model for a value the runtime cannot
+  honour**, and a second defect kept it alive: `mergeGeneratedSpec` chose triggers by ORIGIN
+  (`existingTriggers.length ? existingTriggers : genTriggers`), so a thin draft trigger
+  gathered early **beat the complete shape the model later produced**, base and table
+  included.
+  **Fixed in three places, deliberately, because each alone would have failed:**
+  · `src/workflows/trigger-runnable.js` — **the mechanism, and the only part that holds
+    regardless of what any model emits.** One question of every trigger: *is there anything
+    in this system that could ever start a workflow from this?* Runnable set is
+    `email · schedule · manual · event`, and `event` **must name a connector** because every
+    dispatcher matches on it. Anything else is refused, in words a person can act on, at BOTH
+    publish paths (`POST` and the `PUT` that is the real publish path for most workflows) and
+    **before** the connector-specific checks, which only recognise their own shape.
+  · The prompt no longer offers `connector_event`. **That is a BELIEF about model behaviour
+    and is pinned by nothing** — the guard is what makes it safe to be wrong.
+  · `mergeGeneratedSpec` still lets the draft win — a regenerate must never overwrite what the
+    user actually said — **with exactly one exception: it will not throw a runnable trigger
+    away for an unrunnable one.** It never promotes the model over a usable answer.
+  **The generalisation, which is why this is filed here and not as a connector note:** a
+  trigger type added to a prompt but never taught to a consumer now **refuses to publish
+  loudly** instead of publishing and silently never firing. Keep the runnable set in step with
+  the consumers; this check failing a publish is the signal that someone added one without the
+  other. Pinned by `tests/workflows/trigger-runnable.test.js` (15), **three mutations
+  red→green** (admitting `connector_event` to the runnable set → 6 red; reverting the merge to
+  origin-precedence → 1 red; dropping the connector requirement on `event` → 2 red).
+  **NOT fixed, deliberately: the eight existing rows.** They cannot be repaired — the base and
+  table were never captured, so a migration would mean inventing identifiers nobody recorded.
+  All eight are drafts or errored; none is live. With the guard in place they now refuse to
+  publish and tell the user to pick a base, which is the correct outcome. Real examples are
+  preserved at `~/Desktop/agent-org/runs/2026-07-27/evidence-workflow-dbs/`.
+  **Never witnessed in a browser** — proved by tests and by reading the stored data.
+
 **On the control-flow / promise engine**
 
 - **A check scoped to the PRODUCER is wrong; scope it to the VALUE.** Denylists ("its parent
