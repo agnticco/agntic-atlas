@@ -1,5 +1,13 @@
 [
   {
+    "version": "1.6.55",
+    "date": "2026-07-28",
+    "title": "Plain English on every screen, and the workflow page reorganised",
+    "notes": [
+      "Steps now say what they do — \"Asks a person\", \"Picks a path\", \"Sends it\" — instead of LLM PROMPT, BRANCH and CONNECTOR-ACTION, and they say the same thing on the builder, the workflow page and the procedure document. Gmail filters read as \"emails that are unread\". The procedure document now lists where each route goes and what an approval's timeout means, and no longer prints node ids or the AI's raw prompt. Opening a workflow lands on its overview, with run history underneath the baseline."
+    ]
+  },
+  {
     "version": "1.6.54",
     "date": "2026-07-28",
     "title": "The flow diagram stays put while you approve steps",

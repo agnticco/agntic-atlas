@@ -19,12 +19,13 @@ const TYPE_LABELS = {
   schedule:  'Schedule trigger',
   manual:    'Manual trigger',
   llm:       'AI step',
-  assemble:  'Assemble document',
-  deliver:   'Deliver',
-  branch:    'Branch (routes one way)',
+  assemble:  'Builds a document',
+  deliver:   'Sends it',
+  branch:    'Picks a path',
   foreach:   'For each item',
-  human:     'Wait for a person',
-  decision:  'Decision table',
+  human:     'Asks a person',
+  decision:  'Picks by rules',
+  stop:      'Ends here',
 };
 
 /**
@@ -32,12 +33,15 @@ const TYPE_LABELS = {
  * An SOP is read by the customer, so a step that used to say "Summarize (LLM)"
  * must not start saying "AI step" — the mode carries the meaning now.
  */
+// Sentence-case twins of the client's `_stepTypeWords`. The two must say the SAME
+// THING: a customer reads the workflow page and then exports this document, and
+// three vocabularies for one set of steps is what they used to get (2026-07-29).
 const LLM_MODE_LABELS = {
-  summarize: 'Summarize (AI)',
-  extract:   'Extract (AI)',
-  rewrite:   'Rewrite (AI)',
-  classify:  'Classify (AI)',
-  freeform:  'AI prompt',
+  summarize: 'Writes a summary',
+  extract:   'Pulls out details',
+  rewrite:   'Rewrites it',
+  classify:  'Sorts it',
+  freeform:  'AI writes it',
 };
 
 const CHANNEL_LABELS = {
@@ -395,8 +399,11 @@ export function generateSopMarkdown(wf, { provenance = null } = {}) {
       if (visited.has(nodeId)) return;
       visited.add(nodeId);
       const n = nodeMap[nodeId];
+      // The node id used to be printed beside the name — `→ **Classify the email**
+      // (`classify_email`)`. It is the spec's filing system; a person following a
+      // written procedure needs the name and nothing else.
       const label = n ? (n.label || stepTypeLabel(n)) : nodeId;
-      lines.push(`${prefix}→ **${label}** (\`${nodeId}\`)`);
+      lines.push(`${prefix}→ **${label}**`);
       for (const e of edges.filter(e2 => e2.from === nodeId)) {
         walk(e.to, prefix + '  ');
       }

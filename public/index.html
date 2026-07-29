@@ -1604,54 +1604,13 @@
 
           <!-- SUB-NAV TABS -->
           <div style="display:flex;gap:4px;margin-top:18px">
-            <button onClick="{{ onSwitchDash }}"    class="ab-seg" style="border:none;cursor:pointer;background:{{ consoleDashTabBg }};color:{{ consoleDashTabColor }};font-family:inherit;font-size:13px;font-weight:500;padding:8px 16px;border-radius:8px">Run history</button>
+            <button onClick="{{ onSwitchProfile }}" class="ab-seg" style="border:none;cursor:pointer;background:{{ consoleProfileTabBg }};color:{{ consoleProfileTabColor }};font-family:inherit;font-size:13px;font-weight:500;padding:8px 16px;border-radius:8px">Overview</button>
             <button onClick="{{ onSwitchSop }}"     class="ab-seg" style="border:none;cursor:pointer;background:{{ consoleSopTabBg }};color:{{ consoleSopTabColor }};font-family:inherit;font-size:13px;font-weight:500;padding:8px 16px;border-radius:8px">SOP</button>
-            <button onClick="{{ onSwitchProfile }}" class="ab-seg" style="border:none;cursor:pointer;background:{{ consoleProfileTabBg }};color:{{ consoleProfileTabColor }};font-family:inherit;font-size:13px;font-weight:500;padding:8px 16px;border-radius:8px">Profile</button>
           </div>
           <div style="height:1px;background:rgba(255,255,255,.07);margin-top:12px"></div>
         </div>
 
         <!-- ── DASHBOARD TAB ── -->
-        <sc-if value="{{ consoleViewDash }}" hint-placeholder-val="{{ true }}">
-        <div class="ab-scroll" style="flex:1;overflow-y:auto;min-height:0;padding:16px 32px 48px">
-
-          <!-- FILTER BAR -->
-          <div style="display:flex;align-items:center;gap:6px;margin-bottom:14px">
-            <button onClick="{{ onFilterAll }}"     style="border:1px solid rgba(255,255,255,.1);cursor:pointer;background:{{ consoleFiltAllBg }};color:{{ consoleFiltAllCol }};font-family:inherit;font-size:12px;font-weight:500;padding:5px 13px;border-radius:7px">All</button>
-            <button onClick="{{ onFilterSuccess }}" style="border:1px solid rgba(255,255,255,.1);cursor:pointer;background:{{ consoleFiltOkBg }};color:{{ consoleFiltOkCol }};font-family:inherit;font-size:12px;font-weight:500;padding:5px 13px;border-radius:7px">Success</button>
-            <button onClick="{{ onFilterError }}"   style="border:1px solid rgba(255,255,255,.1);cursor:pointer;background:{{ consoleFiltErrBg }};color:{{ consoleFiltErrCol }};font-family:inherit;font-size:12px;font-weight:500;padding:5px 13px;border-radius:7px">Error</button>
-          </div>
-
-          <!-- RUN ROWS -->
-          <sc-for list="{{ consoleRunRows }}" as="r" hint-placeholder-count="5">
-            <div onClick="{{ r.onClick }}" class="ab-row" style="display:flex;align-items:center;gap:14px;padding:12px 14px;border-radius:10px;border-bottom:1px solid rgba(255,255,255,.05);cursor:pointer">
-              <span style="flex:none;width:8px;height:8px;border-radius:50%;background:{{ r.statusColor }};box-shadow:0 0 6px {{ r.statusGlow }}"></span>
-              <span style="font-size:12.5px;font-weight:500;color:rgba(255,255,255,.65);white-space:nowrap;min-width:60px">{{ r.statusLabel }}</span>
-              <sc-if value="{{ r.isTest }}" hint-placeholder-val="{{ false }}">
-                <span style="flex:none;font-size:10px;font-weight:600;letter-spacing:.08em;color:#f3cd86;background:rgba(240,191,107,.1);border:1px solid rgba(240,191,107,.22);padding:2px 7px;border-radius:4px">TEST</span>
-              </sc-if>
-              <span style="flex:1;font-size:12.5px;color:rgba(255,255,255,.42);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ r.startedAt }}</span>
-              <span style="flex:none;font-size:12.5px;color:rgba(255,255,255,.42);white-space:nowrap">{{ r.duration }}</span>
-              <span style="flex:none;font-size:12.5px;color:rgba(255,255,255,.35);white-space:nowrap">{{ r.steps }}</span>
-              <sc-if value="{{ r.hasError }}" hint-placeholder-val="{{ false }}">
-                <span style="flex:none;max-width:180px;font-size:11.5px;color:#f0a896;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ r.errorSnippet }}</span>
-              </sc-if>
-              <svg style="flex:none;opacity:.3" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18l6-6-6-6"/></svg>
-            </div>
-          </sc-for>
-
-          <!-- EMPTY STATE -->
-          <sc-if value="{{ consoleRunsEmpty }}" hint-placeholder-val="{{ false }}">
-            <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;padding:56px 0;gap:12px;text-align:center">
-              <div style="width:44px;height:44px;border-radius:12px;border:1px solid rgba(255,255,255,.12);background:rgba(255,255,255,.04);display:flex;align-items:center;justify-content:center;font-size:18px;opacity:.5">⏳</div>
-              <div style="font-size:15px;color:rgba(255,255,255,.45)">No runs yet</div>
-              <div style="font-size:13px;color:rgba(255,255,255,.28);max-width:36ch;line-height:1.5">Test runs are logged here when you publish. Scheduled runs appear after the workflow fires automatically.</div>
-            </div>
-          </sc-if>
-
-        </div>
-        </sc-if>
-
         <!-- ── SOP TAB ── -->
         <sc-if value="{{ consoleViewSop }}" hint-placeholder-val="{{ false }}">
         <div class="ab-scroll" style="flex:1;overflow-y:auto;min-height:0;padding:20px 32px 64px">
@@ -1749,6 +1708,45 @@
             <button onClick="{{ onOpenBaselinePanel }}" style="border:1px solid rgba(255,255,255,.18);background:rgba(255,255,255,.06);color:rgba(255,255,255,.85);font-family:inherit;font-size:13px;font-weight:500;padding:9px 20px;border-radius:8px;cursor:pointer;margin-top:4px">Set baseline</button>
           </div>
           </sc-if>
+
+          <!-- RUN HISTORY — moved in from its own tab (operator, 2026-07-29: "just add
+               run history module under the set baseline module"). Landing on a workflow
+               now answers "is it working?" and "what has it done?" on one screen. -->
+          <div style="margin-top:34px;padding-top:26px;border-top:1px solid rgba(255,255,255,.07)">
+            <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:14px">
+              <div style="font-size:10px;font-weight:600;letter-spacing:.16em;text-transform:uppercase;color:rgba(255,255,255,.35)">Run history</div>
+              <div style="display:flex;align-items:center;gap:6px">
+                <button onClick="{{ onFilterAll }}"     style="border:1px solid rgba(255,255,255,.1);cursor:pointer;background:{{ consoleFiltAllBg }};color:{{ consoleFiltAllCol }};font-family:inherit;font-size:12px;font-weight:500;padding:5px 13px;border-radius:7px">All</button>
+                <button onClick="{{ onFilterSuccess }}" style="border:1px solid rgba(255,255,255,.1);cursor:pointer;background:{{ consoleFiltOkBg }};color:{{ consoleFiltOkCol }};font-family:inherit;font-size:12px;font-weight:500;padding:5px 13px;border-radius:7px">Success</button>
+                <button onClick="{{ onFilterError }}"   style="border:1px solid rgba(255,255,255,.1);cursor:pointer;background:{{ consoleFiltErrBg }};color:{{ consoleFiltErrCol }};font-family:inherit;font-size:12px;font-weight:500;padding:5px 13px;border-radius:7px">Error</button>
+              </div>
+            </div>
+
+            <sc-for list="{{ consoleRunRows }}" as="r" hint-placeholder-count="5">
+              <div onClick="{{ r.onClick }}" class="ab-row" style="display:flex;align-items:center;gap:14px;padding:12px 14px;border-radius:10px;border-bottom:1px solid rgba(255,255,255,.05);cursor:pointer">
+                <span style="flex:none;width:8px;height:8px;border-radius:50%;background:{{ r.statusColor }};box-shadow:0 0 6px {{ r.statusGlow }}"></span>
+                <span style="font-size:12.5px;font-weight:500;color:rgba(255,255,255,.65);white-space:nowrap;min-width:60px">{{ r.statusLabel }}</span>
+                <sc-if value="{{ r.isTest }}" hint-placeholder-val="{{ false }}">
+                  <span style="flex:none;font-size:10px;font-weight:600;letter-spacing:.08em;color:#f3cd86;background:rgba(240,191,107,.1);border:1px solid rgba(240,191,107,.22);padding:2px 7px;border-radius:4px">TEST</span>
+                </sc-if>
+                <span style="flex:1;font-size:12.5px;color:rgba(255,255,255,.42);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ r.startedAt }}</span>
+                <span style="flex:none;font-size:12.5px;color:rgba(255,255,255,.42);white-space:nowrap">{{ r.duration }}</span>
+                <span style="flex:none;font-size:12.5px;color:rgba(255,255,255,.35);white-space:nowrap">{{ r.steps }}</span>
+                <sc-if value="{{ r.hasError }}" hint-placeholder-val="{{ false }}">
+                  <span style="flex:none;max-width:180px;font-size:11.5px;color:#f0a896;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ r.errorSnippet }}</span>
+                </sc-if>
+                <svg style="flex:none;opacity:.3" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18l6-6-6-6"/></svg>
+              </div>
+            </sc-for>
+
+            <sc-if value="{{ consoleRunsEmpty }}" hint-placeholder-val="{{ false }}">
+              <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;padding:40px 0;gap:12px;text-align:center">
+                <div style="width:44px;height:44px;border-radius:12px;border:1px solid rgba(255,255,255,.12);background:rgba(255,255,255,.04);display:flex;align-items:center;justify-content:center;font-size:18px;opacity:.5">⏳</div>
+                <div style="font-size:15px;color:rgba(255,255,255,.45)">No runs yet</div>
+                <div style="font-size:13px;color:rgba(255,255,255,.28);max-width:36ch;line-height:1.5">Test runs are logged here when you publish. Scheduled runs appear after the workflow fires automatically.</div>
+              </div>
+            </sc-if>
+          </div>
 
         </div>
         </sc-if>
@@ -3048,7 +3046,7 @@ class Component extends DCLogic {
       view: 'home',           // 'home' | 'build' | 'console' | 'inbox' | 'knowledge'
       sidebarSearch: "", sidebarRunningId: null, connectorModal: null, connectorModalClosing: false,
       consoleWfId: null, consoleWf: null, consoleRuns: [],
-      consoleMetrics: null, consoleView: "dashboard", consoleRunFilter: "all",
+      consoleMetrics: null, consoleView: "profile", consoleRunFilter: "all",
       consoleProfile: null, consoleProfileLoading: false,
       baselinePanelOpen: false, baselineRecorderState: "idle", baselineTimerMs: 0,
       baselineMinutes: "", baselineSeconds: "", baselineRecordingPath: null, profileExpandedOutputs: {},
@@ -3087,7 +3085,7 @@ class Component extends DCLogic {
       mentionOpen: false, mentionQuery: "", mentionAt: -1,
       slashOpen: false, slashQuery: "", slashAt: -1, _slashIdx: 0,
       consoleWfId: null, consoleWf: null, sidebarSearch: "", connectorModal: null, connectorModalClosing: false,
-      consoleRuns: [], consoleMetrics: null, consoleView: "dashboard", consoleRunFilter: "all",
+      consoleRuns: [], consoleMetrics: null, consoleView: "profile", consoleRunFilter: "all",
       consoleProfile: null, consoleProfileLoading: false,
       baselinePanelOpen: false, baselineRecorderState: "idle", baselineTimerMs: 0,
       baselineMinutes: "", baselineSeconds: "", baselineRecordingPath: null, profileExpandedOutputs: {},
@@ -4396,8 +4394,13 @@ class Component extends DCLogic {
       });
       return;
     }
-    this.setState({ view: 'console', consoleWfId: wfId, consoleDrawerRun: null, consoleView: "dashboard", consoleRunFilter: "all", consoleLoading: true, consoleRuns: [], consoleMetrics: null, consoleWf: null, consoleProfile: null, baselinePanelOpen: false, baselineRecorderState: "idle", baselineTimerMs: 0, baselineMinutes: "", baselineSeconds: "", baselineRecordingPath: null, profileExpandedOutputs: {}, connectionsOpen: false, accountOpen: false, profileOpen: false });
+    this.setState({ view: 'console', consoleWfId: wfId, consoleDrawerRun: null, consoleView: "profile", consoleRunFilter: "all", consoleLoading: true, consoleRuns: [], consoleMetrics: null, consoleWf: null, consoleProfile: null, baselinePanelOpen: false, baselineRecorderState: "idle", baselineTimerMs: 0, baselineMinutes: "", baselineSeconds: "", baselineRecordingPath: null, profileExpandedOutputs: {}, connectionsOpen: false, accountOpen: false, profileOpen: false });
     this._loadConsoleData(wfId);
+    // The overview IS the landing page now, so its figures have to be fetched on
+    // arrival. They used to load only when the tab was clicked — which, once the
+    // tab stopped being a tab, would have meant landing on empty time-saved,
+    // baseline and chart panels with nothing to explain why.
+    this._loadConsoleProfile(wfId);
     this._startConsolePoll(wfId); // live run monitoring: keep runs + metrics fresh while open
   }
   closeConsole() {
@@ -5848,7 +5851,7 @@ class Component extends DCLogic {
     if (ty === 'summarize') return { title: label || 'Summarize', desc: rat || 'Condenses the incoming content into a concise summary.' };
     if (ty === 'extract') { const f = Array.isArray(cfg.fields) ? cfg.fields.map(x => (x && (x.name || x.key)) || x).filter(Boolean).join(', ') : ''; return { title: label || 'Extract', desc: rat || (f ? 'Pulls out: ' + f + '.' : 'Extracts structured data from the content.') }; }
     if (ty === 'rewrite') return { title: label || 'Rewrite', desc: rat || ('Rewrites the content' + (cfg.tone ? ' in a ' + cfg.tone + ' tone.' : '.')) };
-    if (ty === 'classify') { const cats = String(cfg.categories || '').split(/[\n,]/).map(x => x.trim()).filter(Boolean).join(', '); return { title: label || 'Classify', desc: rat || (cats ? 'Sorts the content into one of: ' + cats + '.' : 'Sorts the content into one of a fixed set of categories.') }; }
+    if (ty === 'classify') { const cats = String(cfg.categories || '').split(/[\n,]/).map(x => this._plainLabel(x.trim())).filter(Boolean).join(', '); return { title: label || 'Classify', desc: rat || (cats ? 'Sorts the content into one of: ' + cats + '.' : 'Sorts the content into one of a fixed set of categories.') }; }
     if (ty === 'assemble') return { title: label || 'Assemble', desc: rat || 'Stitches the upstream sections into one document. No AI call.' };
     if (ty === 'freeform') { const pr = cfg.prompt || cfg.instructions || ''; return { title: label || 'AI step', desc: rat || 'Runs an AI prompt on the incoming content.', prompt: pr || null }; }
     if (ty === 'deliver') {
@@ -6722,37 +6725,81 @@ class Component extends DCLogic {
 
   // Resolve a step's node type → { shape, icon-flags, typeLabel }. `mode` is the
   // discriminator captured at construction (llm mode / deliver channel / trigger type).
+  // ── WHAT A STEP DOES, IN WORDS A CUSTOMER READS ───────────────────────────
+  // THE ONE type vocabulary. It used to be three, and they had drifted: the canvas
+  // said `LLM · EXTRACT` / `CONNECTOR-ACTION` / `BRANCH`, the on-screen procedure
+  // document said `LLM PROMPT` / `EMAIL TRIGGER`, and the EXPORTED document said
+  // "AI step" / "Wait for a person" — three answers to one question, on three
+  // screens a customer sees in the same sitting. (CLAUDE.md carried the canvas half
+  // as an open residual: "_nodeShape reaches five surfaces including the exported
+  // procedure document.")
+  //
+  // These are claims about what the step DOES, not what it is called in the spec.
+  // `λ`, `LLM` and `CONNECTOR-ACTION` are the filing system, not English — and the
+  // procedure document is the artefact a customer is handed to follow.
+  //
+  // Kept short on purpose: they render as a small-caps tag above the step's name,
+  // so they must read as a caption ("SENDS IT · Post to #atlas-test-temp"), not a
+  // sentence. Anything unrecognised falls through to "STEP" rather than shouting a
+  // raw type at someone.
+  _stepTypeWords(nodeType, mode) {
+    const T = String(nodeType || '').toLowerCase();
+    return ({
+      trigger: 'STARTS IT',
+      summarize: 'WRITES A SUMMARY',
+      extract: 'PULLS OUT DETAILS',
+      rewrite: 'REWRITES IT',
+      freeform: 'AI WRITES IT',
+      classify: 'SORTS IT',
+      llm: 'AI STEP',
+      branch: 'PICKS A PATH',
+      decision: 'PICKS BY RULES',
+      human: 'ASKS A PERSON',
+      foreach: 'FOR EACH ITEM',
+      assemble: 'BUILDS A DOCUMENT',
+      'connector-action': 'CONNECTED APP',
+      connector_action: 'CONNECTED APP',
+      search_web: 'SEARCHES THE WEB',
+      'search-web': 'SEARCHES THE WEB',
+      deliver: 'SENDS IT',
+      stop: 'ENDS HERE',
+      setup_action: 'SETUP',
+      name: 'NAMES IT',
+    })[T] || 'STEP';
+  }
+
   _nodeShape(nodeType, mode) {
     const T = String(nodeType || '').toLowerCase();
     const M = String(mode || '').toLowerCase();
     const icons = {}; // one boolean flag set true
     const set = (k) => { icons[k] = true; };
-    let shape = 'square', typeLabel = (T || 'step').toUpperCase();
+    let shape = 'square';
+    const typeLabel = this._stepTypeWords(T, M);
     if (T === 'trigger') {
-      shape = 'capsuleL'; typeLabel = 'TRIGGER';
+      shape = 'capsuleL';
       if (M === 'email' || M === 'gmail') set('icoMail'); else set('icoBolt');
-    } else if (T === 'summarize') { set('icoSpark'); typeLabel = 'LLM · SUMMARIZE'; }
-    else if (T === 'extract') { set('icoDoc'); typeLabel = 'LLM · EXTRACT'; }
-    else if (T === 'rewrite') { set('icoGear'); typeLabel = 'LLM · REWRITE'; }
-    else if (T === 'freeform') { set('icoSpark'); typeLabel = 'LLM · AI STEP'; }
-    else if (T === 'classify') { set('icoFork'); typeLabel = 'LLM · CLASSIFY'; }
-    else if (T === 'llm') { set('icoSpark'); typeLabel = 'LLM'; }
-    else if (T === 'branch') { shape = 'diamond'; set('icoSplit'); typeLabel = 'BRANCH'; }
-    else if (T === 'decision') { shape = 'diamond'; set('icoGrid'); typeLabel = 'DECISION'; }
-    else if (T === 'human') { shape = 'circle'; set('icoPerson'); typeLabel = 'HUMAN'; }
-    else if (T === 'foreach') { set('icoLoop'); typeLabel = 'FOREACH'; }
-    else if (T === 'assemble') { set('icoLayers'); typeLabel = 'ASSEMBLE'; }
+    } else if (T === 'summarize') { set('icoSpark'); }
+    else if (T === 'extract') { set('icoDoc'); }
+    else if (T === 'rewrite') { set('icoGear'); }
+    else if (T === 'freeform') { set('icoSpark'); }
+    else if (T === 'classify') { set('icoFork'); }
+    else if (T === 'llm') { set('icoSpark'); }
+    else if (T === 'branch') { shape = 'diamond'; set('icoSplit'); }
+    else if (T === 'decision') { shape = 'diamond'; set('icoGrid'); }
+    else if (T === 'human') { shape = 'circle'; set('icoPerson'); }
+    else if (T === 'foreach') { set('icoLoop'); }
+    else if (T === 'assemble') { set('icoLayers'); }
     else if (T === 'connector-action' || T === 'connector_action') {
-      set(/airtable|db|record|sheet|crm/.test(M) ? 'icoDb' : 'icoPlug'); typeLabel = 'CONNECTOR-ACTION';
+      set(/airtable|db|record|sheet|crm/.test(M) ? 'icoDb' : 'icoPlug');
     }
-    else if (T === 'search_web' || T === 'search-web') { set('icoGlobe'); typeLabel = 'SEARCH_WEB'; }
+    else if (T === 'search_web' || T === 'search-web') { set('icoGlobe'); }
     else if (T === 'deliver') {
-      shape = 'capsuleR'; typeLabel = 'DELIVER';
+      shape = 'capsuleR';
       set((M === 'in_app' || M === 'inbox_deliver' || M === 'inbox') ? 'icoInbox' : 'icoSend');
     }
-    else if (T === 'stop') { shape = 'circle'; set('icoStop'); typeLabel = 'STOP'; }
-    else if (T === 'setup_action') { set('icoGear'); typeLabel = 'SETUP'; }
-    else if (T === 'name') { set('icoSpark'); typeLabel = 'NAME'; }
+    else if (T === 'stop') { shape = 'circle'; set('icoStop'); }
+    else if (T === 'setup_action') { set('icoGear'); }
+    else if (T === 'name') { set('icoSpark'); }
     else { set('icoGear'); }
     return { shape, typeLabel, icons };
   }
@@ -7411,6 +7458,115 @@ class Component extends DCLogic {
     return words.charAt(0).toUpperCase() + words.slice(1);
   }
 
+  // Plain-English a value ONLY when it is plainly an identifier — one token of
+  // letters, digits and underscores. `urgent_complaint` becomes "Urgent complaint";
+  // "[Action Required] Enable 2-step verification" is a real sentence someone wrote
+  // and is left exactly alone. Running `_plainId` over everything would quietly eat
+  // the hyphen in "2-step", which is how a cleanup becomes a corruption.
+  _plainLabel(v) {
+    const raw = String(v == null ? '' : v).trim();
+    if (!raw) return '';
+    return /^[A-Za-z0-9_]+$/.test(raw) ? this._plainId(raw) : raw;
+  }
+
+  // `slack:#atlas-test-temp` is how a promise is FILED — connector plus locator.
+  // A person reads "#atlas-test-temp on Slack". The server's run summary already
+  // renders it that way; the evidence row in the panel did not, so the same run
+  // described the same destination two different ways on the same screen.
+  _plainTarget(t) {
+    const raw = String(t == null ? '' : t).trim();
+    if (!raw) return '';
+    const i = raw.indexOf(':');
+    if (i <= 0) return raw;
+    const conn = raw.slice(0, i), loc = raw.slice(i + 1).trim();
+    const name = ({
+      slack: 'Slack', airtable: 'Airtable', gmail: 'Gmail', email: 'email',
+      sheets: 'Google Sheets', docs: 'Google Docs', drive: 'Google Drive',
+      in_app: 'your Atlas inbox', inbox: 'your Atlas inbox',
+    })[conn.toLowerCase()] || this._plainId(conn);
+    return loc ? loc + ' on ' + name : name;
+  }
+
+  // ── AN INSTRUCTION IS FOR THE MODEL; THE CARD IS FOR A PERSON ─────────────
+  // Witnessed on prod, 2026-07-29, on the step-approval card — the product's
+  // designated human safety check — as one unbroken wall:
+  //
+  //   "If there is no subject AND no body text at all, output EXACTLY: ERROR:
+  //    required data not found. … Structure it exactly like this: 🚨 *Urgent
+  //    Complaint* • *Sender:* … Format output as Slack mrkdwn: *bold* for headers,
+  //    • for list items, blank line between sections. No HTML tags of any kind."
+  //
+  // Two thirds of that is plumbing: the missing-data sentinel every content node
+  // carries, and the formatting directions for the channel. Neither tells a person
+  // anything about whether the workflow does what they asked, and the card was tall
+  // enough with them in it to push the approve control off screen entirely.
+  //
+  // Deliberately SUBTRACTIVE — it drops sentences it recognises as machinery and
+  // reformats emphasis; it never rewrites the customer's meaning. An instruction it
+  // does not recognise passes through, because a card that quietly invents a
+  // friendlier instruction than the one the step will actually follow is worse than
+  // one that reads awkwardly.
+  _plainInstruction(v) {
+    const raw = String(v == null ? '' : v).trim();
+    if (!raw) return '';
+    const MACHINERY = [
+      /output\s+exactly\s*:?\s*error/i,   // the missing-data sentinel guard clause
+      /\bmrkdwn\b/i,                      // "Format output as Slack mrkdwn: *bold* …"
+      /no html tags/i,
+      /structure it exactly like this/i,
+    ];
+    const kept = raw
+      .split(/\n{2,}|(?<=[.!?])\s+(?=[A-Z0-9🚨•*])/)
+      .map(s => s.trim())
+      .filter(s => s && !MACHINERY.some(re => re.test(s)));
+    const body = (kept.length ? kept : [raw]).join(' ');
+    return this._plainText(body) || body;
+  }
+
+  // ── A SEARCH QUERY IS NOT ENGLISH ──────────────────────────────────────────
+  // `is:unread` was shown verbatim on the trigger's approval card ("Only when it
+  // matches: is:unread"), in the workflow's status chip, and in the procedure
+  // document — three of the surfaces a non-technical person is asked to check the
+  // workflow BY READING. It is Gmail's query syntax, not a sentence.
+  //
+  // Returns a phrase that completes "Only emails …", so the caller never has to
+  // know which operator it got. An operator we do not recognise keeps its own
+  // value (usually the customer's own word, like `subject:invoice`) rather than
+  // being dropped — losing a filter silently would be worse than reading oddly.
+  _plainFilter(filter) {
+    const raw = String(filter == null ? '' : filter).trim();
+    if (!raw) return '';
+    const out = [];
+    for (const tok of raw.split(/\s+/).filter(Boolean)) {
+      const m = /^(-?)([A-Za-z_]+):(.+)$/.exec(tok);
+      if (!m) { out.push('mentioning "' + tok + '"'); continue; }
+      const neg = m[1] === '-', key = m[2].toLowerCase();
+      const val = m[3].replace(/^["']|["']$/g, '');
+      let phrase;
+      if (key === 'is' && val === 'unread') phrase = 'that are unread';
+      else if (key === 'is' && val === 'starred') phrase = 'that are starred';
+      else if (key === 'is' && val === 'important') phrase = 'marked important';
+      else if (key === 'from') phrase = 'from ' + val;
+      else if (key === 'to') phrase = 'sent to ' + val;
+      else if (key === 'subject') phrase = 'with "' + val + '" in the subject';
+      else if (key === 'label') phrase = 'labelled ' + val;
+      else if (key === 'has' && val === 'attachment') phrase = 'with an attachment';
+      else if (key === 'newer_than') phrase = 'from the last ' + this._plainAge(val);
+      else if (key === 'older_than') phrase = 'older than ' + this._plainAge(val);
+      else phrase = key.replace(/_/g, ' ') + ' ' + val;
+      out.push(neg ? 'not ' + phrase : phrase);
+    }
+    return out.join(', ');
+  }
+
+  _plainAge(v) {
+    const m = /^(\d+)\s*([dhmy])$/i.exec(String(v == null ? '' : v).trim());
+    if (!m) return String(v == null ? '' : v);
+    const n = Number(m[1]);
+    const unit = { d: 'day', h: 'hour', m: 'month', y: 'year' }[m[2].toLowerCase()] || 'day';
+    return n + ' ' + unit + (n === 1 ? '' : 's');
+  }
+
   // ── NOTHING MACHINE-SHAPED REACHES A PERSON ────────────────────────────────
   // Operator, 2026-07-28: "No raw JSON or markdown anywhere in user facing
   // anything." Observed on the evidence row — "What came back matched the deal —
@@ -7841,25 +7997,25 @@ class Component extends DCLogic {
       }
     } else if (ty === 'classify') {
       if (!what) what = 'An AI step reads what came in and answers with exactly one of the labels below. Nothing else can come out of it.';
-      this._fact(facts, 'Instruction', cfg.prompt || cfg.instructions);
-      this._fact(facts, 'Possible answers', this._routeDomainOf(full).join(' · '));
+      this._fact(facts, 'Instruction', this._plainInstruction(cfg.prompt || cfg.instructions));
+      this._fact(facts, 'Possible answers', this._routeDomainOf(full).map(v => this._plainLabel(v)).join(' · '));
     } else if (ty === 'summarize') {
       if (!what) what = 'An AI step shortens what came in.';
-      this._fact(facts, 'Instruction', cfg.instructions || cfg.prompt);
+      this._fact(facts, 'Instruction', this._plainInstruction(cfg.instructions || cfg.prompt));
       this._fact(facts, 'Length', cfg.length);
       this._fact(facts, 'Style', cfg.style);
     } else if (ty === 'extract') {
       if (!what) what = 'An AI step pulls named details out of what came in.';
       const f = Array.isArray(cfg.fields) ? cfg.fields.map(x => (x && (x.name || x.key)) || x).filter(Boolean).join(' · ') : cfg.fields;
       this._fact(facts, 'Pulls out', f);
-      this._fact(facts, 'Instruction', cfg.instructions || cfg.prompt);
+      this._fact(facts, 'Instruction', this._plainInstruction(cfg.instructions || cfg.prompt));
     } else if (ty === 'rewrite') {
       if (!what) what = 'An AI step rewrites what came in.';
-      this._fact(facts, 'Instruction', cfg.instructions || cfg.prompt);
+      this._fact(facts, 'Instruction', this._plainInstruction(cfg.instructions || cfg.prompt));
       this._fact(facts, 'Tone', cfg.tone);
     } else if (ty === 'freeform') {
       if (!what) what = 'An AI step follows the instruction below on whatever the previous step produced.';
-      this._fact(facts, 'Instruction', cfg.prompt || cfg.instructions);
+      this._fact(facts, 'Instruction', this._plainInstruction(cfg.prompt || cfg.instructions));
     } else if (ty === 'assemble') {
       if (!what) what = 'Stitches what earlier steps produced into one document. No AI is involved.';
       this._fact(facts, 'Document title', cfg.title);
@@ -7873,7 +8029,7 @@ class Component extends DCLogic {
       this._fact(facts, 'Who is asked', cfg.assignee);
       const chans = cfg.channels;
       this._fact(facts, 'Asked in', Array.isArray(chans) ? chans.map(c => (c && (c.type || c)) || c).filter(Boolean).map(c => this._plainId(c)).join(' · ') : (chans && this._plainId(chans)));
-      this._fact(facts, 'Possible answers', this._routeDomainOf(full).join(' · '));
+      this._fact(facts, 'Possible answers', this._routeDomainOf(full).map(v => this._plainLabel(v)).join(' · '));
       const to = cfg.timeout;
       if (to && typeof to === 'object') {
         const after = to.after || to.hours || to.minutes || to.seconds;
@@ -7906,7 +8062,7 @@ class Component extends DCLogic {
       this._fact(facts, 'From', ins.map(i => this._plainId(i)).join(' · '));
       const rules = Array.isArray(cfg.rules) ? cfg.rules.length : 0;
       this._fact(facts, 'Rules', rules ? (rules + ' rule' + (rules === 1 ? '' : 's')) : '');
-      this._fact(facts, 'Possible answers', this._routeDomainOf(full).join(' · '));
+      this._fact(facts, 'Possible answers', this._routeDomainOf(full).map(v => this._plainLabel(v)).join(' · '));
     } else if (ty === 'foreach') {
       if (!what) what = 'Runs the same work once for every item in a list.';
       this._fact(facts, 'For each item in', cfg.over && this._plainId(cfg.over));
@@ -8565,7 +8721,7 @@ class Component extends DCLogic {
     if (ty === "summarize") return this._clip(c.instructions, 130) || "Condenses the incoming content into a short summary.";
     if (ty === "extract") { const f = Array.isArray(c.fields) ? c.fields.map(x => (x && (x.name || x.key)) || x).join(", ") : ""; return f ? ("Pulls out: " + this._clip(f, 110)) : "Extracts structured fields from the content."; }
     if (ty === "rewrite") return this._clip(c.instructions, 130) || ("Rewrites the content" + (c.tone ? (" in a " + c.tone + " tone.") : "."));
-    if (ty === "classify") { const k = String(c.categories || "").split(/[\n,]/).map(x => x.trim()).filter(Boolean).join(", "); return k ? ("Sorts into one of: " + this._clip(k, 110)) : "Sorts the content into one of a fixed set of categories."; }
+    if (ty === "classify") { const k = String(c.categories || "").split(/[\n,]/).map(x => this._plainLabel(x.trim())).filter(Boolean).join(", "); return k ? ("Sorts into one of: " + this._clip(k, 110)) : "Sorts the content into one of a fixed set of categories."; }
     if (ty === "assemble") return "Stitches the upstream sections into one document. No AI call.";
     if (ty === "stop") return "Ends this path with no action — nothing is sent, written, or delivered.";
     if (ty === "deliver") return this._deliveryDetail(c);
@@ -8933,12 +9089,18 @@ class Component extends DCLogic {
                // have been ignored. Saying so beats a tick that means the opposite.
                ? "This is a 'should not happen' case. Testing runs the steps directly without checking the trigger, so this one can't be proved here — it was not checked."
                : ("This example ran cleanly, but it didn't exercise anything the deal promises"
-                  + (skipped.length ? " — it took a path that doesn't cover " + skipped.map(c => c.target).join(", ") : "")
+                  + (skipped.length ? " — it took a path that doesn't cover "
+                     // Deduped: two promises to the SAME place used to print it twice,
+                     // so the row read "doesn't cover slack:#ops, slack:#ops".
+                     + Array.from(new Set(skipped.map(c => this._plainTarget(c.target)))).join(", ") : "")
                   + ". Nothing was proved either way."))
             : ("This one fell short — " + ((brokeReason && (brokeReason.reason || ("nothing reached " + brokeReason.target))) || (o.error || "a promise wasn't kept")) + ". Fix it and re-test.");
         return rowFrom(i, v === "kept" ? "✓" : v === "not_exercised" ? "○" : "!",
                        v === "kept" ? SAGE : v === "not_exercised" ? DIM : CLAY,
-                       o.label || ("Example " + (i + 1)), detail);
+                       // A lane-named sample arrives labelled `urgent_complaint`.
+                       // `_plainLabel` only touches single-token identifiers, so a
+                       // real sentence of a label is passed through untouched.
+                       this._plainLabel(o.label) || ("Example " + (i + 1)), detail);
       });
       const total = rows.length, broke = rows.filter(r => r.mark === "!").length;
       const proved = rows.filter(r => r.mark === "✓").length;
@@ -10136,19 +10298,21 @@ class Component extends DCLogic {
       consoleTriggerVisible: !!(S.consoleWf && S.consoleWf.status !== 'draft'),
       consoleTriggerGlyph: (() => { const ti = S.consoleWf && S.consoleWf.status !== 'draft' ? this._getTriggerInfo(S.consoleWf) : null; return ti ? ti.glyph : ""; })(),
       consoleTriggerLabel: (() => { const ti = S.consoleWf && S.consoleWf.status !== 'draft' ? this._getTriggerInfo(S.consoleWf) : null; return ti ? ti.label : ""; })(),
-      // sub-nav tabs
-      consoleViewDash: S.consoleView !== "sop" && S.consoleView !== "profile",
+      // ── SUB-NAV TABS: OVERVIEW IS THE LANDING PAGE ────────────────────────
+      // Run history used to be its own tab AND the default, so opening a workflow
+      // answered "what has it done?" before "is it working?" — and the time-saved
+      // and baseline figures, which are the reason the page exists, were a click
+      // away. Operator, 2026-07-29: profile first, with run history beneath the
+      // baseline module. The run-history tab is gone because its content now lives
+      // on this page; anything that is NOT the SOP is the overview.
       consoleViewSop: S.consoleView === "sop",
-      consoleViewProfile: S.consoleView === "profile",
-      onSwitchDash: () => this.switchConsoleView("dashboard"),
+      consoleViewProfile: S.consoleView !== "sop",
       onSwitchSop: () => this.switchConsoleView("sop"),
       onSwitchProfile: () => this.switchConsoleView("profile"),
-      consoleDashTabBg: (S.consoleView !== "sop" && S.consoleView !== "profile") ? "rgba(255,255,255,.07)" : "transparent",
       consoleSopTabBg: S.consoleView === "sop" ? "rgba(255,255,255,.07)" : "transparent",
-      consoleProfileTabBg: S.consoleView === "profile" ? "rgba(255,255,255,.07)" : "transparent",
-      consoleDashTabColor: (S.consoleView !== "sop" && S.consoleView !== "profile") ? "#fff" : "rgba(255,255,255,.48)",
+      consoleProfileTabBg: S.consoleView !== "sop" ? "rgba(255,255,255,.07)" : "transparent",
       consoleSopTabColor: S.consoleView === "sop" ? "#fff" : "rgba(255,255,255,.48)",
-      consoleProfileTabColor: S.consoleView === "profile" ? "#fff" : "rgba(255,255,255,.48)",
+      consoleProfileTabColor: S.consoleView !== "sop" ? "#fff" : "rgba(255,255,255,.48)",
       // profile tab
       onOpenBaselinePanel: () => this.openBaselinePanel(),
       onCloseBaselinePanel: () => this.closeBaselinePanel(),
@@ -10262,12 +10426,17 @@ class Component extends DCLogic {
         const nodes = wf.nodes || [], edges = wf.edges || [], triggers = wf.triggers || [];
         const deps = {};
         for (const e of edges) { if (!deps[e.to]) deps[e.to] = []; deps[e.to].push(e.from); }
-        const tl = t => ({ email: "Email trigger", schedule: "Schedule", manual: "Manual", summarize: "Summarize (LLM)", llm: "LLM prompt", extract: "Extract", rewrite: "Rewrite", deliver: "Deliver" }[t] || t);
+        // ONE vocabulary — the same one the canvas and the approval card read. This
+        // used to be a private table saying "LLM prompt" / "Email trigger" while the
+        // canvas said "LLM · AI STEP" and the exported document said "AI step".
+        const tl = (t, m) => this._stepTypeWords(t, m);
+        const nameOf = (id) => { const n = nodes.find(x => x && x.id === id); return (n && n.label) || this._plainId(id); };
         const items = [];
         if (triggers.length) {
           const t = triggers[0];
-          const pairs = t.filter ? [{ k: "Filter", v: t.filter }] : [];
-          items.push({ isTrigger: true, glyph: t.type === "email" ? "✉" : "⏱", tag: "TRIGGER", connector: tl(t.type), title: t.label || tl(t.type), desc: t.filter ? "Watches for messages matching: " + t.filter : "Fires on the configured trigger event.", configPairs: pairs, showLine: nodes.length > 0 });
+          const only = this._plainFilter(t.filter);
+          const pairs = only ? [{ k: "Only", v: "emails " + only }] : [];
+          items.push({ isTrigger: true, glyph: t.type === "email" ? "✉" : "⏱", tag: "TRIGGER", connector: this._triggerCaption(t), title: t.label || this._triggerCaption(t), desc: only ? "Starts on its own for emails " + only + "." : "Starts on its own when this event happens.", configPairs: pairs, showLine: nodes.length > 0 });
         }
         nodes.forEach((n, i) => {
           const cfg = n.config || {}, up = deps[n.id] || [];
@@ -10283,21 +10452,51 @@ class Component extends DCLogic {
             else if (cfg.target) pairs.push({ k: "Channel", v: String(cfg.target) });
             if (cfg.title) pairs.push({ k: "Title", v: String(cfg.title) });
           } else {
-            for (const k of ["length","style","format","channel","target","title"]) { if (cfg[k]) pairs.push({ k: this._titleCase(k), v: String(cfg[k]) }); }
-            if (cfg.instructions) pairs.push({ k: "Instructions", v: String(cfg.instructions).slice(0, 90) + (cfg.instructions.length > 90 ? "…" : "") });
+            for (const k of ["length","style","format","channel","target","title"]) { if (cfg[k]) pairs.push({ k: this._titleCase(k), v: this._plainText(String(cfg[k]), 120) }); }
+            // THE PROMPT IS NOT THE PROCEDURE. This used to print `config.instructions`
+            // verbatim, clipped to 90 characters — so the customer's procedure document
+            // read "Instructions: If there is no subject AND no body text at all, output
+            // EXACTLY: ERROR: required data not f…", a machine sentinel cut mid-word.
+            // What belongs here is what the step PRODUCES; how it is prompted is ours.
+            if (Array.isArray(cfg.categories) && cfg.categories.length) {
+              pairs.push({ k: "Sorts into", v: cfg.categories.map(c => this._plainLabel(c)).join(" · ") });
+            }
+            if (cfg.fields && typeof cfg.fields === "object" && !Array.isArray(cfg.fields)) {
+              pairs.push({ k: "Pulls out", v: Object.keys(cfg.fields).map(f => this._plainId(f)).join(", ") });
+            }
+          }
+          // ── A ROUTING STEP MUST SAY WHERE EACH ANSWER GOES ───────────────────
+          // The document described these in prose ("routes into three paths") and then
+          // never said WHICH path each answer takes — so the procedure a customer is
+          // handed was less informative than the approval card they saw while building,
+          // on precisely the step where a wrong route is a silent misdelivery.
+          for (const c of this._branchCases(n)) {
+            const when = String(c.when ?? "");
+            pairs.push({ k: when === "*" ? "Anything else" : this._plainId(when), v: nameOf(c.to) });
+          }
+          // An approval's terms are the safety-critical part: what a person may answer,
+          // and what happens if nobody does. Both were missing entirely.
+          if (n.type === "human") {
+            const answers = (Array.isArray(cfg.options) && cfg.options.length) ? cfg.options : ["approve", "reject"];
+            pairs.push({ k: "They can answer", v: answers.map(a => this._plainId(a)).join(" · ") });
+            const to = cfg.timeout_hours ?? cfg.timeoutHours;
+            if (to) pairs.push({ k: "If nobody answers", v: "after " + to + "h it counts as “" + this._plainId(cfg.on_timeout ?? cfg.onTimeout ?? "reject") + "”" });
           }
           if (isCA) {
-            if (cfg.action) pairs.push({ k: "Action", v: String(cfg.action) });
-            if (cfg.baseId) pairs.push({ k: "Airtable base", v: String(cfg.baseId) });
-            if (cfg.tableId) pairs.push({ k: "Airtable table", v: String(cfg.tableId) });
-            if (cfg.query) pairs.push({ k: "Query", v: this._clip(cfg.query, 100) });
-            if (cfg.filterByFormula) pairs.push({ k: "Filter", v: String(cfg.filterByFormula) });
-            if (cfg.fields && typeof cfg.fields === "object") pairs.push({ k: "Writes fields", v: Object.keys(cfg.fields).join(", ") });
+            // `Action: airtable_create_record` is the capability id, not a sentence —
+            // `_connectorActionLabel` already renders it as "Airtable — Create Record"
+            // in the heading, so repeating the raw id below it adds nothing but jargon.
+            if (cfg.baseId) pairs.push({ k: "Base", v: this._plainId(cfg.baseId) });
+            if (cfg.tableId) pairs.push({ k: "Table", v: this._plainId(cfg.tableId) });
+            if (cfg.query) pairs.push({ k: "Looks for", v: this._plainText(cfg.query, 100) });
+            if (cfg.fields && typeof cfg.fields === "object") pairs.push({ k: "Writes", v: Object.keys(cfg.fields).map(f => this._plainId(f)).join(", ") });
             const mx = cfg.max_results != null ? cfg.max_results : (cfg.maxResults != null ? cfg.maxResults : cfg.maxRecords);
-            if (mx != null) pairs.push({ k: "Max results", v: String(mx) });
+            if (mx != null) pairs.push({ k: "At most", v: String(mx) + " at a time" });
           }
-          const connLabel = isCA ? this._connectorActionLabel(n) : tl(n.type);
-          items.push({ isTrigger: false, glyph: effNodeType(n) === "summarize" ? "Σ" : n.type === "deliver" ? this._deliverGlyph(n) : "λ", tag: "STEP " + (i + 1), connector: connLabel, title: n.label || connLabel, desc: this._nodeDetail(n), configPairs: pairs, deps: up.join(", "), hasDeps: up.length > 0, showLine: i < nodes.length - 1 });
+          const connLabel = isCA ? this._connectorActionLabel(n) : tl(n.type, n.config && n.config.mode);
+          // `deps` was `up.join(", ")` — the raw node ids, so the document read
+          // "← classify_email". A person needs the step's NAME to follow a procedure.
+          items.push({ isTrigger: false, glyph: effNodeType(n) === "summarize" ? "Σ" : n.type === "deliver" ? this._deliverGlyph(n) : "·", tag: "STEP " + (i + 1), connector: connLabel, title: n.label || connLabel, desc: this._nodeDetail(n), configPairs: pairs, deps: up.map(nameOf).join(", "), hasDeps: up.length > 0, showLine: i < nodes.length - 1 });
         });
         return items;
       })(),

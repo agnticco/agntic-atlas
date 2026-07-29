@@ -1315,10 +1315,17 @@ fixed on the spot. Fold the relevant ones into whatever increment next touches t
   own `\{\{[^}]+\}\}`. They agree today because the second was written to match. This repo
   has already paid twice for this shape on the decision-table grammar. Collapse them when
   anything next touches either.
-- **The diagram's type tag is still jargon** — `CONNECTOR-ACTION` / `LLM · SUMMARIZE`
-  (`_nodeShape`) sit beside the approval card that now says the same thing in English.
-  `_nodeShape` reaches five surfaces including the exported procedure document, so changing
-  it outright is wider than it looks.
+- ~~**The diagram's type tag is still jargon**~~ — **CLOSED 2026-07-29.** It was worse than
+  this entry recorded: there were **three** vocabularies for one set of steps, not one, and a
+  customer met all three in a single sitting — the canvas said `LLM · EXTRACT` /
+  `CONNECTOR-ACTION`, the **on-screen** procedure document had its own private table saying
+  `LLM PROMPT` / `EMAIL TRIGGER`, and the **exported** document said "AI step" / "Wait for a
+  person". Now one table (`_stepTypeWords`, read by `_nodeShape` and the document view-model)
+  with the exported generator's tables written to match, and the words say what the step DOES
+  ("ASKS A PERSON", "PICKS A PATH", "SENDS IT"). An unrecognised type says "STEP" instead of
+  shouting its raw name, which is what the old `(T || 'step').toUpperCase()` did to every node
+  type nobody had taught it. Pinned by `tests/api/plain-english-surfaces.test.js` (34), eight
+  mutations red→green.
 - **Approval-channel availability (`email`) is deployment-wide, not per-tenant** — fine today
   (one deployment, one mailer); revisit if tenants ever bring their own sending domain.
 

@@ -71,6 +71,12 @@ function functionSrc(name) {
 
 const METHODS = [
   '_plainId', '_stepName', '_stepKind', '_routeDomainOf', '_branchCases', '_onRefId',
+  // The ONE step-type vocabulary and the value-plaining helpers (2026-07-29).
+  // `_nodeShape` delegates its wording to `_stepTypeWords`, and the cards render
+  // route values through `_plainLabel`; extracting the callers without these
+  // yields a half-built component that throws — which is the point of executing
+  // the REAL sources rather than copying them.
+  '_stepTypeWords', '_plainLabel', '_plainFilter', '_plainAge', '_plainTarget', '_plainInstruction', '_plainText', '_stringify',
   '_normRoute', '_routesOf', '_unroutedValues', '_destinationOf', '_connectorOf',
   '_fact', '_stepDetail', '_approvalCard', '_approvalHint',
   '_deJargon', '_humanCron', '_tzLabel', '_titleCase', '_clip',
@@ -195,8 +201,12 @@ describe('the step being approved is actually shown', () => {
     const card = cardAt(spec, queueIndex(spec, 'sort_it'));
     assert.equal(card.facts.find(f => f.k === 'Instruction').v,
       'Read the email and answer with exactly one label.');
+    // Sentence case since 2026-07-29: the answers a classifier may give are rendered
+    // through `_plainLabel`, so a lane named `urgent_complaint` reads "Urgent
+    // complaint" on the card a non-technical person is asked to approve. The pin is
+    // still that EVERY answer is listed, in order — only the casing moved.
     assert.equal(card.facts.find(f => f.k === 'Possible answers').v,
-      'urgent · billing · referral · spam');
+      'Urgent · Billing · Referral · Spam');
   });
 
   test('an approval step shows what is asked, of whom, and what silence means', () => {

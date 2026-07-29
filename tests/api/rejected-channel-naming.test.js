@@ -83,6 +83,12 @@ const METHODS = [
   '_ownChannelOf', '_realChannelsOf', '_trueChannelText', '_nodeSaidTruly',
   // everything they lean on
   '_plainId', '_stepName', '_stepKind', '_routeDomainOf', '_branchCases', '_onRefId',
+  // The ONE step-type vocabulary and the value-plaining helpers (2026-07-29).
+  // `_nodeShape` delegates its wording to `_stepTypeWords`, and the cards render
+  // route values through `_plainLabel`; extracting the callers without these
+  // yields a half-built component that throws — which is the point of executing
+  // the REAL sources rather than copying them.
+  '_stepTypeWords', '_plainLabel', '_plainFilter', '_plainAge', '_plainTarget', '_plainInstruction', '_plainText', '_stringify',
   '_normRoute', '_routesOf', '_unroutedValues', '_destinationOf', '_connectorOf',
   '_fact', '_approvalCard', '_approvalHint', '_liveShapeOf', '_nodeShape',
   '_deJargon', '_humanCron', '_tzLabel', '_titleCase', '_clip', '_dealSegments',
