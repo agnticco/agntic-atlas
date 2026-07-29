@@ -1,5 +1,16 @@
 [
   {
+    "version": "1.6.50",
+    "date": "2026-07-28",
+    "title": "Plainer English, your own clock, and honest offers",
+    "notes": [
+      "Times and schedules now use your own timezone instead of UTC, and Atlas confirms both the exact time and how often a workflow runs before building it.",
+      "Atlas can no longer offer to produce something the workflow will not actually make — an offer that mentioned a document the build never created is now caught and rewritten.",
+      "Step cards, test results and the workflow panel are plain English throughout: no identifiers, no JSON, no template code, and the step count now matches the steps you approve.",
+      "A workflow you had approved every step of could get stuck permanently untestable after a deploy, with Run test greyed out and no error shown. Fixed."
+    ]
+  },
+  {
     "version": "1.6.49",
     "date": "2026-07-28",
     "title": "The approval message now counts as proof",
