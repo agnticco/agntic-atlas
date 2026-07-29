@@ -53,6 +53,8 @@ import { keepAlive } from './keep-alive.js';
 // before the user can act on it. See the module for why the prompt rule alone
 // is not enough.
 import { scrubInventedNavigation } from './chat-navigation-guard.js';
+// Stops Atlas offering an output the workflow has no instruction to produce.
+import { unbackedArtifacts, artifactCorrectionFor } from './chat-artifact-guard.js';
 
 // Retry an LLM call up to maxRetries times on transient provider errors (500/529/503).
 async function withLLMRetry(fn, maxRetries = 2) {
@@ -1178,6 +1180,9 @@ Rules:
       let clientHasPartial = false;
       // One prose-instead-of-JSON retry per request, never a loop.
       let envelopeRetried = false;
+      // One shot only — see the artifact guard below. A guard that can loop is a
+      // worse bug than the one it fixes.
+      let artifactRetried = false;
       // Exactly the text the client has been sent as `chunk` events — i.e. what the
       // USER can read on screen. Every chunk goes through sendChunk so this stays
       // truthful; it is cleared whenever a partial is withdrawn (`reset`), because
@@ -1344,6 +1349,41 @@ Rules:
           }
         }
 
+        // ── AN OFFER MAY NOT PROMISE WHAT THE BUILD WILL NOT MAKE ─────────────
+        // Operator, 2026-07-28: "This can never happen, especially if a google doc
+        // is a piece of the contract." Witnessed: a reply offering to "summarise
+        // both into a single Google Doc" on a build whose `build_intent` — the
+        // paragraph the workflow is actually assembled from — never mentioned one.
+        // No document was created anywhere.
+        //
+        // Re-ask rather than edit: the promise arrived as one clause of a numbered
+        // sentence, so cutting the sentence deletes the whole offer and cutting the
+        // clause leaves "post the doc" pointing at nothing. See chat-artifact-guard.
+        // Once only, tools off, exactly like the envelope retry above — a guard that
+        // can loop is a worse bug than the one it fixes.
+        if (parsedMeta?.reply && !artifactRetried) {
+          const unbacked = unbackedArtifacts(parsedMeta.reply, parsedMeta.build_intent ?? '');
+          if (unbacked.length) {
+            artifactRetried = true;
+            logEvent('chat.unbacked_artifact', {
+              tenant: req.tenant?.id ?? null, artifacts: unbacked.map(u => u.id),
+            });
+            if (clientHasPartial) withdrawPartial();
+            msgArray.push(new AIMessage(streamedText));
+            msgArray.push({ role: 'user', content: artifactCorrectionFor(unbacked) });
+            extractState = 'searching'; searchBuf = ''; replyBuf = ''; streamedText = ''; escapeNext = false;
+            try {
+              for await (const chunk of llm.stream(msgArray, { configurable: invokeConfig.configurable })) {
+                processToken(typeof chunk.content === 'string' ? chunk.content : '');
+              }
+              try { parsedMeta = JSON.parse(extractJsonLoose(streamedText)); } catch { /* keep the first */ }
+            } catch (err) {
+              // Like the envelope retry: a BONUS, never a new way to fail.
+              logEvent('chat.unbacked_artifact.retry_failed', { tenant: req.tenant?.id ?? null, ...errFields(err) });
+            }
+          }
+        }
+
         // Envelope still missing — show the raw text so the user is never left with
         // an empty reply. They lose the button, not the answer.
         if (extractState === 'searching' && streamedText && !closed) {
@@ -1479,7 +1519,29 @@ Rules:
         runError: result.error,
       });
 
-      logEvent('test.summary', { tenant: req.tenant?.id ?? null, verdict, chars: summary.length });
+      // ── THE GO-LIVE INDICATOR, ON THE RECORD ────────────────────────────────
+      // "Did this workflow pass?" was only ever a sentence on a screen. To run a
+      // test→observe→fix loop over repeated builds you need it as data, tied to a
+      // workflow, alongside HOW MUCH was actually proven — a pass with one sample
+      // and a pass with every lane covered are not the same result, and pooling
+      // them is how "it works" survives a shape that only works sometimes.
+      const marks = Array.isArray(result.outcomeResults)
+        ? result.outcomeResults.map(o => String(o?.verdict ?? o?.outcome ?? '')).filter(Boolean)
+        : [];
+      const lanes = result.laneCoverage ?? {};
+      logEvent('test.summary', {
+        tenant:     req.tenant?.id ?? null,
+        workflowId: req.body?.workflowId ?? null,
+        workflow:   typeof spec?.name === 'string' ? spec.name.slice(0, 80) : null,
+        verdict,
+        examples:   Array.isArray(result.outcomeResults) ? result.outcomeResults.length : 0,
+        kept:       marks.filter(m => m === 'kept').length,
+        broken:     marks.filter(m => m === 'broken').length,
+        lanesCovered: Number.isFinite(lanes.applicable) && Number.isFinite(lanes.total)
+          ? lanes.total - (Array.isArray(lanes.uncovered) ? lanes.uncovered.length : 0) : null,
+        lanesTotal:   Number.isFinite(lanes.total) ? lanes.total : null,
+        chars: summary.length,
+      });
       return res.json({ summary });
     } catch (err) {
       logEvent('test.summary.error', { tenant: req.tenant?.id ?? null, ...errFields(err) });
@@ -1580,6 +1642,20 @@ Rules:
   async function buildCapabilities(req, intent = null) {
   // Operator identity lets the converger resolve "me"/"DM me" to a real target.
   let capabilities = { operator: { name: req.user?.display_name ?? null, email: req.user?.email ?? null } };
+  // ── WHOSE 8AM? ──────────────────────────────────────────────────────────────
+  // A schedule built without this defaulted to UTC in silence: "Every Monday at
+  // 8am (UTC)" is not 8am to anyone outside it, and no screen said which 8am was
+  // meant. The browser has always known; it was simply never asked. Validated as a
+  // real IANA zone before it is trusted — a bad string here would put a workflow on
+  // the wrong clock, which is worse than having no default at all. A DEFAULT only:
+  // a timezone the user says in words still wins.
+  const rawTz = typeof req.body?.timezone === 'string' ? req.body.timezone.trim() : '';
+  if (rawTz) {
+    try {
+      new Intl.DateTimeFormat('en-US', { timeZone: rawTz });   // throws on nonsense
+      capabilities.userTimezone = rawTz;
+    } catch { /* not a zone we can honour — fall through to asking */ }
+  }
   try {
     const slack    = await spine.slack.resolveForTenant(req.tenant.id);
     const google   = await spine.google.resolveForTenant(req.tenant.id, req.user.id);

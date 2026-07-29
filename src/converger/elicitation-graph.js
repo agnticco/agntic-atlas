@@ -210,6 +210,134 @@ export function sufficiencyClaimAlreadyCovered(missing, draft) {
   return false;
 }
 
+/**
+ * WHICH PROMISED COLUMNS THE REAL TABLE DOES NOT HAVE — BEFORE THE PLAN.
+ *
+ * The contract already names everything needed to ask this: `airtable:Table 1`
+ * carries the connector, the table and the promised `fields`. None of it needs a
+ * single node to exist, which is why this can run before the plan rather than
+ * after the whole workflow has been generated.
+ *
+ * ── Why it moved (operator, 2026-07-28) ──────────────────────────────────────
+ * "The converger needs to sort the column details out with the user before
+ * generating the workflow plan, because that information being correct is integral
+ * to the success of the workflow." Today it is discovered in `destinations`, AFTER
+ * generate — and a promise the table cannot keep then surfaces as a blocking gap.
+ * Measured on prod (`build-platform-1785255582744`): two whole-spec passes, 112s +
+ * 152s, spent on a column that never existed, and the user was asked anyway. The
+ * information arrives too late to be cheap and too late to be honest.
+ *
+ * ── Generic by declaration, never by connector name ──────────────────────────
+ * Also the operator's call: *"this needs to apply for every table style data source
+ * regardless of connector."* The only thing consulted is whether the connector
+ * DECLARES `schemaDiscovery` (see `CapabilityRegistry.schemaDiscoveryFor`). Sheets,
+ * Notion and anything built later qualify the moment they declare it — there is no
+ * list of connector names here to forget to add to.
+ *
+ * Pure: takes the columns already read, returns what to ask. The IO lives at the
+ * call site so this stays testable without a network.
+ *
+ * @param {object[]} assertions              the contract's assertions
+ * @param {(connector: string) => boolean} declaresSchema  does this connector describe itself?
+ * @param {Map<string,string[]>} columnsByTable  table locator (lowercased) → real column names
+ * @returns {{index:number,target:string,table:string,missing:string[],columns:string[]}[]}
+ */
+export function promisedColumnGaps(assertions, declaresSchema, columnsByTable) {
+  const out = [];
+  const list = Array.isArray(assertions) ? assertions : [];
+  list.forEach((a, index) => {
+    const fields = Array.isArray(a?.fields) ? a.fields.filter(f => typeof f === 'string' && f.trim()) : [];
+    if (!fields.length) return;
+    const target = String(a?.target ?? '');
+    const i = target.indexOf(':');
+    if (i < 0) return;
+    const connector = target.slice(0, i).trim().toLowerCase();
+    const table     = target.slice(i + 1).trim();
+    if (!connector || !table) return;
+    if (typeof declaresSchema === 'function' && !declaresSchema(connector)) return;
+    const columns = columnsByTable?.get?.(table.toLowerCase());
+    // Columns we could not read are NOT a mismatch. Claiming a column is missing on
+    // a schema we never saw would ask the user to fix something that may be fine —
+    // the same "answered a question it could not answer" failure the oracle's
+    // opaque-id rule exists to prevent.
+    if (!Array.isArray(columns) || !columns.length) return;
+    const real = new Set(columns.map(c => String(c).trim().toLowerCase()));
+    const missing = fields.filter(f => !real.has(f.trim().toLowerCase()));
+    if (missing.length) out.push({ index, target, table, missing, columns });
+  });
+  return out;
+}
+
+/**
+ * Read the real columns of every table the contract promises to write to.
+ *
+ * Every step is taken from the connector's DECLARED `schemaDiscovery` descriptor —
+ * which capability lists containers, which key holds them, which describes one,
+ * which key holds its tables, which holds a table's columns. Nothing here knows the
+ * word "airtable", so a connector that declares the same shape is covered without a
+ * line of code being added (operator: "every table style data source regardless of
+ * connector").
+ *
+ * Best-effort by design: any connector that will not answer simply contributes no
+ * entry, and `promisedColumnGaps` treats an unread schema as "no mismatch" rather
+ * than inventing one.
+ *
+ * @returns {Promise<Map<string,string[]>>} table locator (lowercased) → column names
+ */
+export function tableSchemasFromCapabilities(capabilities) {
+  const out = new Map();
+  const add = (t) => {
+    const cols = (t?.fields ?? t?.columns ?? []).map(c => (typeof c === 'string' ? c : c?.name)).filter(Boolean);
+    if (!cols.length) return;
+    // Keyed by BOTH name and id: the contract names the table the way the person
+    // said it, which may be either.
+    if (t.name) out.set(String(t.name).toLowerCase(), cols);
+    if (t.id)   out.set(String(t.id).toLowerCase(), cols);
+  };
+  const eat = (containers) => {
+    for (const c of (Array.isArray(containers) ? containers : [])) {
+      for (const t of (c?.tables ?? [])) add(t);
+      if (c?.fields || c?.columns) add(c);          // a flat "table" with no container
+    }
+  };
+  if (!capabilities || typeof capabilities !== 'object') return out;
+  // Generic slot first, so a connector added later needs no code here…
+  for (const v of Object.values(capabilities.schemas ?? {})) eat(v);
+  // …and the shape the builder already populates today.
+  for (const [k, v] of Object.entries(capabilities)) {
+    if (/Schema$/.test(k) && Array.isArray(v)) eat(v);
+  }
+  return out;
+}
+
+/** The question a person can actually answer, in their table's own words. */
+export function columnMismatchQuestion(gap) {
+  const cols = gap.columns.join(', ');
+  const miss = gap.missing.join(' and ');
+  return `"${gap.table}" has ${cols}. It doesn't have ${miss} yet — shall I fit `
+       + `${gap.missing.length > 1 ? 'those' : 'that'} into the columns it has, or do you want to add `
+       + `${gap.missing.length > 1 ? 'them' : 'it'} to the table first?`;
+}
+
+/**
+ * Is this blocker a FACT ABOUT THE WORLD rather than a defect in the spec?
+ *
+ * A missing Slack channel, an unverifiable base, a column the table does not have —
+ * none of these can be resolved by regenerating the workflow, because no amount of
+ * rewriting creates a channel or a column in someone else's account. They have to be
+ * taken to the person. Anything else is the builder's own output being wrong, which a
+ * rebuild genuinely can fix.
+ *
+ * Keyed on `field`, not on the code alone: UNSATISFIED_ASSERTION means "a promised
+ * column is missing" when it points at `config.fields`, and "a step that delivers
+ * this is missing" everywhere else — opposite treatments, one code.
+ */
+export function isNotRegenerable(gap) {
+  if (!gap || typeof gap !== 'object') return false;
+  if (gap.code === 'RESOURCE_NOT_FOUND' || gap.code === 'RESOURCE_UNVERIFIED') return true;
+  return gap.code === 'UNSATISFIED_ASSERTION' && gap.field === 'config.fields';
+}
+
 /** Fingerprint of a sufficiency complaint, for "it said the same thing again". */
 export function missingKeyOf(missing) {
   return String(missing ?? '').toLowerCase().replace(/\s+/g, ' ').trim().slice(0, 200);
@@ -1259,6 +1387,56 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
     const assertions = draft.outcome?.assertions ?? [];
     if (!assertions.length) return { phase: 'examples' };
 
+    // ── SETTLE THE COLUMNS BEFORE THE PLAN, NOT AFTER THE BUILD ──────────────
+    // See `promisedColumnGaps`. Everything the question needs is already in the
+    // contract, so it is asked here — before a plan is drafted and long before a
+    // whole workflow is generated against columns that do not exist.
+    //
+    // FAIL-OPEN BY CONSTRUCTION. Any failure to read a schema leaves the build
+    // exactly as it was: `destinations` still checks the columns later and still
+    // reports honestly. This makes the common case cheap and early; it is not the
+    // thing standing between a bad column and the user.
+    //
+    // AND IT COSTS NO NETWORK CALL. The tenant's real bases/tables/columns are
+    // already fetched once per build for the chat context (`buildCapabilities`), so
+    // this reads what is in hand. An earlier cut of this asked the connector again
+    // and broke the "the connector is asked ONCE" latch that two tests pin — a
+    // second round-trip, on the node whose whole purpose is to make builds cheaper.
+    try {
+      const cat = capabilityCatalog;
+      if (cat?.schemaDiscoveryFor) {
+        const columnsByTable = tableSchemasFromCapabilities(state.capabilities);
+        const colGaps = promisedColumnGaps(
+          assertions, (c) => !!cat.schemaDiscoveryFor(c), columnsByTable);
+        if (colGaps.length) {
+          logEvent('converger.column_mismatch_preplan', {
+            ...who(cfg), tables: colGaps.map(g => g.table),
+            missing: colGaps.flatMap(g => g.missing).slice(0, 10),
+          });
+          const answer = await interrupt({
+            type: 'clarification',
+            question: colGaps.map(columnMismatchQuestion).join('\n\n'),
+            step: state.step,
+          });
+          // The answer is applied as a NOTE on the contract, not by rewriting the
+          // user's words: `destinations` still does the authoritative mapping, and
+          // it now does it against a promise the person has already reconciled.
+          const note = typeof answer?.answer === 'string' ? answer.answer.trim() : '';
+          if (note) {
+            draft.outcome = {
+              ...draft.outcome,
+              columnNote: note,
+              columnFacts: colGaps.map(g => ({ table: g.table, columns: g.columns, missing: g.missing })),
+            };
+          }
+        }
+      }
+    } catch (err) {
+      logEvent('converger.column_precheck_failed', {
+        ...who(cfg), error: String(err?.message ?? err).slice(0, 200),
+      });
+    }
+
     const nodes = [...(draft.nodes ?? [])];
     const derived = [];
     for (const a of assertions) {
@@ -1472,8 +1650,26 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
     // `gaps`, where it is resolved conversationally. If there are OTHER blockers too,
     // regenerate as usual — those may close, leaving the resource gap to be handled
     // on the next pass.
+    // A COLUMN THAT DOES NOT EXIST IS THE SAME KIND OF FACT AS A MISSING CHANNEL.
+    // `destinations` maps the promised fields onto the table's REAL columns and
+    // records whatever it could not place (`unmapped`), deliberately leaving it to
+    // fail rather than dropping it silently. That failure arrives here as
+    // UNSATISFIED_ASSERTION on `config.fields` — and a whole-spec rebuild cannot
+    // resolve it, because no amount of regenerating creates a column in someone
+    // else's Airtable. Measured on prod 2026-07-28 (`build-platform-1785255582744`):
+    // two of that build's three generate passes — 112s + 152s — were spent on
+    // exactly this, and it still ended up asking the user.
+    //
+    // So it joins the resource gaps: not a spec defect, not regenerable, taken to the
+    // person conversationally. Deliberately keyed on `field`, not on the code alone —
+    // the SAME code means "a step is genuinely missing" elsewhere, and that one a
+    // rebuild really can fix.
     const blockers = unansweredGaps(gap);
-    if (blockers.length && blockers.every(g => g.code === 'RESOURCE_NOT_FOUND' || g.code === 'RESOURCE_UNVERIFIED')) {
+    if (blockers.length && blockers.every(isNotRegenerable)) {
+      logEvent('converger.regen_skipped', {
+        ...who(cfg), reason: 'not_regenerable', blockers: blockers.length,
+        key: blockers.map(g => `${g.code}:${g.field ?? ''}`).sort().join('|').slice(0, 200),
+      });
       return { ...carryRepair, phase: 'gapping' };
     }
 
@@ -3043,7 +3239,23 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
     // exactly today's behaviour.
     const lanes = laneInventoryOf(assembleSpec(draft));
     const have  = (draft?.outcome?.examples ?? []).filter(e => e && e.given != null);
-    if (typeof runDryRun === 'function' && assertions.length && lanes.length > have.length) {
+    // ── WHY THE TOP-UP DID NOT RUN, EVERY TIME IT DOES NOT RUN ────────────────
+    // The failure branches below record themselves, but the GATE did not: when it
+    // was false nothing was logged at all, so "correctly skipped, there were
+    // already enough samples" and "silently did nothing" were indistinguishable
+    // from the log. Found while measuring a `classify→route` build on 2026-07-28 —
+    // the skip was correct, and the only way to establish that was to open the
+    // database. A loop whose observations need a database query is not observable.
+    const skipReason = typeof runDryRun !== 'function' ? 'no_dry_runner'
+                     : !assertions.length              ? 'no_contract_to_prove'
+                     : lanes.length <= have.length     ? 'enough_samples_already'
+                     : null;
+    if (skipReason) {
+      logEvent('converger.lane_examples_skipped', {
+        ...who(cfg), reason: skipReason, lanes: lanes.length, had: have.length,
+      });
+    }
+    if (!skipReason) {
       try {
         const parsed = await llmJson(llm, [
           new SystemMessage(buildSystemPrompt(state.capabilities)),
