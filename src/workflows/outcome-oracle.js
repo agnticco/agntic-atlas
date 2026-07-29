@@ -241,6 +241,27 @@ export function declaresWrite(capabilityId) {
 }
 
 /**
+ * Does this capability CONFIGURE A RESOURCE ONCE, rather than doing per-run work?
+ *
+ * "Add a column", "create a channel" — things a workflow needs to EXIST. They belong
+ * on the setup path, which runs once while the workflow is being built; as a workflow
+ * STEP they repeat on every fire.
+ *
+ * Read from the same catalog as `declaresWrite`, and DECLARED rather than guessed
+ * from the id. A regex over capability names is the shape this repo has been bitten
+ * by three times (`isWritingAction`, the trigger captions, the step-type tables), and
+ * `airtable_create_field` / `slack_create_channel` would both be indistinguishable
+ * from `airtable_create_record` — which genuinely is per-run work — to any name test.
+ *
+ * Unknown capability ⇒ false. This gate REFUSES a workflow, so silence must not be
+ * able to block a build; the only thing that can is an explicit declaration.
+ */
+export function declaresOneTimeSetup(capabilityId) {
+  const cap = capabilityOf(String(capabilityId ?? '').trim());
+  return cap?.oneTimeSetup === true;
+}
+
+/**
  * Does this capability write, according to what it DECLARED?
  *
  *   'write'     — declared a write, or declared nothing while being able to occupy a

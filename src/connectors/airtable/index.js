@@ -202,13 +202,62 @@ export async function airtableCreateField(api, { baseId, tableId, name, type, de
   const fieldName = String(name ?? '').trim();
   if (!fieldName) throw new Error('airtable_create_field: name is required — a column needs a name.');
 
+  // ── ADDING A COLUMN THAT IS ALREADY THERE IS A NO-OP, NOT A FAILURE ────────
+  // This used to be a bare POST. Airtable refuses a duplicate field name, the api
+  // helper throws on any non-2xx, and the step fails — so a workflow that adds a
+  // column WORKED EXACTLY ONCE and failed on every run after.
+  //
+  // Witnessed on prod 2026-07-29: asked to write four fields into a table with
+  // four different ones, Atlas correctly offered to add the two missing columns
+  // and then put those two adds INSIDE the per-email workflow. Second email
+  // onwards, the run dies at step 1 — before the record is written and before the
+  // Slack post — with nothing delivered. It passes its own test, because the dry
+  // run stubs writes, and goes live looking correct.
+  //
+  // The placement is wrong and is fixed separately (`oneTimeSetup`). This is the
+  // part that has to be right REGARDLESS of placement: a build re-run, an edit, a
+  // re-publish or a retry all call this again on a column that now exists, and
+  // "make sure this column exists" is what the caller actually means. Returns the
+  // existing column with `created: false` so a caller can still tell the
+  // difference.
+  const already = await findExistingField(api, baseId, tableId, fieldName);
+  if (already) return { ...already, baseId, tableId, created: false };
+
   const body = { name: fieldName, type: type || 'singleLineText' };
   if (description) body.description = String(description).slice(0, 20000);
 
   // The api helper takes an OPTIONS object ({ body, params }), not a bare body —
   // passing the payload directly sends no body at all and Airtable rejects it.
-  const data = await api('POST', `/meta/bases/${baseId}/tables/${encodeURIComponent(tableId)}/fields`, { body });
-  return { id: data.id, name: data.name, type: data.type, baseId, tableId, created: true };
+  try {
+    const data = await api('POST', `/meta/bases/${baseId}/tables/${encodeURIComponent(tableId)}/fields`, { body });
+    return { id: data.id, name: data.name, type: data.type, baseId, tableId, created: true };
+  } catch (err) {
+    // Two callers racing, or a column added between the check and the write. The
+    // pre-check above is the common path; this is the one that makes it airtight,
+    // because a check-then-act is never atomic.
+    const again = /duplicate|already exists/i.test(String(err?.message ?? ''))
+      ? await findExistingField(api, baseId, tableId, fieldName)
+      : null;
+    if (again) return { ...again, baseId, tableId, created: false };
+    throw err;
+  }
+}
+
+/** The named column on that table, or null. Case-insensitive: Airtable's are. */
+async function findExistingField(api, baseId, tableId, fieldName) {
+  let described;
+  try {
+    described = await airtableDescribeBase(api, { baseId });
+  } catch {
+    return null;   // cannot read the schema — fall through and let the write decide
+  }
+  const wanted = fieldName.trim().toLowerCase();
+  const key = String(tableId ?? '').trim().toLowerCase();
+  const table = (described.tables ?? []).find(t =>
+    String(t.id ?? '').toLowerCase() === key || String(t.name ?? '').trim().toLowerCase() === key);
+  if (!table) return null;
+  const f = (table.fields ?? []).find(x => String(x.name ?? '').trim().toLowerCase() === wanted);
+  return f ? { id: f.id, name: f.name, type: f.type } : null;
 }
 
 export async function airtableGetRecord(api, { baseId, tableId, recordId } = {}) {
@@ -347,6 +396,8 @@ export function registerAirtableChannels(capabilityRegistry) {
   capabilityRegistry.register({
     id: 'airtable_create_field', connector: 'airtable', positions: ['step'],
     name: 'Add Airtable Column', icon: 'table',
+    // A column is something the workflow needs to EXIST, not work it does per run.
+    oneTimeSetup: true,
     description: 'Adds a column to an existing Airtable table. Use it when a workflow needs a field the table does not have yet — ask the user first, then add it, rather than writing to a column that does not exist.',
     requiredScopes: ['schema.bases:write'],
     configSchema: [

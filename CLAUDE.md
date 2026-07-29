@@ -1326,6 +1326,32 @@ fixed on the spot. Fold the relevant ones into whatever increment next touches t
   shouting its raw name, which is what the old `(T || 'step').toUpperCase()` did to every node
   type nobody had taught it. Pinned by `tests/api/plain-english-surfaces.test.js` (34), eight
   mutations red→green.
+- **A WORKFLOW THAT SET ITSELF UP ON EVERY RUN WORKED EXACTLY ONCE — FIXED
+  (2026-07-29).** Asked to write four fields into an Airtable table that had four
+  different ones, Atlas did the right thing conversationally — read the real
+  columns, proposed a mapping, offered to add the two missing — and then put those
+  two `airtable_create_field` calls **inside an email-triggered workflow**, so every
+  incoming email would re-add the same columns. Airtable refuses a duplicate field
+  name, the api helper throws on any non-2xx, and by the workflow's own failure rule
+  the run stops there — before the record and before the Slack post. **Its own
+  safety net could not see it: the dry run stubs writes, so the step that would fail
+  never ran.** It passed, and would have gone live.
+  **Two fixes, both needed.** `airtableCreateField` is now IDEMPOTENT — it looks the
+  column up first and absorbs a duplicate error from a race — which has to hold
+  wherever it is called from, since a re-publish, an edit or a retry all call it
+  again. And the PLACEMENT is refused at build time (`SETUP_ACTION_AS_STEP`) from a
+  **declared** `oneTimeSetup` trait on the capability, read through
+  `declaresOneTimeSetup` beside `declaresWrite` — one catalog, one declaration, two
+  readers. **Declared, not inferred from the id, because `airtable_create_field` and
+  `airtable_create_record` are indistinguishable to any name test** and one is setup
+  while the other is genuinely per-run work; a name-matching rule has been the defect
+  here three times already. The gate fails OPEN on an unknown capability: it refuses
+  a build, so silence must never be able to block one. Pinned by
+  `tests/workflows/one-time-setup-not-a-step.test.js` (17), **ten mutations
+  red→green — three survived the first pass and the tests were strengthened rather
+  than the mutations dropped**: a name-regex substitute, absorbing every error as
+  "already exists", and the registry dropping the trait were all invisible until the
+  fixtures stopped agreeing with the id and a test drove the REAL registry.
 - **A SCHEDULED WORKFLOW RAN FIVE HOURS EARLY AND SAID IT WAS ON TIME — FIXED
   (2026-07-29).** Measured on prod: THREE stored schedule triggers, every one
   `{"type":"schedule","cron":"0 17 * * 1-5"}` with **no `timezone` field at all**,

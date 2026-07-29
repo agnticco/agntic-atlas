@@ -28,7 +28,7 @@ import { NON_CONTENT_TYPES } from './node-types/_node-input.js';
 import { normalizeChannels, normalizeDecisions, allowedDecisions, TIMEOUT_DECISION } from './node-types/human.js';
 import { isStrong, FORBIDDEN_CHANNELS } from './approval-channels.js';
 import { parseDuration } from './duration.js';
-import { checkOutcome, missingFields, ASSERTION_KINDS, declaresWrite } from './outcome-oracle.js';
+import { checkOutcome, missingFields, ASSERTION_KINDS, declaresWrite, declaresOneTimeSetup } from './outcome-oracle.js';
 import { analyzeTable } from './decision-analysis.js';
 import { tableOf, valuesOf } from './node-types/decision.js';
 
@@ -155,6 +155,31 @@ export class WorkflowValidator {
           message: `Step "${node.label || node.id}" uses "${node.type}", which is not a step type any more.`,
           nodeId: node.id, field: 'type',
           hint: REMOVED_TYPES[node.type],
+        });
+        continue;
+      }
+
+      // ── SETTING A RESOURCE UP IS NOT WORK THE WORKFLOW REPEATS ───────────────
+      // A capability that DECLARES `oneTimeSetup` configures something the workflow
+      // needs to exist — a column, a channel. As a step it re-runs on every fire.
+      //
+      // Witnessed on prod 2026-07-29: asked to write four fields into a table that
+      // had four different ones, Atlas correctly offered to add the two missing
+      // columns, then put those two adds INSIDE an email-triggered workflow. Every
+      // incoming email would re-add the same columns. It passed its own test —
+      // the dry run stubs writes, so the one step that would fail never ran — and
+      // would have gone live looking correct.
+      //
+      // Refused at build time, where the converger can still fix it, rather than at
+      // 6am on the second email. The message says where it belongs, because a
+      // refusal a person cannot act on is just a wall.
+      if ((node.type === 'connector-action' || node.type === 'connector_action')
+          && declaresOneTimeSetup(node.config?.action)) {
+        issues.push({
+          severity: 'error', code: 'SETUP_ACTION_AS_STEP',
+          message: `"${node.label || node.id}" sets something up that only needs doing once, but it sits inside the workflow — so it would run again on every single fire.`,
+          nodeId: node.id, field: 'config.action',
+          hint: 'Do this once while the workflow is being built, then let the workflow use it. Take this step out and the rest of the workflow keeps working.',
         });
         continue;
       }

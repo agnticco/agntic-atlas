@@ -103,6 +103,17 @@ export class CapabilityRegistry {
       // deliberately NOT defaulted to 'read' here: a default here would be a silent
       // fallback on a security-relevant value, which is the bug this seam removes.
       effect:         def.effect         ?? null,
+      // ── CONFIGURES A RESOURCE ONCE, RATHER THAN DOING PER-RUN WORK ─────────
+      // "Add a column", "create a channel" — things a workflow needs to EXIST, not
+      // things it does each time it fires. They belong on the setup path, which runs
+      // once at build time; as a workflow step they repeat on every run.
+      //
+      // Witnessed on prod 2026-07-29: the converger put two `airtable_create_field`
+      // steps inside an email-triggered workflow, so every incoming email tried to
+      // re-add the same two columns. Declared, never inferred from the id — a regex
+      // over capability names is the shape this codebase has been bitten by three
+      // times (`isWritingAction`, the trigger captions, the step-type tables).
+      oneTimeSetup:   def.oneTimeSetup === true,
       assertionKind:  def.assertionKind  ?? null,
       locatorKeys:    Array.isArray(def.locatorKeys) ? def.locatorKeys : null,
       schemaDiscovery: def.schemaDiscovery ?? null,

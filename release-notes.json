@@ -1,5 +1,13 @@
 [
   {
+    "version": "1.6.70",
+    "date": "2026-07-29",
+    "title": "A workflow no longer sets itself up on every run",
+    "notes": [
+      "When Atlas offers to add a column or create a channel for you, that now happens once while the workflow is being built — not on every single run. Previously those steps landed inside the workflow, where the second run would fail on them and stop before doing anything."
+    ]
+  },
+  {
     "version": "1.6.69",
     "date": "2026-07-29",
     "title": "Scheduled workflows run at the time you asked for",

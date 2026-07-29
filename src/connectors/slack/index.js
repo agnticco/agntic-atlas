@@ -415,6 +415,9 @@ export function registerSlackChannel(registry, { fetchImpl = fetch } = {}) {
   // ── create_channel ─────────────────────────────────────────────────────────
   registry.register({
     id: 'slack_create_channel', name: 'Slack Create Channel', icon: 'slack', actionOnly: true,
+    // Same trait as adding a column: a channel is something the workflow needs to
+    // EXIST, not work it repeats on every run.
+    oneTimeSetup: true,
     description: 'Creates a new public or private Slack channel.',
     configSchema: [
       { key: 'name',       label: 'Channel name', type: 'string',  optional: false, hint: 'Lowercase, no spaces' },

@@ -27,12 +27,27 @@ import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import { airtableCreateField } from '../../src/connectors/airtable/index.js';
 
-/** Stand in for the connector's api helper, recording exactly how it was called. */
+/**
+ * Stand in for the connector's api helper, recording exactly how it was called.
+ *
+ * Answers the SCHEMA READ separately (2026-07-29). `airtableCreateField` now looks
+ * the table up first, so that adding a column that already exists is a no-op rather
+ * than a failure — see one-time-setup-not-a-step.test.js for why that matters. These
+ * tests are about the WRITE, so the read reports an empty base and every assertion
+ * below targets the POST rather than "the first call".
+ */
 function recorder(response = { id: 'fldNEW', name: 'Notes', type: 'singleLineText' }) {
   const calls = [];
-  const api = async (method, path, opts) => { calls.push({ method, path, opts }); return response; };
+  const api = async (method, path, opts) => {
+    calls.push({ method, path, opts });
+    if (method === 'GET' && path.includes('/tables')) return { tables: [] };
+    return response;
+  };
   return { api, calls };
 }
+
+/** The create call itself. */
+const postOf = (calls) => calls.find(c => c.method === 'POST');
 
 const BASE = { baseId: 'appABC', tableId: 'Sheet1', name: 'Notes' };
 
@@ -41,9 +56,8 @@ describe('adding an Airtable column', () => {
     const { api, calls } = recorder();
     await airtableCreateField(api, BASE);
 
-    assert.equal(calls.length, 1);
-    const [c] = calls;
-    assert.equal(c.method, 'POST');
+    const c = postOf(calls);
+    assert.ok(c, 'the column must actually be created');
     assert.equal(c.path, '/meta/bases/appABC/tables/Sheet1/fields');
     assert.ok(c.opts && c.opts.body,
       'the payload must be under `body` — a bare third argument sends no body at all');
@@ -53,14 +67,14 @@ describe('adding an Airtable column', () => {
   test('defaults to a plain text column rather than guessing a type', async () => {
     const { api, calls } = recorder();
     await airtableCreateField(api, BASE);
-    assert.equal(calls[0].opts.body.type, 'singleLineText',
+    assert.equal(postOf(calls).opts.body.type, 'singleLineText',
       'a guessed type is a decision the user did not make, and a wrong one silently rejects writes');
   });
 
   test('an explicit type is honoured', async () => {
     const { api, calls } = recorder();
     await airtableCreateField(api, { ...BASE, type: 'number' });
-    assert.equal(calls[0].opts.body.type, 'number');
+    assert.equal(postOf(calls).opts.body.type, 'number');
   });
 
   test('returns what was created, so the caller can confirm it', async () => {
@@ -86,7 +100,7 @@ describe('adding an Airtable column', () => {
   test('a table NAME with spaces is encoded, not sent raw', async () => {
     const { api, calls } = recorder();
     await airtableCreateField(api, { ...BASE, tableId: 'Sales Enquiries' });
-    assert.ok(calls[0].path.includes('Sales%20Enquiries'),
+    assert.ok(postOf(calls).path.includes('Sales%20Enquiries'),
       'an unencoded table name breaks the URL for every table whose name has a space');
   });
 });
