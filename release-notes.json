@@ -1,5 +1,13 @@
 [
   {
+    "version": "1.6.67",
+    "date": "2026-07-28",
+    "title": "The workflow diagram sits under the figures",
+    "notes": [
+      "On a workflow's overview the diagram now sits below Time saved / Last run / Baseline and above the baseline setup, so the numbers you came for lead the page."
+    ]
+  },
+  {
     "version": "1.6.65",
     "date": "2026-07-28",
     "title": "Going live takes you to the dashboard",

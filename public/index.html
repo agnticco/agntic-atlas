@@ -1606,6 +1606,23 @@
         <sc-if value="{{ consoleViewProfile }}" hint-placeholder-val="{{ false }}">
         <div class="ab-scroll" style="flex:1;overflow-y:auto;min-height:0;padding:20px 32px 64px">
 
+          <!-- STAT CARDS -->
+          <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;margin-bottom:28px">
+            <div style="padding:18px 20px;border-radius:12px;background:rgba(127,194,138,.07);border:1px solid rgba(127,194,138,.18)">
+              <div style="font-size:10px;font-weight:600;letter-spacing:.16em;text-transform:uppercase;color:rgba(127,194,138,.75);margin-bottom:10px">Time Saved YTD</div>
+              <div style="font-size:28px;font-weight:600;color:#fff;letter-spacing:-0.02em">{{ profileTimeSavedYtd }}</div>
+            </div>
+            <div style="padding:18px 20px;border-radius:12px;background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.1)">
+              <div style="font-size:10px;font-weight:600;letter-spacing:.16em;text-transform:uppercase;color:rgba(255,255,255,.4);margin-bottom:10px">Last Run</div>
+              <div style="font-size:28px;font-weight:600;color:#fff;letter-spacing:-0.02em">{{ profileLastRunDuration }}</div>
+            </div>
+            <div onClick="{{ onOpenBaselinePanel }}" style="padding:18px 20px;border-radius:12px;background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.1);cursor:pointer">
+              <div style="font-size:10px;font-weight:600;letter-spacing:.16em;text-transform:uppercase;color:rgba(255,255,255,.4);margin-bottom:10px">Baseline</div>
+              <div style="font-size:28px;font-weight:600;color:#fff;letter-spacing:-0.02em">{{ profileBaselineDuration }}</div>
+              <div style="font-size:11px;color:rgba(255,255,255,.28);margin-top:4px">{{ profileBaselineSetAt }}</div>
+            </div>
+          </div>
+
           <!-- ── THE REAL WORKFLOW, DRAWN ─────────────────────────────────────────
                Was a flat left-to-right list of name chips, which could not show a
                branch at all: a five-lane approval workflow read as twelve steps in a
@@ -1670,23 +1687,6 @@
           </div>
           </sc-if>
 
-
-          <!-- STAT CARDS -->
-          <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;margin-bottom:28px">
-            <div style="padding:18px 20px;border-radius:12px;background:rgba(127,194,138,.07);border:1px solid rgba(127,194,138,.18)">
-              <div style="font-size:10px;font-weight:600;letter-spacing:.16em;text-transform:uppercase;color:rgba(127,194,138,.75);margin-bottom:10px">Time Saved YTD</div>
-              <div style="font-size:28px;font-weight:600;color:#fff;letter-spacing:-0.02em">{{ profileTimeSavedYtd }}</div>
-            </div>
-            <div style="padding:18px 20px;border-radius:12px;background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.1)">
-              <div style="font-size:10px;font-weight:600;letter-spacing:.16em;text-transform:uppercase;color:rgba(255,255,255,.4);margin-bottom:10px">Last Run</div>
-              <div style="font-size:28px;font-weight:600;color:#fff;letter-spacing:-0.02em">{{ profileLastRunDuration }}</div>
-            </div>
-            <div onClick="{{ onOpenBaselinePanel }}" style="padding:18px 20px;border-radius:12px;background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.1);cursor:pointer">
-              <div style="font-size:10px;font-weight:600;letter-spacing:.16em;text-transform:uppercase;color:rgba(255,255,255,.4);margin-bottom:10px">Baseline</div>
-              <div style="font-size:28px;font-weight:600;color:#fff;letter-spacing:-0.02em">{{ profileBaselineDuration }}</div>
-              <div style="font-size:11px;color:rgba(255,255,255,.28);margin-top:4px">{{ profileBaselineSetAt }}</div>
-            </div>
-          </div>
 
           <!-- BASELINE RECORDING PLAYER (injected by _renderProfileRecording) -->
           <div id="profile-recording"></div>

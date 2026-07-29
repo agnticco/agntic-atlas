@@ -440,6 +440,23 @@ describe('the workflow page draws the real graph', () => {
     assert.ok(!markup.includes('an.decide'));
   });
 
+  test('it sits under the figures and above the baseline', () => {
+    // Operator's order, 2026-07-29: the numbers you came for first, then the
+    // picture of the workflow, then the baseline setup and the run log.
+    const cards    = HTML.indexOf('<!-- STAT CARDS -->');
+    const graph    = HTML.indexOf('<sc-if value="{{ consoleGraph }}"');
+    const baseline = HTML.indexOf('<!-- BASELINE RECORDING PLAYER');
+    const empty    = HTML.indexOf('<!-- NO BASELINE / EMPTY STATE -->');
+    const runs     = HTML.indexOf('<!-- RUN HISTORY —');
+    for (const [n, v] of [['stat cards', cards], ['graph', graph], ['baseline', baseline],
+                          ['baseline empty state', empty], ['run history', runs]]) {
+      assert.ok(v > 0, `${n} is gone from the overview`);
+    }
+    assert.ok(cards < graph, 'the time-saved figures come first');
+    assert.ok(graph < baseline && graph < empty, 'the workflow sits above the baseline modules');
+    assert.ok(empty < runs, 'run history stays last');
+  });
+
   test('it scrolls away instead of owning the top of the page', () => {
     // It was in the page's FIXED header, above the tabs, so ~350px of every screen
     // was the diagram whether you wanted it or not and no amount of scrolling got
