@@ -53,6 +53,8 @@ import { keepAlive } from './keep-alive.js';
 // before the user can act on it. See the module for why the prompt rule alone
 // is not enough.
 import { scrubInventedNavigation } from './chat-navigation-guard.js';
+// Stops Atlas offering an output the workflow has no instruction to produce.
+import { unbackedArtifacts, artifactCorrectionFor } from './chat-artifact-guard.js';
 
 // Retry an LLM call up to maxRetries times on transient provider errors (500/529/503).
 async function withLLMRetry(fn, maxRetries = 2) {
@@ -1178,6 +1180,9 @@ Rules:
       let clientHasPartial = false;
       // One prose-instead-of-JSON retry per request, never a loop.
       let envelopeRetried = false;
+      // One shot only — see the artifact guard below. A guard that can loop is a
+      // worse bug than the one it fixes.
+      let artifactRetried = false;
       // Exactly the text the client has been sent as `chunk` events — i.e. what the
       // USER can read on screen. Every chunk goes through sendChunk so this stays
       // truthful; it is cleared whenever a partial is withdrawn (`reset`), because
@@ -1341,6 +1346,41 @@ Rules:
             // The retry is a BONUS, never a new way to fail: on any error fall through
             // and show whatever the first answer said.
             logEvent('chat.envelope.retry.failed', { tenant: req.tenant?.id ?? null, ...errFields(err) });
+          }
+        }
+
+        // ── AN OFFER MAY NOT PROMISE WHAT THE BUILD WILL NOT MAKE ─────────────
+        // Operator, 2026-07-28: "This can never happen, especially if a google doc
+        // is a piece of the contract." Witnessed: a reply offering to "summarise
+        // both into a single Google Doc" on a build whose `build_intent` — the
+        // paragraph the workflow is actually assembled from — never mentioned one.
+        // No document was created anywhere.
+        //
+        // Re-ask rather than edit: the promise arrived as one clause of a numbered
+        // sentence, so cutting the sentence deletes the whole offer and cutting the
+        // clause leaves "post the doc" pointing at nothing. See chat-artifact-guard.
+        // Once only, tools off, exactly like the envelope retry above — a guard that
+        // can loop is a worse bug than the one it fixes.
+        if (parsedMeta?.reply && !artifactRetried) {
+          const unbacked = unbackedArtifacts(parsedMeta.reply, parsedMeta.build_intent ?? '');
+          if (unbacked.length) {
+            artifactRetried = true;
+            logEvent('chat.unbacked_artifact', {
+              tenant: req.tenant?.id ?? null, artifacts: unbacked.map(u => u.id),
+            });
+            if (clientHasPartial) withdrawPartial();
+            msgArray.push(new AIMessage(streamedText));
+            msgArray.push({ role: 'user', content: artifactCorrectionFor(unbacked) });
+            extractState = 'searching'; searchBuf = ''; replyBuf = ''; streamedText = ''; escapeNext = false;
+            try {
+              for await (const chunk of llm.stream(msgArray, { configurable: invokeConfig.configurable })) {
+                processToken(typeof chunk.content === 'string' ? chunk.content : '');
+              }
+              try { parsedMeta = JSON.parse(extractJsonLoose(streamedText)); } catch { /* keep the first */ }
+            } catch (err) {
+              // Like the envelope retry: a BONUS, never a new way to fail.
+              logEvent('chat.unbacked_artifact.retry_failed', { tenant: req.tenant?.id ?? null, ...errFields(err) });
+            }
           }
         }
 
