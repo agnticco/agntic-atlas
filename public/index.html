@@ -9909,6 +9909,17 @@ class Component extends DCLogic {
               this._cgRO = this._cgRO || new ResizeObserver(() => this._fitConsoleGraph());
               try { this._cgRO.observe(el); } catch (e) {}
               if (typeof requestAnimationFrame === 'function') requestAnimationFrame(() => this._fitConsoleGraph());
+              // FIT AGAIN ONCE THE FONTS LAND. The fit reads `scrollHeight`, which is
+              // driven by the node TITLES — and they are absolutely positioned, so
+              // their wrapping changes the scroll extent without changing any
+              // border-box the ResizeObserver watches. Measured on prod: the first
+              // frame reported 480px and the settled graph is 428, so the graph drew
+              // at 0.54 when 0.61 fits — it opened smaller than it needed to be, and
+              // the only way to see the right size was to double-click to re-fit.
+              if (document.fonts && document.fonts.ready && !this._cgFontFit) {
+                this._cgFontFit = true;
+                document.fonts.ready.then(() => this._fitConsoleGraph()).catch(() => {});
+              }
             }
           },
         };

@@ -504,6 +504,19 @@ describe('the workflow page draws the real graph', () => {
     assert.match(body, /window\.removeEventListener\('mouseup'/);
   });
 
+  test('it re-fits once the fonts land', () => {
+    // The fit reads `scrollHeight`, driven by the node TITLES — absolutely
+    // positioned, so their wrapping changes the scroll extent without changing any
+    // border-box the ResizeObserver watches. Measured on prod: first frame 480px,
+    // settled 428, so the graph opened at 0.54 when 0.61 fits, and double-clicking
+    // to reset was the only way to see the right size.
+    const i = HTML.indexOf('fitInnerRef: (el) => {\n            this._cgInner');
+    assert.ok(i > 0, 'the console graph inner ref moved — re-point this test');
+    const body = HTML.slice(i, i + 1400);
+    assert.match(body, /document\.fonts\.ready/);
+    assert.match(body, /_cgFontFit/, 'the ref fires every render — this must arm once');
+  });
+
   test('a view the person set is not yanked back by a resize', () => {
     const i = HTML.indexOf('_fitConsoleGraph() {');
     const body = code(HTML.slice(i, i + 500));
