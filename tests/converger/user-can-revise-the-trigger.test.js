@@ -70,13 +70,35 @@ describe('the prod case', () => {
 });
 
 describe('which passes count as a person revising something', () => {
-  test('a plan approved WITH A CHANGE does', () => {
-    // The prod path: "Request a change" on the plan, which reports through the
-    // first_build route with its own wording.
-    assert.equal(userRevisedThisBuild({ route: 'first_build', detail: 'plan approved with a change' }), true);
+  /**
+   * THE FIRST FIX GOT THIS WRONG, AND PROD SAID SO.
+   *
+   * It read `/with a change/` out of `detail` — a diagnostic string — and missed the
+   * exact path a person takes. Typing a change into the chat re-enters `plan` and
+   * re-renders it; the "Approve & build" that FOLLOWS carries no modification of its
+   * own, so the detail reads a plain "plan approved". Verified on
+   * `build-platform-1785348385950` (2026-07-29): stored state
+   * `{route:'first_build', detail:'plan approved'}` — and the keyword filter the user
+   * had just rejected survived into the built spec, again.
+   *
+   * The route that sets the reason knows the answer, so it declares it. Recognising a
+   * sentence is the defect this codebase keeps re-finding.
+   */
+  test('THE PROD CASE: a plan revised in chat, then plainly approved', () => {
+    assert.equal(userRevisedThisBuild(
+      { route: 'first_build', detail: 'plan approved', userRevised: true }), true);
   });
 
-  test('a plan approved unchanged does NOT', () => {
+  test('and the wording alone no longer decides it, either way', () => {
+    // Neither direction may be inferred from prose: the detail that says "with a
+    // change" without the declaration is not a revision, and the plain one with the
+    // declaration is.
+    assert.equal(userRevisedThisBuild({ route: 'first_build', detail: 'plan approved with a change' }), false);
+    assert.equal(userRevisedThisBuild({ route: 'first_build', detail: 'plan approved', userRevised: true }), true);
+  });
+
+  test('a plan approved untouched does NOT', () => {
+    assert.equal(userRevisedThisBuild({ route: 'first_build', detail: 'plan approved', userRevised: false }), false);
     assert.equal(userRevisedThisBuild({ route: 'first_build', detail: 'plan approved' }), false);
   });
 
@@ -93,6 +115,25 @@ describe('which passes count as a person revising something', () => {
 
   test('silence is not a revision', () => {
     for (const r of [null, undefined, {}, { route: '' }]) assert.equal(userRevisedThisBuild(r), false);
+  });
+});
+
+describe('the plan node declares it, from the durable signal', () => {
+  const SRC = readFileSync(new URL('../../src/converger/elicitation-graph.js', import.meta.url), 'utf8');
+
+  test('approval reports a revision when the plan was revised on an EARLIER round', () => {
+    // `change` alone is only true when the modification rides along with THIS
+    // approval. `planRounds` is the record that the plan approved is not the plan
+    // first shown — without it the prod case is invisible.
+    assert.match(SRC, /userRevised: !!change \|\| \(state\.planRounds \?\? 0\) > 0/);
+  });
+
+  test('the two other user-driven routes declare it outright', () => {
+    for (const route of ['user_change_request', 'ratify_feedback']) {
+      const at = SRC.indexOf(`route: '${route}'`);
+      assert.ok(at > 0, route);
+      assert.match(SRC.slice(at, at + 160), /userRevised: true/, route);
+    }
   });
 });
 

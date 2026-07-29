@@ -1,5 +1,13 @@
 [
   {
+    "version": "1.6.77",
+    "date": "2026-07-29",
+    "title": "The plan you revised is the plan that gets built",
+    "notes": [
+      "The previous fix read '/with a change/' out of a diagnostic string and missed the path a person actually takes: revising the plan in chat re-renders it, and the approval that follows carries no modification, so the revision was invisible and the rejected trigger filter survived again. The route now declares it, from planRounds."
+    ]
+  },
+  {
     "version": "1.6.76",
     "date": "2026-07-29",
     "title": "A quiet path is not a broken promise",

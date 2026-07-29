@@ -466,9 +466,19 @@ const USER_ORDERED_ROUTES = new Set([
  */
 const USER_REVISION_ROUTES = new Set(['user_change_request', 'ratify_feedback']);
 export function userRevisedThisBuild(reason) {
-  const route = String(reason?.route ?? '').trim();
-  if (USER_REVISION_ROUTES.has(route)) return true;
-  return route === 'first_build' && /with a change/i.test(String(reason?.detail ?? ''));
+  // DECLARED, NOT PARSED. The first version of this read `/with a change/` out of
+  // `detail` — a diagnostic string — and was wrong on the very case it was written
+  // for. Revising the plan by typing into the chat re-enters `plan` and re-renders
+  // it; the LATER "Approve & build" then carries no modification of its own, so the
+  // detail read "plan approved" and the revision was invisible. Verified on prod
+  // 2026-07-29 (`build-platform-1785348385950`): the stored state held
+  // `{route:'first_build', detail:'plan approved'}` and the keyword filter the user
+  // had just rejected survived into the built spec.
+  //
+  // The route that sets the reason knows the answer; it now says so. A rule that has
+  // to recognise a sentence is the defect this file keeps finding.
+  if (reason?.userRevised === true) return true;
+  return USER_REVISION_ROUTES.has(String(reason?.route ?? '').trim());
 }
 
 /**
@@ -2448,7 +2458,18 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
       confirmationLog: [{ step: state.step, type: 'plan_review', approved: true }],
       step:            state.step + 1,
       phase:           'proposing',    // → generate
-      _regenReason:    { route: 'first_build', detail: change ? 'plan approved with a change' : 'plan approved' },
+      _regenReason:    {
+        route: 'first_build',
+        detail: change ? 'plan approved with a change' : 'plan approved',
+        // DID THIS PERSON REVISE THE PLAN AT ANY POINT? `change` alone is only true
+        // when the modification rides along with THIS approval. Typing a change into
+        // the chat re-enters `plan` (above, bumping `planRounds`) and the approval
+        // that follows is a plain one — so `change` is null and the revision would be
+        // invisible to everything downstream. `planRounds` is the durable record that
+        // the plan they approved is not the plan they were first shown, and it is what
+        // unfreezes the trigger in `generate`.
+        userRevised: !!change || (state.planRounds ?? 0) > 0,
+      },
     };
   });
 
@@ -3911,7 +3932,7 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
         clarifications:  [{ q: '(revise the built workflow)', a: review.modification }],
         confirmationLog: [{ step: state.step, type: 'walkthrough_revise', modification: review.modification }],
         phase:              'proposing',
-        _regenReason:       { route: 'user_change_request', detail: String(review.modification).slice(0, 300) },
+        _regenReason:       { route: 'user_change_request', detail: String(review.modification).slice(0, 300), userRevised: true },
         proposeRounds:      0,
         gapRounds:          0,
         regenRounds:        0,
@@ -4005,7 +4026,7 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
       return {
         clarifications:  [{ q: '(ratify feedback)', a: confirmation.feedback }],
         phase:           'proposing',
-        _regenReason:    { route: 'ratify_feedback', detail: String(confirmation.feedback).slice(0, 300) },
+        _regenReason:    { route: 'ratify_feedback', detail: String(confirmation.feedback).slice(0, 300), userRevised: true },
         proposeRounds:   0,
         gapRounds:       0,
         regenRounds:     0,
