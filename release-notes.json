@@ -1,5 +1,13 @@
 [
   {
+    "version": "1.6.78",
+    "date": "2026-07-29",
+    "title": "A login email is not a Slack account",
+    "notes": [
+      "Two approval builds addressed their Slack DM to the operator's Atlas login, which has no Slack account, so every run failed 'no Slack user matches' and neither could verify. The DM target is now resolved from the connected workspace, and an unmatched login is never guessed at — Atlas asks instead, because DMing the nearest match would deliver private drafts to a colleague. users.list is also paginated now."
+    ]
+  },
+  {
     "version": "1.6.77",
     "date": "2026-07-29",
     "title": "The plan you revised is the plan that gets built",

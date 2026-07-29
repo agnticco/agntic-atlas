@@ -1462,6 +1462,22 @@ fixed on the spot. Fold the relevant ones into whatever increment next touches t
   machine-ordered rebuild; a revision still cannot lose a trigger or promote an
   unrunnable one. Pinned by `tests/converger/user-can-revise-the-trigger.test.js`
   (13, 6 mutations killed).
+- **A login email is not a Slack account — FIXED (2026-07-29).** The converger's
+  system prompt said, unconditionally, *"when they say DM me, use
+  `{channel:'slack_dm', user:'<their ATLAS LOGIN email>'}'"*, and nothing had checked
+  the two identities were the same. They were not: two approval builds addressed
+  their DM to `hello@agntic.co` while the workspace's only Slack email is
+  `charles@agntic.co`, so every run failed *"no Slack user matches"* — the probe was
+  right, the INSTRUCTION was wrong — and neither build could verify. Diagnosed against
+  the live workspace first (`users.list` ok, 4 members, `users:read.email` present,
+  one page): **not a lookup bug**. The DM target is now resolved from the CONNECTED
+  WORKSPACE (`resolveOperatorSlackIdentity`) and an unmatched login is never guessed
+  at — the converger is given the members it can see and told to ASK, because DMing
+  the nearest match delivers this person's drafts and approvals to a colleague. Fixed
+  in passing: `users.list` was read one page deep (`limit: 200`, no cursor), so past
+  200 members it silently resolves nobody and "not found" is indistinguishable from a
+  wrong address. Pinned by `tests/connectors/operator-slack-identity.test.js`
+  (17, 8 mutations killed).
 - **Approval-channel availability (`email`) is deployment-wide, not per-tenant** — fine today
   (one deployment, one mailer); revisit if tenants ever bring their own sending domain.
 

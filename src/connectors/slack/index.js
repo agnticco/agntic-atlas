@@ -152,8 +152,56 @@ export function createSlackCapabilityProvider({ oauthTokenStore = null, token = 
     return resolved;
   }
 
+  /**
+   * WHO IS THE OPERATOR *IN SLACK*?
+   *
+   * Their Atlas login and their Slack account are two different identities, and
+   * assuming they are the same builds a workflow that can never deliver. WITNESSED
+   * ON PROD, 2026-07-29: the converger was told "when they say DM me, use
+   * { channel:'slack_dm', user:'<their Atlas email>' }", so an approval workflow
+   * addressed its Slack DM to `hello@agntic.co`. The workspace has four members and
+   * exactly one email — `charles@agntic.co`. Every run failed the same way ("no
+   * Slack user matches"), which is what the probe was correctly reporting, and it
+   * blocked two approval builds from ever verifying.
+   *
+   * EXACT MATCH OR NOTHING. If the login email names no Slack member we do NOT pick
+   * the nearest one: a wrong guess here DMs someone else the operator's drafts and
+   * approvals. Unresolved returns the members we CAN see so the converger can ask
+   * which of them to use — the same "reason from live connector state, then ask"
+   * that the rest of the interview does — instead of inventing an address.
+   *
+   * Read-only, best-effort: any failure yields `{ resolved:false, candidates:[] }`
+   * and the build proceeds exactly as before.
+   *
+   * @returns {Promise<{resolved: boolean, userId: string|null, email: string|null,
+   *                    name: string|null, candidates: Array<{email,name}>}>}
+   */
+  async function resolveOperatorSlackIdentity(tenantId, loginEmail, { botToken = null } = {}) {
+    const miss = { resolved: false, userId: null, email: null, name: null, candidates: [] };
+    try {
+      const resolved = await resolveForTenant(tenantId);
+      if (!resolved?.connected) return miss;
+      // The caller supplies the token: decrypting a tenant's stored grant needs the
+      // cipher, which lives with auth, not here. The env token still stands in under
+      // exactly the same isolation rule as `scopesForTenant`.
+      const tok = botToken ?? (envTokenServes(tenantId) ? (token ?? process.env.SLACK_BOT_TOKEN) : null);
+      if (!tok) return miss;
+      const api = makeSlackApi({ token: tok }, fetchImpl ?? fetch);
+      const members = await listMembers(api);
+      const usable = members
+        .filter(u => !u.deleted && !u.is_bot && u.id !== 'USLACKBOT' && u.profile?.email)
+        .map(u => ({ id: u.id, email: u.profile.email, name: u.profile?.real_name ?? u.name ?? null }));
+      const want = String(loginEmail ?? '').trim().toLowerCase();
+      const hit  = want ? usable.find(u => u.email.toLowerCase() === want) : null;
+      if (hit) return { resolved: true, userId: hit.id, email: hit.email, name: hit.name, candidates: [] };
+      // Bounded: this goes into a prompt, and a 500-person workspace must not.
+      return { ...miss, candidates: usable.slice(0, 8).map(({ email, name }) => ({ email, name })) };
+    } catch { return miss; }
+  }
+
   return {
     resolveForTenant,
+    resolveOperatorSlackIdentity,
     async describe(tenantId) { return describeSlackForPrompt(await resolveForTenant(tenantId)); },
     /** Drop cached scopes for a tenant (after re-install) or all tenants. */
     refresh(tenantId) { if (tenantId) cache.delete(tenantId); else cache.clear(); },
@@ -237,12 +285,36 @@ export async function resolveChannel(api, target) {
 // Resolve a user arg (Slack ID or email) to a Slack user ID.
 // Uses users.list scan — users.lookupByEmail is unreliable (invalid_arguments even
 // with valid emails and users:read.email scope).
+/**
+ * Every member, not just the first page.
+ *
+ * `users.list` is cursor-paginated and every call here asked for `limit: 200` and
+ * read `d.members` once. In a workspace with more than 200 people that silently
+ * resolves nobody past the first page — the lookup does not error, it just reports
+ * "no user found", which is indistinguishable from the address being wrong. Bounded
+ * at 10 pages so a pathological workspace cannot stall a build.
+ */
+export async function listMembers(api, { maxPages = 10 } = {}) {
+  const out = [];
+  let cursor;
+  for (let i = 0; i < maxPages; i += 1) {
+    const d = await api.get('users.list', { limit: 200, ...(cursor ? { cursor } : {}) });
+    out.push(...(d.members ?? []));
+    cursor = d.response_metadata?.next_cursor || '';
+    if (!cursor) break;
+  }
+  return out;
+}
+
+// Resolve a user arg (Slack ID or email) to a Slack user ID.
+// Uses users.list scan — users.lookupByEmail is unreliable (invalid_arguments even
+// with valid emails and users:read.email scope).
 export async function resolveUser(api, user) {
   if (!user) throw new Error('slack: user (ID or email) is required');
   if (!user.includes('@')) return user;
   const target = user.toLowerCase().trim();
-  const d = await api.get('users.list', { limit: 200 });
-  const match = (d.members ?? []).find((u) =>
+  const members = await listMembers(api);
+  const match = members.find((u) =>
     !u.deleted && (u.profile?.email?.toLowerCase() === target || u.name?.toLowerCase() === target)
   );
   if (!match) throw new Error(`slack: no user found with email "${user}"`);

@@ -123,12 +123,51 @@ function knowledgeContextBlock(capabilities) {
   return `${liveNote}\nKNOWLEDGE BASE CONTENT (relevant excerpts from this tenant's knowledge base — use these to inform proposals, e.g. correct field names, document structure, or domain terms):\n${chunks}\n`;
 }
 
+/**
+ * THE ADDRESS THAT CAN ACTUALLY RECEIVE.
+ *
+ * This block used to say, unconditionally, «deliver via { channel:"slack_dm",
+ * user:"<their ATLAS LOGIN email>" }». A login and a Slack account are two
+ * identities and nothing had checked they were the same one. WITNESSED ON PROD,
+ * 2026-07-29: an approval workflow DM'd `hello@agntic.co`; the workspace's only
+ * Slack email is `charles@agntic.co`, so every run failed "no Slack user matches"
+ * and two approval builds could never verify. The probe was right; the instruction
+ * was wrong.
+ *
+ * Three states, and the difference matters:
+ *   · RESOLVED   — use the verified Slack address. Guaranteed deliverable.
+ *   · CANDIDATES — Slack is connected but the login matches no member. Say so and
+ *     ASK. Never guess: DMing the "closest" member sends this person's drafts and
+ *     approvals to someone else.
+ *   · NEITHER    — behave as before; the email is all we know.
+ */
 function operatorSummary(capabilities) {
   const op = capabilities?.operator;
   if (!op?.email) return '';
   const who = op.name ? `${op.name} <${op.email}>` : op.email;
-  return `
-THE OPERATOR (the person you are building this for): ${who}.
+  const head = `\nTHE OPERATOR (the person you are building this for): ${who}.`;
+  const slack = op.slack;
+
+  if (slack?.resolved && slack.email) {
+    const asWho = slack.name ? `${slack.name} <${slack.email}>` : slack.email;
+    return `${head}
+Their SLACK account is ${asWho} — verified against the connected workspace, and NOT the same string as their login above.
+When they say "me", "myself", "DM me", or "send it to me", deliver via a Slack direct message: { channel:"slack_dm", user:"${slack.email}" }.
+Never address a Slack DM to their login email — it is not a Slack account and the message cannot be delivered.
+`;
+  }
+
+  if (Array.isArray(slack?.candidates) && slack.candidates.length) {
+    const list = slack.candidates
+      .map(c => (c.name ? `${c.name} <${c.email}>` : c.email)).join(', ');
+    return `${head}
+Their login email has NO matching account in the connected Slack workspace, so a DM to "${op.email}" CANNOT be delivered — do not write it as a slack_dm target.
+The workspace members you could DM are: ${list}.
+If the workflow needs to reach them in Slack, ASK which of those is them (or use a channel, or the Atlas inbox) rather than guessing — a DM sent to the wrong person delivers their private drafts and approvals to a colleague.
+`;
+  }
+
+  return `${head}
 When they say "me", "myself", "DM me", or "send it to me", deliver via a Slack direct message: { channel:"slack_dm", user:"${op.email}" }.
 `;
 }

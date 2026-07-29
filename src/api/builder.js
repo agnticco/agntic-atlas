@@ -1744,6 +1744,16 @@ Rules:
           const r = await fetch(`${apiBase}/conversations.list?exclude_archived=true&limit=200&types=public_channel,private_channel`, { headers: { authorization: `Bearer ${botToken}` } });
           const d = await r.json();
           if (d?.ok) capabilities.slackChannels = (d.channels ?? []).map(c => c.name).filter(Boolean);
+          // ── WHO IS THE OPERATOR *IN SLACK*? ──────────────────────────────
+          // Their Atlas login and their Slack account are different identities.
+          // The prompt used to hand the model the LOGIN email as a DM target, so a
+          // build addressed its approval DM to an address with no Slack account and
+          // every run failed "no Slack user matches" — see
+          // `resolveOperatorSlackIdentity`. Resolved once here, from the live
+          // workspace, so the converger is never told to write an address that
+          // cannot receive.
+          capabilities.operator.slack =
+            await spine.slack.resolveOperatorSlackIdentity(req.tenant.id, req.user?.email, { botToken });
         }
       } catch { /* non-fatal */ }
     }
