@@ -453,7 +453,7 @@ describe('the workflow page draws the real graph', () => {
   test('it is capped small and centred', () => {
     const i = HTML.indexOf('_fitConsoleGraph() {');
     const body = code(HTML.slice(i, i + 900));
-    assert.match(body, /MAX_H = 190/, 'a share of the viewport is the builder\'s rule, not this one');
+    assert.match(body, /MAX_H = 260/, 'a share of the viewport is the builder\'s rule, not this one');
     assert.doesNotMatch(body, /window\.innerHeight/);
     // `scale()` shrinks the painted box, not the laid-out one, so without this the
     // graph hugs the left edge with all the slack piled up on the right.

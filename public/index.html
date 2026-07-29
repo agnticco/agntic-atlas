@@ -8568,7 +8568,11 @@ class Component extends DCLogic {
   _fitConsoleGraph() {
     const o = this._cgOuter, i = this._cgInner;
     if (!o || !i) return;
-    const MAX_H = 190;
+    // 260, not smaller: at 190 the whole 12-node graph fitted and its labels came
+    // out at ~5px — smaller, and no longer information. This is still well under
+    // the ~350px it used to take, and it now scrolls away, which was the real
+    // complaint.
+    const MAX_H = 260;
     const w = i.scrollWidth || 1, h = i.scrollHeight || 1;
     const k = Math.min(1, o.clientWidth / w, MAX_H / h);
     i.style.transform = 'scale(' + k + ')';
