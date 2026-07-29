@@ -311,6 +311,40 @@ describe('the workflow page lands on the overview', () => {
   });
 });
 
+describe('the go-live review card and the live landing', () => {
+  // These two share `draftNodes`, and it carried a FOURTH copy of the type
+  // vocabulary — whose own comment claimed "no raw LLM/jargon" while it shipped
+  // BRANCH, HUMAN, STOP and AI STEP, because anything outside its six-entry table
+  // fell through to `titleCase(type).toUpperCase()`.
+  test('the step tag comes from the shared vocabulary', () => {
+    const i = HTML.indexOf('_nodeLabel(type)');
+    assert.ok(i > 0, '`_nodeLabel` moved — re-point this test');
+    const body = code(HTML.slice(i, i + 200));
+    assert.match(body, /_stepTypeWords/);
+    assert.doesNotMatch(body, /titleCase\(type/, 'the fall-through printed the raw node type');
+    assert.doesNotMatch(body, /"AI Step"/, 'the private table must be gone, not merely bypassed');
+  });
+
+  test('the trigger title renders its filter instead of printing it', () => {
+    const i = HTML.indexOf('_triggerTitle(t) {');
+    assert.ok(i > 0);
+    const body = code(HTML.slice(i, i + 1000));
+    assert.match(body, /_plainFilter/, '"A new email arrives · is:unread" is on the live header');
+    assert.doesNotMatch(body, /base \+ ' · ' \+ filter/);
+  });
+
+  test('twelve steps wrap instead of being crushed into one row', () => {
+    // Each card was `flex:1` in a nowrap row, so 12 steps got ~50px each and the
+    // headings ran into one another.
+    const n = (HTML.match(/<sc-for list="\{\{ draftNodes \}\}"/g) || []).length;
+    assert.equal(n, 2, 'the review card and the live landing both render this list');
+    assert.equal((HTML.match(/flex:1 1 210px;min-width:210px/g) || []).length, n,
+      'every card needs a width floor, or it collapses again on a long workflow');
+    assert.ok(!/align-items:stretch">\s*<sc-for list="\{\{ draftNodes \}\}"/.test(HTML),
+      'the row must be allowed to wrap');
+  });
+});
+
 describe('the evidence row names a destination once', () => {
   test('duplicates are collapsed and the target is readable', () => {
     const i = HTML.indexOf("it took a path that doesn't cover");

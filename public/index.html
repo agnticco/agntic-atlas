@@ -1119,9 +1119,13 @@
 
             <div style="margin-top:30px;border-radius:20px;border:1px solid rgba(255,255,255,.1);background:linear-gradient(170deg,rgba(255,255,255,.05),rgba(255,255,255,.015));padding:24px">
               <div style="font-size:11px;font-weight:500;letter-spacing:.2em;text-transform:uppercase;color:#8A8A8A;margin-bottom:18px">The workflow</div>
-              <div style="display:flex;align-items:stretch">
+              <!-- WRAPS, because it used to CRUSH. Every card was `flex:1` in one row, so a
+                   12-step workflow gave each one ~50px: text broke one word per line and the
+                   headings collided ("Route by classificatioAsk"). Witnessed 2026-07-29 on the
+                   review card immediately before Go live and on the live landing. -->
+              <div style="display:flex;align-items:stretch;flex-wrap:wrap;row-gap:10px">
                 <sc-for list="{{ draftNodes }}" as="n" hint-placeholder-count="3">
-                  <div style="display:flex;align-items:stretch;flex:1;min-width:0">
+                  <div style="display:flex;align-items:stretch;flex:1 1 210px;min-width:210px">
                     <sc-if value="{{ n.showArrow }}" hint-placeholder-val="{{ false }}"><div style="display:flex;align-items:center;padding:0 12px;color:rgba(127,194,138,.5);font-size:18px">→</div></sc-if>
                     <div style="flex:1;min-width:0;border-radius:14px;border:1px solid rgba(127,194,138,.3);background:rgba(127,194,138,.08);padding:16px">
                       <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px"><span style="flex:none;width:20px;height:20px;border-radius:50%;background:rgba(127,194,138,.18);border:1px solid rgba(127,194,138,.55);display:flex;align-items:center;justify-content:center;color:#9fd6a8;font-size:11px">✓</span><span style="font-size:10px;font-weight:600;letter-spacing:.18em;text-transform:uppercase;color:rgba(127,194,138,.9)">{{ n.label }}</span></div>
@@ -1469,9 +1473,13 @@
 
             <div style="margin-top:30px;border-radius:20px;border:1px solid rgba(255,255,255,.1);background:linear-gradient(170deg,rgba(255,255,255,.05),rgba(255,255,255,.015));padding:24px">
               <div style="font-size:11px;font-weight:500;letter-spacing:.2em;text-transform:uppercase;color:#8A8A8A;margin-bottom:18px">Pipeline · live</div>
-              <div style="display:flex;align-items:stretch">
+              <!-- WRAPS, because it used to CRUSH. Every card was `flex:1` in one row, so a
+                   12-step workflow gave each one ~50px: text broke one word per line and the
+                   headings collided ("Route by classificatioAsk"). Witnessed 2026-07-29 on the
+                   review card immediately before Go live and on the live landing. -->
+              <div style="display:flex;align-items:stretch;flex-wrap:wrap;row-gap:10px">
                 <sc-for list="{{ draftNodes }}" as="n" hint-placeholder-count="3">
-                  <div style="display:flex;align-items:stretch;flex:1;min-width:0">
+                  <div style="display:flex;align-items:stretch;flex:1 1 210px;min-width:210px">
                     <sc-if value="{{ n.showArrow }}" hint-placeholder-val="{{ false }}"><div style="display:flex;align-items:center;padding:0 12px;color:rgba(127,194,138,.55);font-size:18px">→</div></sc-if>
                     <div style="flex:1;min-width:0;border-radius:14px;border:1px solid rgba(127,194,138,.25);background:rgba(127,194,138,.06);padding:15px">
                       <div style="display:flex;align-items:center;gap:8px;margin-bottom:9px"><span style="flex:none;width:9px;height:9px;border-radius:50%;background:#7fc28a;box-shadow:0 0 8px rgba(127,194,138,.55);animation:flowPulse 2s infinite"></span><span style="font-size:10px;font-weight:500;letter-spacing:.18em;text-transform:uppercase;color:rgba(127,194,138,.85)">{{ n.label }}</span></div>
@@ -5917,9 +5925,14 @@ class Component extends DCLogic {
   _triggerTitle(t) {
     const base = this._triggerCaption(t);
     const filter = t && t.filter;
-    return (this._triggerIsMail(t) && typeof filter === 'string' && filter)
-      ? base + ' · ' + filter
-      : base;
+    // The filter used to be appended RAW — "A new email arrives · is:unread" — and
+    // this title is the one on the live workflow header, the go-live review card
+    // and the status chip.
+    // `_plainFilter` returns a phrase that completes "Only emails …", so the leading
+    // "that are" is dropped here — this is a chip after a caption, not a sentence.
+    // "A new email arrives · unread", "… · from bob@acme.com", "… · with an attachment".
+    const only = this._plainFilter(filter).replace(/^that are /, '');
+    return (this._triggerIsMail(t) && only) ? base + ' · ' + only : base;
   }
   _titleCase(s) { s = String(s || ""); return s.charAt(0).toUpperCase() + s.slice(1); }
 
@@ -8666,11 +8679,13 @@ class Component extends DCLogic {
     (sp.nodes || []).forEach(n => items.push({ label: this._nodeLabel(n.type), title: n.label || this._titleCase(n.type), detail: this._nodeDetail(n) }));
     return items.map((it, i) => ({ ...it, showArrow: i > 0 }));
   }
-  // Operator-friendly LABEL for a node type (no raw "LLM"/jargon).
-  _nodeLabel(type) {
-    const m = { llm: "AI Step", summarize: "Summarize", extract: "Extract", rewrite: "Rewrite", deliver: "Deliver", "connector-action": "Action" };
-    return String(m[type] || this._titleCase(type || "Step")).toUpperCase();
-  }
+  // THE FOURTH copy of the type vocabulary, found 2026-07-29 on the screen it is
+  // least acceptable on: the "Workflow is live" landing, and the review card
+  // immediately before Go live. Its own comment claimed "no raw LLM/jargon" and it
+  // still shipped `BRANCH`, `HUMAN`, `STOP` and `AI STEP` — because anything not in
+  // its six-entry table fell through to `titleCase(type).toUpperCase()`, i.e. the
+  // raw node type. It now delegates, like the other three.
+  _nodeLabel(type) { return this._stepTypeWords(type); }
   // Plain-language description of what a node does — never raw key:value spec,
   // never a model name (which is internal + often wrong).
   _clip(s, len) { s = String(s == null ? "" : s).replace(/\s+/g, " ").trim(); return s.length > len ? s.slice(0, len - 1) + "…" : s; }
@@ -8703,7 +8718,7 @@ class Component extends DCLogic {
   _triggerDetail(t) {
     const ty = t.type || (t.cron ? "schedule" : "manual");
     if (ty === "schedule") return "Runs automatically on this schedule — nothing needs to arrive to start it.";
-    if (ty === "email") return t.filter ? ("When an email matches: " + this._clip(t.filter, 90)) : "When a new email arrives.";
+    if (ty === "email") { const only = this._plainFilter(t.filter); return only ? ("When an email arrives " + only + ".") : "When a new email arrives."; }
     if (ty === "event") { const ch = this._hashName((t.filter && (t.filter.channel || t.filter)) || ""); return "When a message is posted" + (ch ? (" in " + ch) : " in Slack") + "."; }
     if (ty === "manual") return "Runs each time you start it by hand.";
     if (ty === "one_time") return "Runs once, right after you approve it, then turns off.";

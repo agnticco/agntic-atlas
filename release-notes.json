@@ -1,5 +1,13 @@
 [
   {
+    "version": "1.6.56",
+    "date": "2026-07-28",
+    "title": "The go-live screen and the live workflow header, in plain English",
+    "notes": [
+      "The screen before Go live and the live workflow page had a fourth set of step labels of their own — BRANCH, HUMAN, AI STEP — and squeezed a 12-step workflow into columns about 50px wide, so the headings ran into each other. They now use the same words as everywhere else, wrap onto several rows, and the trigger reads \"A new email arrives · unread\" instead of \"is:unread\"."
+    ]
+  },
+  {
     "version": "1.6.55",
     "date": "2026-07-28",
     "title": "Plain English on every screen, and the workflow page reorganised",

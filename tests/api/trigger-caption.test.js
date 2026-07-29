@@ -58,7 +58,10 @@ function methodSrc(name) {
 }
 
 const METHODS = ['_triggerCaption', '_triggerIsMail', '_triggerGlyph', '_specTriggerTitle',
-                 '_triggerTitle', '_getTriggerInfo', '_triggerNodeFrom', '_humanCron', '_tzLabel', '_titleCase'];
+                 '_triggerTitle', '_getTriggerInfo', '_triggerNodeFrom', '_humanCron', '_tzLabel', '_titleCase',
+                 // `_triggerTitle` renders the mail filter rather than printing it
+                 // (2026-07-29) — "A new email arrives · is:unread" was on the live header.
+                 '_plainFilter', '_plainAge'];
 
 function component() {
   const obj = eval('({\n' + METHODS.map(methodSrc).join(',\n') + '\n})');
@@ -215,7 +218,13 @@ describe('one rule, not two — the surfaces cannot drift apart again', () => {
   });
 
   test('the email filter survives on the strip that has nowhere else to show it', () => {
-    assert.match(C._triggerTitle(EMAIL), /is:unread/);
+    // The INFORMATION must survive — that this workflow watches only unread mail —
+    // but since 2026-07-29 it is rendered rather than printed: the raw `is:unread`
+    // was appearing on the live workflow header and the go-live review card.
+    const title = C._triggerTitle(EMAIL);
+    assert.match(title, /unread/, 'dropping the filter would understate what the workflow watches');
+    assert.doesNotMatch(title, /is:unread/, 'Gmail query syntax is not a caption');
+    assert.equal(title, 'A new email arrives · unread');
   });
 
   test('every trigger produces a non-empty human sentence', () => {
