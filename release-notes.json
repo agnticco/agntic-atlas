@@ -1,5 +1,13 @@
 [
   {
+    "version": "1.6.62",
+    "date": "2026-07-28",
+    "title": "Pan and zoom the workflow diagram",
+    "notes": [
+      "The diagram now sits on the same dotted canvas as the builder. Hold the scroll wheel and move the mouse to pan; scroll to zoom in and out around the pointer. Double-click to put it back where it started."
+    ]
+  },
+  {
     "version": "1.6.60",
     "date": "2026-07-28",
     "title": "The workflow diagram takes less of the page",

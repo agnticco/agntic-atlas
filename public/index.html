@@ -1663,8 +1663,13 @@
                from the builder's block rather than written again, so the two cannot
                disagree about what a workflow looks like. -->
           <sc-if value="{{ consoleGraph }}" hint-placeholder-val="{{ false }}">
-          <div style="margin:0 0 22px;border-radius:13px;border:1px solid rgba(255,255,255,.08);background:rgba(255,255,255,.018);padding:12px 10px">
-            <div ref="{{ consoleGraph.fitRef }}" style="box-sizing:content-box;overflow:hidden;padding:0">
+          <div style="margin:0 0 22px;border-radius:13px;border:1px solid rgba(255,255,255,.08);overflow:hidden">
+            <!-- The dotted field is the builder's, to the pixel — same colour, same 16px
+                 grid — so the diagram reads as the same canvas in both places. It is on
+                 the VIEWPORT rather than the page so it can be panned and zoomed with
+                 the graph: dragging across empty space with a static background gives
+                 no feedback at all, and the drag reads as broken. -->
+            <div ref="{{ consoleGraph.fitRef }}" style="position:relative;box-sizing:content-box;overflow:hidden;padding:0;cursor:grab;background:#0A0A0A;background-image:radial-gradient(rgba(255,255,255,.05) 1px,transparent 1px);background-size:16px 16px">
               <div ref="{{ consoleGraph.fitInnerRef }}" style="position:relative;width:{{ consoleGraph.canvasW }};height:{{ consoleGraph.canvasH }};transform-origin:top left;margin:0">
                       <sc-for list="{{ consoleGraph.edges }}" as="ed" hint-placeholder-count="3">
                         <span style="position:absolute;left:0;top:0;width:{{ consoleGraph.canvasW }};height:{{ consoleGraph.canvasH }};display:block;pointer-events:none;opacity:{{ ed.o }};transition:opacity .45s"><svg width="{{ consoleGraph.canvasW }}" height="{{ consoleGraph.canvasH }}" fill="none" style="display:block;overflow:visible"><path d="{{ ed.d }}" stroke="{{ ed.color }}" stroke-width="2" stroke-linecap="round" fill="none"></path><polygon points="{{ ed.arrowPoints }}" fill="{{ ed.color }}"></polygon></svg></span>
@@ -4458,6 +4463,9 @@ class Component extends DCLogic {
     // tab stopped being a tab, would have meant landing on empty time-saved,
     // baseline and chart panels with nothing to explain why.
     this._loadConsoleProfile(wfId);
+    // A pan/zoom belongs to the workflow it was made on. Carrying it to the next one
+    // would open a different graph scrolled off-screen at someone else's zoom.
+    this._cgUserView = false; this._cgView = null;
     this._startConsolePoll(wfId); // live run monitoring: keep runs + metrics fresh while open
   }
   closeConsole() {
@@ -8565,9 +8573,25 @@ class Component extends DCLogic {
   //   · `transform: scale()` shrinks the PAINTED box but not the laid-out one, so a
   //     scaled graph hugged the left edge with the slack piled up on the right. The
   //     left margin is set from the real scaled width to centre it.
+  // Paint the current view. ONE place writes the transform, so the auto-fit and the
+  // user's own panning cannot end up disagreeing about where the graph is.
+  _cgApply() {
+    const o = this._cgOuter, i = this._cgInner, v = this._cgView;
+    if (!o || !i || !v) return;
+    i.style.transform = 'translate(' + Math.round(v.tx) + 'px,' + Math.round(v.ty) + 'px) scale(' + v.k + ')';
+    // The dots move WITH the canvas. A 16px grid at the current zoom, offset by the
+    // pan — so dragging over an empty region still visibly moves something.
+    const g = 16 * v.k;
+    o.style.backgroundSize = g + 'px ' + g + 'px';
+    o.style.backgroundPosition = (v.tx % g) + 'px ' + (v.ty % g) + 'px';
+  }
+
   _fitConsoleGraph() {
     const o = this._cgOuter, i = this._cgInner;
     if (!o || !i) return;
+    // Once the person has panned or zoomed, that is THEIR view — a resize must not
+    // yank it back. Re-fitting happens on demand (double-click) or on a new workflow.
+    if (this._cgUserView) { this._cgApply(); return; }
     // 260, not smaller: at 190 the whole 12-node graph fitted and its labels came
     // out at ~5px — smaller, and no longer information. This is still well under
     // the ~350px it used to take, and it now scrolls away, which was the real
@@ -8575,10 +8599,60 @@ class Component extends DCLogic {
     const MAX_H = 260;
     const w = i.scrollWidth || 1, h = i.scrollHeight || 1;
     const k = Math.min(1, o.clientWidth / w, MAX_H / h);
-    i.style.transform = 'scale(' + k + ')';
-    i.style.marginLeft = Math.max(0, Math.round((o.clientWidth - w * k) / 2)) + 'px';
-    o.style.height = Math.round(h * k) + 'px';
+    // A viewport, not a shrink-wrap: it keeps its height when the person zooms in,
+    // with a floor so a two-step workflow still has somewhere to pan.
+    o.style.height = Math.round(Math.min(MAX_H, Math.max(160, h * k))) + 'px';
+    this._cgView = { k, tx: Math.max(0, (o.clientWidth - w * k) / 2), ty: 0 };
+    this._cgApply();
   }
+
+  // ── PAN AND ZOOM ──────────────────────────────────────────────────────────
+  // Operator, 2026-07-29: hold the scroll wheel and move the mouse to pan; scroll to
+  // zoom. Middle-drag is the convention every canvas tool uses and it leaves left-
+  // click free.
+  _cgWheel(e) {
+    const o = this._cgOuter, v = this._cgView;
+    if (!o || !v) return;
+    // Non-passive on purpose: without this the page scrolls behind the zoom.
+    e.preventDefault();
+    const r = o.getBoundingClientRect();
+    const cx = e.clientX - r.left, cy = e.clientY - r.top;
+    const k2 = Math.min(2.5, Math.max(0.15, v.k * (e.deltaY < 0 ? 1.12 : 1 / 1.12)));
+    if (k2 === v.k) return;                       // already at a stop
+    // Zoom ABOUT THE POINTER: keep whatever is under the cursor under the cursor.
+    v.tx = cx - (cx - v.tx) * (k2 / v.k);
+    v.ty = cy - (cy - v.ty) * (k2 / v.k);
+    v.k = k2;
+    this._cgUserView = true;
+    this._cgApply();
+  }
+
+  _cgDown(e) {
+    if (e.button !== 1 || !this._cgView) return;  // middle button only
+    e.preventDefault();                            // stops Chrome's autoscroll cursor
+    const o = this._cgOuter;
+    const sx = e.clientX, sy = e.clientY, tx0 = this._cgView.tx, ty0 = this._cgView.ty;
+    if (o) o.style.cursor = 'grabbing';
+    // Bound to the WINDOW, so a drag that leaves the box keeps working and still
+    // ends when the button comes up outside it — a listener on the box alone leaves
+    // the canvas stuck to the pointer.
+    const move = (ev) => {
+      this._cgView.tx = tx0 + (ev.clientX - sx);
+      this._cgView.ty = ty0 + (ev.clientY - sy);
+      this._cgUserView = true;
+      this._cgApply();
+    };
+    const up = () => {
+      window.removeEventListener('mousemove', move);
+      window.removeEventListener('mouseup', up);
+      if (o) o.style.cursor = 'grab';
+    };
+    window.addEventListener('mousemove', move);
+    window.addEventListener('mouseup', up);
+  }
+
+  // Double-click puts it back. Panning with no way home is a trap.
+  _cgResetView() { this._cgUserView = false; this._fitConsoleGraph(); }
   // Confirm advances to the next node (with the 560ms green flash). Reject stops and
   // asks for a note in the chat — the note goes to the converger, which re-proposes.
   _liveApprove() {
@@ -9819,6 +9893,14 @@ class Component extends DCLogic {
           hasEdges: lg.edges.length > 0, hasEdgeLabels: lg.edgeLabels.length > 0,
           fitRef: (el) => {
             this._cgOuter = el;
+            if (el && !el._cgWired) {
+              el._cgWired = true;   // a ref fires on every render; these attach once
+              el.addEventListener('wheel', (e) => this._cgWheel(e), { passive: false });
+              el.addEventListener('mousedown', (e) => this._cgDown(e));
+              el.addEventListener('dblclick', () => this._cgResetView());
+              // Middle-click would otherwise open links in a new tab on release.
+              el.addEventListener('auxclick', (e) => { if (e.button === 1) e.preventDefault(); });
+            }
             if (el) { this._cgRO = this._cgRO || new ResizeObserver(() => this._fitConsoleGraph()); try { this._cgRO.observe(el); } catch (e) {} }
           },
           fitInnerRef: (el) => {

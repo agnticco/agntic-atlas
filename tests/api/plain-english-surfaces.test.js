@@ -452,13 +452,72 @@ describe('the workflow page draws the real graph', () => {
 
   test('it is capped small and centred', () => {
     const i = HTML.indexOf('_fitConsoleGraph() {');
-    const body = code(HTML.slice(i, i + 900));
+    // Bounded by the next method, not a character count — the explanatory comments
+    // in here have outrun a fixed slice twice already.
+    const body = code(HTML.slice(i, HTML.indexOf('_cgWheel(e) {', i)));
     assert.match(body, /MAX_H = 260/, 'a share of the viewport is the builder\'s rule, not this one');
     assert.doesNotMatch(body, /window\.innerHeight/);
     // `scale()` shrinks the painted box, not the laid-out one, so without this the
-    // graph hugs the left edge with all the slack piled up on the right.
-    assert.match(body, /marginLeft/, 'a scaled graph does not centre itself');
-    assert.match(body, /o\.clientWidth - w \* k/);
+    // graph hugs the left edge with all the slack piled up on the right. Centring
+    // moved into the view's own `tx` when pan/zoom landed, so it is one number that
+    // the auto-fit and the user's dragging both write.
+    assert.match(body, /tx: Math\.max\(0, \(o\.clientWidth - w \* k\) \/ 2\)/,
+      'a scaled graph does not centre itself');
+  });
+
+  test('it wears the builder\'s dotted canvas', () => {
+    const i = HTML.indexOf('<sc-if value="{{ consoleGraph }}"');
+    const markup = HTML.slice(i, HTML.indexOf('{{ consoleGraph.edges }}', i));
+    // The exact field the builder uses, so the two read as one canvas.
+    assert.match(markup, /radial-gradient\(rgba\(255,255,255,\.05\) 1px,transparent 1px\)/);
+    assert.match(markup, /background-size:16px 16px/);
+    assert.match(markup, /cursor:grab/);
+    assert.match(markup, /overflow:hidden/, 'a pannable canvas must clip, not spill');
+  });
+
+  test('the wheel zooms about the pointer and does not scroll the page', () => {
+    const i = HTML.indexOf('_cgWheel(e) {');
+    assert.ok(i > 0, '`_cgWheel` is gone — re-point this test');
+    const body = code(HTML.slice(i, i + 900));
+    assert.match(body, /e\.preventDefault\(\)/, 'without this the page scrolls behind the zoom');
+    // Keeping the point under the cursor fixed is what makes zoom feel attached to
+    // the mouse rather than to the corner of the box.
+    assert.match(body, /cx - \(cx - v\.tx\) \* \(k2 \/ v\.k\)/);
+    assert.match(body, /Math\.min\(2\.5, Math\.max\(0\.15/, 'zoom must have stops at both ends');
+    const w = HTML.indexOf('this._cgOuter = el;');
+    assert.ok(w > 0, 'the console graph ref moved — re-point this test');
+    assert.match(HTML.slice(w, w + 900), /'wheel',[^\n]*\{ passive: false \}/,
+      'a passive wheel listener cannot preventDefault, so the page would scroll too');
+  });
+
+  test('panning is the middle button, and survives leaving the box', () => {
+    const i = HTML.indexOf('_cgDown(e) {');
+    assert.ok(i > 0);
+    const body = code(HTML.slice(i, i + 1200));
+    assert.match(body, /e\.button !== 1/, 'middle-drag leaves left-click free');
+    assert.match(body, /e\.preventDefault\(\)/, 'otherwise Chrome opens its autoscroll cursor');
+    // Bound to the window: a listener on the box alone leaves the canvas stuck to
+    // the pointer when the drag ends outside it.
+    assert.match(body, /window\.addEventListener\('mousemove'/);
+    assert.match(body, /window\.addEventListener\('mouseup'/);
+    assert.match(body, /window\.removeEventListener\('mousemove'/, 'a drag listener that is never removed leaks');
+    assert.match(body, /window\.removeEventListener\('mouseup'/);
+  });
+
+  test('a view the person set is not yanked back by a resize', () => {
+    const i = HTML.indexOf('_fitConsoleGraph() {');
+    const body = code(HTML.slice(i, i + 500));
+    assert.match(body, /if \(this\._cgUserView\) \{ this\._cgApply\(\); return; \}/,
+      'the ResizeObserver fires on every layout change and would undo the pan');
+    assert.match(HTML, /_cgResetView\(\)\s*\{/, 'panning with no way home is a trap');
+    assert.match(HTML, /'dblclick', \(\) => this\._cgResetView\(\)/);
+  });
+
+  test('the view does not follow you to the next workflow', () => {
+    const i = HTML.indexOf("this.setState({ view: 'console', consoleWfId: wfId");
+    const body = HTML.slice(i, i + 1400);
+    assert.match(body, /_cgUserView = false/,
+      'a different graph would otherwise open off-screen at someone else\'s zoom');
   });
 
   test('it fits itself without fighting the builder canvas over the same handles', () => {
