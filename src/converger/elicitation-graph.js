@@ -751,6 +751,20 @@ export function stampScheduleTimezone(triggers, tz) {
   });
 }
 
+/**
+ * The agreed contract, with its human sentence brought up to date.
+ *
+ * Only the prose moves, only on a user revision, and only when the rebuild wrote
+ * something to move it to. Everything else about the outcome — assertions above
+ * all — is returned exactly as it came in.
+ */
+export function refreshedOutcome(base, generated, userRevised) {
+  if (!base || !userRevised) return base ?? null;
+  const next = String(generated?.statement ?? '').trim();
+  if (!next || next === String(base.statement ?? '').trim()) return base;
+  return { ...base, statement: next };
+}
+
 export function mergeGeneratedSpec(draft, generated, opts = {}) {
   const base = draft ?? { ...DRAFT_DEFAULT };
   const g    = generated ?? {};
@@ -811,7 +825,24 @@ export function mergeGeneratedSpec(draft, generated, opts = {}) {
     ...base,
     name:          base.name ?? g.name ?? null,
     description:   base.description ?? g.description ?? null,
-    outcome:       base.outcome ?? null,      // the contract is never rewritten here
+    // ── THE CONTRACT IS NEVER REWRITTEN HERE — BUT ITS SENTENCE MAY BE ────────
+    //
+    // `assertions` are the machine-checkable promise and stay untouched: a rebuild
+    // that could rewrite them could quietly promise less than the user agreed to.
+    //
+    // `statement` is the half a PERSON reads — it is what the panel renders as
+    // "THE DEAL" and "WHAT THIS MUST DELIVER". It is written once, early, and when
+    // the user later revises the workflow it silently describes the OLD behaviour.
+    // WITNESSED ON PROD, 2026-07-29: after the subject-keyword filter was removed at
+    // the user's request, the trigger correctly watched every unread email while the
+    // deal still read "When an email arrives containing pricing-related keywords".
+    // The workflow was right and the sentence describing it was wrong, which is the
+    // one kind of wrong this product exists to prevent.
+    //
+    // So on a USER REVISION only, and only when the rebuild produced a non-empty
+    // statement, the sentence is refreshed to match what was actually built. The
+    // assertions it is paired with are unchanged.
+    outcome:       refreshedOutcome(base.outcome ?? null, g.outcome, opts.userRevised === true),
     triggers,
     nodes,
     edges,
@@ -1887,10 +1918,35 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
         // catches a critic that rewords itself, which is what actually happened.
         const repeated   = (!!missingKey && missingKey === state._lastMissingKey)
                         || sameComplaint(verdict.missing, state._lastMissingText);
-        if (covered || repeated) {
+        // ── A FAST-TIER OPINION MAY NOT OVERRULE WHAT THE PERSON JUST SAID ─────
+        //
+        // A third way this verdict is already disproven, and the sharpest. This
+        // critic runs AFTER `scoreGap` has said the spec is complete, and its whole
+        // remit is to catch what the outcome cannot EXPRESS. When the user has just
+        // revised the plan in their own words, their words ARE the expression — so
+        // the one moment this check is least entitled to a whole-spec Opus rebuild
+        // is the moment right after a person told us what they wanted.
+        //
+        // WITNESSED ON PROD, 2026-07-29 (`build-platform-1785349506263`). Asked to
+        // stop matching pricing emails on subject keywords, the build did exactly
+        // that — and this critic then ordered a rebuild saying: "The email trigger
+        // filter does not match the intent — it should filter for emails containing
+        // the keywords 'pricing', 'plans', 'cost'… not all unread emails." It was
+        // arguing against an explicit instruction, using the pre-revision intent as
+        // its evidence. It LOST — a machine-ordered rebuild cannot overwrite the
+        // user's trigger (`mergeGeneratedSpec`) — but it still cost a full Opus pass
+        // and put a contradiction in the reasoning log.
+        //
+        // Deliberately scoped to a build the user has revised: elsewhere the critic
+        // is untouched. It still RUNS and still logs, so the signal is not lost —
+        // it simply may not spend a rebuild disagreeing with the person.
+        const contradictsUser = userRevisedThisBuild(state._regenReason);
+        if (covered || repeated || contradictsUser) {
           logEvent('converger.sufficiency_overruled', {
             ...who(cfg),
-            reason: covered ? 'contract_already_covers_it' : 'same_complaint_as_last_rebuild',
+            reason: covered ? 'contract_already_covers_it'
+                  : repeated ? 'same_complaint_as_last_rebuild'
+                  : 'user_revised_this_build',
             detail: String(verdict.missing).slice(0, 200),
           });
           return {

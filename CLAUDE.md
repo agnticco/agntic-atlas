@@ -1478,6 +1478,32 @@ fixed on the spot. Fold the relevant ones into whatever increment next touches t
   200 members it silently resolves nobody and "not found" is indistinguishable from a
   wrong address. Pinned by `tests/connectors/operator-slack-identity.test.js`
   (17, 8 mutations killed).
+- **Three things a person said, that the product then contradicted — FIXED
+  (2026-07-29).** None corrupted a spec; each made Atlas SAY something untrue of the
+  workflow it had just built. (a) **The critic argued with the user.** Asked to stop
+  matching pricing emails on subject keywords, the build complied — and the fast-tier
+  sufficiency critic ordered a whole-spec Opus rebuild: *"the trigger filter should
+  filter for the keywords 'pricing', 'plans', 'cost'… not all unread emails"*, reasoning
+  from the PRE-revision intent. It lost (a machine rebuild cannot overwrite the user's
+  trigger) but cost ~$0.70 and left a contradiction in the log. `userRevisedThisBuild`
+  is now a third way the verdict is disproven, beside `sufficiencyClaimAlreadyCovered`
+  and the repeat check — the critic still RUNS and still logs
+  (`reason: user_revised_this_build`), it simply may not spend a rebuild disagreeing
+  with the person. (b) **The promise went stale**: after that revision the trigger
+  correctly watched every unread email while the deal still read *"When an email
+  arrives containing pricing-related keywords"*. `refreshedOutcome` updates the
+  STATEMENT — the half a person reads — on a user revision only; **assertions are never
+  rewritten** (a rebuild that could rewrite them could quietly promise less). (c) **The
+  approval card never showed the draft**: the `human` node's schema calls `preview`
+  "what they actually see", the generator set it correctly to `{{draft_reply.output}}`,
+  and the card rendered a question reading *"review the draft reply below"* with nothing
+  below. Now rendered via `_plainPreview`, which resolves the reference to the step's
+  LABEL rather than printing a raw `{{…}}`. Pinned by
+  `tests/converger/user-has-the-last-word.test.js` (12) and
+  `tests/api/approval-card-shows-the-draft.test.js` (10); 10 mutations killed.
+  *Process note: the client edit shipped a `},` into a CLASS body and the page died
+  with `Unexpected token ','` — caught by loading `public/` on :8899 BEFORE deploying,
+  which is the rule written after v1.6.65 broke prod the other way round.*
 - **Approval-channel availability (`email`) is deployment-wide, not per-tenant** — fine today
   (one deployment, one mailer); revisit if tenants ever bring their own sending domain.
 

@@ -1,5 +1,13 @@
 [
   {
+    "version": "1.6.79",
+    "date": "2026-07-29",
+    "title": "The person building it has the last word",
+    "notes": [
+      "Three ways Atlas contradicted something the user had just said: the sufficiency critic ordered a rebuild arguing against an explicit instruction, the promise text kept describing the pre-revision behaviour, and the approval card never showed the approver what they would be shown. None corrupted a spec; each made Atlas say something untrue of the workflow it had built."
+    ]
+  },
+  {
     "version": "1.6.78",
     "date": "2026-07-29",
     "title": "A login email is not a Slack account",

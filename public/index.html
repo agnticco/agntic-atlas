@@ -7533,6 +7533,33 @@ class Component extends DCLogic {
     })[conn.toLowerCase()] || this._plainId(conn);
     return loc ? loc + ' on ' + name : name;
   }
+  // WHAT THE APPROVER SEES, SAID IN WORDS RATHER THAN IN A TEMPLATE.
+  //
+  // `preview` is almost always a reference to an earlier step's output —
+  // `{{draft_reply.output}}` — which is the right thing to store and the wrong
+  // thing to show a person. Resolved against the spec's own nodes so the card can
+  // say "the result of “Draft acknowledgement reply”" instead. A reference we
+  // cannot resolve is described generically rather than printed raw: an unexplained
+  // `{{…}}` on a customer card is the defect this whole family of helpers exists to
+  // remove. Literal preview text is shown as-is — that IS what they will see.
+  _plainPreview(v, nodes) {
+    const s = (v == null) ? '' : String(v).trim();
+    if (!s) return '';
+    var list = Array.isArray(nodes) ? nodes : [];
+    var name = function (id) {
+      var ref = list.find(function (n) { return n && n.id === id; });
+      var label = ref && String(ref.label || '').trim();
+      return label ? ('the result of “' + label + '”') : 'the result of the step before it';
+    };
+    // A reference and nothing else — the usual case.
+    var only = s.match(/^\{\{\s*([A-Za-z0-9_]+)\s*(?:\.\s*[A-Za-z0-9_]+\s*)?\}\}$/);
+    if (only) return name(only[1]);
+    // Prose WITH a reference in it: keep the words they will read and describe the
+    // reference in place, rather than throwing the sentence away.
+    return s.replace(/\{\{\s*([A-Za-z0-9_]+)\s*(?:\.\s*[A-Za-z0-9_]+\s*)?\}\}/g,
+      function (_, id) { return name(id); });
+  }
+
 
   // ── AN INSTRUCTION IS FOR THE MODEL; THE CARD IS FOR A PERSON ─────────────
   // Witnessed on prod, 2026-07-29, on the step-approval card — the product's
@@ -8101,6 +8128,17 @@ class Component extends DCLogic {
     } else if (ty === 'human') {
       if (!what) what = 'The workflow stops here and waits for a person to answer. Nothing after this runs until they do.';
       this._fact(facts, 'Asks', cfg.prompt);
+      // WHAT THE APPROVER ACTUALLY SEES.
+      //
+      // The `human` node's own schema calls `preview` "what they actually see", and
+      // this card never rendered it. Witnessed on prod 2026-07-29: an approval step
+      // whose question read "Please review the draft reply below" — and nothing
+      // below it. The draft WAS attached (`preview: "{{draft_reply.output}}"`), but
+      // the person confirming the step could not tell, and the whole point of this
+      // card is that nobody approves what they have not been shown. Same rule as the
+      // confirm-action card that used to list three identical "Add Airtable Column"
+      // rows.
+      this._fact(facts, 'They also see', this._plainPreview(cfg.preview, nodes));
       this._fact(facts, 'Who is asked', cfg.assignee);
       const chans = cfg.channels;
       this._fact(facts, 'Asked in', Array.isArray(chans) ? chans.map(c => (c && (c.type || c)) || c).filter(Boolean).map(c => this._plainId(c)).join(' · ') : (chans && this._plainId(chans)));
