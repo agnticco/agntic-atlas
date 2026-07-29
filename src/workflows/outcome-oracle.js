@@ -966,6 +966,38 @@ export function canonicalConnector(name) {
       }
     }
   }
+  // ── THE SAME NAME WITH NOTHING BETWEEN THE WORDS ──────────────────────────
+  //
+  // A model writes `gdrive`, `gsheets`, `googledrive` as readily as `google_drive`,
+  // and the split above only helps when there IS a separator. `gdocs` and `gcal`
+  // happened to be spelled out in the alias table; `gdrive` and `gsheets` were
+  // simply forgotten — and the cost of forgetting is not a cosmetic one.
+  //
+  // WITNESSED ON PROD, 2026-07-29. Asked for a weekly CRM digest in a Google Doc,
+  // Atlas spent three turns designing it, produced a plan, and then refused to
+  // build: *"I can't include gdrive — that connector is not connected, so I won't
+  // promise something the workflow can't actually do."* Google Workspace WAS
+  // connected. `assertableConnectors` never saw `gdrive`, so a workflow Atlas could
+  // run perfectly well was declined, and the user was told their working connector
+  // was missing.
+  //
+  // Handled as the two FAMILIES rather than the instances, because the instances are
+  // unbounded: a vendor prefix run together with the service name. Only reached when
+  // the name is otherwise unknown, so `gmail` — a key in its own right — is returned
+  // long before it could ever be shortened to `mail`.
+  // Order between the two prefixes is immaterial — the loop tries both, so
+  // `googledrive` resolves whether `google` or `g` is stripped first. A name with
+  // nothing after the prefix (`g`, `google`) needs no guard either: the remainder is
+  // empty, matches no key and no alias, and falls through to being returned as
+  // itself. Both were confirmed by mutation — neither could be made to fail.
+  for (const prefix of ['google', 'g']) {
+    if (!n.startsWith(prefix)) continue;
+    const rest = n.slice(prefix.length);
+    if (CONNECTOR_ALIASES[rest]) return rest;
+    for (const [key, aliases] of Object.entries(CONNECTOR_ALIASES)) {
+      if (aliases.includes(rest)) return key;
+    }
+  }
   return n;
 }
 

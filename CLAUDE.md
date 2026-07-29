@@ -1560,6 +1560,29 @@ fixed on the spot. Fold the relevant ones into whatever increment next touches t
   *Two of those mutations initially survived because the assertions they should have
   broken passed either way — the guard case (`"Monday AND Friday"`) had to be added
   before deleting the guard was detectable.*
+- **Atlas told a user their CONNECTED connector wasn't connected — FIXED
+  (2026-07-29).** Asked for a weekly CRM digest in a Google Doc, Atlas spent three
+  turns designing it (read the real table, caught that the base has no last-modified
+  field, agreed the contents), produced a plan, took the approval — then refused:
+  *"I can't include gdrive — that connector is not connected, so I won't promise
+  something the workflow can't actually do."* **Google Workspace WAS connected.** The
+  refusal instinct is right; the premise was false, so a workflow Atlas could run was
+  declined and the user was told a working connector was missing. Cause: one missing
+  word. `CONNECTOR_ALIASES` spells out `gdocs` and `gcal`; nobody wrote `gdrive` or
+  `gsheets`, and `canonicalConnector` only splits compounds on `_`/`-`/`.`, so
+  `google_drive` resolved and `gdrive` did not — the same one-word omission as the
+  missing `tasks` entry hours earlier, with the same cost. Fixed as the FAMILY (a
+  vendor prefix run together with the service name) rather than the instances, since
+  the spellings a model may choose are unbounded; `gmail` is returned as itself long
+  before it could be shortened to `mail`. Pinned by
+  `tests/workflows/connector-spellings.test.js` (29, 1 mutation killed — two further
+  mutations proved *unkillable* and the dead guard they exposed was removed rather
+  than left untested).
+- **A connector's availability is only checked at BUILD time (open).** Three turns of
+  design, a plan and an approval all preceded the "not connected" refusal above, and
+  `capabilities.connectors` was known from turn one. Even with the alias fixed, a
+  genuinely absent connector still wastes the whole interview. Same family as the
+  setup-action dead end: the user does everything asked and then hits a wall.
 - **Approval-channel availability (`email`) is deployment-wide, not per-tenant** — fine today
   (one deployment, one mailer); revisit if tenants ever bring their own sending domain.
 

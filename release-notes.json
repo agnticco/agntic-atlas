@@ -1,5 +1,13 @@
 [
   {
+    "version": "1.6.84",
+    "date": "2026-07-29",
+    "title": "A connected connector reported as not connected",
+    "notes": [
+      "Atlas designed a Google Doc digest over three turns, took the approval, then refused to build because 'gdrive is not connected' — Google Workspace was connected. CONNECTOR_ALIASES spelled out gdocs and gcal but not gdrive or gsheets. Fixed as a family: a vendor prefix run together with the service name."
+    ]
+  },
+  {
     "version": "1.6.83",
     "date": "2026-07-29",
     "title": "No templates on the last card before a real send",
