@@ -391,8 +391,10 @@ describe('the go-live review card and the live landing', () => {
   test('twelve steps wrap instead of being crushed into one row', () => {
     // Each card was `flex:1` in a nowrap row, so 12 steps got ~50px each and the
     // headings ran into one another.
+    // ONE renderer now: the live landing that shared this list was deleted on
+    // 2026-07-29, when publishing started going straight to the dashboard.
     const n = (HTML.match(/<sc-for list="\{\{ draftNodes \}\}"/g) || []).length;
-    assert.equal(n, 2, 'the review card and the live landing both render this list');
+    assert.equal(n, 1, 'the go-live review card is the only screen that draws this list');
     assert.equal((HTML.match(/flex:1 1 210px;min-width:210px/g) || []).length, n,
       'every card needs a width floor, or it collapses again on a long workflow');
     assert.ok(!/align-items:stretch">\s*<sc-for list="\{\{ draftNodes \}\}"/.test(HTML),

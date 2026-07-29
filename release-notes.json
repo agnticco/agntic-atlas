@@ -1,5 +1,13 @@
 [
   {
+    "version": "1.6.65",
+    "date": "2026-07-28",
+    "title": "Going live takes you to the dashboard",
+    "notes": [
+      "Publishing now opens the workflow's dashboard directly, and reopening Atlas takes you there too. The \"Workflow is live\" card in between is gone — it only had a button to the dashboard on it, and it came back every time you opened the app."
+    ]
+  },
+  {
     "version": "1.6.64",
     "date": "2026-07-28",
     "title": "Drag the workflow diagram with either mouse button",
