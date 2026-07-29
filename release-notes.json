@@ -1,5 +1,13 @@
 [
   {
+    "version": "1.6.51",
+    "date": "2026-07-28",
+    "title": "The step count matches the steps you approve",
+    "notes": [
+      "The workflow panel counted the steps without the trigger, so it could read 3 steps beside an approval queue asking you to confirm 4."
+    ]
+  },
+  {
     "version": "1.6.50",
     "date": "2026-07-28",
     "title": "Plainer English, your own clock, and honest offers",
