@@ -4920,16 +4920,26 @@ class Component extends DCLogic {
     this._chatGen = (this._chatGen || 0) + 1;
     if (this._chatAbort) { try { this._chatAbort.abort(); } catch (e) {} this._chatAbort = null; }
   }
-  async sendChat(t) {
+  /**
+   * @param {string} t
+   * @param {{hidden?: boolean}} [opts] — `hidden` sends the turn to the model
+   *   WITHOUT drawing it as something the person said. Used when Atlas needs to tell
+   *   itself what just happened (see `_runChatActions`). It is deliberately not a
+   *   user bubble: every message Atlas composes and the person merely clicks would
+   *   otherwise wear their avatar, and this file already records what that costs.
+   */
+  async sendChat(t, opts = {}) {
     if (!this.state.authToken) { this.setState({ msgs: [{ isAtlas: true, text: "Please sign in first.", hasReason: false }] }); return; }
     const self = this;
+    const hidden = opts.hidden === true;
     const gen = (this._chatGen = (this._chatGen || 0) + 1); // this turn's generation
     const ac = new AbortController();
     this._chatAbort = ac;
-    const msgs = [...this.state.msgs, { isOperator: true, text: t }];
+    const msgs = hidden ? this.state.msgs : [...this.state.msgs, { isOperator: true, text: t }];
     this.setState({ msgs, inputValue: "", thinking: true, mentionOpen: false });
     const history = msgs.map(m =>
       m.isOperator ? { role: "user", content: m.text } : (m.isAtlas ? { role: "assistant", content: m.text } : null)).filter(Boolean);
+    if (hidden) history.push({ role: "user", content: t });
     try {
       const resp = await fetch("/api/builder/chat", { method: "POST", headers: this._H(), body: JSON.stringify({ messages: history }), signal: ac.signal });
       if (self._chatGen !== gen) return; // superseded while awaiting the response
@@ -5138,6 +5148,24 @@ class Component extends DCLogic {
     }
     const allOk = results.length && results.every(x => x.ok);
     this.setState({ msgs: this.state.msgs.map(m => (m._id === msgId ? { ...m, status: allOk ? "done" : "error", results } : m)) });
+    // ── HAND THE CONVERSATION BACK ──────────────────────────────────────────
+    // Running the actions used to be the END of the exchange: the card ticked, and
+    // nothing else happened. Witnessed on prod 2026-07-29 — Atlas said "give me the
+    // go-ahead and I'll add them, THEN WE CAN BUILD THE FULL WORKFLOW", added three
+    // Airtable columns, printed "Done", and stopped. The person is left at a dead
+    // end after doing exactly what was asked, holding a promise of a next step that
+    // never comes. Typing "now build it" recovered it, but only someone who guessed
+    // that would get there.
+    //
+    // Sent hidden: this is Atlas telling itself what it just did, not the person
+    // saying it. Only on success — a failed action needs the person to decide what
+    // happens next, and carrying on regardless would talk past a real problem.
+    if (allOk) {
+      this.sendChat(
+        'Those actions have now run successfully: ' + results.map(r => r.label).join('; ')
+        + '. Carry on from here — do not ask the user to confirm them again.',
+        { hidden: true });
+    }
   }
   _dismissChatActions(msgId) {
     this.setState({ msgs: this.state.msgs.map(m => (m._id === msgId ? { ...m, status: "dismissed" } : m)) });

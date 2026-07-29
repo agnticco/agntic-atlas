@@ -24,6 +24,7 @@ import { logEvent, errFields } from '../utils/event-log.js';
 import { channelIdForCapability } from '../connectors/slack/index.js';
 import { webConnectionStatus } from '../connectors/web/index.js';
 import { availableApprovalChannels } from '../workflows/approval-channels.js';
+import { isOpaqueProviderId } from '../workflows/outcome-oracle.js';
 import { mailerConfigured } from '../utils/mailer.js';
 import { getGoogleAccessToken } from '../connectors/google/index.js';
 import { getSlackToken } from '../connectors/slack/oauth.js';
@@ -627,11 +628,43 @@ function isSideEffectingChatTool(cap) {
 }
 
 // Build the human-facing confirmation line for a pending action.
-function describePendingAction(cap, args = {}) {
-  const to = args.to || args.target || args.user || args.channel || args.email;
+/**
+ * The one line a person reads before approving an action Atlas wants to take.
+ *
+ * IT HAS TO SAY WHAT IS BEING ACTED ON. This looked only for a recipient and a
+ * subject, so anything that CREATES something — whose arguments are a name and a
+ * place, not a `to` — fell through to the bare capability name. Witnessed on prod
+ * 2026-07-29: asked to add three Airtable columns, the confirmation listed
+ *
+ *     Add Airtable Column
+ *     Add Airtable Column
+ *     Add Airtable Column
+ *
+ * three identical rows, with the column names sitting unused in `args`. That is the
+ * same rule the step-approval card exists for — never ask someone to approve
+ * something you have not shown them — and it is worse here, because this is the last
+ * gate before Atlas changes something in a system of record.
+ *
+ * Generic by argument shape, never by capability name: `name` is what a create takes,
+ * and the location keys below cover a table, a folder, a file or a calendar. An
+ * opaque provider id (`appXXXXXXXXXXXXXX`) is suppressed — it identifies nothing to
+ * a reader, and the same rule already governs the promise checker.
+ */
+export function describePendingAction(cap, args = {}) {
+  const base    = cap?.name || cap?.id || 'action';
+  const to      = args.to || args.target || args.user || args.channel || args.email;
+  const what    = args.name || args.fieldName || args.columnName;
   const subject = args.subject || args.title;
-  const base = cap?.name || cap?.id || 'action';
-  return [base, to ? `→ ${to}` : null, subject ? `“${subject}”` : null].filter(Boolean).join(' ');
+  const rawWhere = args.tableId || args.table || args.folder || args.path
+                || args.spreadsheetId || args.calendarId;
+  const where = rawWhere && !isOpaqueProviderId(rawWhere) ? rawWhere : null;
+  return [
+    base,
+    to ? `→ ${to}` : null,
+    what ? `“${what}”` : null,
+    subject && subject !== what ? `“${subject}”` : null,
+    where && where !== to ? `in ${where}` : null,
+  ].filter(Boolean).join(' ');
 }
 
 // When `pending` is supplied, side-effecting tool calls are CAPTURED into it and

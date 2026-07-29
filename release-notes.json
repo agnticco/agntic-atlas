@@ -1,5 +1,13 @@
 [
   {
+    "version": "1.6.71",
+    "date": "2026-07-29",
+    "title": "You can see what you're approving, and the conversation carries on",
+    "notes": [
+      "When Atlas asks you to confirm actions like adding columns, each row now names the column and the table instead of repeating the capability's name. And once they've run, Atlas picks the conversation back up instead of stopping."
+    ]
+  },
+  {
     "version": "1.6.70",
     "date": "2026-07-29",
     "title": "A workflow no longer sets itself up on every run",
