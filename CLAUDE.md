@@ -1427,6 +1427,41 @@ fixed on the spot. Fold the relevant ones into whatever increment next touches t
   a route that forgets to set it yields an empty detail and can never be gated, so a
   missing log label still cannot fail anyone's build. Pinned by
   `tests/converger/rebuild-only-for-a-new-complaint.test.js` (25, 10 mutations killed).
+- **A quiet path was scored as a broken promise — FIXED (2026-07-29).** Prod: a
+  pricing-enquiry workflow (Gmail → classify → branch → draft → Slack approval →
+  send, with a silent stop for anything else). 12 examples, 10 kept, and the two
+  labelled *"Non-pricing email — should not trigger workflow"* reported as BROKEN —
+  for sending nothing, which is exactly what they were for. `broke > 0 ⇒ 'failed'`,
+  so it could not go live. **The cause was evaluation order:** `!ran || broken ||
+  !contract.every(ok) ? 'broken' : (negative ? 'not_exercised' : …)` — a negative
+  that correctly delivers nothing fails its assertions BY DESIGN and short-circuited
+  to `broken`, never reaching the branch written for it, which was reachable only
+  when a negative HAD delivered. Two prior fixes (07-21, 07-23) both changed WHICH
+  samples count as negative; neither touched WHEN the negative test is consulted.
+  **It also punished the better design** — a trigger-filter workflow lets the
+  negative through, delivers, and lands on `not_exercised` correctly; only the
+  in-flow classifier with a silent stop failed. A crash or content sentinel is still
+  `broken` for a negative; only the CONTRACT result is excused, and `contractPassed`
+  is untouched (verify reads it — flipping it is the F17 regression through a new
+  door). Pinned by `tests/workflows/quiet-path-is-not-a-broken-promise.test.js`
+  (12, 4 mutations killed).
+- **The trigger was the one part of a spec its owner could not change — FIXED
+  (2026-07-29).** Asked to stop matching pricing emails on subject keywords, Atlas
+  re-planned and showed *"no subject-keyword filter — the AI reads every email and
+  decides"*; the built workflow kept `subject:(pricing|price|cost|plan|subscription)`
+  and so contained its own contradiction — a classifier instructed with *"How much
+  for the team package?"* as a positive, behind a trigger that would never pass that
+  email. Verify passed. The trigger is derived ONCE in `process`
+  (`if (!triggers.length)`) from the intent before the interview ends, and never
+  revisited; then TWO mechanisms pinned it — `mergeGeneratedSpec` prefers the draft's
+  triggers, and `buildGeneratePrompt` seeds the model with them under *"ALREADY
+  DERIVED … do not contradict them"*. Both exist to stop a MACHINE rebuild
+  overwriting what the user said, and neither distinguished the machine from the
+  person. Both are now relaxed **only** when `userRevisedThisBuild()` — a change
+  asked for at the plan, the walkthrough or ratify — and never for a
+  machine-ordered rebuild; a revision still cannot lose a trigger or promote an
+  unrunnable one. Pinned by `tests/converger/user-can-revise-the-trigger.test.js`
+  (13, 6 mutations killed).
 - **Approval-channel availability (`email`) is deployment-wide, not per-tenant** — fine today
   (one deployment, one mailer); revisit if tenants ever bring their own sending domain.
 

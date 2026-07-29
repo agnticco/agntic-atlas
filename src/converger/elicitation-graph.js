@@ -452,6 +452,26 @@ const USER_ORDERED_ROUTES = new Set([
 ]);
 
 /**
+ * DID A PERSON JUST ASK FOR SOMETHING TO CHANGE?
+ *
+ * A narrower question than the split above, which also excuses a plain first
+ * build. This one asks: has the user, in words, revised what they want since the
+ * draft was assembled? Only that unfreezes the trigger (see `mergeGeneratedSpec`)
+ * — a rebuild the MODEL ordered must still never overwrite what the user said,
+ * which is the rule that guard exists for.
+ *
+ * The plan surface reports a revision through the `first_build` route with its own
+ * wording, so the detail is consulted for that one case rather than adding a route
+ * and having to keep two spellings in step.
+ */
+const USER_REVISION_ROUTES = new Set(['user_change_request', 'ratify_feedback']);
+export function userRevisedThisBuild(reason) {
+  const route = String(reason?.route ?? '').trim();
+  if (USER_REVISION_ROUTES.has(route)) return true;
+  return route === 'first_build' && /with a change/i.test(String(reason?.detail ?? ''));
+}
+
+/**
  * The complaint a rebuild is meant to fix — or null when a person ordered it.
  *
  * `about` is the PROMISE the complaint concerns, normalised to the assertion target
@@ -745,10 +765,33 @@ export function mergeGeneratedSpec(draft, generated, opts = {}) {
   // could. That is not "prefer the model" — it never promotes the model over a
   // usable answer, and a draft with even one runnable trigger is left untouched.
   // It only refuses to throw a working trigger away for a broken one.
+  //
+  // ── AND ONE MORE: WHEN THE PERSON THEMSELVES ASKED FOR THE CHANGE ─────────
+  //
+  // The rule above protects the draft FROM THE MODEL. It was also, silently,
+  // protecting it from the USER — and the trigger is the one part of a spec a
+  // user can never otherwise revise, because `process` derives it ONCE
+  // (`if (!triggers.length)`) and never revisits it.
+  //
+  // WITNESSED ON PROD, 2026-07-29. Asked to stop matching pricing emails on
+  // subject keywords ("'Re: project plan for Q3' isn't a pricing question, and
+  // 'How much for the team package?' is one but wouldn't match"), Atlas re-planned,
+  // and the plan it showed said — verbatim — "no subject-keyword filter: the AI
+  // reads every email and decides". The BUILT workflow kept
+  // `is:unread subject:(pricing|price|cost|plan|subscription)`. It then contained
+  // its own contradiction: a classifier instructed with "How much for the team
+  // package?" as a positive example, behind a trigger that would never let that
+  // email through.
+  //
+  // Two mechanisms pinned it, which is why nothing the user said could move it:
+  // this merge preferred the draft, AND `buildGeneratePrompt` seeds the model with
+  // "ALREADY DERIVED (reuse these exact ids and triggers — do not contradict
+  // them)". Both are relaxed for a user revision, and only for a user revision.
   const draftHasRunnable = existingTriggers.some(isRunnableTrigger);
   const genHasRunnable   = genTriggers.some(isRunnableTrigger);
   const chosen = existingTriggers.length
-    ? ((!draftHasRunnable && genHasRunnable) ? genTriggers : existingTriggers)
+    ? (((!draftHasRunnable || opts.userRevised === true) && genHasRunnable)
+        ? genTriggers : existingTriggers)
     : genTriggers;
   // Fill a missing schedule zone AFTER the winner is picked, so it applies whichever
   // side won and no path can reach publish declaring nothing.
@@ -2510,6 +2553,9 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
     // in `converger.generate_pass` — a rebuild that silently never happened would be
     // invisible in exactly the log built to make rebuilds visible.
     const complaintNow = machineComplaint(state._regenReason);
+    // Read once, beside the complaint, so the prompt seeding and the merge can
+    // never disagree about whether this pass is a person's revision.
+    const userRevised  = userRevisedThisBuild(state._regenReason);
     if (state._generated && alreadyRebuiltFor(complaintNow, state._regenComplaints)) {
       logEvent('converger.regen_refused', {
         ...who(cfg),
@@ -2605,7 +2651,12 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
         intent:         state.intent,
         clarifications,
         outcome:        draft.outcome,
-        draft,
+        // A USER REVISION UNFREEZES THE TRIGGER. The prompt renders `draft.triggers`
+        // under "ALREADY DERIVED … do not contradict them", so seeding the stale one
+        // instructs the model to reproduce exactly what the person just asked to
+        // change. Withheld here for that case only; the real draft still carries it,
+        // so if the model emits no trigger the merge falls back to it unchanged.
+        draft:          userRevised ? { ...draft, triggers: [] } : draft,
         capabilities:   state.capabilities,
         setupResults:   state.setup_results,
         plan:           state._approvedPlan,   // the user-approved skeleton (increment 1)
@@ -2672,7 +2723,10 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
       };
     }
 
-    const merged = mergeGeneratedSpec(draft, generated, { userTimezone: state.capabilities?.userTimezone });
+    const merged = mergeGeneratedSpec(draft, generated, {
+      userTimezone: state.capabilities?.userTimezone,
+      userRevised,
+    });
 
     // ── A REBUILD THAT PRODUCED THE SAME SPEC HAS PROVEN IT CANNOT FIX IT ─────
     // This is the choke point: every regenerate path — a blocking gap, a

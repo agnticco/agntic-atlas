@@ -1,5 +1,13 @@
 [
   {
+    "version": "1.6.76",
+    "date": "2026-07-29",
+    "title": "A quiet path is not a broken promise",
+    "notes": [
+      "Two fixes from a pricing-approval build. Examples labelled 'should not trigger workflow' were scored as broken promises for sending nothing — evaluation order meant a negative never reached the branch written for it, and only the safer in-flow-classifier design failed. And a trigger the user asked to change could not be changed: derived once, then pinned both by the spec merge and by the generate prompt, so the approved plan and the built workflow disagreed."
+    ]
+  },
+  {
     "version": "1.6.75",
     "date": "2026-07-29",
     "title": "A promise that names the product names no address",

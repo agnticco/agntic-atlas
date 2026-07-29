@@ -1923,10 +1923,42 @@ export function evaluateExampleRun(spec, example, runResult) {
     || (Object.prototype.hasOwnProperty.call(example, 'expect') && example.expect === null)
   );
 
-  const verdict = !ran || broken || !contract.every(c => c.ok)
+  // ── ORDER MATTERS, AND FOR TWO YEARS IT WAS WRONG ────────────────────────
+  //
+  // `negative` used to be consulted only AFTER `!contract.every(c => c.ok)` had
+  // already resolved to 'broken'. For a negative that is backwards: a
+  // "should not happen" example that correctly delivers NOTHING fails every
+  // delivery assertion by design, short-circuited to 'broken', and never reached
+  // the branch written for it. The branch was effectively reachable only when a
+  // negative had DELIVERED — the opposite case.
+  //
+  // WITNESSED ON PROD, 2026-07-29. A pricing-enquiry workflow with an in-flow
+  // classifier and a silent stop: 12 examples, 10 kept, and the two labelled
+  // "Non-pricing email — should not trigger workflow" reported as broken promises
+  // for staying quiet. `broke > 0` ⇒ 'failed' (run-summary.js), so the workflow
+  // could not go live.
+  //
+  // WORSE, IT PUNISHED THE BETTER DESIGN. A workflow that filters at the TRIGGER
+  // lets the negative sample through, delivers, passes its contract, and lands on
+  // 'not_exercised' correctly. A workflow that classifies IN-FLOW and stops — the
+  // safer shape, and the one a person asks for — was the only one that failed.
+  //
+  // A crash is still a crash: `!ran` and a content error stay 'broken' for a
+  // negative too. Only the CONTRACT result is excused, because for a negative an
+  // unsatisfied contract is the expected outcome, not a defect. This cannot
+  // certify anything on its own — 'not_exercised' neither certifies nor blocks,
+  // so the positive examples must still carry the run to 'kept'.
+  //
+  // `contractPassed` is deliberately untouched (see above): the converger's verify
+  // reads it, and this is a fix to what the PERSON is told, not to what drives a
+  // rebuild.
+  const verdict = !ran || broken
     ? 'broken'
-    : (negative ? 'not_exercised'
-      : (enforced > 0 && !contractIncomplete ? 'kept' : 'not_exercised'));
+    : negative
+      ? 'not_exercised'
+      : !contract.every(c => c.ok)
+        ? 'broken'
+        : (enforced > 0 && !contractIncomplete ? 'kept' : 'not_exercised');
 
   return {
     exampleId: example?.id ?? null,
