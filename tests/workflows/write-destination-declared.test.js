@@ -25,10 +25,18 @@
  * Hence: the capability DECLARES where it writes, and the tests below are written so
  * that re-deriving the answer from names cannot make them pass.
  *
- * TWO PLACES DECIDED THIS, AND THEY HAD DRIFTED. `nodeEffect` answers "can this node
- * satisfy the promise" at build time; `normalizeDelivery` builds the RECEIPT that the
- * runtime check matches and whose first entry gets quoted back to the user. Fixing
- * one alone leaves the other wrong, so both are pinned here.
+ * THREE PLACES DECIDED THIS, AND THEY HAD DRIFTED. `nodeEffect` computes the effect;
+ * `normalizeDelivery` builds the RECEIPT the runtime check matches, whose first entry
+ * gets quoted back to the user; and `satisfiesAssertion`/`checkOutcome` answer "does
+ * any step keep this promise" at BUILD time — the check that raises
+ * UNSATISFIED_ASSERTION.
+ *
+ * The first version of this file pinned two of the three, and the fix broke the
+ * third: declaring `effect: 'write'` routes a capability through
+ * `declaredWriteEffect`, which took its connector from the capability ('google')
+ * rather than from the id ('tasks'), so the destination was finally right and the
+ * promise failed anyway on the connector. The full suite passed. It was caught only
+ * by re-running the real build on prod. All three are pinned now.
  */
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
@@ -38,7 +46,7 @@ import { registerGoogleChannels, tasksCreate } from '../../src/connectors/google
 import { registerAirtableChannels } from '../../src/connectors/airtable/index.js';
 import {
   nodeEffect, normalizeDelivery, checkAssertionAtRuntime, deliveryTarget,
-  setCapabilityCatalog,
+  satisfiesAssertion, checkOutcome, setCapabilityCatalog,
 } from '../../src/workflows/outcome-oracle.js';
 
 /** The real shipped registry — not a fixture. */
@@ -82,6 +90,59 @@ describe('the prod case: a task goes to a LIST, not to its own title', () => {
     const r = checkAssertionAtRuntime(PROMISE, [receiptFor(PROD_NODE)]);
     assert.doesNotMatch(String(r.reason ?? ''), /\{\{.*\}\}/,
       'an unresolved template must never be quoted back as a destination');
+  });
+});
+
+describe('THE THIRD DECIDER — the one this test file originally missed', () => {
+  /**
+   * `satisfiesAssertion` / `checkOutcome` answer "does any step keep this promise?"
+   * at BUILD time, and they are what raise UNSATISFIED_ASSERTION. The first version
+   * of this file covered `nodeEffect` and the runtime receipt and not this — so
+   * declaring `effect: 'write'` on `tasks_create`, which routes it through
+   * `declaredWriteEffect`, swapped its connector from the sub-service name ('tasks',
+   * derived from the id) to the credential-owning connector ('google', declared on
+   * the capability). The destination was finally right and the promise still failed,
+   * for a new reason. The whole suite passed. Only re-running the real build on prod
+   * showed it.
+   *
+   * Every shipped write is checked against a promise written the way an outcome
+   * writes one, so a declaration cannot again fix one decider and break another.
+   */
+  const CASES = [
+    ['tasks_create',           { title: '{{x.subject}}' },                       'record_exists',   'tasks:My Tasks'],
+    ['gmail_send',             { to: 'sam@acme.com', subject: 's', body: 'b' },  'message_sent',    'gmail:sam@acme.com'],
+    ['docs_create',            { title: 'Weekly report', content: 'c' },         'document_exists', 'docs:Weekly report'],
+    ['sheets_append',          { spreadsheetId: 'Leads', range: 'A:C' },         'record_exists',   'sheets:Leads'],
+    ['calendar_create_event',  { title: 'Standup', start: 's', end: 'e' },       'record_exists',   'calendar:Standup'],
+    ['drive_create_folder',    { name: 'Invoices' },                             'document_exists', 'drive:Invoices'],
+    ['airtable_create_record', { baseId: 'appX', tableId: 'Leads', fields: {} }, 'record_exists',   'airtable:Leads'],
+  ];
+
+  for (const [action, config, kind, target] of CASES) {
+    test(`${action} keeps a promise written as "${target}"`, () => {
+      realCatalog();
+      const node = { id: 'n1', type: 'connector-action', config: { action, ...config } };
+      assert.equal(satisfiesAssertion({ id: 'a1', kind, target }, node), true);
+      assert.equal(checkOutcome({ assertions: [{ id: 'a1', kind, target }] }, [node]).unsatisfied.length, 0,
+        'this is the check that raises UNSATISFIED_ASSERTION');
+    });
+  }
+
+  test('the sub-service name and the connector name BOTH work', () => {
+    // 'google' is what the capability declares; 'tasks' is what an outcome says.
+    // Losing either one fails a correct workflow.
+    realCatalog();
+    for (const c of ['tasks', 'google']) assert.ok(nodeEffect(PROD_NODE).connectors.has(c), c);
+  });
+
+  test('and a wrong destination is still refused here', () => {
+    realCatalog();
+    assert.equal(satisfiesAssertion({ id: 'a1', kind: 'record_exists', target: 'tasks:Work' }, PROD_NODE), false);
+  });
+
+  test('a promise to a connector this step does not touch is refused', () => {
+    realCatalog();
+    assert.equal(satisfiesAssertion({ id: 'a1', kind: 'record_exists', target: 'airtable:Leads' }, PROD_NODE), false);
   });
 });
 

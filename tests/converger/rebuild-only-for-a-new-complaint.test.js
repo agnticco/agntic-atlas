@@ -185,6 +185,16 @@ describe('the gate is wired at the choke point, not per route', () => {
       'placed at any single route, it would guard only that route — the original defect');
   });
 
+  test('the refusal log says WHAT was refused, not "[object Object]"', () => {
+    // A complaint is an object now. The first live firing of this gate logged
+    // `"detail":"[object Object]"` — at the one moment the log existed to explain
+    // itself.
+    const gate = generate.slice(generate.indexOf('alreadyRebuiltFor(complaintNow'));
+    assert.match(gate.slice(0, 1400), /about:\s+complaintNow\.about/);
+    assert.doesNotMatch(gate.slice(0, 1400), /String\(complaintNow\)/,
+      'stringifying the complaint object is the defect');
+  });
+
   test('a refused pass is still logged', () => {
     // A rebuild that silently never happened would be invisible in the very log
     // built to make rebuilds visible.

@@ -2514,7 +2514,11 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
       logEvent('converger.regen_refused', {
         ...who(cfg),
         route:  state._regenReason?.route ?? 'unattributed',
-        detail: String(complaintNow).slice(0, 300),
+        // A complaint is `{about, text}`. Stringifying the object logged
+        // "[object Object]" — witnessed on the first live firing of this gate, which
+        // is exactly the moment the log needed to say what had been refused.
+        about:  complaintNow.about,
+        detail: String(complaintNow.text ?? '').slice(0, 300),
         seen:   (state._regenComplaints ?? []).length,
         step:   state.step,
       });
@@ -2538,7 +2542,9 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
           ? state._verifyReport
           : { ran: false, passed: 0, total: 0, gaveUp: true,
               note: 'a rebuild ran into the same problem it was meant to fix, so I stopped — review it before going live' },
-        confirmationLog: [{ step: state.step, type: 'generate_refused', complaint: String(complaintNow).slice(0, 300) }],
+        confirmationLog: [{ step: state.step, type: 'generate_refused',
+                            about: complaintNow.about,
+                            complaint: String(complaintNow.text ?? '').slice(0, 300) }],
         step: state.step + 1,
         _regenReason: null,
       };

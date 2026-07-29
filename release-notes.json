@@ -1,5 +1,13 @@
 [
   {
+    "version": "1.6.73",
+    "date": "2026-07-29",
+    "title": "Keep the sub-service name when a write is declared",
+    "notes": [
+      "Declaring effect: write routed Google capabilities through declaredWriteEffect, which took the connector from the capability ('google') instead of the id ('tasks') — so a promise written as 'tasks:My Tasks' failed on the connector even though the destination was now correct. Both names are kept. Caught by re-running the real build on prod; the third decider had no test."
+    ]
+  },
+  {
     "version": "1.6.72",
     "date": "2026-07-29",
     "title": "Declare where a write lands; one gate on rebuilds",

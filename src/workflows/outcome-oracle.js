@@ -317,9 +317,25 @@ function declaredWriteEffect(id, cap, config) {
   const locators = (keys && !declared.length && typeof cap?.defaultLocator === 'string' && cap.defaultLocator.trim())
     ? [cap.defaultLocator.trim()]
     : declared;
+  // ── WHAT A PERSON CALLS THE PLACE, AND WHAT THE CONNECTOR CALLS ITSELF ────
+  //
+  // A contract is written in the words the OUTCOME uses — "tasks:My Tasks",
+  // "docs:Weekly report" — which are SUB-SERVICE names. `cap.connector` is the
+  // credential-owning connector, and for everything Google that is the single
+  // value 'google'. Taking only the declared one is how declaring `effect: 'write'`
+  // on `tasks_create` turned a locator bug into a CONNECTOR bug: the destination
+  // was finally right, and the assertion failed anyway because "google" is not
+  // "tasks". (Caught only by re-running the real build on prod — the unit tests
+  // covered the runtime check and the receipt, and not this, the third decider.)
+  //
+  // Both names are legitimate; neither is a guess. The union is what the id-prefix
+  // path produced before anything was declared, so declaring can only ever ADD a
+  // name here, never remove one.
+  const connectors = aliasesFor(connector);
+  for (const alias of aliasesFor(String(id ?? '').split('_')[0])) connectors.add(alias);
   return {
     kind,
-    connectors: aliasesFor(connector),
+    connectors,
     locators,
     fields:     readFieldNames(config?.fields),
   };
