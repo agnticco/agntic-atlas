@@ -226,6 +226,61 @@ describe('the name a PERSON would write for the destination', () => {
       'an Airtable promise must not be kept by a Google Task');
   });
 
+  /**
+   * THE PHRASING CHANGES EVERY BUILD. Three consecutive prod builds of one correct
+   * workflow produced three different targets, and each needed its own fix:
+   *
+   *     tasks:My Tasks          the list
+   *     google_tasks:My Tasks   the product, then the list
+   *     tasks:Google Tasks      the product, twice
+   *
+   * The third names no destination — "a task in Google Tasks" is the connector said
+   * twice, and requiring it to match "My Tasks" makes the model guess a provider
+   * default nobody in the conversation ever said. Chasing phrasings one at a time is
+   * unwinnable, so a locator that only repeats the product is treated as no address
+   * at all — the judgement this file already makes for templates, opaque ids and the
+   * inbox.
+   */
+  const PHRASINGS = ['tasks:My Tasks', 'google_tasks:My Tasks', 'tasks:Google Tasks',
+                     'google_tasks:Google Tasks', 'gtasks:Google Tasks', 'tasks:tasks'];
+
+  for (const target of PHRASINGS) {
+    test(`"${target}" is kept — build AND run`, () => {
+      realCatalog();
+      const a = { id: 'a1', kind: 'record_exists', target };
+      assert.equal(satisfiesAssertion(a, PROD_NODE), true, 'build-time');
+      assert.equal(checkAssertionAtRuntime(a, [receiptFor(PROD_NODE)]).ok, true, 'runtime');
+    });
+  }
+
+  test('"My Tasks" is a LIST NAME, not a restatement of the product', () => {
+    // The sharpest edge of the rule, and one a first draft got wrong: excusing
+    // "my<connector>" as well swallowed the real default list name, and with it the
+    // check that a promise about a DIFFERENT list must fail.
+    realCatalog();
+    const work = { ...PROD_NODE, config: { ...PROD_NODE.config, tasklistId: 'Work' } };
+    assert.equal(satisfiesAssertion({ id: 'a1', kind: 'record_exists', target: 'tasks:My Tasks' }, work), false,
+      'a task written to Work does not keep a promise about My Tasks');
+  });
+
+  test('a locator naming a REAL destination is still compared exactly', () => {
+    // The whole risk of the rule above: if "any locator that looks product-ish"
+    // passed, a promise about the wrong list would pass too.
+    realCatalog();
+    assert.equal(satisfiesAssertion({ id: 'a1', kind: 'record_exists', target: 'tasks:Work' }, PROD_NODE), false);
+    const table = { type: 'connector-action',
+                    config: { action: 'airtable_create_record', baseId: 'appX', tableId: 'Leads', fields: {} } };
+    assert.equal(satisfiesAssertion({ id: 'a1', kind: 'record_exists', target: 'airtable:Leads' }, table), true);
+    assert.equal(satisfiesAssertion({ id: 'a1', kind: 'record_exists', target: 'airtable:Invoices' }, table), false);
+  });
+
+  test('the product name does not excuse the WRONG product', () => {
+    // "airtable:Google Tasks" is a promise about Airtable. The locator being a
+    // product name must not make the connector check moot.
+    realCatalog();
+    assert.equal(satisfiesAssertion({ id: 'a1', kind: 'record_exists', target: 'airtable:Google Tasks' }, PROD_NODE), false);
+  });
+
   test('the two halves of the same question now agree', () => {
     // Build-time and runtime, on one target, must not disagree — that disagreement
     // IS the defect, not either answer on its own.

@@ -1,5 +1,13 @@
 [
   {
+    "version": "1.6.75",
+    "date": "2026-07-29",
+    "title": "A promise that names the product names no address",
+    "notes": [
+      "Three consecutive prod builds of one correct workflow phrased the same promise three ways — tasks:My Tasks, google_tasks:My Tasks, tasks:Google Tasks — and each needed its own fix. The third names no destination: 'a task in Google Tasks' is the connector said twice. A locator that only repeats the product is now treated as no address, the same judgement already made for templates, opaque provider ids and the inbox."
+    ]
+  },
+  {
     "version": "1.6.74",
     "date": "2026-07-29",
     "title": "Google Tasks was missing from the connector vocabulary",

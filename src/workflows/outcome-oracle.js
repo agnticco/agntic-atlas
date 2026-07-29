@@ -545,6 +545,49 @@ function isTemplate(s) {
 }
 
 /**
+ * A LOCATOR THAT NAMES THE PRODUCT IS NOT AN ADDRESS.
+ *
+ * The assertion target is prose a model writes, and it phrases the same promise a
+ * different way on every build. Observed on three consecutive prod builds of ONE
+ * workflow, all correct, none satisfiable:
+ *
+ *     tasks:My Tasks          the list
+ *     google_tasks:My Tasks   the product, then the list
+ *     tasks:Google Tasks      the product, twice
+ *
+ * The third names no destination at all — "a task in Google Tasks" is the connector
+ * repeated, and there is no second Google Tasks to mis-route to. Requiring it to
+ * match the list name means the model must guess a provider default ("My Tasks")
+ * that nobody in the conversation ever said.
+ *
+ * So: when the locator is just the connector's own name, the promise is about the
+ * CONNECTOR, and any delivery there keeps it. This is the same judgement made three
+ * times already in this file — a template locator, an opaque provider id, the inbox
+ * — "undecidable / not an address here, therefore not a mismatch". It does not
+ * weaken the check: kind, connector and fields are still enforced, a promise naming
+ * a REAL destination is still compared exactly, and a workflow that promises Google
+ * Tasks and delivers nothing there still fails.
+ *
+ * Chasing the phrasings one at a time is unwinnable; this removes a whole class.
+ */
+function locatorIsJustTheConnector(locator, connector) {
+  const flat = (s) => normLocator(s).replace(/[\s_\-]+/g, '');
+  const l = flat(locator);
+  if (!l) return true;
+  // DELIBERATELY EXACT, NOT FUZZY. An earlier draft also excused anything of the
+  // form "my<connector>" — which swallowed "My Tasks", the REAL default list name,
+  // and with it the check that a promise about a different list must fail. The
+  // vendor prefix is the only variation allowed, because it is the only one that
+  // adds no information: "Google Tasks" says nothing "tasks" had not already said,
+  // while "My Tasks" names a specific list.
+  for (const n of new Set([connector, canonicalConnector(connector)])) {
+    const c = flat(n);
+    if (c && (l === c || l === `google${c}` || c === `google${l}`)) return true;
+  }
+  return false;
+}
+
+/**
  * An OPAQUE PROVIDER ID — `tblbQ0PmkA2o1P17Q` — as opposed to a name a person
  * wrote. Whether it names the same table as `Table 1` is a question only a network
  * call to the provider can answer, so string comparison must not answer it, and
@@ -696,6 +739,8 @@ export function satisfiesAssertion(assertion, node) {
   // For a locator-free connector (the inbox), the locator is a label, not an
   // address — any delivery to the connector satisfies the assertion.
   if (isLocatorFree(connector)) return true;
+  // …and likewise when the locator merely repeats the product name.
+  if (locatorIsJustTheConnector(locator, connector)) return true;
 
   // AN OPAQUE PROVIDER ID IS UNDECIDABLE HERE, NOT A MISMATCH (2026-07-19).
   //
@@ -1173,7 +1218,10 @@ export function checkAssertionAtRuntime(assertion, deliveries = []) {
     // No locator on the assertion, a template locator (resolved at run time), or a
     // locator-free connector (the inbox — its "locator" is a label, not an address)
     // ⇒ "some delivery to this connector" is enough.
-    if (!wantLocator || isTemplate(locator) || locatorFree) {
+    // The build-time half applies `locatorIsJustTheConnector` too; leaving it out
+    // here is how these two came to disagree about `google_tasks` in the first place.
+    if (!wantLocator || isTemplate(locator) || locatorFree
+        || locatorIsJustTheConnector(locator, connector)) {
       return { ok: true, detail: describeDelivery(d) };
     }
     // The delivery reached one or more destinations (its resolved value AND its
