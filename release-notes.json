@@ -1,5 +1,13 @@
 [
   {
+    "version": "1.6.68",
+    "date": "2026-07-28",
+    "title": "Atlas knows how to build per-item work",
+    "notes": [
+      "Asking Atlas to go through each of something and act on some of them — sort each email, flag each overdue row — used to send it round in circles: it knew loops can't contain routing, concluded per-item work was impossible, and judged the whole batch instead. It now knows the shape that works."
+    ]
+  },
+  {
     "version": "1.6.67",
     "date": "2026-07-28",
     "title": "The workflow diagram sits under the figures",

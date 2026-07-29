@@ -291,6 +291,28 @@ ${stepSummary(capabilities)}
   • {{item}} / {{index}} are bound ONLY inside a loop. Anywhere else they are rejected (BAD_TEMPLATE_REF).
   • NO branch, NO human, NO decision and NO nested foreach inside a loop — a loop has no edges, so nothing inside it can route on an answer. Decide and route OUTSIDE the loop, on a value the loop produced.
   • A write inside a loop is N writes per fire — the riskiest shape there is. Give it idempotency: { "key": "{{item}}", "on_conflict": "skip" }, or a re-fired trigger duplicates every row.
+  THE SHAPE FOR "GO THROUGH EACH X AND ACT ON SOME OF THEM" — build it this way.
+  This is the most common per-item ask there is ("sort each email and post the ones
+  needing a reply", "read every row and flag the overdue ones"), and the rules above
+  rule out the obvious build, so here is the one that works:
+    1. a step that produces the list.                          e.g. a Gmail search
+    2. foreach over it. INSIDE, do the per-item judgement and   e.g. llm mode:"classify",
+       emit the item together with its label. This is where       or a freeform llm that
+       "each" actually happens, and it needs NO branch.           returns the item + label
+    3. AFTER the loop, ONE step reads {{loopId.output}} and     e.g. llm mode:"classify"
+       produces a SINGLE routing value for the whole batch        categories: ["some","none"]
+       ("some need a reply" / "none do").
+    4. branch on THAT step — with its mandatory catch-all.
+    5. the acting step ALSO reads {{loopId.output}} and uses only the items whose
+       label matches.
+  A loop's output is { count, total, truncated, skipped, results }, where "results"
+  holds the per-item outputs in order. Every step after the loop can therefore see
+  what each item was judged to be — which is exactly what makes steps 3 and 5 work
+  without a branch inside the loop.
+  DO NOT fall back to judging the whole batch in ONE step because branches are
+  banned inside loops. That conclusion is wrong: the loop does the per-item work and
+  the branch routes once, afterwards, on what the loop found. A single batch step
+  cannot sort items individually, and it will be sent back for rebuilding.
 - branch: Route the workflow down exactly ONE path, based on a value an earlier step produced. config: { on: "<stepId>.output", cases: [ { when: "<value>", to: "<stepId>" }, … , { when: "*", to: "<stepId>" } ] }.
   HARD RULES, all enforced at publish time:
   • The catch-all { "when": "*" } is MANDATORY. Without it an unexpected value matches nothing and the workflow SILENTLY does nothing.
