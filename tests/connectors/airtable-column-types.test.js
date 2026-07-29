@@ -171,6 +171,67 @@ describe('what a person reads when it still cannot be done', () => {
   });
 });
 
+describe('the table can be NAMED, not just identified', () => {
+  /**
+   * Airtable's RECORD endpoints take a table name or id; the SCHEMA endpoint takes
+   * only the `tbl…` id. Every other capability here understands a name, and a name
+   * is what a person types — so a caller who said "Companies" got NOT_FOUND from
+   * the metadata API. Witnessed on prod 2026-07-29 retrying a column the user had
+   * asked for: the first attempt carried the id and reached the options error, the
+   * retry carried the name and failed differently.
+   */
+  const pathFor = async (ref) => {
+    const seen = {};
+    const api = async (method, p, opts) => {
+      if (method === 'GET') return { tables: [{ ...TABLE, id: 'tbliVdMFZz9UIb71z' }] };
+      seen.path = p;
+      return { id: 'fldNEW', name: opts.body.name, type: opts.body.type };
+    };
+    await airtableCreateField(api, { baseId: 'appX', tableId: ref, name: 'Intro Email Sent', type: 'checkbox' });
+    return seen.path;
+  };
+
+  test('a table NAME is resolved to its id before the write', async () => {
+    assert.match(await pathFor('Companies'), /tables\/tbliVdMFZz9UIb71z\/fields/);
+  });
+
+  test('a table id still works', async () => {
+    assert.match(await pathFor('tbliVdMFZz9UIb71z'), /tables\/tbliVdMFZz9UIb71z\/fields/);
+  });
+
+  test('matching is case-insensitive, as Airtable is', async () => {
+    assert.match(await pathFor('companies'), /tables\/tbliVdMFZz9UIb71z\/fields/);
+  });
+
+  test('an unreadable schema falls through with what the caller gave', async () => {
+    // A permissions or network problem must not become a refusal to write — the
+    // write itself is then the thing that decides, exactly as before.
+    const seen = {};
+    const api = async (method, p, opts) => {
+      if (method === 'GET') throw new Error('schema read failed');
+      seen.path = p;
+      return { id: 'f', name: opts.body.name, type: opts.body.type };
+    };
+    await airtableCreateField(api, { baseId: 'appX', tableId: 'Companies', name: 'X', type: 'checkbox' });
+    assert.match(seen.path, /tables\/Companies\/fields/);
+  });
+
+  test('a table that genuinely does not exist is said in words', async () => {
+    const api = async (method) => {
+      if (method === 'GET') return { tables: [] };
+      throw new Error('airtable POST /meta/bases/appX/tables/Ghost/fields failed: NOT_FOUND');
+    };
+    await assert.rejects(
+      () => airtableCreateField(api, { baseId: 'appX', tableId: 'Ghost', name: 'X', type: 'checkbox' }),
+      (e) => {
+        assert.match(e.message, /couldn't find a table called "Ghost"/);
+        assert.doesNotMatch(e.message, /NOT_FOUND|POST|\/meta\/bases/);
+        assert.match(String(e.cause?.message ?? ''), /NOT_FOUND/);
+        return true;
+      });
+  });
+});
+
 describe('none of this disturbed the idempotency guard', () => {
   test('a column that already exists is still a no-op', async () => {
     const api = recordingApi();

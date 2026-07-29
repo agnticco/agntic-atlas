@@ -1,5 +1,13 @@
 [
   {
+    "version": "1.6.82",
+    "date": "2026-07-29",
+    "title": "Add a column to a table you named, not just one you identified",
+    "notes": [
+      "The Airtable schema endpoint accepts only the tbl-id, while every other capability here and every person uses the table name — so a retry carrying 'Companies' got NOT_FOUND. Resolved from the schema read the idempotency check already does, and the failure is said in words."
+    ]
+  },
+  {
     "version": "1.6.81",
     "date": "2026-07-29",
     "title": "The confirm button went dead after a reload",

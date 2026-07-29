@@ -1521,7 +1521,13 @@ fixed on the spot. Fold the relevant ones into whatever increment next touches t
   validator were being rendered verbatim on a chat card; only the schema/options
   family is reworded (auth and rate-limit errors pass through untouched, and the
   original is kept as `cause`). Pinned by
-  `tests/connectors/airtable-column-types.test.js` (23, 6 mutations killed).
+  `tests/connectors/airtable-column-types.test.js` (28, 9 mutations killed). **A second
+  defect on the same call, found on the retry:** the schema endpoint
+  (`/meta/bases/{base}/tables/{table}/fields`) accepts ONLY the `tbl…` id, while every
+  other Airtable capability here — and every person — uses the table NAME, so a retry
+  that carried "Companies" got `NOT_FOUND`. The name is now resolved to its id from the
+  schema read the idempotency check already performs, and an unreadable schema still
+  falls through to the write rather than refusing.
 - **The confirm button went dead, silently and for good — FIXED (2026-07-29).**
   A column add failed, the page was reloaded, Atlas re-offered the same action, and
   "Confirm & run" did NOTHING: no request, no console error, no change on screen, no

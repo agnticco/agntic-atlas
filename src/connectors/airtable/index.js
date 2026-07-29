@@ -256,8 +256,18 @@ export async function airtableCreateField(api, { baseId, tableId, name, type, de
   // "make sure this column exists" is what the caller actually means. Returns the
   // existing column with `created: false` so a caller can still tell the
   // difference.
-  const already = await findExistingField(api, baseId, tableId, fieldName);
-  if (already) return { ...already, baseId, tableId, created: false };
+  // One schema read serves both: "does the column already exist?" and "which table
+  // id does this name refer to?" — the schema endpoint below will not take a name.
+  const table = await resolveTable(api, baseId, tableId);
+  if (table) {
+    const wanted = fieldName.toLowerCase();
+    const hit = (table.fields ?? []).find(x => String(x.name ?? '').trim().toLowerCase() === wanted);
+    if (hit) return { id: hit.id, name: hit.name, type: hit.type, baseId, tableId, created: false };
+  }
+  // Unresolved means we could not read the schema (a permissions or network
+  // problem). Fall through with what the caller gave us rather than refusing —
+  // the write is then the thing that decides, exactly as before.
+  const tableRef = table?.id ?? tableId;
 
   const fieldType = type || 'singleLineText';
   const body = { name: fieldName, type: fieldType };
@@ -282,7 +292,7 @@ export async function airtableCreateField(api, { baseId, tableId, name, type, de
   // The api helper takes an OPTIONS object ({ body, params }), not a bare body —
   // passing the payload directly sends no body at all and Airtable rejects it.
   try {
-    const data = await api('POST', `/meta/bases/${baseId}/tables/${encodeURIComponent(tableId)}/fields`, { body });
+    const data = await api('POST', `/meta/bases/${baseId}/tables/${encodeURIComponent(tableRef)}/fields`, { body });
     return { id: data.id, name: data.name, type: data.type, baseId, tableId, created: true };
   } catch (err) {
     // Two callers racing, or a column added between the check and the write. The
@@ -302,6 +312,13 @@ export async function airtableCreateField(api, { baseId, tableId, name, type, de
     // reworded; every other failure (NOT_AUTHORIZED, rate limits, network) passes
     // through untouched, because a rewritten auth error sends people to the wrong
     // place.
+    if (/NOT_FOUND|TABLE_NOT_FOUND/i.test(String(err?.message ?? ''))) {
+      const e = new Error(
+        `I couldn't find a table called "${tableId}" in that Airtable base, so there was nowhere to add `
+        + `"${fieldName}". Check the table name and I'll try again.`);
+      e.cause = err;
+      throw e;
+    }
     if (/failed schema validation|invalid options|unknown field type/i.test(String(err?.message ?? ''))) {
       const e = new Error(
         `Airtable wouldn't accept a "${fieldType}" column called "${fieldName}" — it needs more detail about how `
@@ -315,18 +332,36 @@ export async function airtableCreateField(api, { baseId, tableId, name, type, de
 }
 
 /** The named column on that table, or null. Case-insensitive: Airtable's are. */
-async function findExistingField(api, baseId, tableId, fieldName) {
+/**
+ * THE TABLE, WHETHER YOU NAMED IT OR IDENTIFIED IT.
+ *
+ * The record endpoints accept either; the SCHEMA endpoint
+ * (`/meta/bases/{base}/tables/{table}/fields`) accepts only the `tbl…` id. So a
+ * caller who said "Companies" — which every other Airtable capability here
+ * understands, and which is what a person types — got NOT_FOUND from the metadata
+ * API. Witnessed on prod 2026-07-29, on the retry of a column the user had asked
+ * for: the first attempt happened to carry the id and got as far as the options
+ * error; the retry carried the name and failed differently.
+ *
+ * Resolved once, from the schema this function already had to fetch, and shared
+ * with the write so the two cannot disagree about which table was meant.
+ */
+async function resolveTable(api, baseId, tableId) {
   let described;
   try {
     described = await airtableDescribeBase(api, { baseId });
   } catch {
     return null;   // cannot read the schema — fall through and let the write decide
   }
-  const wanted = fieldName.trim().toLowerCase();
   const key = String(tableId ?? '').trim().toLowerCase();
-  const table = (described.tables ?? []).find(t =>
-    String(t.id ?? '').toLowerCase() === key || String(t.name ?? '').trim().toLowerCase() === key);
+  return (described.tables ?? []).find(t =>
+    String(t.id ?? '').toLowerCase() === key || String(t.name ?? '').trim().toLowerCase() === key) ?? null;
+}
+
+async function findExistingField(api, baseId, tableId, fieldName) {
+  const table = await resolveTable(api, baseId, tableId);
   if (!table) return null;
+  const wanted = fieldName.trim().toLowerCase();
   const f = (table.fields ?? []).find(x => String(x.name ?? '').trim().toLowerCase() === wanted);
   return f ? { id: f.id, name: f.name, type: f.type } : null;
 }
