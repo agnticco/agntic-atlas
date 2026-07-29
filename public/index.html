@@ -5819,7 +5819,7 @@ class Component extends DCLogic {
     if (comp === 'trigger') {
       const t = spec;
       if (t.type === 'schedule' || t.cron) {
-        const when = this._humanCron(t.cron) || t.label || 'On a schedule';
+        const when = this._humanCron(t.cron, t.timezone) || t.label || 'On a schedule';
         return { title: when, desc: rat || 'The workflow starts itself on this schedule — no one has to press anything.' };
       }
       if (t.type === 'email') return { title: t.label || 'New email arrives', desc: rat || 'The workflow fires each time a matching email lands in your inbox.' };
@@ -6870,7 +6870,7 @@ class Component extends DCLogic {
     const ty = String((t && t.type) || (t && t.cron ? 'schedule' : '') || '').toLowerCase();
 
     if (ty === 'email')    return 'A new email arrives';
-    if (ty === 'schedule') return this._humanCron(t && t.cron) || 'On a schedule';
+    if (ty === 'schedule') return this._humanCron(t && t.cron, t && t.timezone) || 'On a schedule';
     if (ty === 'manual')   return 'When you run it';
 
     if (ty === 'event') {
@@ -7810,7 +7810,7 @@ class Component extends DCLogic {
         this._fact(facts, 'Only when it matches', full.filter);
       } else if (tt === 'schedule') {
         if (!what) what = 'The workflow starts itself on this schedule — nobody has to press anything.';
-        this._fact(facts, 'Runs', this._humanCron(full.cron) || full.cron);
+        this._fact(facts, 'Runs', this._humanCron(full.cron, full.timezone) || full.cron);
       } else if (tt === 'manual') {
         if (!what) what = 'The workflow runs each time you start it by hand.';
       } else {
@@ -8315,6 +8315,26 @@ class Component extends DCLogic {
     if (next >= total && this.state.awaitingGraphApproval) {
       setTimeout(() => {
         if (!this.state.awaitingGraphApproval) return;
+        // ── NO LIVE SESSION MEANS THERE IS NOTHING TO ACCEPT *TO* ─────────────
+        // A draft reopened from the sidebar carries `threadId: null`, and `_send`
+        // returns SILENTLY on a missing thread. So this branch used to set
+        // `thinking: true`, fire a request that never left the browser, and wait
+        // for a reply that could never come.
+        //
+        // Witnessed by the operator (2026-07-28, prod v1.6.52): every step ticked,
+        // "4 / 4 APPROVED · every step approved" on the canvas, and the panel
+        // sliding back to "Building…" with Run test greyed out — permanently, with
+        // no error. In their words: "when I accepted the last step it went back
+        // into chain of thought mode instead of releasing the test."
+        //
+        // With no session the approval is purely local, which is exactly what the
+        // reopen path already assumes: it restores a draft as confirmed and
+        // testable. So land in that state rather than waiting on a ghost.
+        if (!this.state.threadId) {
+          this.setState({ awaitingGraphApproval: false, thinking: false,
+                          inputMode: 'change', phase: 'proposed' });
+          return;
+        }
         this.setState({ awaitingGraphApproval: false, thinking: true, inputMode: 'locked' });
         this._send({ type: 'accept' });
       }, 620);   // let the final green flash land first
@@ -8609,19 +8629,42 @@ class Component extends DCLogic {
     return intent ? this._clip(intent, 42) : (nm || "Untitled draft");
   }
   _hashName(s) { s = String(s || "").replace(/^#/, "").trim(); return s ? ("#" + s) : ""; }
-  _humanCron(cron) {
+  // ── A TIME WITHOUT ITS ZONE IS NOT A CONFIRMED TIME ────────────────────────
+  // Operator, 2026-07-28. The chat now says "8am Central" and the contract carries
+  // "8am Central time", but the trigger card — the one a person ticks to confirm
+  // what starts the workflow — still read a bare "Every day at 8:00 AM". The card
+  // exists so the schedule can be checked by reading, and the half that matters
+  // most when someone is in a different zone was the half missing.
+  //
+  // Short form ("CDT") over long ("Central Daylight Time"): it fits the row, and it
+  // is the form people write times in. Falls back to the IANA name if the browser
+  // cannot resolve it — an unfamiliar "America/Chicago" still beats no zone at all.
+  _tzLabel(tz) {
+    const zone = String(tz || "").trim();
+    if (!zone) return "";
+    try {
+      const part = new Intl.DateTimeFormat("en-US", { timeZone: zone, timeZoneName: "short" })
+        .formatToParts(new Date()).find(p => p.type === "timeZoneName");
+      return part && part.value ? part.value : zone;
+    } catch (e) { return zone; }
+  }
+
+  _humanCron(cron, tz) {
+    const zone = this._tzLabel(tz);
+    const withZone = (s) => (s && zone ? s + " " + zone : s);
     const p = String(cron || "").trim().split(/\s+/); if (p.length < 5) return "";
     const [min, hr, dom, mon, dow] = p;
     let t = ""; const h = parseInt(hr, 10), m = parseInt(min, 10) || 0;
     if (!isNaN(h)) { const ap = h < 12 ? "AM" : "PM"; let hh = h % 12; if (hh === 0) hh = 12; t = " at " + hh + ":" + String(m).padStart(2, "0") + " " + ap; }
     if (dom === "*" && mon === "*") {
-      if (dow === "*") return "Every day" + t;
-      if (dow === "1-5") return "Every weekday" + t;
+      if (dow === "*") return withZone("Every day" + t);
+      if (dow === "1-5") return withZone("Every weekday" + t);
       const D = { 0: "Sun", 1: "Mon", 2: "Tue", 3: "Wed", 4: "Thu", 5: "Fri", 6: "Sat" };
       const list = String(dow).split(",").map(d => D[d.trim()]).filter(Boolean).join(", ");
-      if (list) return "Every " + list + t;
+      if (list) return withZone("Every " + list + t);
     }
-    return t ? ("On a schedule" + t) : "On a schedule";
+    // No time parsed ⇒ no zone to qualify: "On a schedule CDT" would be nonsense.
+    return t ? withZone("On a schedule" + t) : "On a schedule";
   }
   _slackChannel() {
     const sp = this.state.spec; if (!sp || !sp.nodes) return "#general";
@@ -9044,7 +9087,7 @@ class Component extends DCLogic {
   // Adaptive "What starts it" card — replaces the hardcoded UPS email mock.
   _sampleTriggerView(trg) {
     const t = trg || {}; const ty = t.type || (t.cron ? "schedule" : "manual");
-    const cadence = t.label || this._humanCron(t.cron) || this._triggerTitle(t);
+    const cadence = t.label || this._humanCron(t.cron, t.timezone) || this._triggerTitle(t);
     if (ty === "email") return { heading: "Sample incoming email", icon: "✉", iconBg: "#1d2733", iconColor: "#86b3e0",
       fromLine: "A matching email", metaLine: "Gmail inbox", title: this._clip(t.filter, 60) || "New email", body: "Atlas reads the matching email and runs the steps on its contents." };
     if (ty === "event") { const ch = this._hashName((t.filter && (t.filter.channel || t.filter)) || ""); return { heading: "What starts it", icon: "#", iconBg: "#1d2b22", iconColor: "#7fc28a",

@@ -466,6 +466,38 @@ as load-bearing.*
   RETURN TRUE to claim it left the page actionable, and a caller that re-enters a polling loop
   carries its own budget. Pinned by `tests/api/build-poll-watchdog.test.js` (15), all guards
   hand-mutated red→green.
+
+- **A SEND THAT CAN SILENTLY DO NOTHING MUST NEVER BE THE LAST STEP OF A STATE TRANSITION
+  (2026-07-28, witnessed by the operator on prod v1.6.52).** They approved every step of a
+  four-step workflow. The canvas read `4 / 4 APPROVED · every step approved`; the panel beside
+  it slid BACK to **"Building…"** — with the curated fact rotating underneath, so it looked
+  alive — and Run test stayed greyed out under *"Confirm every step to start testing"*, forever.
+  Their words: *"when I accepted the last step it went back into chain of thought mode instead
+  of releasing the test."*
+  **Cause: `_send` opens with `if (!tid) return;`** — a silent discard when there is no thread.
+  Approving the last step set `thinking: true`, locked the composer, and then called it. With
+  no session the request never left the browser, nothing errored, and nothing retried. **The
+  client had already committed to the new state before finding out the send was a no-op.**
+  **Two doors lead to a null thread with the walkthrough still on screen, and BOTH were
+  reachable:** `_buildLost` — the "your work is safe" path taken when the connection drops —
+  nulls the thread and deliberately does NOT clear `awaitingGraphApproval` (the build really is
+  safe on disk); and reopening a draft from the sidebar does the same at three sites.
+  Confirmed against the prod event log: the graph sat paused at `walkthrough` for 21 minutes,
+  and the last `/respond` was the PLAN acceptance 31 seconds *before* it — no respond was ever
+  sent for the four step confirmations. **A paused server and a "thinking" client were the same
+  silence.**
+  **Fixed at the caller, not in `_send`:** with no session the acceptance is purely local, so it
+  lands in the state the reopen path already assumes — confirmed, `phase: 'proposed'`, testable
+  — rather than waiting on a ghost. `_send`'s silent return is left alone deliberately; making
+  it throw would turn every benign late call into an error bubble.
+  **The generalisation:** anywhere a handler sets an optimistic state *and then* calls something
+  that can decline to act, the decline must be a branch the handler takes, not a condition it
+  never learns about. Pinned by `tests/api/walkthrough-accept-no-session.test.js` (9), which
+  extracts and executes the real `_liveApprove` and `_testUnlocked`; two mutations red→green
+  (removing the no-session branch → 4 red; dropping just its `phase: 'proposed'` → 1 red).
+  **Witnessed live before the fix; the fixed version is code-proven and a live re-check is
+  pending.**
+
 - **A label that makes a claim about the USER must fail toward the WEAKER claim
   (2026-07-26).** The plan card's marks (`you said` / `I found` / `I inferred`) resolved
   anything unrecognised — missing, empty, `null`, a typo, a value the model invented — to

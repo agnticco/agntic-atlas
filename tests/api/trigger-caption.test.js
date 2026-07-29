@@ -58,7 +58,7 @@ function methodSrc(name) {
 }
 
 const METHODS = ['_triggerCaption', '_triggerIsMail', '_triggerGlyph', '_specTriggerTitle',
-                 '_triggerTitle', '_getTriggerInfo', '_triggerNodeFrom', '_humanCron', '_titleCase'];
+                 '_triggerTitle', '_getTriggerInfo', '_triggerNodeFrom', '_humanCron', '_tzLabel', '_titleCase'];
 
 function component() {
   const obj = eval('({\n' + METHODS.map(methodSrc).join(',\n') + '\n})');

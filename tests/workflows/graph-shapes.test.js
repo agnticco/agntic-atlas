@@ -52,7 +52,7 @@ function grab(name) {
 // point of the count is that the two agree, and stubbing either would test a
 // program nobody runs.
 const METHODS = ['_laneSourceOf', '_isExclusiveSplit', '_splitTargetsOf', '_stepShape',
-                 '_stepShapeLabel', '_triggerNodeFrom', '_liveNodesFromSpec', '_triggerCaption', '_humanCron', '_triggerIsMail',
+                 '_stepShapeLabel', '_triggerNodeFrom', '_liveNodesFromSpec', '_triggerCaption', '_humanCron', '_tzLabel', '_triggerIsMail',
                  '_titleCase', '_countedSteps'];
 const Graph = new Function('return class G { ' + METHODS.map(grab).join('\n') + ' }')();
 const g = new Graph();

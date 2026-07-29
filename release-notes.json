@@ -1,5 +1,13 @@
 [
   {
+    "version": "1.6.53",
+    "date": "2026-07-28",
+    "title": "Approving the last step releases the test",
+    "notes": [
+      "If the connection dropped mid-build, approving your final step used to leave the page stuck on \"Building…\" with Run test greyed out. It now unlocks the test panel instead of waiting for a reply that could never arrive. Scheduled workflows also show their timezone, so you never see a bare \"8:00 AM\"."
+    ]
+  },
+  {
     "version": "1.6.51",
     "date": "2026-07-28",
     "title": "The step count matches the steps you approve",

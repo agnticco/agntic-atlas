@@ -85,7 +85,7 @@ const METHODS = [
   '_plainId', '_stepName', '_stepKind', '_routeDomainOf', '_branchCases', '_onRefId',
   '_normRoute', '_routesOf', '_unroutedValues', '_destinationOf', '_connectorOf',
   '_fact', '_approvalCard', '_approvalHint', '_liveShapeOf', '_nodeShape',
-  '_deJargon', '_humanCron', '_titleCase', '_clip', '_dealSegments',
+  '_deJargon', '_humanCron', '_tzLabel', '_titleCase', '_clip', '_dealSegments',
   '_liveNodesFromSpec', '_triggerNodeFrom',
   // `_triggerNodeFrom` delegates its fallback wording and its icon decision to these
   // (2026-07-27). Extracting it without them yields a half-built component that throws

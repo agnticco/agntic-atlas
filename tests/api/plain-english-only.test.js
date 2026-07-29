@@ -99,6 +99,33 @@ describe('a schedule is confirmed, never guessed', () => {
   });
 });
 
+describe('a time is never shown without its zone', () => {
+  // The chat says "8am Central" and the contract carries "8am Central time", but
+  // the TRIGGER CARD — the one a person ticks to confirm what starts the workflow
+  // — read a bare "Every day at 8:00 AM" (witnessed on prod, v1.6.51). The card
+  // exists so a schedule can be checked by reading, and the half that matters most
+  // to someone in another zone was the half missing.
+  test('the humaniser takes a timezone and appends it', () => {
+    const i = src.indexOf('_humanCron(cron, tz) {');
+    assert.ok(i > 0, '_humanCron must accept the zone');
+    const body = src.slice(i, i + 1200);
+    assert.match(body, /withZone\("Every day"/, 'a daily schedule carries its zone');
+    assert.match(body, /withZone\("Every weekday"/);
+  });
+
+  test('"On a schedule" with no parsed time is NOT given a zone', () => {
+    const i = src.indexOf('_humanCron(cron, tz) {');
+    const body = src.slice(i, i + 1200);
+    assert.match(body, /t \? withZone\("On a schedule"/,
+      '"On a schedule CDT" would be nonsense — the zone qualifies a TIME');
+  });
+
+  test('every caller passes the trigger’s zone through', () => {
+    assert.doesNotMatch(src, /_humanCron\((?:t && )?t?\.?cron\)/,
+      'a call site that drops the zone puts a bare time back on the card');
+  });
+});
+
 describe('every surface agrees on what the workflow is', () => {
   test('the panel counts every step, as the approval queue does', () => {
     const i = src.indexOf('_stepShape(spec) {');
