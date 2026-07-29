@@ -615,6 +615,7 @@ export function registerGoogleChannels(capabilityRegistry) {
 
   capabilityRegistry.register({
     id: 'gmail_search', connector: 'google', positions: ['step'],
+    effect: 'read',
     name: 'Search Gmail', icon: 'mail',
     description: 'Search inbox messages with a Gmail query (e.g. from:ups.com is:unread).',
     configSchema: [
@@ -673,6 +674,7 @@ export function registerGoogleChannels(capabilityRegistry) {
 
   capabilityRegistry.register({
     id: 'calendar_list_events', connector: 'google', positions: ['step'],
+    effect: 'read',
     name: 'List Calendar Events', icon: 'calendar',
     description: 'Fetch upcoming events from the connected Google Calendar.',
     configSchema: [
@@ -729,6 +731,7 @@ export function registerGoogleChannels(capabilityRegistry) {
 
   capabilityRegistry.register({
     id: 'drive_list_files', connector: 'google', positions: ['step'],
+    effect: 'read',
     name: 'List Drive Files', icon: 'folder',
     description: 'List files in Google Drive, optionally filtered by name or type.',
     configSchema: [
@@ -742,6 +745,7 @@ export function registerGoogleChannels(capabilityRegistry) {
 
   capabilityRegistry.register({
     id: 'sheets_describe', connector: 'google', positions: ['step'],
+    effect: 'read',
     name: 'Describe Google Sheet', icon: 'table',
     description: 'Lists a spreadsheet\'s tabs and their column headers. Use it to map data onto real columns instead of asking the user for their column order.',
     configSchema: [
@@ -754,6 +758,7 @@ export function registerGoogleChannels(capabilityRegistry) {
 
   capabilityRegistry.register({
     id: 'sheets_read', connector: 'google', positions: ['step'],
+    effect: 'read',
     name: 'Read Google Sheet', icon: 'table',
     description: 'Read data from a spreadsheet range.',
     configSchema: [
@@ -784,6 +789,7 @@ export function registerGoogleChannels(capabilityRegistry) {
 
   capabilityRegistry.register({
     id: 'docs_read', connector: 'google', positions: ['step'],
+    effect: 'read',
     name: 'Read Google Doc', icon: 'file-text',
     description: 'Read the text content of a Google Doc.',
     configSchema: [
@@ -812,6 +818,7 @@ export function registerGoogleChannels(capabilityRegistry) {
 
   capabilityRegistry.register({
     id: 'tasks_list', connector: 'google', positions: ['step'],
+    effect: 'read',
     name: 'List Tasks', icon: 'check-square',
     description: 'List tasks from a Google Tasks list.',
     configSchema: [
@@ -848,6 +855,7 @@ export function registerGoogleChannels(capabilityRegistry) {
   // Gmail trigger — polling stub; real Pub/Sub push upgradeable later
   capabilityRegistry.register({
     id: 'gmail_new_message', connector: 'google', positions: ['trigger'],
+    effect: 'read',
     name: 'New Gmail Message', icon: 'mail',
     description: 'Fires when a new Gmail message arrives matching a query (polling; upgradeable to Pub/Sub push).',
     configSchema: [

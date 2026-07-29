@@ -1583,6 +1583,36 @@ fixed on the spot. Fold the relevant ones into whatever increment next touches t
   `capabilities.connectors` was known from turn one. Even with the alias fixed, a
   genuinely absent connector still wastes the whole interview. Same family as the
   setup-action dead end: the user does everything asked and then hits a wall.
+- **THE DECLARATION AUDIT (2026-07-29).** Six times in one day the same defect shape
+  was found by a build failing — a rule scoped to the FORM of a name rather than what
+  the thing MEANS (`isWritingAction`, the trigger captions, the step-type tables, the
+  missing `tasks` alias, `title` in `LOCATOR_KEYS`, the missing `gdrive` alias). Each
+  was fixed where it was found; the last landed in a table edited hours earlier
+  without noticing its neighbours were also missing. So the whole question was asked
+  at once, against the LIVE registry rather than from memory. What it found:
+  **19 of 28 capabilities declared no `effect` at all**, so a verb regex decided for
+  every one of them — and three were misclassified, all in the dangerous direction
+  (writes seen as reads): `gmail_mark_read`, `airtable_create_field`, and
+  **`airtable_delete_record`**. The last is the most destructive capability shipped
+  and it matched none of `create|append|send|post|add|insert`, so it escaped BOTH
+  guards `isWritingAction` feeds: duplicate protection (a double trigger deletes
+  twice) and the approval-strength check (a delete authorised by a channel that
+  proves nobody). **No build had ever exercised it, because nothing in the product
+  promises a deletion** — which is exactly why the audit was worth doing rather than
+  waiting for a tenth shape to trip over it. Fixed: `effect` declared on all 16
+  reads/triggers and on `airtable_create_field`; destructive verbs added to the
+  fallback. `gmail_mark_read` and `airtable_delete_record` are deliberately left
+  undeclared — declaring `write` would give them `record_exists` and let a DELETE
+  satisfy a promise that something exists. **The vocabulary has no kind for "changed,
+  nothing created"; adding one is a real follow-up.** Pinned by
+  `tests/workflows/capability-declarations-audit.test.js` (16, 6 mutations killed),
+  which walks the live registry and fails when a capability is added undeclared,
+  misclassified, unresolvable, or missing its destination — so the next connector
+  fails HERE rather than months later as "Atlas said my connector wasn't connected".
+  *An existing test also caught the first attempt over-broadening the fallback to
+  `update|set|move|rename`: `notion_update_page` is the CONTROL proving a declaration
+  does that work. Widening the guess would have made guessing more load-bearing —
+  the direction this audit exists to reverse.*
 - **Approval-channel availability (`email`) is deployment-wide, not per-tenant** — fine today
   (one deployment, one mailer); revisit if tenants ever bring their own sending domain.
 

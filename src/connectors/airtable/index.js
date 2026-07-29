@@ -457,6 +457,7 @@ export function registerAirtableChannels(capabilityRegistry) {
   // the `Deal Size` column itself instead of asking a human to paste an id.
   capabilityRegistry.register({
     id: 'airtable_list_bases', connector: 'airtable', positions: ['step'],
+    effect: 'read',
     name: 'List Airtable Bases', icon: 'table',
     description: 'Lists the Airtable bases this workspace can see. Use it to find a base instead of asking the user for its ID.',
     requiredScopes: ['schema.bases:read'],
@@ -467,6 +468,7 @@ export function registerAirtableChannels(capabilityRegistry) {
 
   capabilityRegistry.register({
     id: 'airtable_describe_base', connector: 'airtable', positions: ['step'],
+    effect: 'read',
     name: 'Describe Airtable Base', icon: 'table',
     description: 'Lists a base\'s tables and their field names, types, and select options. Use it to map data onto real columns instead of guessing them.',
     requiredScopes: ['schema.bases:read'],
@@ -504,6 +506,11 @@ export function registerAirtableChannels(capabilityRegistry) {
     name: 'Add Airtable Column', icon: 'table',
     // A column is something the workflow needs to EXIST, not work it does per run.
     oneTimeSetup: true,
+    // It changes someone's schema, so it is a write for every guard that asks. Safe
+    // to declare despite the assertion kind being a poor fit: `SETUP_ACTION_AS_STEP`
+    // refuses it a place in the run path at all, so it can never be reached to
+    // satisfy a promise.
+    effect: 'write', locatorKeys: ['table', 'tableId', 'baseId'],
     description: 'Adds a column to an existing Airtable table. Use it when a workflow needs a field the table does not have yet — ask the user first, then add it, rather than writing to a column that does not exist.',
     requiredScopes: ['schema.bases:write'],
     configSchema: [
@@ -520,6 +527,7 @@ export function registerAirtableChannels(capabilityRegistry) {
 
   capabilityRegistry.register({
     id: 'airtable_list_records', connector: 'airtable', positions: ['step'],
+    effect: 'read',
     name: 'List Airtable Records', icon: 'table',
     description: 'Fetch records from an Airtable table, optionally filtered by a formula.',
     requiredScopes: ['data.records:read'],
@@ -536,6 +544,7 @@ export function registerAirtableChannels(capabilityRegistry) {
 
   capabilityRegistry.register({
     id: 'airtable_get_record', connector: 'airtable', positions: ['step'],
+    effect: 'read',
     name: 'Get Airtable Record', icon: 'table',
     description: 'Fetch a single Airtable record by ID.',
     requiredScopes: ['data.records:read'],
@@ -550,6 +559,7 @@ export function registerAirtableChannels(capabilityRegistry) {
 
   capabilityRegistry.register({
     id: 'airtable_search_records', connector: 'airtable', positions: ['step'],
+    effect: 'read',
     name: 'Search Airtable Records', icon: 'table',
     description: 'Search records in an Airtable table using a formula filter.',
     requiredScopes: ['data.records:read'],
@@ -630,6 +640,7 @@ export function registerAirtableChannels(capabilityRegistry) {
 
   capabilityRegistry.register({
     id: 'airtable_record_changed', connector: 'airtable', positions: ['trigger'],
+    effect: 'read',
     name: 'Airtable Record Changed', icon: 'table',
     description: 'Fires when a record is created or updated in an Airtable table.',
     requiredScopes: ['webhook:manage'],

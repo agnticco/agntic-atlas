@@ -1770,7 +1770,34 @@ export function deriveWorkflowName(def) {
  */
 export function isWritingAction(action) {
   if (declaresWrite(action)) return true;
-  return /(^|_)(create|append|send|post|add|insert)(_|$)/i.test(String(action ?? ''));
+  // ── DESTROYING SOMETHING IS A WRITE ──────────────────────────────────────
+  //
+  // This list enumerated only verbs that CREATE. `airtable_delete_record` — the
+  // most destructive capability shipped — matched none of them, and neither did
+  // `gmail_mark_read`, so both escaped BOTH guards this predicate feeds:
+  //   · WRITE_WITHOUT_IDEMPOTENCY — a double trigger deletes twice;
+  //   · the approval-strength check (`isWriteNode`) — a delete could be authorised
+  //     by a channel that proves nobody.
+  //
+  // Found by auditing every registered capability against ground truth rather than
+  // by a build failing: nothing in the product promises a deletion, so no build had
+  // ever exercised it. That is exactly why the audit was worth doing.
+  //
+  // Still a NAME test, and still the wrong shape for the same reason it has been
+  // wrong six times today — which is why every shipped capability now DECLARES its
+  // effect and reaches the line above instead. This remains only for capabilities
+  // from sources we do not control, where a guessed "yes, that writes" is safer than
+  // a confident "no".
+  //
+  // DELIBERATELY NARROW. The first attempt also added `update|set|move|rename`, and a
+  // test caught it: `notion_update_page` is the CONTROL in
+  // `source-agnostic-catalog.test.js` proving that the DECLARATION is what makes a
+  // strangely-named write count, not this regex. Broadening the guess would have made
+  // the guessing more load-bearing — the exact direction this codebase has spent the
+  // day moving away from. Only verbs that cannot plausibly name a read are added, and
+  // `update` is not one of them: a shipped capability that updates says so instead.
+  return /(^|_)(create|append|send|post|add|insert|delete|remove|archive|trash|mark)(_|$)/i
+    .test(String(action ?? ''));
 }
 
 /**

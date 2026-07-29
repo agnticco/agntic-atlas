@@ -1,5 +1,13 @@
 [
   {
+    "version": "1.6.85",
+    "date": "2026-07-29",
+    "title": "The declaration audit: 19 of 28 capabilities were guesses",
+    "notes": [
+      "Asked the whole question at once instead of one build at a time. 19 of 28 capabilities declared no effect, so a verb regex decided; three were writes seen as reads, including airtable_delete_record — the most destructive capability shipped — which escaped both the duplicate-protection and approval-strength guards. No build had ever exercised it because nothing promises a deletion."
+    ]
+  },
+  {
     "version": "1.6.84",
     "date": "2026-07-29",
     "title": "A connected connector reported as not connected",

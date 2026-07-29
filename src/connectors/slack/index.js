@@ -1108,6 +1108,7 @@ export function registerSlackTriggers(capabilityRegistry) {
 
   capabilityRegistry.register({
     id: 'slack_message',
+    effect: 'read',
     connector: 'slack',
     positions: ['trigger'],
     name: 'Slack Message',
@@ -1123,6 +1124,7 @@ export function registerSlackTriggers(capabilityRegistry) {
 
   capabilityRegistry.register({
     id: 'slack_mention',
+    effect: 'read',
     connector: 'slack',
     positions: ['trigger'],
     name: 'Slack App Mention',
