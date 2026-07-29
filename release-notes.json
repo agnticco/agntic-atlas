@@ -1,5 +1,13 @@
 [
   {
+    "version": "1.6.59",
+    "date": "2026-07-28",
+    "title": "The workflow page draws the real workflow",
+    "notes": [
+      "Opening a workflow now shows the actual diagram — branches, approval gates and all — instead of a flat row of names that could not show a branch at all. It is the same picture the builder draws. Approval steps also stop listing \"Timeout\" as something a person can answer; a timeout is what happens when nobody does, and that is stated on the next line."
+    ]
+  },
+  {
     "version": "1.6.58",
     "date": "2026-07-28",
     "title": "The procedure document states an approval's deadline",

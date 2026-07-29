@@ -163,34 +163,35 @@ describe('one rule, not two — the surfaces cannot drift apart again', () => {
     assert.doesNotMatch(C._triggerTitle(LEGACY), /connector[_ ]event/i);
   });
 
-  // WEAKER THAN THE REST, AND DELIBERATELY SO — read this before trusting it.
+  // THIS USED TO BE A SOURCE PIN, AND IT NO LONGER HAS TO BE (2026-07-29).
   //
-  // The console rail is built inline inside `renderVals()`, a ~1000-line render
-  // method that cannot be extracted and executed the way the others are. So this
-  // pins the SOURCE, not the behaviour. That is exactly the "a grep proves a
-  // symbol EXISTS, not that anything ENFORCES it" weakness CLAUDE.md warns about,
-  // and it is recorded here rather than hidden.
+  // The console rail was built inline inside `renderVals()`, a ~1000-line render
+  // method that could not be extracted and executed — so this asserted on the
+  // SOURCE, which is the "a grep proves a symbol EXISTS, not that anything
+  // ENFORCES it" weakness CLAUDE.md warns about. It was recorded as weaker than
+  // the rest, with a note: "if that rail is ever made extractable, replace this
+  // with a real behavioural check."
   //
-  // It exists because the first version of this fix was pinned by NOTHING: with
-  // the rail reverted to the clock icon, the raw type tag and the word
-  // "Schedule", all 17 other tests stayed green. Found by hand-mutation, and the
-  // test was strengthened rather than the mutation dropped. If that rail is ever
-  // made extractable, replace this with a real behavioural check.
-  test('THE CONSOLE RAIL is wired to the shared rule (source pin, not behavioural)', () => {
-    const anchor = HTML.indexOf('const trg = (wf.triggers || [])[0];');
-    assert.notEqual(anchor, -1, 'the console rail moved — re-point this test, do not delete it');
-    // Comments are stripped first: the fix's own explanatory comment quotes the
-    // very literals this asserts are gone, and a test that a comment can turn
-    // red is worse than no test.
-    const stmt = HTML.slice(anchor, HTML.indexOf('(wf.nodes || []).forEach', anchor))
-      .split('\n').filter(l => !l.trim().startsWith('//')).join('\n');
+  // The rail is now DELETED. The workflow page draws the real graph, whose first
+  // node is synthesised by `_triggerNodeFrom` — which IS extractable. So this is
+  // the behavioural check that note asked for, against the same defect: the page
+  // calling an Airtable record change a schedule, or showing a raw internal type.
+  test('THE WORKFLOW PAGE names a connector trigger correctly (behavioural)', () => {
+    assert.ok(!HTML.includes('consoleDag'),
+      'the inline rail is back — this test is behavioural only because it is gone');
 
-    assert.match(stmt, /this\._triggerGlyph\(/, 'the rail is choosing its own icon again');
-    assert.match(stmt, /this\._triggerCaption\(/, 'the rail is writing its own caption again');
-    assert.doesNotMatch(stmt, /"Schedule"/, 'the rail is calling non-email triggers a schedule again');
-    assert.doesNotMatch(stmt, /"Email trigger"/, 'the rail has its own email wording again');
-    assert.doesNotMatch(stmt, /trg\.type \|\| "trigger"\)\.toUpperCase\(\)/,
-      'the rail is showing the raw internal type to a customer again');
+    for (const [name, trg] of [['Airtable', AIRTABLE], ['Slack', SLACK_MSG], ['legacy', LEGACY]]) {
+      const node = C._triggerNodeFrom({ triggers: [trg] });
+      assert.ok(node, `no trigger node for ${name}`);
+      const text = String(node.label ?? '') + ' ' + String(node.type ?? '');
+      assert.doesNotMatch(text, /schedule/i, `${name} is being called a schedule again`);
+      assert.doesNotMatch(text, /connector[_ ]event/i, `${name} shows the raw internal type`);
+      assert.doesNotMatch(text, /undefined|null|\[object/, `${name} leaked a raw value: "${text}"`);
+    }
+
+    // …and the one that must still read as mail, so this cannot pass by making
+    // every trigger generic.
+    assert.match(String(C._triggerNodeFrom({ triggers: [EMAIL] }).label ?? ''), /email/i);
   });
 
   test('THE STATUS CHIP: the raw internal type is never shown as prose', () => {

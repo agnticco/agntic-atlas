@@ -49,7 +49,7 @@ function methodSrc(name) {
 
 /** The real helpers, executed. */
 const C = (() => {
-  const names = ['_stepTypeWords', '_plainId', '_plainLabel', '_plainFilter', '_plainAge', '_plainTarget', '_plainInstruction', '_plainText', '_stringify', '_nodeShape'];
+  const names = ['_stepTypeWords', '_plainId', '_plainLabel', '_plainFilter', '_plainAge', '_plainTarget', '_plainInstruction', '_plainText', '_stringify', '_nodeShape', '_routeDomainOf', '_answersAPersonCanGive'];
   return eval('({\n' + names.map(methodSrc).join(',\n') + '\n})');
 })();
 
@@ -218,6 +218,45 @@ describe('the approval card shows the instruction, minus the plumbing', () => {
   });
 });
 
+describe('nobody can answer "timeout"', () => {
+  // The approval card and the procedure document both read "They can answer:
+  // Approve · Reject · Timeout". A timeout is what happens when a person answers
+  // NOTHING, and it is already stated on the next line ("If nobody answers…"). A
+  // safety screen listing an impossible answer is a small lie in the one place the
+  // product asks a person to check its work.
+  const HUMAN = { type: 'human', config: { decisions: 'approve, reject' } };
+
+  test('the choosable answers exclude it', () => {
+    assert.deepEqual(C._answersAPersonCanGive(HUMAN), ['approve', 'reject']);
+  });
+
+  test('but the ROUTE domain still includes it — do not narrow that', () => {
+    // `_unroutedValues` uses this to catch a workflow whose timeout falls through
+    // the catch-all silently. Narrowing it here would delete a real safety check
+    // to fix a wording problem.
+    assert.ok(C._routeDomainOf(HUMAN).includes('timeout'),
+      'the branch below really can receive a timeout, and that must stay provable');
+  });
+
+  test('a declared answer genuinely called something else is untouched', () => {
+    const three = { type: 'human', config: { decisions: 'approve, reject, escalate' } };
+    assert.deepEqual(C._answersAPersonCanGive(three), ['approve', 'reject', 'escalate']);
+  });
+
+  test('a classifier is not a person and is left alone', () => {
+    const cls = { type: 'llm', config: { mode: 'classify', categories: 'urgent, timeout' } };
+    assert.deepEqual(C._answersAPersonCanGive(cls), ['urgent', 'timeout'],
+      'a category that happens to be NAMED timeout is a real answer here');
+  });
+
+  test('every surface that lists answers uses it', () => {
+    assert.equal((HTML.match(/_answersAPersonCanGive\(/g) || []).length, 5,
+      'the definition plus all four render sites — the card, the two other panels, and the document');
+    assert.ok(!/'Possible answers', this\._routeDomainOf/.test(HTML),
+      'a render site still reading the raw domain would print "Timeout" again');
+  });
+});
+
 describe('a promise names its destination the way a person says it', () => {
   test('connector:locator becomes a phrase', () => {
     assert.equal(C._plainTarget('slack:#atlas-test-temp'), '#atlas-test-temp on Slack');
@@ -288,7 +327,7 @@ describe('the procedure document on screen', () => {
     // not by the suite.
     assert.match(src, /const to = cfg\.timeout;/, 'the nested shape is the one production writes');
     assert.doesNotMatch(src, /timeout_hours/);
-    assert.match(src, /_routeDomainOf\(n\)/,
+    assert.match(src, /_answersAPersonCanGive\(n\)/,
       'the answers must come from the same derivation as the card, not a hardcoded default');
   });
 
@@ -361,21 +400,51 @@ describe('the go-live review card and the live landing', () => {
   });
 });
 
-describe('the workflow page strip and status chip', () => {
-  test('the strip reads the shared vocabulary — it was the FIFTH copy', () => {
-    const i = HTML.indexOf('consoleDag: (() => {');
-    assert.ok(i > 0, 'the workflow-page strip moved — re-point this test');
-    const src = code(HTML.slice(i, i + 2000));
-    assert.match(src, /_stepTypeWords/);
-    assert.doesNotMatch(src, /et\.toUpperCase\(\)/,
-      'the fall-through is what put `branch`, `human` and `stop` on screen raw');
-    assert.doesNotMatch(src, /"CLASSIFY"|"EXTRACT"/, 'the private table must be gone');
+describe('the workflow page draws the real graph', () => {
+  // It was a flat row of name chips that could not show a branch at all, so the
+  // screen you land on after publishing was the one place the SHAPE of a five-lane
+  // approval workflow was invisible. The flat renderer — which was also the fifth
+  // copy of the type vocabulary — is gone entirely.
+  test('the flat strip and its private vocabulary are deleted, not bypassed', () => {
+    assert.ok(!HTML.includes('consoleDag'),
+      'a dead second renderer is how they drift back — delete it');
   });
 
-  test('and drops the lambda glyph', () => {
-    const i = HTML.indexOf('consoleDag: (() => {');
-    const src = code(HTML.slice(i, i + 2000));
-    assert.doesNotMatch(src, /: "λ"/, 'a lambda means nothing to the person reading this page');
+  test('it shares the builder\'s layout engine', () => {
+    const i = HTML.indexOf('consoleGraph: (() => {');
+    assert.ok(i > 0, 'the workflow-page graph moved — re-point this test');
+    const src = code(HTML.slice(i, i + 1800));
+    assert.match(src, /_liveGraphLayout\(/,
+      'one engine must know how to draw a workflow, or the two pictures disagree');
+    assert.match(src, /_liveNodesFromSpec\(wf\)/);
+  });
+
+  test('a settled workflow shows no approval chrome', () => {
+    const i = HTML.indexOf('consoleGraph: (() => {');
+    const src = code(HTML.slice(i, i + 1800));
+    // confirmed === every node, nothing pending, nothing flashing, not `ready`.
+    assert.match(src, /nodes\.length, -1, false, false, nodes\.length/,
+      'nothing on a published workflow is awaiting approval');
+    assert.ok(!/consoleGraph\.card/.test(HTML), 'there is no step being approved here');
+  });
+
+  test('the drawn markup carries no confirm or reject control', () => {
+    const i = HTML.indexOf('<sc-if value="{{ consoleGraph }}"');
+    assert.ok(i > 0, 'the workflow-page graph markup moved');
+    const j = HTML.indexOf('<!-- SUB-NAV TABS -->', i);
+    const markup = HTML.slice(i, j);
+    assert.ok(markup.includes('{{ an.icoPerson }}'), 'it must still be the real diagram');
+    assert.ok(!markup.includes('an.check'), 'a published workflow cannot be approved again');
+    assert.ok(!markup.includes('an.decide'));
+  });
+
+  test('it fits itself without fighting the builder canvas over the same handles', () => {
+    // One ResizeObserver pair watching both surfaces would let a resize of one
+    // rescale the other.
+    assert.match(HTML, /_fitConsoleGraph\(\)\s*\{/);
+    assert.ok(HTML.includes('this._cgOuter') && HTML.includes('this._lgOuter'));
+    const i = HTML.indexOf('_fitConsoleGraph() {');
+    assert.doesNotMatch(code(HTML.slice(i, i + 500)), /_lgOuter|_lgInner/);
   });
 
   test('the status chip renders its filter and its schedule', () => {
