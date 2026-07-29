@@ -1386,6 +1386,47 @@ fixed on the spot. Fold the relevant ones into whatever increment next touches t
   different complaints share ≤2 — not guessed. The anti-false-positive cases matter
   more than the catch: a guard that suppressed real findings would hide defects
   instead of a loop.
+- **A correct workflow was told it delivered nowhere, and paid for three rebuilds
+  — FIXED (2026-07-29).** Prod `build-platform-1785337840769`, from a deliberately
+  vague opener. The workflow was right: Gmail trigger → classify → branch → create a
+  Google Task. The oracle said *"nothing reached "My Tasks" in tasks — this run
+  delivered to `{{extract_email.subject}}` (tasks)"*. `tasks_create` takes
+  `{title, notes, due, tasklistId}`; the oracle's fallback `LOCATOR_KEYS` list —
+  key names that USUALLY name a destination — contains `title` and not `tasklistId`,
+  so it reported the task's own NAME as the place it was written. **The fifth
+  instance of a rule scoped to the FORM of a name rather than to what it MEANS.**
+  Capabilities now DECLARE `locatorKeys` (+ `defaultLocator` for a provider default
+  like Google's "My Tasks"); the guess list survives only for capabilities from
+  sources we do not control. Two places decided this — `nodeEffect` and
+  `normalizeDelivery`, the second being the RECEIPT the runtime check matches — and
+  they had drifted; both now read the one declaration, and the handler returns the
+  list it actually wrote to so a real run can correct a wrong declaration. Also
+  caught in passing: `gmail_get_message` matched the `message_sent` verb regex, so
+  **reading** mail satisfied a promise to **send** it. Pinned by
+  `tests/workflows/write-destination-declared.test.js` (21, 9 mutations killed).
+- **"Don't pay twice for the same complaint" had been written three times, once per
+  route — REPLACED WITH ONE GATE (2026-07-29).** `_lastShape`, `_lastBlockerKey`,
+  `_lastMissingKey` were each added after their own incident, each compares a route
+  only against ITSELF, and `verify_failed` — which orders the most rebuilds — had
+  none. So the ONE false fact above was discovered by three different nodes and
+  bought three whole-spec Opus passes: `blocking_gaps` "UNSATISFIED_ASSERTION",
+  `gap_answer` "promises tasks:My Tasks, but no step…", `verify_failed` "nothing
+  reached My Tasks" (twice, byte-identical). 355s of Opus, ~$1.40, on a spec correct
+  after pass one. **This is the rule-duplication defect applied to the guard against
+  rebuilds.** Now one gate at `generate` — the single place every route arrives —
+  keyed on `_regenReason`, the single thing every route already sets, so a route
+  added later inherits it instead of arriving unguarded. Complaints are compared by
+  **the promise they concern** (`about`, normalised to the assertion target), not by
+  wording: measured, `sameComplaint` needs `minShared:1` to pair the gap and verify
+  sentences, at which point it pairs nearly everything. That required the validator
+  to carry `target` as DATA on `UNSATISFIED_ASSERTION` — it existed only inside an
+  English sentence. Matching against every complaint so far, not just the last, also
+  catches A→B→A thrash. Measured end-to-end through the real graph: an unfixable
+  structural failure costs **6 dry runs, was 9**; the prod sequence replays as **2
+  paid passes, was 4**. `_regenReason` is consequently **no longer diagnostic only** —
+  a route that forgets to set it yields an empty detail and can never be gated, so a
+  missing log label still cannot fail anyone's build. Pinned by
+  `tests/converger/rebuild-only-for-a-new-complaint.test.js` (25, 10 mutations killed).
 - **Approval-channel availability (`email`) is deployment-wide, not per-tenant** — fine today
   (one deployment, one mailer); revisit if tenants ever bring their own sending domain.
 

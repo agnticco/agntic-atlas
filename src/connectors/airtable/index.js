@@ -461,6 +461,10 @@ export function registerAirtableChannels(capabilityRegistry) {
     name: 'Create Airtable Record', icon: 'table',
     description: 'Create a new record in an Airtable table.',
     outputFormat: 'plain',
+    // The table is the destination; `fields` is content. (The guess list already
+    // happened to get this one right — declaring it stops that being luck.)
+    effect: 'write', assertionKind: 'record_exists',
+    locatorKeys: ['table', 'tableId', 'baseId'],
     requiredScopes: ['data.records:write'],
     configSchema: [
       { key: 'baseId',  label: 'Base ID',          type: 'string',   optional: false },
@@ -490,6 +494,8 @@ export function registerAirtableChannels(capabilityRegistry) {
     name: 'Update Airtable Record', icon: 'table',
     description: 'Update fields on an existing Airtable record.',
     outputFormat: 'plain',
+    effect: 'write', assertionKind: 'record_exists',
+    locatorKeys: ['table', 'tableId', 'baseId'],
     requiredScopes: ['data.records:write'],
     configSchema: [
       { key: 'baseId',   label: 'Base ID',          type: 'string',   optional: false },

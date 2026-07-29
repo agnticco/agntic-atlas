@@ -41,6 +41,8 @@ export class CapabilityRegistry {
    * @param {'read'|'write'} [def.effect]  — does this capability CHANGE the outside world?
    * @param {string} [def.assertionKind]   — 'message_sent' | 'record_exists' | 'document_exists'
    * @param {string[]} [def.locatorKeys]   — config keys that name the destination
+   * @param {string} [def.defaultLocator]  — human name of the destination used when
+   *                                         none of `locatorKeys` is set in config
    *
    * ── Schema discovery (P13-0 seam #3) ──────────────────────────────────────
    * @param {object} [def.schemaDiscovery] — declared on a connector's DESCRIBE capability.
@@ -116,6 +118,21 @@ export class CapabilityRegistry {
       oneTimeSetup:   def.oneTimeSetup === true,
       assertionKind:  def.assertionKind  ?? null,
       locatorKeys:    Array.isArray(def.locatorKeys) ? def.locatorKeys : null,
+      // ── WHERE IT WRITES WHEN NOBODY SAID ──────────────────────────────────
+      // Some destinations are optional in config because the provider has a real
+      // default: omit `tasklistId` and Google Tasks writes to the list literally
+      // named "My Tasks". Without this, declaring `locatorKeys` on such a capability
+      // trades one wrong answer for another — the oracle stops reporting the WRONG
+      // destination and starts reporting NO destination ("no destination was filled
+      // in"), which fails the same build for a new reason.
+      //
+      // It is the human name of the implicit destination, not the provider's
+      // sentinel ('@default' identifies nothing to a reader, and cannot be matched
+      // against an outcome that promises "My Tasks"). Consulted ONLY when the
+      // declared keys yield nothing — an explicit destination always wins.
+      defaultLocator: typeof def.defaultLocator === 'string' && def.defaultLocator.trim()
+        ? def.defaultLocator.trim()
+        : null,
       schemaDiscovery: def.schemaDiscovery ?? null,
       // A non-destructive READ that confirms this delivery's DESTINATION exists and is
       // reachable — e.g. "does this Slack channel exist and is the bot in it", "does this

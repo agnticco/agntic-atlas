@@ -294,12 +294,33 @@ function declaredWriteEffect(id, cap, config) {
     if (kind === 'record_exists' && DOC_CONNECTORS.has(connector)) kind = 'document_exists';
   }
   const keys = Array.isArray(cap?.locatorKeys) && cap.locatorKeys.length ? cap.locatorKeys : null;
+  // WHY A DECLARED KEY LIST BEATS THE GUESS LIST.
+  //
+  // `collectLocators` walks LOCATOR_KEYS — a fixed list of key names that USUALLY
+  // name a destination. It is a guess about FORM, and it is wrong whenever a
+  // capability happens to use one of those names for CONTENT instead. Witnessed on
+  // prod 2026-07-29: `tasks_create` takes `{title, notes, due, tasklistId}`. The
+  // guess list contains `title` and not `tasklistId`, so the oracle reported the
+  // task's own NAME as the place it was written to — "nothing reached \"My Tasks\"
+  // in tasks — this run delivered to {{extract_email.subject}} (tasks)". A correct
+  // workflow was therefore unsatisfiable, and the converger spent THREE Opus
+  // rebuilds (~150s, ~$1.40) failing to fix a spec that was already right.
+  //
+  // This is the same defect family as `isWritingAction` and the trigger captions:
+  // a rule scoped to the SHAPE of a name rather than to what the thing MEANS. The
+  // guess list stays as the fallback for capabilities from sources we do not
+  // control, but every capability we ship declares.
+  const declared = keys
+    ? keys.map(k => config?.[k]).filter(v => typeof v === 'string' && v.trim())
+    : collectLocators(config);
+  // An implicit destination counts, but never over an explicit one.
+  const locators = (keys && !declared.length && typeof cap?.defaultLocator === 'string' && cap.defaultLocator.trim())
+    ? [cap.defaultLocator.trim()]
+    : declared;
   return {
     kind,
     connectors: aliasesFor(connector),
-    locators:   keys
-      ? keys.map(k => config?.[k]).filter(v => typeof v === 'string' && v.trim())
-      : collectLocators(config),
+    locators,
     fields:     readFieldNames(config?.fields),
   };
 }
@@ -909,8 +930,30 @@ export function normalizeDelivery(node, output) {
   push(o.target); push(o.to); push(o.user); push(o.slackChannel); push(o.channelName);
   if (o.channel && o.channel !== channel) push(o.channel);
   if (eff) for (const k of eff.locatorKeys) { push(o[k]); push(node?.config?.[k]); }
-  // Also fold in any declared locator the channel table doesn't list (e.g. a
-  // connector-action's own destination keys), so a write's target is never lost.
+  // ── THE CAPABILITY'S OWN DECLARATION, AHEAD OF ANY GUESS ──────────────────
+  // This function is the SECOND place that decides where a delivery went; the
+  // first is `nodeEffect`. They were separate rules over the same question, and
+  // they drifted: fixing `tasks_create`'s destination in `nodeEffect` alone would
+  // leave the RECEIPT — the thing `checkAssertionAtRuntime` actually matches, and
+  // the thing whose first entry gets quoted back to the user as "this run
+  // delivered to …" — still naming the task's title. Both now read the one
+  // declaration.
+  //
+  // Ordering is load-bearing: matching accepts ANY locator in the list, so extra
+  // entries are harmless, but `locators[0]` becomes `target` and that is what the
+  // failure message quotes. The declared destination has to come first.
+  //
+  // What the RUN reported comes first, then what the node declared — the same
+  // resolved-then-declared order used above, and the only way a wrong declaration
+  // can ever be corrected by a real run. (`tasks_create` returns the list it wrote
+  // to; without reading `o` here that return was dead weight.)
+  if (!eff) {
+    const cap = capabilityOf(String(node?.config?.action ?? node?.config?.channel ?? ''));
+    if (Array.isArray(cap?.locatorKeys)) for (const k of cap.locatorKeys) push(o[k]);
+    const d = nodeEffect(node); if (d) for (const l of d.locators) push(l);
+  }
+  // Fallback for a capability that declares nothing (an imported server, a
+  // generated connector) — a guess is still better than losing the target.
   for (const l of collectLocators(node?.config)) push(l);
   const target = locators[0] ?? null;
   // WOULD-SATISFY (dry-run, increment #21). A build-time dry run stubs terminal

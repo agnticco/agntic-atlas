@@ -386,6 +386,11 @@ export function scoreGap(spec = {}, { capabilities = {}, validator = null } = {}
       // same code elsewhere means a step is genuinely missing, which a rebuild CAN
       // fix. Without this the two were indistinguishable and both bought an Opus pass.
       field:    issue.field ?? null,
+      // WHICH PROMISE this gap is about, when it is about one. Carried for the same
+      // reason as `field`: it lets the rebuild routes recognise that two differently
+      // worded complaints concern the same assertion, instead of buying a whole-spec
+      // Opus pass for each. Null on gaps that concern no promise.
+      target:   issue.target ?? null,
       // A deterministic, machine-applicable repair the validator computed for a
       // STRUCTURAL defect (a missing branch/route edge to add, an ambiguous extra
       // edge to remove). Present only on codes whose fix is unambiguous. The gaps

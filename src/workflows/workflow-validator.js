@@ -560,6 +560,11 @@ export class WorkflowValidator {
         severity: 'error', code: 'UNSATISFIED_ASSERTION',
         message: `The outcome promises "${a.target}" (${a.kind}), but no step in this workflow does that — the request would be silently dropped.`,
         nodeId: null, field: 'outcome.assertions',
+        // WHICH PROMISE, as data rather than as prose. The target was recoverable
+        // only by parsing this sentence, so the converger's rebuild routes could not
+        // tell that the gap they were rebuilding for and the delivery `verify` later
+        // failed were THE SAME PROMISE — and paid for both. See `machineComplaint`.
+        target: a.target,
         hint: `Add a step that delivers to ${a.target}, or remove the promise from the outcome. Do not publish a workflow that quietly does less than it says.`,
       });
     }

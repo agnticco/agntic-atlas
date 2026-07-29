@@ -585,7 +585,12 @@ export async function tasksCreate(gapi, { title, notes, due, tasklistId = '@defa
   if (notes) task.notes = notes;
   if (due)   task.due = due;
   const created = await gapi('POST', `/tasks/v1/lists/${tasklistId}/tasks`, { body: task });
-  return { taskId: created.id };
+  // Return the LIST as well as the task. A real run's receipt is what the outcome
+  // check matches against, and returning only `taskId` left it with nothing to say
+  // about where the task landed — so the answer came from config alone, and a real
+  // run could not correct a wrong declaration. '@default' is the provider's sentinel
+  // for the list Google names "My Tasks"; it identifies nothing to a reader.
+  return { taskId: created.id, tasklistId: tasklistId === '@default' ? 'My Tasks' : tasklistId };
 }
 
 /**
@@ -625,6 +630,11 @@ export function registerGoogleChannels(capabilityRegistry) {
     id: 'gmail_get_message', connector: 'google', positions: ['step'],
     name: 'Get Gmail Message', icon: 'mail',
     description: 'Fetch the full content of a specific Gmail message by ID.',
+    // A READ. Undeclared, this fell through to the oracle's verb regex, whose
+    // `message_sent` pattern matches any id ending in `_message` — so FETCHING a
+    // message counted as SENDING one, and a workflow that merely read mail could
+    // satisfy an outcome promising a message was sent.
+    effect: 'read',
     configSchema: [
       { key: 'messageId', label: 'Message ID', type: 'string', optional: false, hint: 'Gmail message ID' },
     ],
@@ -637,6 +647,7 @@ export function registerGoogleChannels(capabilityRegistry) {
     id: 'gmail_send', connector: 'google', positions: ['step', 'delivery'],
     name: 'Send Email (Gmail)', icon: 'mail',
     description: 'Send an email from the connected Gmail account.',
+    effect: 'write', assertionKind: 'message_sent', locatorKeys: ['to'],
     outputFormat: 'html',
     configSchema: [
       { key: 'to',      label: 'To',      type: 'string',   optional: false },
@@ -678,6 +689,10 @@ export function registerGoogleChannels(capabilityRegistry) {
     id: 'calendar_create_event', connector: 'google', positions: ['step', 'delivery'],
     name: 'Create Calendar Event', icon: 'calendar',
     description: 'Add an event to the connected Google Calendar.',
+    // The event's own title IS its identity here — this capability takes no
+    // calendar id, so it always writes to the connected primary calendar.
+    effect: 'write', assertionKind: 'record_exists',
+    locatorKeys: ['title'], defaultLocator: 'your calendar',
     outputFormat: 'plain',
     configSchema: [
       { key: 'title',       label: 'Title',                            type: 'string', optional: false },
@@ -694,6 +709,8 @@ export function registerGoogleChannels(capabilityRegistry) {
   capabilityRegistry.register({
     id: 'drive_create_folder', connector: 'google', positions: ['step'],
     name: 'Create Drive Folder', icon: 'folder',
+    effect: 'write', assertionKind: 'document_exists',
+    locatorKeys: ['name'], defaultLocator: 'your Drive',
     description: 'Create a new folder in Google Drive. Returns folderId and link — use these in downstream docs_create or drive_list_files configs.',
     configSchema: [
       { key: 'name',     label: 'Folder name', type: 'string', optional: false },
@@ -752,6 +769,8 @@ export function registerGoogleChannels(capabilityRegistry) {
     id: 'sheets_append', connector: 'google', positions: ['step', 'delivery'],
     name: 'Append to Google Sheet', icon: 'table',
     description: 'Add rows of data to a spreadsheet.',
+    effect: 'write', assertionKind: 'record_exists',
+    locatorKeys: ['spreadsheetId', 'range'],
     outputFormat: 'plain',
     configSchema: [
       { key: 'spreadsheetId', label: 'Spreadsheet ID',    type: 'string', optional: false },
@@ -778,6 +797,8 @@ export function registerGoogleChannels(capabilityRegistry) {
   capabilityRegistry.register({
     id: 'docs_create', connector: 'google', positions: ['step', 'delivery'],
     name: 'Create Google Doc', icon: 'file-text',
+    effect: 'write', assertionKind: 'document_exists',
+    locatorKeys: ['title'], defaultLocator: 'your Drive',
     description: 'Create a new Google Doc from markdown content (headings, bold, lists render properly).',
     outputFormat: 'markdown',
     configSchema: [
@@ -807,6 +828,12 @@ export function registerGoogleChannels(capabilityRegistry) {
     name: 'Create Task', icon: 'check-square',
     description: 'Add a task to a Google Tasks list.',
     outputFormat: 'plain',
+    // THE DESTINATION IS THE LIST, NOT THE TASK'S OWN NAME. `title` is content —
+    // reporting it as the destination is the defect that cost three Opus rebuilds
+    // on prod (see `declaredWriteEffect`). `tasklistId` is optional because the
+    // handler defaults to '@default', which is the list named "My Tasks".
+    effect: 'write', assertionKind: 'record_exists',
+    locatorKeys: ['tasklistId'], defaultLocator: 'My Tasks',
     configSchema: [
       { key: 'title',      label: 'Title',       type: 'string', optional: false },
       { key: 'notes',      label: 'Notes',       type: 'string', optional: true  },

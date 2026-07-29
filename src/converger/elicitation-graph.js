@@ -412,6 +412,111 @@ export function sameComplaint(a, b, { minShared = 4, minContainment = 0.25 } = {
   return shared / Math.min(A.size, B.size) >= minContainment;
 }
 
+/* ── ONE GATE ON REBUILDS, INSTEAD OF ONE PER ROUTE ──────────────────────────
+ *
+ * "Do not pay twice for the same complaint" had been implemented THREE times by
+ * 2026-07-29 — `_lastShape` (the spec came back identical), `_lastBlockerKey` (the
+ * same blocking gaps), `_lastMissingKey`/`_lastMissingText` (the same sufficiency
+ * complaint) — each added after its own prod incident, each guarding exactly one
+ * route, none able to see the others. `verify_failed`, which orders more rebuilds
+ * than any of them, had none at all.
+ *
+ * So a single underlying fact discovered by three different nodes was paid for
+ * three times. WITNESSED ON PROD, `build-platform-1785337840769`: the oracle could
+ * not see a Google Task's destination, and that one fact arrived as
+ *
+ *     blocking_gaps  "UNSATISFIED_ASSERTION"
+ *     gap_answer     "promises tasks:My Tasks, but no step does that"
+ *     verify_failed  "nothing reached My Tasks"      (twice, byte-identical)
+ *
+ * Four whole-spec Opus passes — 132s + 72s + 71s + 80s — on a spec that was correct
+ * after the first. Three per-route guards, and not one of them fired, because each
+ * only ever compares a route against ITSELF.
+ *
+ * The gate below is route-independent by construction: it reads `_regenReason`, the
+ * one thing EVERY route already sets, at `generate`, the one place they all arrive.
+ * A route added later inherits it instead of arriving unguarded — which is the
+ * property the three fingerprints above never had.
+ */
+
+/**
+ * Routes into `generate` that a PERSON ordered.
+ *
+ * These are exempt: if someone asks twice for the same change, we try twice. The
+ * gate is about the model failing to move its own complaint, never about refusing
+ * a person. `first_build` is here because it follows a person approving or
+ * changing the plan, and `decision_correction` because it carries their words.
+ */
+const USER_ORDERED_ROUTES = new Set([
+  'first_build', 'user_change_request', 'ratify_feedback', 'ratify_rejected', 'decision_correction',
+]);
+
+/**
+ * The complaint a rebuild is meant to fix — or null when a person ordered it.
+ *
+ * `about` is the PROMISE the complaint concerns, normalised to the assertion target
+ * ("tasks:My Tasks") and nothing else, so that every route reports the same string
+ * for the same fact. That normalisation is the whole mechanism: the three nodes
+ * describe this fact in three registers —
+ *
+ *     "UNSATISFIED_ASSERTION:"
+ *     "The outcome promises \"tasks:My Tasks\" (record_exists), but no step …"
+ *     "nothing reached \"My Tasks\" in tasks — this run delivered to …"
+ *
+ * — and no text matcher can be made to see those as one thing without also matching
+ * complaints that are genuinely different. (Measured: `sameComplaint` needs
+ * `minShared: 1` to pair the last two, at which point it pairs nearly everything.)
+ * Comparing what the complaint is ABOUT is exact, cheap, and cannot be defeated by
+ * rewording — the same reason the capability registry declares where it writes
+ * instead of guessing from key names.
+ *
+ * `text` remains for complaints that concern no promise (a run that errored, a
+ * sufficiency verdict), where similarity is still the best available comparison.
+ */
+export function machineComplaint(reason) {
+  const route = String(reason?.route ?? '').trim();
+  if (!route || USER_ORDERED_ROUTES.has(route)) return null;
+  const text  = String(reason?.detail ?? '').trim();
+  const about = normaliseAbout(reason?.about);
+  if (!text && !about) return null;
+  return { about, text };
+}
+
+/** Assertion targets, sorted and joined — one string per distinct set of promises. */
+function normaliseAbout(about) {
+  const xs = (Array.isArray(about) ? about : [about])
+    .map(a => String(a ?? '').trim().toLowerCase())
+    .filter(Boolean);
+  return xs.length ? [...new Set(xs)].sort().join(',') : null;
+}
+
+/**
+ * Has this build already bought a rebuild for this complaint?
+ *
+ * Two complaints about the SAME PROMISE are the same complaint however they are
+ * worded — that is the cross-route case, and it is an exact comparison. When
+ * neither names a promise, fall back to wording similarity, which is what the
+ * sufficiency route has used since 2026-07-28.
+ *
+ * Matching against EVERY complaint so far, rather than only the last one, also
+ * catches A→B→A thrash, where a rebuild fixes one thing by breaking another and the
+ * loop alternates for ever without ever repeating consecutively.
+ */
+export function alreadyRebuiltFor(complaint, seen = []) {
+  if (!complaint) return false;
+  return (seen ?? []).some((prev) => {
+    if (!prev) return false;
+    if (complaint.about && prev.about) return complaint.about === prev.about;
+    if (complaint.about || prev.about) return false;   // one names a promise, one does not
+    return sameComplaint(complaint.text, prev.text);
+  });
+}
+
+/** Bounded — a build cannot accumulate complaints faster than it can pay for them. */
+function rememberComplaint(seen = [], complaint) {
+  return complaint ? [...seen, complaint].slice(-8) : seen;
+}
+
 /** Strip markdown fences and extract raw JSON from LLM output. */
 function extractJson(text) {
   const fenced = text.match(/```(?:json)?\s*([\s\S]*?)```/);
@@ -1207,9 +1312,19 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
       // them recorded NOTHING — so a build that rebuilt itself five times could not be
       // told apart from one that rebuilt once, and the reason had to be inferred by
       // elimination from node timings. Every route into `generate` now sets this, and
-      // `generate` logs it with the build's thread/tenant. It is diagnostic only: it
-      // never gates, bounds or changes a rebuild.
+      // `generate` logs it with the build's thread/tenant.
+      //
+      // It is NO LONGER diagnostic only (it was, until 2026-07-29). `generate` now
+      // gates on it: a rebuild whose complaint this build has already paid to fix is
+      // refused. That is only sound because EVERY route sets it — a route that
+      // forgets shows up as `unattributed`, which has an empty detail and therefore
+      // can never be gated, so a missing label still cannot fail anyone's build.
       _regenReason:      null,
+      // Every machine-discovered complaint this build has already bought a rebuild
+      // for. See `alreadyRebuiltFor`: the one cross-route replacement for the three
+      // per-route fingerprints above, which between them could not stop the same
+      // fact being paid for by `blocking_gaps`, then `gap_answer`, then `verify`.
+      _regenComplaints:  [],
       // The last accepted proposal was a NO-OP (see `propose`). Read by `analyze`.
       _noProgress:       false,
       // The whole-spec `generate` pass has run at least once (converger
@@ -1957,7 +2072,13 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
 
     // The reason this rebuild is being ordered: the blockers that rejected the last
     // build. Shared by both remaining exits, so neither can be added without one.
-    const blockerReason = { route: 'blocking_gaps', detail: blockerKey.slice(0, 300) };
+    // `about` — the promises these blockers concern, so the gate can tell that the
+    // gap route and the verify route are complaining about the same thing.
+    const blockerReason = {
+      route: 'blocking_gaps',
+      detail: blockerKey.slice(0, 300),
+      about: blockers.map(g => g.target).filter(Boolean),
+    };
 
     const clarificationCount = (state.clarifications ?? []).length;
     if (clarificationCount >= MAX_CLARIFICATIONS) {
@@ -2372,6 +2493,57 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
       };
     }
 
+    // ── A REBUILD IS ONLY WORTH PAYING FOR IF THE COMPLAINT IS NEW ───────────
+    //
+    // See `alreadyRebuiltFor`. The model has already seen this complaint and its best
+    // attempt did not move it; the same prompt plus the same complaint will not
+    // produce a different spec, and a second attempt costs ~80s and ~$0.70 while the
+    // person waits. Worse, it can make the spec WORSE — a rebuild rewrites everything,
+    // including the parts that were right.
+    //
+    // The cost of being wrong here is bounded and mild: the workflow is built, valid
+    // and publishable, and the person is told plainly that one thing did not settle,
+    // with "Request a change" and "Run test" both still open. The cost of NOT having
+    // this gate is measured: four Opus passes on a correct spec.
+    //
+    // Deliberately placed BELOW the `logEvent` above, so a refused pass still appears
+    // in `converger.generate_pass` — a rebuild that silently never happened would be
+    // invisible in exactly the log built to make rebuilds visible.
+    const complaintNow = machineComplaint(state._regenReason);
+    if (state._generated && alreadyRebuiltFor(complaintNow, state._regenComplaints)) {
+      logEvent('converger.regen_refused', {
+        ...who(cfg),
+        route:  state._regenReason?.route ?? 'unattributed',
+        detail: String(complaintNow).slice(0, 300),
+        seen:   (state._regenComplaints ?? []).length,
+        step:   state.step,
+      });
+      emitBeat(cfg, {
+        kind: 'check',
+        // Same closing phrase as the aggregate cap and the verify give-up. This is the
+        // third way a build can stop short, and a person should not have to learn a
+        // third vocabulary to recognise it.
+        text: 'I rebuilt this and ran into the same problem again, so I\'ve stopped rather than '
+            + 'keep trying the same fix. The workflow is built — review it before going live.',
+      });
+      return {
+        // `_buildCapped` is the EXISTING route to the walkthrough (see the aggregate
+        // cap above). Reusing it keeps one way out of the rebuild loop rather than
+        // adding a second that would have to be kept in step with it.
+        phase:        'analyzing',
+        _buildCapped: true,
+        // Keep verify's own verdict if it reached a clean one on this draft; only
+        // claim a give-up when there is nothing better to report.
+        _verifyReport: (state._verifyReport && state._verifyReport.gaveUp === false)
+          ? state._verifyReport
+          : { ran: false, passed: 0, total: 0, gaveUp: true,
+              note: 'a rebuild ran into the same problem it was meant to fix, so I stopped — review it before going live' },
+        confirmationLog: [{ step: state.step, type: 'generate_refused', complaint: String(complaintNow).slice(0, 300) }],
+        step: state.step + 1,
+        _regenReason: null,
+      };
+    }
+
     // WHY THE REBUILD IS DIFFERENT FROM THE LAST ONE.
     //
     // `_missingNote` carries the reason the previous draft was rejected — either a
@@ -2544,6 +2716,8 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
         draft: merged,
         _generated: true,
         _lastShape: newShape,
+        // This pass was paid for. Whatever it was meant to fix has now had its turn.
+        _regenComplaints: rememberComplaint(state._regenComplaints, complaintNow),
         regenRounds:       MAX_REGEN_ROUNDS,
         verifyRounds:      MAX_VERIFY_ROUNDS,
         // ALL of them, not just the loud ones. Saturating verify and the gap loop while
@@ -2602,6 +2776,11 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
       // Remembered so the NEXT rebuild can tell whether it changed anything. Without
       // this the comparison above can never match and the guard is dead code.
       _lastShape: newShape,
+      // This pass was paid for. Recording the complaint HERE — where the Opus call
+      // has actually completed — rather than at the routes that request a rebuild is
+      // what makes the gate route-independent, and what stops a refused pass from
+      // being remembered as though it had been tried.
+      _regenComplaints: rememberComplaint(state._regenComplaints, complaintNow),
       // Count a REGENERATION only when a prior build already latched — the first
       // build must not consume the MAX_REGEN_ROUNDS budget. `_missingNote` is cleared
       // now that this pass has consumed it, so it can't leak into an unrelated rebuild.
@@ -3229,7 +3408,12 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
         proposeRounds:   0,
         step:            state.step + 1,
         phase:           'proposing',
-        _regenReason:    { route: 'gap_answer', detail: clarifications.map(c => c.q).join('; ').slice(0, 300) },
+        _regenReason:    {
+          route: 'gap_answer',
+          detail: clarifications.map(c => c.q).join('; ').slice(0, 300),
+          // Same promises the blocking-gap route reports, so the two are comparable.
+          about: blocking.map(g => g.target).filter(Boolean),
+        },
       };
     }
 
@@ -3543,7 +3727,11 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
         round: (state.verifyRounds ?? 0) + 1,
         passed: passedCount, total,
         failures: structural.length,
-        assertion: firstFail?.oracle?.target ?? firstFail?.oracle?.id ?? null,
+        // The failing promise. `oracle.target`/`oracle.id` are both null on a
+        // contract failure, so this logged `"assertion":null` on every real rebuild
+        // it exists to attribute — the target lives on the contract entries.
+        assertion: (firstFail?.oracle?.contract ?? []).find(c => !c.ok)?.target
+                   ?? firstFail?.oracle?.target ?? firstFail?.oracle?.id ?? null,
         complaint: String(complaint ?? '').slice(0, 300),
       });
       emitBeat(cfg, {
@@ -3557,7 +3745,18 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
       return {
         ...carryDraft,
         phase:          'proposing',
-        _regenReason:   { route: 'verify_failed', detail: String(complaint ?? '').slice(0, 300) },
+        _regenReason:   {
+          route: 'verify_failed',
+          detail: String(complaint ?? '').slice(0, 300),
+          // The promises the failing samples were about — the same values the gap
+          // routes report, which is what lets the gate see one fact across three
+          // nodes instead of three unrelated complaints.
+          // Read off the failing CONTRACT entries, not `oracle.target` — which is
+          // null here (the prod event logged `"assertion":null` for exactly this
+          // reason) and would have left every verify complaint with nothing to
+          // compare, silently reducing the gate to text similarity.
+          about: (firstFail?.oracle?.contract ?? []).filter(c => !c.ok).map(c => c.target).filter(Boolean),
+        },
         verifyRounds:   (state.verifyRounds ?? 0) + 1,
         clarifications: [{
           q: '(self-test failed — fix required)',
