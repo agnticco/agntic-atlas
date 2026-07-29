@@ -438,6 +438,29 @@ describe('the workflow page draws the real graph', () => {
     assert.ok(!markup.includes('an.decide'));
   });
 
+  test('it scrolls away instead of owning the top of the page', () => {
+    // It was in the page's FIXED header, above the tabs, so ~350px of every screen
+    // was the diagram whether you wanted it or not and no amount of scrolling got
+    // past it. It belongs inside the overview's own scroll pane.
+    const tabs  = HTML.indexOf('<!-- SUB-NAV TABS -->');
+    const pane  = HTML.indexOf('<sc-if value="{{ consoleViewProfile }}"');
+    const graph = HTML.indexOf('<sc-if value="{{ consoleGraph }}"');
+    assert.ok(tabs > 0 && pane > 0 && graph > 0);
+    assert.ok(graph > pane, 'the graph must render inside the scrolling overview pane');
+    assert.ok(graph > tabs, 'and below the fixed header, not in it');
+  });
+
+  test('it is capped small and centred', () => {
+    const i = HTML.indexOf('_fitConsoleGraph() {');
+    const body = code(HTML.slice(i, i + 900));
+    assert.match(body, /MAX_H = 190/, 'a share of the viewport is the builder\'s rule, not this one');
+    assert.doesNotMatch(body, /window\.innerHeight/);
+    // `scale()` shrinks the painted box, not the laid-out one, so without this the
+    // graph hugs the left edge with all the slack piled up on the right.
+    assert.match(body, /marginLeft/, 'a scaled graph does not centre itself');
+    assert.match(body, /o\.clientWidth - w \* k/);
+  });
+
   test('it fits itself without fighting the builder canvas over the same handles', () => {
     // One ResizeObserver pair watching both surfaces would let a resize of one
     // rescale the other.

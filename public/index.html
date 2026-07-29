@@ -1595,65 +1595,6 @@
             </div>
           </div>
 
-          <!-- ── THE REAL WORKFLOW, DRAWN ─────────────────────────────────────────
-               Was a flat left-to-right list of name chips, which could not show a
-               branch at all: a five-lane approval workflow read as twelve steps in a
-               row, so the screen you land on after publishing was the one place the
-               SHAPE of your workflow was invisible (operator, 2026-07-29).
-
-               Same layout engine and the same labels as the builder's canvas
-               (`_liveGraphLayout`, `_nodeShape`) — the only thing that differs is
-               chrome a settled workflow has no use for: the confirm/reject controls
-               and the build-reveal animation, both stripped. This markup was DERIVED
-               from the builder's block rather than written again, so the two cannot
-               disagree about what a workflow looks like. -->
-          <sc-if value="{{ consoleGraph }}" hint-placeholder-val="{{ false }}">
-          <div style="margin-top:12px;border-radius:13px;border:1px solid rgba(255,255,255,.08);background:rgba(255,255,255,.018);padding:6px 10px">
-            <div ref="{{ consoleGraph.fitRef }}" style="box-sizing:content-box;overflow:hidden;padding:0">
-              <div ref="{{ consoleGraph.fitInnerRef }}" style="position:relative;width:{{ consoleGraph.canvasW }};height:{{ consoleGraph.canvasH }};transform-origin:top left;margin:14px 20px 10px 18px">
-                      <sc-for list="{{ consoleGraph.edges }}" as="ed" hint-placeholder-count="3">
-                        <span style="position:absolute;left:0;top:0;width:{{ consoleGraph.canvasW }};height:{{ consoleGraph.canvasH }};display:block;pointer-events:none;opacity:{{ ed.o }};transition:opacity .45s"><svg width="{{ consoleGraph.canvasW }}" height="{{ consoleGraph.canvasH }}" fill="none" style="display:block;overflow:visible"><path d="{{ ed.d }}" stroke="{{ ed.color }}" stroke-width="2" stroke-linecap="round" fill="none"></path><polygon points="{{ ed.arrowPoints }}" fill="{{ ed.color }}"></polygon></svg></span>
-                      </sc-for>
-                      <!-- A case label rides its own edge (only an exclusive split has them). -->
-                      <sc-for list="{{ consoleGraph.edgeLabels }}" as="el" hint-placeholder-count="2">
-                        <span style="position:absolute;left:{{ el.left }};top:{{ el.top }};transform:translateX(-50%);font-family:'Instrument Serif',Georgia,serif;font-style:italic;font-size:12px;color:{{ el.color }};white-space:nowrap;pointer-events:none;opacity:{{ el.o }};transition:opacity .45s">{{ el.text }}</span>
-                      </sc-for>
-                      <sc-for list="{{ consoleGraph.nodes }}" as="an" hint-placeholder-count="4">
-                        <div style="position:absolute;left:{{ an.left }};top:{{ an.top }}">
-                          <div class="nodewrap" style="flex:none;position:relative;opacity:{{ an.o }};transform:{{ an.tr }};transition:opacity .5s,transform .5s cubic-bezier(.2,.7,.3,1)">
-                            <div style="width:{{ an.w }};height:{{ an.h }};border-radius:{{ an.radius }};border:1.5px solid {{ an.border }};background:{{ an.bg }};transform:{{ an.rot }};display:flex;align-items:center;justify-content:center;color:{{ an.fg }};transition:border .25s,color .25s">
-                              <span style="transform:{{ an.unrot }};display:flex">
-                                <sc-if value="{{ an.icoMail }}" hint-placeholder-val="{{ false }}"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="2"></rect><path d="M3 7l9 6 9-6"></path></svg></sc-if>
-                                <sc-if value="{{ an.icoFork }}" hint-placeholder-val="{{ false }}"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12h7"></path><path d="M10 12c4.5 0 4.5-5.5 9-5.5"></path><path d="M10 12c4.5 0 4.5 5.5 9 5.5"></path><circle cx="20.5" cy="6.5" r="1.4"></circle><circle cx="20.5" cy="17.5" r="1.4"></circle></svg></sc-if>
-                                <sc-if value="{{ an.icoDoc }}" hint-placeholder-val="{{ false }}"><svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="8" y1="13" x2="16" y2="13"></line><line x1="8" y1="17" x2="13" y2="17"></line></svg></sc-if>
-                                <sc-if value="{{ an.icoDb }}" hint-placeholder-val="{{ false }}"><svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5" rx="8" ry="3"></ellipse><path d="M4 5v14c0 1.7 3.6 3 8 3s8-1.3 8-3V5"></path><path d="M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3"></path></svg></sc-if>
-                                <sc-if value="{{ an.icoInbox }}" hint-placeholder-val="{{ false }}"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M22 12h-6l-2 3h-4l-2-3H2"></path><path d="M5.5 5h13L22 12v6a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2v-6z"></path></svg></sc-if>
-                                <sc-if value="{{ an.icoGear }}" hint-placeholder-val="{{ false }}"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><circle cx="12" cy="12" r="3.2"></circle><path d="M12 2.5v3M12 18.5v3M2.5 12h3M18.5 12h3M5.2 5.2l2.1 2.1M16.7 16.7l2.1 2.1M18.8 5.2l-2.1 2.1M7.3 16.7l-2.1 2.1"></path></svg></sc-if>
-                                <sc-if value="{{ an.icoSpark }}" hint-placeholder-val="{{ false }}"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"><path d="M12 3l2.1 6.4L20.5 11.5l-6.4 2.1L12 20l-2.1-6.4L3.5 11.5l6.4-2.1z"></path></svg></sc-if>
-                                <sc-if value="{{ an.icoSplit }}" hint-placeholder-val="{{ false }}"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M5 12h6M11 12l5-5M11 12l5 5"></path></svg></sc-if>
-                                <sc-if value="{{ an.icoPerson }}" hint-placeholder-val="{{ false }}"><svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><circle cx="12" cy="8" r="4"></circle><path d="M4 21c0-4 3.6-6.5 8-6.5s8 2.5 8 6.5"></path></svg></sc-if>
-                                <sc-if value="{{ an.icoBolt }}" hint-placeholder-val="{{ false }}"><svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor"><path d="M13 2 4.5 13.5H11L9.5 22 19 10h-6.5z"></path></svg></sc-if>
-                                <sc-if value="{{ an.icoLayers }}" hint-placeholder-val="{{ false }}"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2 2 7.5 12 13l10-5.5z"></path><path d="M2 12.5 12 18l10-5.5"></path><path d="M2 17.5 12 23l10-5.5"></path></svg></sc-if>
-                                <sc-if value="{{ an.icoPlug }}" hint-placeholder-val="{{ false }}"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M9 7V3M15 7V3"></path><path d="M6 7h12v4a6 6 0 0 1-12 0z"></path><path d="M12 17v4"></path></svg></sc-if>
-                                <sc-if value="{{ an.icoGlobe }}" hint-placeholder-val="{{ false }}"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"></circle><path d="M3 12h18M12 3c2.7 2.6 4 5.7 4 9s-1.3 6.4-4 9c-2.7-2.6-4-5.7-4-9s1.3-6.4 4-9z"></path></svg></sc-if>
-                                <sc-if value="{{ an.icoSend }}" hint-placeholder-val="{{ false }}"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M22 2 11 13"></path><path d="M22 2 15 22l-4-9-9-4z"></path></svg></sc-if>
-                                <sc-if value="{{ an.icoLoop }}" hint-placeholder-val="{{ false }}"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M17 2l4 4-4 4"></path><path d="M3 11V9a4 4 0 0 1 4-4h14"></path><path d="M7 22l-4-4 4-4"></path><path d="M21 13v2a4 4 0 0 1-4 4H3"></path></svg></sc-if>
-                                <sc-if value="{{ an.icoGrid }}" hint-placeholder-val="{{ false }}"><svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"></rect><path d="M3 9h18M3 15h18M12 3v18"></path></svg></sc-if>
-                                <sc-if value="{{ an.icoStop }}" hint-placeholder-val="{{ false }}"><svg viewBox="0 0 24 24" width="15" height="15" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="2.5"></rect></svg></sc-if>
-                              </span>
-                            </div>
-                            <span style="position:absolute;top:calc(100% + 8px);left:50%;transform:translateX(-50%);width:92px;display:flex;flex-direction:column;gap:2px;text-align:center;pointer-events:none">
-                              <span style="font-size:10.5px;font-weight:600;line-height:1.25;color:{{ an.titleColor }};overflow:hidden;text-overflow:ellipsis;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical">{{ an.title }}</span>
-                              <span style="font-family:ui-monospace,SFMono-Regular,monospace;font-size:7.5px;font-weight:600;letter-spacing:.12em;color:rgba(255,255,255,.3);white-space:nowrap">{{ an.tag }}</span>
-                            </span>
-                          </div>
-                        </div>
-                      </sc-for>
-              </div>
-            </div>
-          </div>
-          </sc-if>
-
           <!-- SUB-NAV TABS -->
           <div style="display:flex;gap:4px;margin-top:18px">
             <button onClick="{{ onSwitchProfile }}" class="ab-seg" style="border:none;cursor:pointer;background:{{ consoleProfileTabBg }};color:{{ consoleProfileTabColor }};font-family:inherit;font-size:13px;font-weight:500;padding:8px 16px;border-radius:8px">Overview</button>
@@ -1708,6 +1649,66 @@
         <!-- ── PROFILE TAB ── -->
         <sc-if value="{{ consoleViewProfile }}" hint-placeholder-val="{{ false }}">
         <div class="ab-scroll" style="flex:1;overflow-y:auto;min-height:0;padding:20px 32px 64px">
+
+          <!-- ── THE REAL WORKFLOW, DRAWN ─────────────────────────────────────────
+               Was a flat left-to-right list of name chips, which could not show a
+               branch at all: a five-lane approval workflow read as twelve steps in a
+               row, so the screen you land on after publishing was the one place the
+               SHAPE of your workflow was invisible (operator, 2026-07-29).
+
+               Same layout engine and the same labels as the builder's canvas
+               (`_liveGraphLayout`, `_nodeShape`) — the only thing that differs is
+               chrome a settled workflow has no use for: the confirm/reject controls
+               and the build-reveal animation, both stripped. This markup was DERIVED
+               from the builder's block rather than written again, so the two cannot
+               disagree about what a workflow looks like. -->
+          <sc-if value="{{ consoleGraph }}" hint-placeholder-val="{{ false }}">
+          <div style="margin:0 0 22px;border-radius:13px;border:1px solid rgba(255,255,255,.08);background:rgba(255,255,255,.018);padding:12px 10px">
+            <div ref="{{ consoleGraph.fitRef }}" style="box-sizing:content-box;overflow:hidden;padding:0">
+              <div ref="{{ consoleGraph.fitInnerRef }}" style="position:relative;width:{{ consoleGraph.canvasW }};height:{{ consoleGraph.canvasH }};transform-origin:top left;margin:0">
+                      <sc-for list="{{ consoleGraph.edges }}" as="ed" hint-placeholder-count="3">
+                        <span style="position:absolute;left:0;top:0;width:{{ consoleGraph.canvasW }};height:{{ consoleGraph.canvasH }};display:block;pointer-events:none;opacity:{{ ed.o }};transition:opacity .45s"><svg width="{{ consoleGraph.canvasW }}" height="{{ consoleGraph.canvasH }}" fill="none" style="display:block;overflow:visible"><path d="{{ ed.d }}" stroke="{{ ed.color }}" stroke-width="2" stroke-linecap="round" fill="none"></path><polygon points="{{ ed.arrowPoints }}" fill="{{ ed.color }}"></polygon></svg></span>
+                      </sc-for>
+                      <!-- A case label rides its own edge (only an exclusive split has them). -->
+                      <sc-for list="{{ consoleGraph.edgeLabels }}" as="el" hint-placeholder-count="2">
+                        <span style="position:absolute;left:{{ el.left }};top:{{ el.top }};transform:translateX(-50%);font-family:'Instrument Serif',Georgia,serif;font-style:italic;font-size:12px;color:{{ el.color }};white-space:nowrap;pointer-events:none;opacity:{{ el.o }};transition:opacity .45s">{{ el.text }}</span>
+                      </sc-for>
+                      <sc-for list="{{ consoleGraph.nodes }}" as="an" hint-placeholder-count="4">
+                        <div style="position:absolute;left:{{ an.left }};top:{{ an.top }}">
+                          <div class="nodewrap" style="flex:none;position:relative;opacity:{{ an.o }};transform:{{ an.tr }};transition:opacity .5s,transform .5s cubic-bezier(.2,.7,.3,1)">
+                            <div style="width:{{ an.w }};height:{{ an.h }};border-radius:{{ an.radius }};border:1.5px solid {{ an.border }};background:{{ an.bg }};transform:{{ an.rot }};display:flex;align-items:center;justify-content:center;color:{{ an.fg }};transition:border .25s,color .25s">
+                              <span style="transform:{{ an.unrot }};display:flex">
+                                <sc-if value="{{ an.icoMail }}" hint-placeholder-val="{{ false }}"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="2"></rect><path d="M3 7l9 6 9-6"></path></svg></sc-if>
+                                <sc-if value="{{ an.icoFork }}" hint-placeholder-val="{{ false }}"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12h7"></path><path d="M10 12c4.5 0 4.5-5.5 9-5.5"></path><path d="M10 12c4.5 0 4.5 5.5 9 5.5"></path><circle cx="20.5" cy="6.5" r="1.4"></circle><circle cx="20.5" cy="17.5" r="1.4"></circle></svg></sc-if>
+                                <sc-if value="{{ an.icoDoc }}" hint-placeholder-val="{{ false }}"><svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="8" y1="13" x2="16" y2="13"></line><line x1="8" y1="17" x2="13" y2="17"></line></svg></sc-if>
+                                <sc-if value="{{ an.icoDb }}" hint-placeholder-val="{{ false }}"><svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5" rx="8" ry="3"></ellipse><path d="M4 5v14c0 1.7 3.6 3 8 3s8-1.3 8-3V5"></path><path d="M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3"></path></svg></sc-if>
+                                <sc-if value="{{ an.icoInbox }}" hint-placeholder-val="{{ false }}"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M22 12h-6l-2 3h-4l-2-3H2"></path><path d="M5.5 5h13L22 12v6a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2v-6z"></path></svg></sc-if>
+                                <sc-if value="{{ an.icoGear }}" hint-placeholder-val="{{ false }}"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><circle cx="12" cy="12" r="3.2"></circle><path d="M12 2.5v3M12 18.5v3M2.5 12h3M18.5 12h3M5.2 5.2l2.1 2.1M16.7 16.7l2.1 2.1M18.8 5.2l-2.1 2.1M7.3 16.7l-2.1 2.1"></path></svg></sc-if>
+                                <sc-if value="{{ an.icoSpark }}" hint-placeholder-val="{{ false }}"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"><path d="M12 3l2.1 6.4L20.5 11.5l-6.4 2.1L12 20l-2.1-6.4L3.5 11.5l6.4-2.1z"></path></svg></sc-if>
+                                <sc-if value="{{ an.icoSplit }}" hint-placeholder-val="{{ false }}"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M5 12h6M11 12l5-5M11 12l5 5"></path></svg></sc-if>
+                                <sc-if value="{{ an.icoPerson }}" hint-placeholder-val="{{ false }}"><svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><circle cx="12" cy="8" r="4"></circle><path d="M4 21c0-4 3.6-6.5 8-6.5s8 2.5 8 6.5"></path></svg></sc-if>
+                                <sc-if value="{{ an.icoBolt }}" hint-placeholder-val="{{ false }}"><svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor"><path d="M13 2 4.5 13.5H11L9.5 22 19 10h-6.5z"></path></svg></sc-if>
+                                <sc-if value="{{ an.icoLayers }}" hint-placeholder-val="{{ false }}"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2 2 7.5 12 13l10-5.5z"></path><path d="M2 12.5 12 18l10-5.5"></path><path d="M2 17.5 12 23l10-5.5"></path></svg></sc-if>
+                                <sc-if value="{{ an.icoPlug }}" hint-placeholder-val="{{ false }}"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M9 7V3M15 7V3"></path><path d="M6 7h12v4a6 6 0 0 1-12 0z"></path><path d="M12 17v4"></path></svg></sc-if>
+                                <sc-if value="{{ an.icoGlobe }}" hint-placeholder-val="{{ false }}"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"></circle><path d="M3 12h18M12 3c2.7 2.6 4 5.7 4 9s-1.3 6.4-4 9c-2.7-2.6-4-5.7-4-9s1.3-6.4 4-9z"></path></svg></sc-if>
+                                <sc-if value="{{ an.icoSend }}" hint-placeholder-val="{{ false }}"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M22 2 11 13"></path><path d="M22 2 15 22l-4-9-9-4z"></path></svg></sc-if>
+                                <sc-if value="{{ an.icoLoop }}" hint-placeholder-val="{{ false }}"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M17 2l4 4-4 4"></path><path d="M3 11V9a4 4 0 0 1 4-4h14"></path><path d="M7 22l-4-4 4-4"></path><path d="M21 13v2a4 4 0 0 1-4 4H3"></path></svg></sc-if>
+                                <sc-if value="{{ an.icoGrid }}" hint-placeholder-val="{{ false }}"><svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"></rect><path d="M3 9h18M3 15h18M12 3v18"></path></svg></sc-if>
+                                <sc-if value="{{ an.icoStop }}" hint-placeholder-val="{{ false }}"><svg viewBox="0 0 24 24" width="15" height="15" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="2.5"></rect></svg></sc-if>
+                              </span>
+                            </div>
+                            <span style="position:absolute;top:calc(100% + 8px);left:50%;transform:translateX(-50%);width:92px;display:flex;flex-direction:column;gap:2px;text-align:center;pointer-events:none">
+                              <span style="font-size:10.5px;font-weight:600;line-height:1.25;color:{{ an.titleColor }};overflow:hidden;text-overflow:ellipsis;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical">{{ an.title }}</span>
+                              <span style="font-family:ui-monospace,SFMono-Regular,monospace;font-size:7.5px;font-weight:600;letter-spacing:.12em;color:rgba(255,255,255,.3);white-space:nowrap">{{ an.tag }}</span>
+                            </span>
+                          </div>
+                        </div>
+                      </sc-for>
+              </div>
+            </div>
+          </div>
+          </sc-if>
+
 
           <!-- STAT CARDS -->
           <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;margin-bottom:28px">
@@ -8552,13 +8553,27 @@ class Component extends DCLogic {
   // The same fit for the workflow page's copy of the graph. Deliberately a separate
   // pair of element handles: one ResizeObserver watching both surfaces' boxes would
   // let a resize of one rescale the other, and they are never mounted together.
+  //
+  // SMALLER AND CENTRED, AND IT SCROLLS AWAY (operator, 2026-07-29: "needs to be
+  // centered and smaller and allow me to scroll past it. It takes up a lot of page
+  // real estate"). Three separate causes, all fixed:
+  //   · it sat in the page's FIXED header, so it could never be scrolled past — it
+  //     now lives at the top of the overview's own scroll pane;
+  //   · the builder's cap is a share of the viewport, right for the surface you are
+  //     watching a build on and wrong for a reference diagram above your numbers.
+  //     A flat 190px is roughly four rows of nodes, which reads at a glance;
+  //   · `transform: scale()` shrinks the PAINTED box but not the laid-out one, so a
+  //     scaled graph hugged the left edge with the slack piled up on the right. The
+  //     left margin is set from the real scaled width to centre it.
   _fitConsoleGraph() {
     const o = this._cgOuter, i = this._cgInner;
     if (!o || !i) return;
-    const maxH = Math.max(260, Math.round(window.innerHeight * 0.42));
-    const k = Math.min(1, o.clientWidth / (i.scrollWidth || 1), maxH / (i.scrollHeight || 1));
+    const MAX_H = 190;
+    const w = i.scrollWidth || 1, h = i.scrollHeight || 1;
+    const k = Math.min(1, o.clientWidth / w, MAX_H / h);
     i.style.transform = 'scale(' + k + ')';
-    o.style.height = (i.scrollHeight * k) + 'px';
+    i.style.marginLeft = Math.max(0, Math.round((o.clientWidth - w * k) / 2)) + 'px';
+    o.style.height = Math.round(h * k) + 'px';
   }
   // Confirm advances to the next node (with the 560ms green flash). Reject stops and
   // asks for a note in the chat — the note goes to the converger, which re-proposes.

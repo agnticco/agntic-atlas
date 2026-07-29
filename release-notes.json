@@ -1,5 +1,13 @@
 [
   {
+    "version": "1.6.60",
+    "date": "2026-07-28",
+    "title": "The workflow diagram takes less of the page",
+    "notes": [
+      "It sat in the fixed header, so it owned the top of every workflow page and no amount of scrolling got past it. It now sits at the top of the overview and scrolls away, capped shorter, and centred."
+    ]
+  },
+  {
     "version": "1.6.59",
     "date": "2026-07-28",
     "title": "The workflow page draws the real workflow",
