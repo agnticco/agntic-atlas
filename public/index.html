@@ -7542,6 +7542,17 @@ class Component extends DCLogic {
     return this._plainText(body) || body;
   }
 
+  // A step's `query` is a mail/search filter on Gmail ("is:unread newer_than:1d")
+  // and a plain sentence on a web search ("best CRM for small teams"). Only the
+  // first is syntax, and only the first should be rewritten — running the second
+  // through the filter renderer would mangle a phrase the user wrote themselves.
+  // The tell is an operator token, `word:value`.
+  _plainQuery(v) {
+    const raw = String(v == null ? '' : v).trim();
+    if (!raw || !/(^|\s)[A-Za-z_]+:[^\s]/.test(raw)) return raw;
+    return this._plainFilter(raw).replace(/^that are /, '') || raw;
+  }
+
   // ── A SEARCH QUERY IS NOT ENGLISH ──────────────────────────────────────────
   // `is:unread` was shown verbatim on the trigger's approval card ("Only when it
   // matches: is:unread"), in the workflow's status chip, and in the procedure
@@ -8018,7 +8029,7 @@ class Component extends DCLogic {
       if (tt === 'email') {
         if (!what) what = 'The workflow starts on its own each time a matching email lands in your inbox.';
         this._fact(facts, 'Watches', 'your email inbox');
-        this._fact(facts, 'Only when it matches', full.filter);
+        this._fact(facts, 'Only', this._plainFilter(full.filter) && ('emails ' + this._plainFilter(full.filter)));
       } else if (tt === 'schedule') {
         if (!what) what = 'The workflow starts itself on this schedule — nobody has to press anything.';
         this._fact(facts, 'Runs', this._humanCron(full.cron, full.timezone) || full.cron);
@@ -8081,7 +8092,7 @@ class Component extends DCLogic {
       this._fact(facts, 'App', a.connector);
       this._fact(facts, 'Does', this._plainId(cfg.action));
       ['target', 'to', 'channel', 'query', 'url', 'baseId', 'tableId', 'folder', 'path', 'spreadsheetId', 'calendarId']
-        .forEach(k => { const v = cfg[k]; if (v != null && typeof v !== 'object') this._fact(facts, this._plainId(k), v); });
+        .forEach(k => { const v = cfg[k]; if (v != null && typeof v !== 'object') this._fact(facts, this._plainId(k), k === 'query' ? this._plainQuery(v) : v); });
       this._fact(facts, 'Heading', cfg.title);
     } else if (ty === 'branch') {
       if (!what) what = 'Sends the work down exactly one of the paths below. Nothing else runs.';
@@ -10676,7 +10687,7 @@ class Component extends DCLogic {
             // in the heading, so repeating the raw id below it adds nothing but jargon.
             if (cfg.baseId) pairs.push({ k: "Base", v: this._plainId(cfg.baseId) });
             if (cfg.tableId) pairs.push({ k: "Table", v: this._plainId(cfg.tableId) });
-            if (cfg.query) pairs.push({ k: "Looks for", v: this._plainText(cfg.query, 100) });
+            if (cfg.query) pairs.push({ k: "Looks for", v: this._plainQuery(cfg.query) });
             if (cfg.fields && typeof cfg.fields === "object") pairs.push({ k: "Writes", v: Object.keys(cfg.fields).map(f => this._plainId(f)).join(", ") });
             const mx = cfg.max_results != null ? cfg.max_results : (cfg.maxResults != null ? cfg.maxResults : cfg.maxRecords);
             if (mx != null) pairs.push({ k: "At most", v: String(mx) + " at a time" });

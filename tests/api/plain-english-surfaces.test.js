@@ -49,7 +49,7 @@ function methodSrc(name) {
 
 /** The real helpers, executed. */
 const C = (() => {
-  const names = ['_stepTypeWords', '_plainId', '_plainLabel', '_plainFilter', '_plainAge', '_plainTarget', '_plainInstruction', '_plainText', '_stringify', '_nodeShape', '_routeDomainOf', '_answersAPersonCanGive'];
+  const names = ['_stepTypeWords', '_plainId', '_plainLabel', '_plainFilter', '_plainAge', '_plainTarget', '_plainInstruction', '_plainText', '_stringify', '_nodeShape', '_routeDomainOf', '_answersAPersonCanGive', '_plainQuery'];
   return eval('({\n' + names.map(methodSrc).join(',\n') + '\n})');
 })();
 
@@ -142,6 +142,43 @@ describe('a search query is rendered, not printed', () => {
   test('nothing in, nothing out', () => {
     assert.equal(C._plainFilter(''), '');
     assert.equal(C._plainFilter(null), '');
+  });
+});
+
+describe('a search step shows what it looks for, not its syntax', () => {
+  // Witnessed on the approval card, 2026-07-29: `Query: is:unread newer_than:1d`.
+  // `_plainFilter` covered the TRIGGER's filter; a connector-action's `query` went
+  // through the generic config loop, which prints whatever it is given.
+  test('a mail query is rendered', () => {
+    assert.equal(C._plainQuery('is:unread newer_than:1d'), 'unread, from the last 1 day');
+  });
+
+  test('a web search query is a sentence and is left EXACTLY alone', () => {
+    // The same config key on a different capability. Running this through the
+    // filter renderer would mangle a phrase the person wrote themselves.
+    const sentence = 'best CRM for small teams 2026';
+    assert.equal(C._plainQuery(sentence), sentence);
+  });
+
+  test('a colon inside prose is not mistaken for an operator', () => {
+    const prose = 'pricing: what do competitors charge';
+    assert.equal(C._plainQuery(prose), prose, 'the tell is `word:value` with no space after the colon');
+  });
+
+  test('nothing in, nothing out', () => {
+    assert.equal(C._plainQuery(''), '');
+    assert.equal(C._plainQuery(null), '');
+  });
+
+  test('every site that shows a query routes through it', () => {
+    assert.match(HTML, /k === 'query' \? this\._plainQuery\(v\)/, 'the approval card');
+    assert.match(HTML, /k: "Looks for", v: this\._plainQuery\(cfg\.query\)/, 'the procedure document');
+  });
+
+  test('and the trigger card no longer prints its filter raw', () => {
+    // "Only when it matches: is:unread" — the one site the earlier sweep missed.
+    assert.ok(!HTML.includes("this._fact(facts, 'Only when it matches', full.filter)"));
+    assert.match(HTML, /this\._fact\(facts, 'Only', this\._plainFilter\(full\.filter\)/);
   });
 });
 

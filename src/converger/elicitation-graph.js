@@ -343,6 +343,75 @@ export function missingKeyOf(missing) {
   return String(missing ?? '').toLowerCase().replace(/\s+/g, ' ').trim().slice(0, 200);
 }
 
+// ── THE SAME COMPLAINT, SAID DIFFERENTLY, IS STILL THE SAME COMPLAINT ───────
+// `missingKeyOf` compares the first 200 characters, so it only ever caught a
+// WORD-FOR-WORD repeat. Measured on prod (build-platform-1785296845055): the
+// sufficiency critic ordered four rebuilds of one workflow, every one of them the
+// same objection in new words —
+//   "classifies the entire batch of emails as a single unit…"
+//   "Per-email classification: the workflow classifies the batch as a whole…"
+//   "Per-email classification step — the workflow must classify EACH email…"
+//   "must extract individual email details … before classifying each one"
+// — four different keys, so the guard never fired and the loop ran to the cap.
+//
+// That is the shape this codebase keeps paying for: a check scoped to the FORM a
+// value takes rather than to what it MEANS, defeated by one rephrasing. Compare
+// the content words instead. Not clever, and it does not need to be: two attempts
+// to say one thing about one workflow share most of their nouns.
+const COMPLAINT_STOPWORDS = new Set([
+  'that', 'this', 'with', 'from', 'into', 'them', 'they', 'then', 'than', 'there',
+  'their', 'which', 'while', 'would', 'could', 'should', 'must', 'need', 'needs',
+  'have', 'has', 'been', 'being', 'does', 'each', 'every', 'only', 'also', 'more',
+  'but', 'and', 'the', 'for', 'are', 'not', 'its', 'it', 'a', 'an', 'is', 'to', 'of',
+  'workflow', 'step', 'steps', 'node', 'nodes', 'current', 'draft', 'intent', 'user',
+]);
+
+/** Content words, crudely stemmed so classify/classifies/classification agree. */
+export function complaintWords(text) {
+  const out = new Set();
+  for (const raw of String(text ?? '').toLowerCase().replace(/[^a-z0-9\s]/g, ' ').split(/\s+/)) {
+    if (raw.length < 4 || COMPLAINT_STOPWORDS.has(raw)) continue;
+    // Crude on purpose. The trailing y/ic pass is what makes classify, classifies,
+    // classifying and classification all land on "classif" — without it they stayed
+    // three separate tokens and the four prod complaints looked less alike than they
+    // are. Over-stemming is safe here: it only has to be CONSISTENT, since both
+    // sides of the comparison go through it.
+    const stem = raw
+      .replace(/(ations?|ation|ically|ingly)$/, '')
+      .replace(/(ing|ies|ied|ion|ally|ual|ly|es|ed|s)$/, '')
+      .replace(/(ic|y)$/, '');
+    if (stem.length >= 3 && !COMPLAINT_STOPWORDS.has(stem)) out.add(stem);
+  }
+  return out;
+}
+
+/**
+ * Is this complaint the one that ordered the last rebuild, however it is phrased?
+ *
+ * MEASURED ON THE FOUR REAL PROD COMPLAINTS, not guessed. Every pair of them
+ * shares 5–7 content words (classify, batch, email, individual…); the same
+ * comparison against genuinely different complaints — a missing Slack channel, a
+ * missing column, a wrong schedule — shares 0, 0, 2 and 0. So the ABSOLUTE count
+ * separates them cleanly, where a ratio does not: each rewording adds its own
+ * specifics, which dilutes a Jaccard score to 0.19–0.27 and puts it under the
+ * shortest unrelated complaint.
+ *
+ * The containment floor is a second opinion for the case a bare count would get
+ * wrong: two long, unrelated complaints that happen to share four generic words.
+ *
+ * A false MATCH costs one un-bought rebuild on a spec the person still reviews
+ * step by step. A false MISS costs the loop this exists to stop — four rebuilds
+ * and five and a half minutes, on the record.
+ */
+export function sameComplaint(a, b, { minShared = 4, minContainment = 0.25 } = {}) {
+  const A = complaintWords(a), B = complaintWords(b);
+  if (!A.size || !B.size) return false;
+  let shared = 0;
+  for (const w of A) if (B.has(w)) shared += 1;
+  if (shared < minShared) return false;
+  return shared / Math.min(A.size, B.size) >= minContainment;
+}
+
 /** Strip markdown fences and extract raw JSON from LLM output. */
 function extractJson(text) {
   const fenced = text.match(/```(?:json)?\s*([\s\S]*?)```/);
@@ -518,7 +587,36 @@ export const DRAFT_DEFAULT = {
  * @param {{triggers?, nodes?, edges?, name?, description?}} generated  the model's whole-spec output
  * @returns {object} a draft with a complete, wired edge set
  */
-export function mergeGeneratedSpec(draft, generated) {
+// ── A SCHEDULE WITHOUT A ZONE RUNS IN THE WRONG ONE, SILENTLY ───────────────
+// Measured on prod, 2026-07-29. THREE stored schedule triggers, every one of them
+// `{"type":"schedule","cron":"0 17 * * 1-5"}` — no `timezone` field at all — while
+// the workflow beside them was named "Every weekday at 5pm CDT".
+//
+// The scheduler is not at fault: it reads `t.timezone ?? t.config?.timezone ??
+// deploymentTimeZone()`, and that fallback was itself a recorded fix. But the prod
+// box is Etc/UTC, so a trigger that declares nothing fires at 17:00 UTC — NOON in
+// Chicago. The workflow runs, reports success, and is five hours early, having told
+// the user to the minute when it would run.
+//
+// The prompt has asked for a zone all along and the model kept omitting it. A
+// prompt is a belief about model behaviour; this is the mechanism that makes being
+// wrong about it harmless. It NEVER overrides a zone the model did declare — the
+// model may know something the browser does not (a workflow for a team in another
+// office) — it only fills the blank that would otherwise mean "wherever the server
+// happens to live".
+export function stampScheduleTimezone(triggers, tz) {
+  const zone = String(tz ?? '').trim();
+  if (!zone || !Array.isArray(triggers)) return triggers;
+  return triggers.map((t) => {
+    if (!t || typeof t !== 'object') return t;
+    const isSchedule = t.type === 'schedule' || (!t.type && t.cron);
+    if (!isSchedule) return t;
+    if (t.timezone || t.config?.timezone) return t;   // declared — leave it alone
+    return { ...t, timezone: zone };
+  });
+}
+
+export function mergeGeneratedSpec(draft, generated, opts = {}) {
   const base = draft ?? { ...DRAFT_DEFAULT };
   const g    = generated ?? {};
 
@@ -544,9 +642,12 @@ export function mergeGeneratedSpec(draft, generated) {
   // It only refuses to throw a working trigger away for a broken one.
   const draftHasRunnable = existingTriggers.some(isRunnableTrigger);
   const genHasRunnable   = genTriggers.some(isRunnableTrigger);
-  const triggers = existingTriggers.length
+  const chosen = existingTriggers.length
     ? ((!draftHasRunnable && genHasRunnable) ? genTriggers : existingTriggers)
     : genTriggers;
+  // Fill a missing schedule zone AFTER the winner is picked, so it applies whichever
+  // side won and no path can reach publish declaring nothing.
+  const triggers = stampScheduleTimezone(chosen, opts.userTimezone);
 
   const merged = {
     ...base,
@@ -1084,6 +1185,7 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
       // by `sufficiency` naming the SAME missing thing, on a spec `scoreGap` had
       // already returned `complete: true` for.
       _lastMissingKey:   null,
+      _lastMissingText:  null,
       _missingNote:      null,
       // ── WHAT THE SYSTEM ALREADY FIXED, SO THE NEXT PASS DOES NOT UNDO IT ─────
       // The deterministic repairs (`autoRepairStructural`) fill blanks the model left
@@ -1612,7 +1714,11 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
         // on the next pass round.
         const missingKey = missingKeyOf(verdict.missing);
         const covered    = sufficiencyClaimAlreadyCovered(verdict.missing, draft);
-        const repeated   = !!missingKey && missingKey === state._lastMissingKey;
+        // Word-for-word OR the same objection rephrased — see `sameComplaint`. The
+        // exact check is kept because it is free and unambiguous; the second is what
+        // catches a critic that rewords itself, which is what actually happened.
+        const repeated   = (!!missingKey && missingKey === state._lastMissingKey)
+                        || sameComplaint(verdict.missing, state._lastMissingText);
         if (covered || repeated) {
           logEvent('converger.sufficiency_overruled', {
             ...who(cfg),
@@ -1624,6 +1730,7 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
             phase:             'gapping',
             sufficiencyChecks: MAX_SUFFICIENCY_CHECKS,
             _lastMissingKey:   missingKey,
+            _lastMissingText:  String(verdict.missing ?? ''),
           };
         }
         return {
@@ -1632,6 +1739,7 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
           proposeRounds:     (state.proposeRounds ?? 0) + 1,
           sufficiencyChecks: (state.sufficiencyChecks ?? 0) + 1,
           _lastMissingKey:   missingKey,
+          _lastMissingText:  String(verdict.missing ?? ''),
           _missingNote:      String(verdict.missing),
           // THE ROUTE THAT DROVE THE MOST REBUILDS AND RECORDED THE FEWEST. On the
           // record (2026-07-26) this branch ordered 5 of the 7 whole-spec rebuilds
@@ -2386,7 +2494,7 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
       };
     }
 
-    const merged = mergeGeneratedSpec(draft, generated);
+    const merged = mergeGeneratedSpec(draft, generated, { userTimezone: state.capabilities?.userTimezone });
 
     // ── A REBUILD THAT PRODUCED THE SAME SPEC HAS PROVEN IT CANNOT FIX IT ─────
     // This is the choke point: every regenerate path — a blocking gap, a

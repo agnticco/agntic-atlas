@@ -1,5 +1,13 @@
 [
   {
+    "version": "1.6.69",
+    "date": "2026-07-29",
+    "title": "Scheduled workflows run at the time you asked for",
+    "notes": [
+      "A schedule built without an explicit timezone was being stored with none at all, so it ran in the server's zone — a workflow you were told runs at 5pm Chicago would have fired at noon. New schedules now carry your timezone. Also: Atlas stops rebuilding a workflow when the same objection comes back in different words, and search steps show what they look for rather than their query syntax."
+    ]
+  },
+  {
     "version": "1.6.68",
     "date": "2026-07-28",
     "title": "Atlas knows how to build per-item work",

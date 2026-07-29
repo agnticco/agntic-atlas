@@ -1326,6 +1326,40 @@ fixed on the spot. Fold the relevant ones into whatever increment next touches t
   shouting its raw name, which is what the old `(T || 'step').toUpperCase()` did to every node
   type nobody had taught it. Pinned by `tests/api/plain-english-surfaces.test.js` (34), eight
   mutations red→green.
+- **A SCHEDULED WORKFLOW RAN FIVE HOURS EARLY AND SAID IT WAS ON TIME — FIXED
+  (2026-07-29).** Measured on prod: THREE stored schedule triggers, every one
+  `{"type":"schedule","cron":"0 17 * * 1-5"}` with **no `timezone` field at all**,
+  beside a workflow named "Every weekday at 5pm CDT" and a plan card reading
+  "5:00 pm CDT (America/Chicago)". The scheduler was not at fault — it reads
+  `t.timezone ?? t.config?.timezone ?? deploymentTimeZone()`, and honouring the
+  declared zone was itself a recorded fix. But **the prod box is Etc/UTC**, so a
+  trigger declaring nothing fires at 17:00 UTC — *noon* in Chicago. The run
+  succeeds, the dashboard is green, and the workflow is five hours early having
+  told the user to the minute when it would run. Silent, user-reachable, looks like
+  success. **The prompt had asked for a zone all along and the model kept omitting
+  it** — a prompt is a belief about model behaviour, so the fix is the mechanism
+  that makes being wrong about it harmless: `stampScheduleTimezone` fills a blank
+  zone from the browser's, at the one point every build passes through
+  (`mergeGeneratedSpec`, after the draft-vs-model choice, so it applies whichever
+  side won). It **never overrides a declared zone** — the model may know something
+  the browser does not. Pinned by `tests/converger/schedule-timezone-stamped.test.js`
+  (10), two mutations red→green. **Existing rows are NOT migrated** — their intended
+  zone was never captured, so a migration would mean inventing one; they keep
+  falling back to the deployment zone until edited.
+- **The sufficiency repeat-guard was defeated by rephrasing — FIXED (2026-07-29).**
+  The guard added on 2026-07-28 compared the first 200 characters of the critic's
+  complaint, so it only caught a WORD-FOR-WORD repeat. On prod
+  (`build-platform-1785296845055`) the critic ordered four rebuilds of one workflow
+  — 5m24s, stopped only by the cap — saying the same thing four different ways
+  ("classifies the entire batch…", "Per-email classification:", "Per-email
+  classification step —", "must extract individual email details…"), so it produced
+  four different keys and never fired once. **The same shape this file records
+  repeatedly: a check scoped to the FORM a value takes rather than to what it
+  MEANS.** Now compares content words (`sameComplaint`), with thresholds MEASURED
+  against those four complaints — every pair shares ≥5 words, five genuinely
+  different complaints share ≤2 — not guessed. The anti-false-positive cases matter
+  more than the catch: a guard that suppressed real findings would hide defects
+  instead of a loop.
 - **Approval-channel availability (`email`) is deployment-wide, not per-tenant** — fine today
   (one deployment, one mailer); revisit if tenants ever bring their own sending domain.
 
