@@ -1,5 +1,13 @@
 [
   {
+    "version": "1.6.57",
+    "date": "2026-07-28",
+    "title": "The workflow page reads in plain English too",
+    "notes": [
+      "The step strip and status chip on the workflow page were the last two places still showing machine text — EXTRACT, BRANCH, HUMAN, a lambda symbol, and \"Gmail: is:unread\". They now match the rest of the product."
+    ]
+  },
+  {
     "version": "1.6.56",
     "date": "2026-07-28",
     "title": "The go-live screen and the live workflow header, in plain English",

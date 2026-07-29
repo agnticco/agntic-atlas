@@ -3904,13 +3904,17 @@ class Component extends DCLogic {
     const t = (wf.triggers || [])[0];
     if (!t || t.type === 'manual') return { glyph: '▶', label: 'Manual — run on demand', type: 'manual' };
     if (t.type === 'email' || t.type === 'gmail') {
+      // The status chip beside "active" on the workflow page. It printed the query
+      // verbatim — "Gmail: is:unread" — so the raw syntax led the page.
       const filter = t.filter || (t.config && t.config.filter);
-      return { glyph: '✉', label: 'Gmail' + (filter ? ': ' + filter : ''), type: 'email' };
+      const only = this._plainFilter(filter).replace(/^that are /, '');
+      return { glyph: '✉', label: 'Gmail' + (only ? ' · ' + only : ''), type: 'email' };
     }
     if (t.type === 'schedule') {
       const label = t.label || (t.config && t.config.label);
       const cron  = t.cron  || (t.config && t.config.cron);
-      return { glyph: '⏱', label: 'Scheduled' + (label ? ' — ' + label : cron ? ' (' + cron + ')' : ''), type: 'schedule' };
+      // A cron expression is not a caption either — `_humanCron` already reads it.
+      return { glyph: '⏱', label: 'Scheduled' + (label ? ' — ' + label : cron ? ' — ' + (this._humanCron(cron, t.timezone) || cron) : ''), type: 'schedule' };
     }
     if (t.type === 'event') {
       if (t.connector === 'slack')    return { glyph: '⚡', label: 'Slack — ' + (t.event || 'event'), type: 'slack' };
@@ -10399,10 +10403,13 @@ class Component extends DCLogic {
         if (trg) items.push({ glyph: this._triggerGlyph(trg), typeLabel: "TRIGGER", label: this._triggerCaption(trg), showArrow: false });
         (wf.nodes || []).forEach((n, i) => {
           const et = effNodeType(n);
-          const tl = { summarize: "SUMMARIZE", freeform: "AI STEP", extract: "EXTRACT", rewrite: "REWRITE", classify: "CLASSIFY", assemble: "ASSEMBLE", deliver: "DELIVER" };
+          // The FIFTH copy of the type vocabulary, and the last (2026-07-29). Same
+          // fall-through as the other four — `et.toUpperCase()` for anything it did
+          // not list, so `branch`, `human` and `stop` reached the customer raw.
           const isCA = n.type === "connector-action";
-          const typeLabel = isCA ? this._connectorActionLabel(n).toUpperCase() : (tl[et] || et.toUpperCase());
-          items.push({ glyph: et === "summarize" ? "Σ" : n.type === "deliver" ? this._deliverGlyph(n) : "λ", typeLabel, label: n.label || (isCA ? this._connectorActionLabel(n) : this._titleCase(et)), showArrow: true });
+          const typeLabel = isCA ? this._connectorActionLabel(n).toUpperCase() : this._stepTypeWords(et);
+          // `λ` is a lambda. It meant nothing to anyone reading this page.
+          items.push({ glyph: et === "summarize" ? "Σ" : n.type === "deliver" ? this._deliverGlyph(n) : "·", typeLabel, label: n.label || (isCA ? this._connectorActionLabel(n) : this._titleCase(et)), showArrow: true });
         });
         return items;
       })(),

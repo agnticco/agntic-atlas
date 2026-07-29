@@ -345,6 +345,34 @@ describe('the go-live review card and the live landing', () => {
   });
 });
 
+describe('the workflow page strip and status chip', () => {
+  test('the strip reads the shared vocabulary — it was the FIFTH copy', () => {
+    const i = HTML.indexOf('consoleDag: (() => {');
+    assert.ok(i > 0, 'the workflow-page strip moved — re-point this test');
+    const src = code(HTML.slice(i, i + 2000));
+    assert.match(src, /_stepTypeWords/);
+    assert.doesNotMatch(src, /et\.toUpperCase\(\)/,
+      'the fall-through is what put `branch`, `human` and `stop` on screen raw');
+    assert.doesNotMatch(src, /"CLASSIFY"|"EXTRACT"/, 'the private table must be gone');
+  });
+
+  test('and drops the lambda glyph', () => {
+    const i = HTML.indexOf('consoleDag: (() => {');
+    const src = code(HTML.slice(i, i + 2000));
+    assert.doesNotMatch(src, /: "λ"/, 'a lambda means nothing to the person reading this page');
+  });
+
+  test('the status chip renders its filter and its schedule', () => {
+    const i = HTML.indexOf('_getTriggerInfo(wf) {');
+    assert.ok(i > 0);
+    const src = code(HTML.slice(i, i + 1400));
+    assert.match(src, /_plainFilter/, '"Gmail: is:unread" led the workflow page');
+    assert.doesNotMatch(src, /'Gmail' \+ \(filter \?/);
+    assert.match(src, /_humanCron/, 'a cron expression is not a caption');
+    assert.doesNotMatch(src, /cron \? ' \(' \+ cron/);
+  });
+});
+
 describe('the evidence row names a destination once', () => {
   test('duplicates are collapsed and the target is readable', () => {
     const i = HTML.indexOf("it took a path that doesn't cover");
