@@ -5150,7 +5150,14 @@ class Component extends DCLogic {
     // The build no longer lives in this request. The POST starts it and returns a
     // thread id; the work happens on the server and we poll. A closed tab, a refresh,
     // a locked phone or a deploy no longer takes the build with it.
-    fetch("/api/builder/sessions", { method: "POST", headers: this._H(), body: JSON.stringify({ intent: intent, workflowId: this.state.workflowId || null }) })
+    // THE USER'S OWN CLOCK, NOT THE SERVER'S. A schedule built without this
+    // defaulted to UTC silently — "Every Monday at 8am (UTC)" is not 8am to anyone
+    // outside it, and nothing on screen said which 8am was meant. The browser knows;
+    // it just was never asked. Sent as a plain IANA zone, and it is only a DEFAULT —
+    // a timezone the user states in words still wins.
+    var browserTz = null;
+    try { browserTz = Intl.DateTimeFormat().resolvedOptions().timeZone || null; } catch (e) { browserTz = null; }
+    fetch("/api/builder/sessions", { method: "POST", headers: this._H(), body: JSON.stringify({ intent: intent, workflowId: this.state.workflowId || null, timezone: browserTz }) })
       .then(r => this._readJson(r))
       .then(r => {
         if (!r.ok || (r.data && r.data.error)) return self._apiError(r.data.error);
@@ -7322,12 +7329,62 @@ class Component extends DCLogic {
   // something (the underscores), so "urgent" reads as "Urgent" and does not get a
   // pointless "(urgent)" after it, while "format_message" keeps the id a person
   // may need in order to find it.
+  // PLAIN ENGLISH, AND ONLY PLAIN ENGLISH (operator, 2026-07-28: "never raw text,
+  // only plain english to users"). This used to append the identifier in
+  // parentheses — "Urgent complaint (urgent_complaint)" — on the reasoning that a
+  // person might need it to find something. In practice it put `urgent_complaint`,
+  // `normal_enquiry` and `spam` on the one screen whose entire purpose is that a
+  // non-technical person can check the workflow BY READING it. The parenthetical is
+  // gone; the identifier is the codebase's filing system and stays there.
   _plainId(id) {
     const raw = String(id == null ? '' : id).trim();
     if (!raw) return '';
-    const words = raw.replace(/[_-]+/g, ' ').trim();
-    const english = words.charAt(0).toUpperCase() + words.slice(1);
-    return /[_-]/.test(raw) ? (english + ' (' + raw + ')') : english;
+    const words = raw.replace(/[_-]+/g, ' ').replace(/\s+/g, ' ').trim();
+    return words.charAt(0).toUpperCase() + words.slice(1);
+  }
+
+  // ── NOTHING MACHINE-SHAPED REACHES A PERSON ────────────────────────────────
+  // Operator, 2026-07-28: "No raw JSON or markdown anywhere in user facing
+  // anything." Observed on the evidence row — "What came back matched the deal —
+  // {"sender_name":"Patricia Gomez <patricia.gomez@...>","subje…" — a JSON blob
+  // offered as the explanation of why a promise was kept.
+  //
+  // Deliberately conservative: it RESHAPES what it recognises (a JSON object into
+  // its values, Slack/markdown emphasis into the words it was wrapping) and leaves
+  // anything else alone. Mangling a sentence to be safe would trade one unreadable
+  // thing for another.
+  _plainText(v, maxLen) {
+    var s = v == null ? '' : String(v);
+    if (!s.trim()) return '';
+    // A JSON object or array → its human values, in order, comma-separated.
+    var t = s.trim();
+    if ((t[0] === '{' || t[0] === '[')) {
+      try {
+        var parsed = JSON.parse(t);
+        var vals = [];
+        var walk = function(x) {
+          if (x == null) return;
+          if (Array.isArray(x)) { x.forEach(walk); return; }
+          if (typeof x === 'object') { Object.keys(x).forEach(function(k) { walk(x[k]); }); return; }
+          var sv = String(x).trim();
+          if (sv) vals.push(sv);
+        };
+        walk(parsed);
+        if (vals.length) s = vals.join(' · ');
+      } catch (e) { /* not JSON after all — leave it */ }
+    }
+    // Emphasis marks are formatting instructions for Slack, not words.
+    s = s.replace(/```[a-z]*\n?/gi, '').replace(/`([^`]+)`/g, '$1')
+         .replace(/\*\*([^*]+)\*\*/g, '$1').replace(/\*([^*\n]+)\*/g, '$1')
+         .replace(/^\s{0,3}#{1,6}\s+/gm, '').replace(/^\s*[-–—•]\s+/gm, '')
+         .replace(/\{\{\s*([^}]+?)\s*\}\}/g, function(_m, ref) {
+           // A template is a promise about where a value comes from, not a value.
+           var tail = String(ref).split('.').pop();
+           return 'the ' + String(tail).replace(/[_-]+/g, ' ').trim();
+         })
+         .replace(/[ \t]+/g, ' ').trim();
+    if (maxLen && s.length > maxLen) s = s.slice(0, maxLen - 1).trimEnd() + '…';
+    return s;
   }
 
   // A step's own name, NEVER clipped. A name cut off mid-word is not a name, and
@@ -8754,7 +8811,10 @@ class Component extends DCLogic {
         const brokeReason = (o.contract || []).find(c => !c.ok);
         const skipped = (o.contract || []).filter(c => c.applicable === false);
         const detail = v === "kept"
-          ? ("What came back matched the deal — " + (this._clip(this._stringify(o.produced && (o.produced.summary || o.produced.text || o.produced)), 140) || "delivered as promised") + ".")
+          // `_plainText` first: `_stringify` on a produced object yields a JSON blob,
+          // and a JSON blob was being offered to a person as the reason their promise
+          // was kept. See `_plainText` — no raw JSON or markdown reaches a reader.
+          ? ("What came back matched the deal — " + (this._plainText(this._stringify(o.produced && (o.produced.summary || o.produced.text || o.produced)), 140) || "delivered as promised") + ".")
           : v === "not_exercised"
             ? (o.negative
                // A "should not happen" case: the panel runs the steps directly and
@@ -8884,14 +8944,21 @@ class Component extends DCLogic {
     // only the trunk would report "1 step" for a workflow the plan card correctly
     // calls "3 STEPS", widening the very step-count disagreement that is already on
     // record as a defect.
-    // `steps` is left alone deliberately. After a router only ONE lane runs, so the
-    // lane nodes are not steps this workflow always takes — that is a product
-    // decision on the record above, not a bug, and changing it is the operator's
-    // call rather than something to slip in beside a correctness fix. It does still
-    // disagree with the approval queue's "STEP n OF 12"; recorded, not silently
-    // altered. `paths` is different: it was provably counting the wrong thing.
+    // ── ONE WORKFLOW, ONE ANSWER (operator, 2026-07-28) ──────────────────────
+    // "Everything needs to agree to what the workflow actually is."
+    //
+    // `steps` used to stop at the first branch, on the reasoning that after a
+    // router only one lane RUNS, so lane nodes are not steps the workflow always
+    // takes. Defensible in the abstract, and wrong in practice: the same workflow
+    // then published "4 steps" here and "STEP 5 OF 5" in the approval queue, and a
+    // person cannot reconcile two numbers for one thing. The queue's count is the
+    // one they walk through and tick off, so it is the one that wins.
+    //
+    // Both figures now come from the whole spec — every node, every branch's lanes
+    // — which is also what `laneInventoryOf` certifies against. Panel, queue and
+    // oracle agree by construction rather than by coincidence.
     return {
-      steps: parallel ? nodes.length : brIdx + 1,
+      steps: nodes.length,
       paths: parallel ? targets.length : (allPaths || targets.length),
       parallel,
     };

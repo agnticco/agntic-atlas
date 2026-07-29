@@ -168,19 +168,26 @@ describe('the live graph handles every workflow shape', () => {
     assert.equal(g._stepShape(dupEdges).paths, 2);
   });
 
-  test('a fan-out counts its lanes as STEPS; a router does not', () => {
-    // After a router only one lane runs, so the lane nodes are not steps this
-    // workflow always takes. After a fan-out every lane runs, so they are — and
-    // counting only the trunk would report "1 step" for a workflow whose plan
-    // document correctly says "3 STEPS", widening a step-count disagreement that
-    // is already a recorded defect.
+  test('STEPS is every step, so the panel and the approval queue agree', () => {
+    // SUPERSEDED 2026-07-28 (operator: "everything needs to agree to what the
+    // workflow actually is"). This used to stop at the first branch for a router,
+    // on the reasoning that only one lane RUNS so the lane nodes are not steps the
+    // workflow always takes. Defensible in the abstract, wrong in practice: the
+    // same workflow published "4 steps" in the panel and "STEP 5 OF 5" in the
+    // approval queue, and a person cannot reconcile two numbers for one thing. The
+    // queue's count is the one they walk through and tick off, so it wins.
     assert.deepEqual(g._stepShape(fanOut),  { steps: 3, paths: 2, parallel: true });
-    assert.deepEqual(g._stepShape(router),  { steps: 2, paths: 3, parallel: false });
+    assert.deepEqual(g._stepShape(router),  { steps: 5, paths: 3, parallel: false });
+    assert.equal(g._stepShape(router).steps, router.nodes.length,
+      'the panel must count what the queue counts — every node');
   });
 
   test('the panel says "at once" for a broadcast and "paths" for a choice', () => {
+    // The parallel/exclusive distinction still matters for PATHS: a fan-out's lanes
+    // all run, so calling them "paths" would say a choice is being made when
+    // nothing is choosing. Only the STEPS half was superseded.
     assert.equal(g._stepShapeLabel(fanOut), '3 steps · 2 at once');
-    assert.equal(g._stepShapeLabel(router), '2 steps · 3 paths');
+    assert.equal(g._stepShapeLabel(router), '5 steps · 3 paths');
   });
 
   test('N-way fan-out is generic, not special-cased to two', () => {

@@ -133,6 +133,37 @@ When they say "me", "myself", "DM me", or "send it to me", deliver via a Slack d
 `;
 }
 
+/**
+ * The user's own clock, and the rule that a schedule is never guessed at.
+ *
+ * Both from the operator (2026-07-28), after a build produced "Every Monday at 8am
+ * (UTC)" without ever asking whose 8am it was:
+ *
+ *   · "Always needs to default to the user's browser timezone."
+ *   · "The converger needs to confirm with the user the exact time and frequency
+ *      of a scheduled workflow."
+ *
+ * A schedule is the one part of a workflow whose mistake is invisible until the
+ * wrong hour arrives — nothing fails, nothing warns, the digest simply lands at
+ * 3am. So the time, the days and the zone are CONFIRMED IN WORDS, not inferred.
+ */
+function scheduleClockSummary(capabilities) {
+  const tz = capabilities?.userTimezone;
+  return `
+SCHEDULES — CONFIRM THE CLOCK, NEVER GUESS IT.
+${tz
+  ? `The user's own timezone is "${tz}" (read from their browser). Use it as the DEFAULT for every schedule. A timezone they state in words always wins over it. NEVER default to UTC.`
+  : `The user's timezone is unknown. Do NOT default to UTC — ASK which timezone they mean before proposing a schedule.`}
+Before offering to build a scheduled workflow, the reply must state back, in plain
+words, BOTH of these and invite a correction:
+  · the exact time, WITH the timezone named ("8am ${tz ?? 'your time'}", never a bare "8am"), and
+  · how often it runs ("every Monday", "every weekday", "the 1st of each month").
+If either is missing from what the user said, ASK for it — do not choose one for them.
+A schedule is the one setting whose error is silent: nothing fails and nothing warns,
+the workflow simply runs at an hour nobody chose.
+`;
+}
+
 function triggerSummary(capabilities) {
   const triggers = capabilities?.triggers ?? {};
   const defaults = {
@@ -204,6 +235,7 @@ ${knowledgeContextBlock(capabilities)}
 AVAILABLE TRIGGER TYPES:
 ${triggerSummary(capabilities)}
 ${connectorTriggerSummary(capabilities)}
+${scheduleClockSummary(capabilities)}
 
 TRIGGER INFERENCE RULES:
 - Intent mentions "every morning/daily/weekly/hourly/on a schedule/recurring" → schedule trigger

@@ -216,8 +216,15 @@ describe('the step being approved is actually shown', () => {
       edges: [],
     };
     const card = cardAt(idSpec, queueIndex(idSpec, 'format_message'));
-    assert.equal(card.title, 'Format message (format_message)',
-      'an unnamed step is named by what it does, with the identifier in parentheses after it');
+    // SUPERSEDED 2026-07-28 (operator: "never raw text, only plain english to
+    // users"). The identifier used to be appended in parentheses so a person could
+    // find the step in the spec. In practice it put `urgent_complaint`,
+    // `normal_enquiry` and `spam` on the one screen whose entire purpose is that a
+    // non-technical person can check the workflow BY READING it.
+    assert.equal(card.title, 'Format message',
+      'an unnamed step is named by what it does — the identifier stays in the codebase');
+    assert.doesNotMatch(card.title, /format_message/,
+      'no raw identifier reaches the person being asked to approve the step');
     assert.equal(card.kind, 'AI step — follows an instruction you wrote');
   });
 });

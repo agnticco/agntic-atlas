@@ -1602,6 +1602,20 @@ Rules:
   async function buildCapabilities(req, intent = null) {
   // Operator identity lets the converger resolve "me"/"DM me" to a real target.
   let capabilities = { operator: { name: req.user?.display_name ?? null, email: req.user?.email ?? null } };
+  // ── WHOSE 8AM? ──────────────────────────────────────────────────────────────
+  // A schedule built without this defaulted to UTC in silence: "Every Monday at
+  // 8am (UTC)" is not 8am to anyone outside it, and no screen said which 8am was
+  // meant. The browser has always known; it was simply never asked. Validated as a
+  // real IANA zone before it is trusted — a bad string here would put a workflow on
+  // the wrong clock, which is worse than having no default at all. A DEFAULT only:
+  // a timezone the user says in words still wins.
+  const rawTz = typeof req.body?.timezone === 'string' ? req.body.timezone.trim() : '';
+  if (rawTz) {
+    try {
+      new Intl.DateTimeFormat('en-US', { timeZone: rawTz });   // throws on nonsense
+      capabilities.userTimezone = rawTz;
+    } catch { /* not a zone we can honour — fall through to asking */ }
+  }
   try {
     const slack    = await spine.slack.resolveForTenant(req.tenant.id);
     const google   = await spine.google.resolveForTenant(req.tenant.id, req.user.id);
