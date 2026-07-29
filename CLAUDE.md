@@ -1522,6 +1522,18 @@ fixed on the spot. Fold the relevant ones into whatever increment next touches t
   family is reworded (auth and rate-limit errors pass through untouched, and the
   original is kept as `cause`). Pinned by
   `tests/connectors/airtable-column-types.test.js` (23, 6 mutations killed).
+- **The confirm button went dead, silently and for good — FIXED (2026-07-29).**
+  A column add failed, the page was reloaded, Atlas re-offered the same action, and
+  "Confirm & run" did NOTHING: no request, no console error, no change on screen, no
+  way to tell why or to recover. The card's id came from an in-memory counter
+  (`"act" + (++self._pc)`) that restarts at 1 on every mount — while the RESTORED
+  conversation still holds the cards from before the reload. The new card was minted
+  as `act1`, the finished `act1` was still in `msgs`, and the handler looked its card
+  up with `.find()`, got the OLD one, saw `status: "error"` and returned. *The guard
+  was never wrong — it was reading the wrong card.* Two fixes because either alone
+  leaves a hole: ids are seeded per mount, AND the lookup takes the LAST match so a
+  conversation restored from before the fix still works. Pinned by
+  `tests/api/confirm-button-survives-a-reload.test.js` (6, 3 mutations killed).
 - **Approval-channel availability (`email`) is deployment-wide, not per-tenant** — fine today
   (one deployment, one mailer); revisit if tenants ever bring their own sending domain.
 

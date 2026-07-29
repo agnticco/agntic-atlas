@@ -5020,7 +5020,21 @@ class Component extends DCLogic {
             // Outward-facing actions the chat proposed are HELD for confirmation —
             // nothing was sent. Render a confirm card; the action runs only on click.
             if (Array.isArray(twDone.pendingActions) && twDone.pendingActions.length) {
-              const aid = "act" + (self._pc = (self._pc || 0) + 1);
+              // ── AN ID THAT SURVIVES A RELOAD ─────────────────────────────
+              // This was `"act" + (++counter)`, an in-memory counter that restarts
+              // at 1 on every mount — while the RESTORED conversation still carries
+              // the cards from before the reload. So a fresh card gets `act1`, the
+              // old finished `act1` is still in `msgs`, and `_runChatActions` looks
+              // up by id with `.find()` and gets the old one. Its status is "error"
+              // or "done", the guard returns, and the button does nothing at all:
+              // no request, no console error, no change on screen.
+              //
+              // Witnessed on prod 2026-07-29: a column add failed, the page was
+              // reloaded, Atlas re-offered the same action, and "Confirm & run" was
+              // dead — permanently, with no way for the user to tell why. The
+              // seed makes the id unique across mounts.
+              if (!self._pcSeed) self._pcSeed = Date.now().toString(36);
+              const aid = "act" + self._pcSeed + "-" + (self._pc = (self._pc || 0) + 1);
               newMsgs.push({ isActionConfirm: true, _id: aid, status: "pending",
                 actions: twDone.pendingActions.map(a => ({ name: a.name, args: a.args, label: a.label })) });
             }
@@ -5132,7 +5146,13 @@ class Component extends DCLogic {
   // "Confirm & run". Each executes via /chat/execute-action (the sole path a chat
   // send/write actually runs). Results are shown back in the same card.
   async _runChatActions(msgId) {
-    const cur = this.state.msgs.find(m => m._id === msgId);
+    // The LAST card with this id, not the first. Ids are unique now (see where they
+    // are minted), but a conversation restored from before that fix can still carry
+    // a duplicate — and `find()` would hand back the old, already-run one and
+    // silently disable the live card. Reading from the end always prefers the card
+    // the person is actually looking at.
+    const all = this.state.msgs.filter(m => m && m._id === msgId);
+    const cur = all[all.length - 1];
     if (!cur || (cur.status && cur.status !== "pending")) return;
     this.setState({ msgs: this.state.msgs.map(m => (m._id === msgId ? { ...m, status: "running" } : m)) });
     const results = [];

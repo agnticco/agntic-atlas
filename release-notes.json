@@ -1,5 +1,13 @@
 [
   {
+    "version": "1.6.81",
+    "date": "2026-07-29",
+    "title": "The confirm button went dead after a reload",
+    "notes": [
+      "Action-card ids came from a counter that restarts on every mount, so a card minted after a reload collided with a finished card restored from before it. The click handler looked up by id, found the old one, saw it had already run, and returned — silently, with no way to recover."
+    ]
+  },
+  {
     "version": "1.6.80",
     "date": "2026-07-29",
     "title": "Atlas could only ever make one kind of Airtable column",
