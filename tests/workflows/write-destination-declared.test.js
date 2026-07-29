@@ -46,7 +46,7 @@ import { registerGoogleChannels, tasksCreate } from '../../src/connectors/google
 import { registerAirtableChannels } from '../../src/connectors/airtable/index.js';
 import {
   nodeEffect, normalizeDelivery, checkAssertionAtRuntime, deliveryTarget,
-  satisfiesAssertion, checkOutcome, setCapabilityCatalog,
+  satisfiesAssertion, checkOutcome, canonicalConnector, setCapabilityCatalog,
 } from '../../src/workflows/outcome-oracle.js';
 
 /** The real shipped registry — not a fixture. */
@@ -143,6 +143,96 @@ describe('THE THIRD DECIDER — the one this test file originally missed', () =>
   test('a promise to a connector this step does not touch is refused', () => {
     realCatalog();
     assert.equal(satisfiesAssertion({ id: 'a1', kind: 'record_exists', target: 'airtable:Leads' }, PROD_NODE), false);
+  });
+});
+
+describe('the name a PERSON would write for the destination', () => {
+  /**
+   * A model writes the connector the way someone would say it — "google_tasks:My
+   * Tasks". Two independent defects meant that could not be satisfied:
+   *
+   *  1. `CONNECTOR_ALIASES` had every Google sub-service EXCEPT tasks. With no
+   *     `tasks` key, `canonicalConnector('google_tasks')` fell back to its parts and
+   *     matched `google` — which appears first in GMAIL's alias list. A promise
+   *     about a task list resolved to mail. Silently.
+   *  2. `satisfiesAssertion` compared the connector RAW, while
+   *     `checkAssertionAtRuntime` had always canonicalised. Build-time and runtime
+   *     disagreed about what a target name means.
+   *
+   * Both were live on prod, and between them they produced UNSATISFIED_ASSERTION on
+   * a workflow whose one step did exactly what the promise said.
+   */
+  test('google_tasks resolves to tasks, NOT to gmail', () => {
+    assert.equal(canonicalConnector('google_tasks'), 'tasks');
+  });
+
+  test('no google_<x> may silently resolve to gmail', () => {
+    // The general form of defect 1. Anything missing from the alias table becomes
+    // gmail rather than failing loudly, so this is checked per sub-service.
+    for (const svc of ['tasks', 'docs', 'sheets', 'calendar', 'drive']) {
+      assert.equal(canonicalConnector(`google_${svc}`), svc, `google_${svc}`);
+    }
+  });
+
+  for (const target of ['google_tasks:My Tasks', 'tasks:My Tasks', 'gtasks:My Tasks']) {
+    test(`"${target}" is satisfied by the step that keeps it`, () => {
+      realCatalog();
+      const a = { id: 'a1', kind: 'record_exists', target };
+      assert.equal(satisfiesAssertion(a, PROD_NODE), true);
+      assert.equal(checkOutcome({ assertions: [a] }, [PROD_NODE]).unsatisfied.length, 0);
+    });
+  }
+
+  test('and canonicalising did NOT make the check loose', () => {
+    // The risk of accepting more names is accepting the wrong one. A task step must
+    // not satisfy a promise about mail, another list, or another product.
+    realCatalog();
+    for (const [kind, target] of [['message_sent', 'gmail:sam@acme.com'],
+                                  ['record_exists', 'tasks:Work'],
+                                  ['record_exists', 'airtable:Leads']]) {
+      assert.equal(satisfiesAssertion({ id: 'a1', kind, target }, PROD_NODE), false, target);
+    }
+  });
+
+  test('a name that ONLY canonicalising can resolve', () => {
+    // `google_tasks` happens to be spelled out in the tasks alias list, so it matches
+    // rawly and proves nothing about canonicalisation. `google_docs` is not in any
+    // list — it resolves only by splitting the compound. Without the canonical
+    // comparison this fails, and the survival of that mutation is what exposed the
+    // gap.
+    realCatalog();
+    const node = { type: 'connector-action', config: { action: 'docs_create', title: 'Weekly report', content: 'c' } };
+    assert.ok(!nodeEffect(node).connectors.has('google_docs'), 'precondition: not a raw match');
+    assert.equal(satisfiesAssertion({ id: 'a1', kind: 'document_exists', target: 'google_docs:Weekly report' }, node), true);
+  });
+
+  test('a name that ONLY the exact match can resolve', () => {
+    // The other direction. `canonicalConnector('google')` is 'gmail' — google appears
+    // in gmail's alias list first — so canonicalising ALONE turns a promise about
+    // "google:My Tasks" into a promise about mail and refuses it. The exact match has
+    // to be tried first, and this is the case that proves it still is.
+    realCatalog();
+    assert.equal(canonicalConnector('google'), 'gmail', 'precondition for this test');
+    assert.ok(nodeEffect(PROD_NODE).connectors.has('google'));
+    assert.equal(satisfiesAssertion({ id: 'a1', kind: 'record_exists', target: 'google:My Tasks' }, PROD_NODE), true);
+  });
+
+  test('THE CONNECTOR IS CHECKED AT ALL — right place, wrong product', () => {
+    // Every other "must be refused" case here differs in its LOCATOR too, so all of
+    // them still fail when the connector check is deleted outright. This one shares
+    // the locator exactly and differs only in the connector.
+    realCatalog();
+    assert.equal(satisfiesAssertion({ id: 'a1', kind: 'record_exists', target: 'airtable:My Tasks' }, PROD_NODE), false,
+      'an Airtable promise must not be kept by a Google Task');
+  });
+
+  test('the two halves of the same question now agree', () => {
+    // Build-time and runtime, on one target, must not disagree — that disagreement
+    // IS the defect, not either answer on its own.
+    realCatalog();
+    const a = { id: 'a1', kind: 'record_exists', target: 'google_tasks:My Tasks' };
+    assert.equal(satisfiesAssertion(a, PROD_NODE),
+                 checkAssertionAtRuntime(a, [receiptFor(PROD_NODE)]).ok);
   });
 });
 

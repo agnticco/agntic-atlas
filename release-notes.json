@@ -1,5 +1,13 @@
 [
   {
+    "version": "1.6.74",
+    "date": "2026-07-29",
+    "title": "Google Tasks was missing from the connector vocabulary",
+    "notes": [
+      "canonicalConnector('google_tasks') resolved to GMAIL — there was no tasks entry in the alias table, so the fallback matched 'google', which appears first in Gmail's aliases. And satisfiesAssertion compared the connector raw while the runtime check had always canonicalised, so the two halves of one question disagreed. A promise about a task list could not be kept by the step that kept it."
+    ]
+  },
+  {
     "version": "1.6.73",
     "date": "2026-07-29",
     "title": "Keep the sub-service name when a write is declared",

@@ -91,6 +91,18 @@ const CONNECTOR_ALIASES = {
   drive:     ['drive', 'google', 'docs'],
   sheets:    ['sheets', 'google', 'drive', 'spreadsheet'],
   calendar:  ['calendar', 'google', 'gcal'],
+  // GOOGLE TASKS WAS NEVER IN THIS TABLE, and its absence did not read as "unknown"
+  // — it read as GMAIL. `canonicalConnector('google_tasks')` finds no `tasks` key,
+  // falls back to the parts, and `google` appears in gmail's alias list first, so a
+  // promise about someone's task list resolved to their mail. Witnessed on prod
+  // 2026-07-29: `google_tasks:My Tasks` (the model writes what a person would say)
+  // could not be satisfied by the one step that satisfied it.
+  //
+  // Every other Google sub-service has been here since the table was written; this
+  // one was simply forgotten when the capability was added. The lesson is in the
+  // ordering hazard, not the omission: any `google_<x>` for an `<x>` missing from
+  // this table silently becomes gmail rather than failing loudly.
+  tasks:     ['tasks', 'google', 'gtasks', 'google_tasks'],
   airtable:  ['airtable'],
   inbox:     ['inbox', 'atlas', 'in_app', 'app'],
   webhook:   ['webhook', 'http', 'https'],
@@ -667,7 +679,19 @@ export function satisfiesAssertion(assertion, node) {
   if (!kindSatisfies(eff.kind, assertion.kind, eff.connectors)) return false;
 
   const { connector, locator } = splitTarget(assertion.target);
-  if (connector && !eff.connectors.has(connector)) return false;
+  // CANONICALISE, AS THE RUNTIME CHECK ALREADY DID.
+  //
+  // `checkAssertionAtRuntime` has always compared `canonicalConnector(connector)`;
+  // this, the BUILD-TIME half of the same question, compared the raw string. So the
+  // two disagreed about what a target name refers to — the exact drift the
+  // `isOpaqueProviderId` comment two paragraphs down was written about, in the same
+  // function, for the same reason. A model writes what a person would say
+  // ("google_tasks:My Tasks"); the runtime check understood it and the build-time
+  // check raised UNSATISFIED_ASSERTION on a step that plainly satisfied it.
+  //
+  // Additive: an exact match still wins, so this can only ever accept a name it
+  // previously rejected, never reject one it accepted.
+  if (connector && !eff.connectors.has(connector) && !eff.connectors.has(canonicalConnector(connector))) return false;
 
   // For a locator-free connector (the inbox), the locator is a label, not an
   // address — any delivery to the connector satisfies the assertion.
