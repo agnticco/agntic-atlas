@@ -10013,7 +10013,7 @@ class Component extends DCLogic {
       onBuilderRenameBlur: () => { if (S.workflowId) this.commitRename(S.workflowId); },
       testStatusLabel: (S.phase === "chat" ? "Not started" : (!testUnlocked ? (this._stepShapeLabel(S.spec) ? ("Building · " + this._stepShapeLabel(S.spec)) : "Incomplete") : (TS === "running" ? "Testing…" : (TS === "passed" ? "All steps passed" : (TS === "failed" ? "Break found" : (TS === "unverified" ? "Not verified" : (TS === "paused" ? "Waiting on a person" : "Ready to test"))))))),
       testStatusColor: (TS === "passed") ? "#9fd6a8" : (TS === "failed" ? "#f0a896" : (TS === "running" ? "#f3cd86" : "rgba(255,255,255,.45)")),
-      testStatusGlow: (TS === "passed" || published) ? "rgba(127,194,138,.55)" : (TS === "failed" ? "rgba(232,116,97,.5)" : (TS === "running" ? "rgba(240,191,107,.5)" : "rgba(255,255,255,0)")),
+      testStatusGlow: (TS === "passed") ? "rgba(127,194,138,.55)" : (TS === "failed" ? "rgba(232,116,97,.5)" : (TS === "running" ? "rgba(240,191,107,.5)" : "rgba(255,255,255,0)")),
       testCaption: S.phase === "chat" ? "Your workflow takes shape here once you're ready to build — just say the word in the chat."
         : !testUnlocked ? "Finish building the workflow in the conversation, then test it end-to-end here before it goes live."
         : (TS === "idle" ? "Run the workflow once against the real engine to catch breaks before publishing."
@@ -10056,7 +10056,7 @@ class Component extends DCLogic {
           .filter(Boolean).join(" and ") || "its own channel") + ".",
       showVerdict: verdict.show && !contract.show, verdictText: verdict.text, verdictIcon: verdict.icon, verdictColor: verdict.color,
       verdictBorder: verdict.border, verdictBg: verdict.bg, verdictIconBg: verdict.iconBg,
-      isPublished: published,
+      isPublished: false,
       footLocked: !testUnlocked, footRunTest: testUnlocked && TS === "idle" && !contract.show, footTesting: TS === "running", footProceed: testUnlocked && TS === "passed" && !contract.show, footContract: contract.show,
       onRunTest: () => this.runTest(), onReviewDraft: () => this.reviewDraft(),
       runTestDisclosure: this._runTestDisclosure(),
