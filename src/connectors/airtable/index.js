@@ -196,7 +196,43 @@ export async function airtableDescribeBase(api, { baseId } = {}) {
  * would be a decision the user did not make, and a wrong type silently rejects writes.
  * A caller who knows better passes `type`.
  */
-export async function airtableCreateField(api, { baseId, tableId, name, type, description } = {}) {
+/**
+ * WHAT AIRTABLE NEEDS TO KNOW BEFORE IT WILL MAKE A COLUMN.
+ *
+ * Most field types carry required `options`, and this connector never sent any —
+ * so it could create exactly one kind of column, the `singleLineText` default, and
+ * every other type failed. It looked like it worked because the only columns
+ * anyone had asked for so far were text.
+ *
+ * WITNESSED ON PROD, 2026-07-29. Atlas read a real CRM table, correctly proposed
+ * adding an "Intro Email Sent" CHECKBOX to mark contacted leads, showed it for
+ * confirmation, was confirmed — and then:
+ *
+ *     Invalid options for Companies.Intro Email Sent:
+ *     Failed schema validation: Intro Email Sent.options is missing
+ *
+ * It offered to do something it could not do, at the one moment the user had said
+ * yes. Defaults here are the neutral choice for each type; a caller that knows
+ * better passes `options` and those win.
+ *
+ * SELECT TYPES ARE DELIBERATELY ABSENT. A single/multi select with no choices is
+ * both rejected and meaningless — the choices are the whole content of the column,
+ * and inventing them would be guessing at someone's data. Those get a plain error
+ * naming what is missing instead.
+ */
+const FIELD_OPTION_DEFAULTS = {
+  checkbox: { icon: 'check', color: 'greenBright' },
+  number:   { precision: 0 },
+  percent:  { precision: 0 },
+  currency: { precision: 2, symbol: '$' },
+  rating:   { icon: 'star', max: 5, color: 'yellowBright' },
+  date:     { dateFormat: { name: 'iso' } },
+  dateTime: { dateFormat: { name: 'iso' }, timeFormat: { name: '24hour' }, timeZone: 'utc' },
+  duration: { durationFormat: 'h:mm' },
+};
+const FIELD_TYPES_NEEDING_CHOICES = new Set(['singleSelect', 'multipleSelects']);
+
+export async function airtableCreateField(api, { baseId, tableId, name, type, description, options } = {}) {
   if (!baseId) throw new Error('airtable_create_field: baseId is required.');
   if (!tableId) throw new Error('airtable_create_field: tableId is required.');
   const fieldName = String(name ?? '').trim();
@@ -223,8 +259,25 @@ export async function airtableCreateField(api, { baseId, tableId, name, type, de
   const already = await findExistingField(api, baseId, tableId, fieldName);
   if (already) return { ...already, baseId, tableId, created: false };
 
-  const body = { name: fieldName, type: type || 'singleLineText' };
+  const fieldType = type || 'singleLineText';
+  const body = { name: fieldName, type: fieldType };
   if (description) body.description = String(description).slice(0, 20000);
+
+  // Caller-supplied options win; otherwise the neutral default for this type. A
+  // type that needs none (singleLineText, email, url, …) gets no `options` key at
+  // all — sending an empty object is itself a schema violation.
+  const opts = (options && typeof options === 'object' && Object.keys(options).length)
+    ? options
+    : FIELD_OPTION_DEFAULTS[fieldType];
+  if (opts) body.options = opts;
+
+  if (FIELD_TYPES_NEEDING_CHOICES.has(fieldType) && !Array.isArray(body.options?.choices)) {
+    // Said before the request, in the words of the person who asked for it. The
+    // alternative is Airtable's "Failed schema validation" reaching a chat card.
+    throw new Error(
+      `I can't add "${fieldName}" as a ${fieldType === 'singleSelect' ? 'single select' : 'multi select'} `
+      + 'column without knowing its options — tell me the choices it should offer and I\'ll add it.');
+  }
 
   // The api helper takes an OPTIONS object ({ body, params }), not a bare body —
   // passing the payload directly sends no body at all and Airtable rejects it.
@@ -239,6 +292,24 @@ export async function airtableCreateField(api, { baseId, tableId, name, type, de
       ? await findExistingField(api, baseId, tableId, fieldName)
       : null;
     if (again) return { ...again, baseId, tableId, created: false };
+    // ── WHAT A PERSON READS WHEN THE COLUMN CANNOT BE MADE ──────────────────
+    // The confirm card shows this message verbatim. On prod it showed:
+    //   "airtable POST /meta/bases/app0agE5SbNEnINMY/tables/tblIVdMFZz9UIb71z/
+    //    fields failed: Invalid options for Companies.Intro Email Sent:
+    //    Failed schema validation: Intro Email Sent.options is missing"
+    // — an HTTP verb, two opaque provider ids, and Airtable's internal validator,
+    // to someone who asked for a checkbox. Only the schema/options family is
+    // reworded; every other failure (NOT_AUTHORIZED, rate limits, network) passes
+    // through untouched, because a rewritten auth error sends people to the wrong
+    // place.
+    if (/failed schema validation|invalid options|unknown field type/i.test(String(err?.message ?? ''))) {
+      const e = new Error(
+        `Airtable wouldn't accept a "${fieldType}" column called "${fieldName}" — it needs more detail about how `
+        + 'that kind of column should be set up. Add the column in Airtable and I\'ll use it, or tell me a '
+        + 'simpler type (a text or checkbox column) and I\'ll add that.');
+      e.cause = err;
+      throw e;
+    }
     throw err;
   }
 }
@@ -404,7 +475,8 @@ export function registerAirtableChannels(capabilityRegistry) {
       { key: 'baseId',      label: 'Base ID',     type: 'string', optional: false, hint: 'appXXXXXXXXXXXXXX — from airtable_list_bases' },
       { key: 'tableId',     label: 'Table',       type: 'string', optional: false, hint: 'Table id or name — from airtable_describe_base' },
       { key: 'name',        label: 'Column name', type: 'string', optional: false, hint: 'Exactly as it should read in Airtable' },
-      { key: 'type',        label: 'Column type', type: 'string', optional: true,  hint: 'Defaults to singleLineText, which accepts anything a workflow can write' },
+      { key: 'type',        label: 'Column type', type: 'string', optional: true,  hint: 'Defaults to singleLineText, which accepts anything a workflow can write. checkbox / number / date / dateTime / percent / currency / rating / duration all work and are configured for you.' },
+      { key: 'options',     label: 'Column options', type: 'object', optional: true, hint: 'Only if the defaults are wrong for you. REQUIRED for singleSelect / multipleSelects: { "choices": [{ "name": "…" }] } — those cannot be guessed.' },
       { key: 'description', label: 'Description', type: 'string', optional: true },
     ],
     isReady: ready,

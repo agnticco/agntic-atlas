@@ -1,5 +1,13 @@
 [
   {
+    "version": "1.6.80",
+    "date": "2026-07-29",
+    "title": "Atlas could only ever make one kind of Airtable column",
+    "notes": [
+      "It offered to add an 'Intro Email Sent' checkbox, was confirmed, and failed: most Airtable field types need required options and the connector sent none, so only the singleLineText default ever worked. Defaults now supplied per type, select columns refused in words rather than guessed, and the raw API sentence no longer reaches the chat card."
+    ]
+  },
+  {
     "version": "1.6.79",
     "date": "2026-07-29",
     "title": "The person building it has the last word",

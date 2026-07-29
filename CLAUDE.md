@@ -1504,6 +1504,24 @@ fixed on the spot. Fold the relevant ones into whatever increment next touches t
   *Process note: the client edit shipped a `},` into a CLASS body and the page died
   with `Unexpected token ','` — caught by loading `public/` on :8899 BEFORE deploying,
   which is the rule written after v1.6.65 broke prod the other way round.*
+- **Atlas could only ever make ONE kind of Airtable column — FIXED (2026-07-29).**
+  Building a lead-intro workflow against the real CRM, Atlas read the Companies
+  table, noticed there was nowhere to record that a lead had been contacted,
+  proposed an "Intro Email Sent" CHECKBOX, showed it for confirmation, was confirmed
+  — and failed: *"Failed schema validation: Intro Email Sent.options is missing"*.
+  `airtableCreateField` sent `{name, type}` and nothing else; most Airtable field
+  types carry REQUIRED `options` and the only one that does not is the
+  `singleLineText` default. So it worked for every column anyone had happened to ask
+  for (all text) and could create no other kind — it offered to do something it
+  could not do, at the moment the user said yes. Defaults now supplied for checkbox
+  / number / percent / currency / rating / date / dateTime / duration; caller
+  options always win; select types are REFUSED IN WORDS rather than guessed, because
+  their choices are the column's content. **And the failure message is no longer the
+  raw API sentence** — an HTTP verb, two opaque provider ids and Airtable's internal
+  validator were being rendered verbatim on a chat card; only the schema/options
+  family is reworded (auth and rate-limit errors pass through untouched, and the
+  original is kept as `cause`). Pinned by
+  `tests/connectors/airtable-column-types.test.js` (23, 6 mutations killed).
 - **Approval-channel availability (`email`) is deployment-wide, not per-tenant** — fine today
   (one deployment, one mailer); revisit if tenants ever bring their own sending domain.
 
