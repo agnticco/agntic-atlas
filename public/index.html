@@ -3669,7 +3669,20 @@ class Component extends DCLogic {
       }
     } catch (e) { /* ignore */ }
   }
-  componentDidUpdate() { if (this.el) this.el.scrollTop = this.el.scrollHeight; this._saveBuild(); if (this.state.mentionOpen) this._renderAtPicker(); if (this.state.slashOpen) this._renderSlashPicker(); }
+  // ── STICK TO THE BOTTOM ONLY IF THE READER IS ALREADY THERE ────────────────
+  // This used to pin the conversation to the bottom on EVERY render, which is
+  // right while a reply streams in and wrong the moment the person scrolls up to
+  // look at something. It became unusable on 2026-07-28: the approval walkthrough
+  // renders a tall step card, so pinning the bottom pushes the FLOW DIAGRAM — which
+  // holds the only approve control — above the viewport, and every re-render dragged
+  // it back off screen. Witnessed on prod: step 7 of 12 could not be approved at all.
+  //
+  // 80px of slack, because a reader sitting at the bottom rarely sits at exactly 0.
+  _atBottom(el) { return (el.scrollHeight - el.scrollTop - el.clientHeight) <= 80; }
+  componentDidUpdate() {
+    if (this.el && this._stick !== false) this.el.scrollTop = this.el.scrollHeight;
+    this._saveBuild(); if (this.state.mentionOpen) this._renderAtPicker(); if (this.state.slashOpen) this._renderSlashPicker();
+  }
 
   // ── in-progress build persistence (survive a refresh / accidental close) ──────
   // The build (spec, conversation, test results) otherwise lives only in memory,
@@ -5136,7 +5149,13 @@ class Component extends DCLogic {
     // shows up much later as a page that will not settle.
     clearInterval(this._factT);
     this._factT = setInterval(function() {
-      if (self.state.phase !== "building") { clearInterval(self._factT); self._factT = null; return; }
+      // `phase` stays "building" through the approval walkthrough, so this used to
+      // keep firing a re-render every 11s while the person was clicking through 12
+      // steps — jogging the page under their cursor for no gain, because the
+      // "Building…" line it animates is gone by then. Stop at the walkthrough.
+      if (self.state.phase !== "building" || self.state.awaitingGraphApproval) {
+        clearInterval(self._factT); self._factT = null; return;
+      }
       self.setState({ _factTick: Date.now() });
     }, 11000);
     this.setState({
@@ -9397,7 +9416,16 @@ class Component extends DCLogic {
       })(),
 
       // conversation
-      thread: this.buildThread(), thinking: S.thinking, scrollRef: (el) => { this.el = el; },
+      thread: this.buildThread(), thinking: S.thinking,
+      // `_stick` is what `componentDidUpdate` reads to decide whether to follow the
+      // bottom. It stays undefined (⇒ follow) until the person scrolls away from it.
+      scrollRef: (el) => {
+        this.el = el;
+        if (el && !el._stickWired) {
+          el._stickWired = true;
+          el.addEventListener('scroll', () => { this._stick = this._atBottom(el); }, { passive: true });
+        }
+      },
 
       // The DEDICATED GENERATED-WORKFLOW CANVAS — the complete graph the converger
       // generated in one pass, laid out from state.spec.{nodes,edges} by _specCanvas

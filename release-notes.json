@@ -1,5 +1,13 @@
 [
   {
+    "version": "1.6.54",
+    "date": "2026-07-28",
+    "title": "The flow diagram stays put while you approve steps",
+    "notes": [
+      "Approving a step with a long description was impossible: the page kept scrolling itself back down, taking the flow diagram — and the tick you approve with — off screen. The conversation now only follows the bottom if you are already there."
+    ]
+  },
+  {
     "version": "1.6.53",
     "date": "2026-07-28",
     "title": "Approving the last step releases the test",
