@@ -246,9 +246,14 @@ function code(s) {
 }
 
 describe('the procedure document on screen', () => {
+  // Bounded by the NEXT view-model key rather than a character count — the block
+  // has outgrown a fixed slice twice while this change was being written, and a
+  // too-short slice reports a defect that is not there.
   const i = HTML.indexOf('consoleSopNodes: (() => {');
   assert.ok(i > 0, 'the procedure document view-model moved — re-point this test');
-  const src = code(HTML.slice(i, i + 6500));
+  const end = HTML.indexOf('// run drawer', i);
+  assert.ok(end > i, 'the marker that ends the procedure-document block moved');
+  const src = code(HTML.slice(i, end));
 
   test('it reads the shared vocabulary instead of its own table', () => {
     assert.doesNotMatch(src, /LLM prompt|Email trigger|Summarize \(LLM\)/,
@@ -274,6 +279,17 @@ describe('the procedure document on screen', () => {
   test('an approval states its terms', () => {
     assert.match(src, /They can answer/);
     assert.match(src, /If nobody answers/, 'a timeout that silently counts as reject must be written down');
+  });
+
+  test('and reads the timeout the way the approval card does', () => {
+    // A first cut invented a flat `timeout_hours`, so on the real live workflow —
+    // which nests it under `config.timeout` — the document silently omitted the
+    // deadline while the card three clicks away stated it. Caught in the browser,
+    // not by the suite.
+    assert.match(src, /const to = cfg\.timeout;/, 'the nested shape is the one production writes');
+    assert.doesNotMatch(src, /timeout_hours/);
+    assert.match(src, /_routeDomainOf\(n\)/,
+      'the answers must come from the same derivation as the card, not a hardcoded default');
   });
 
   test('the trigger filter is rendered, not printed', () => {

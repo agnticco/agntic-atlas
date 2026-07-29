@@ -1,5 +1,13 @@
 [
   {
+    "version": "1.6.58",
+    "date": "2026-07-28",
+    "title": "The procedure document states an approval's deadline",
+    "notes": [
+      "The document listed what a person can answer at an approval step but not what happens if nobody does — it read a different config shape than the approval card, so on real workflows the deadline was silently missing."
+    ]
+  },
+  {
     "version": "1.6.57",
     "date": "2026-07-28",
     "title": "The workflow page reads in plain English too",

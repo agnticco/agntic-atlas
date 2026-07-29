@@ -10499,10 +10499,19 @@ class Component extends DCLogic {
           // An approval's terms are the safety-critical part: what a person may answer,
           // and what happens if nobody does. Both were missing entirely.
           if (n.type === "human") {
-            const answers = (Array.isArray(cfg.options) && cfg.options.length) ? cfg.options : ["approve", "reject"];
-            pairs.push({ k: "They can answer", v: answers.map(a => this._plainId(a)).join(" · ") });
-            const to = cfg.timeout_hours ?? cfg.timeoutHours;
-            if (to) pairs.push({ k: "If nobody answers", v: "after " + to + "h it counts as “" + this._plainId(cfg.on_timeout ?? cfg.onTimeout ?? "reject") + "”" });
+            // Read EXACTLY what the approval card reads — `_routeDomainOf` for the
+            // answers and the nested `config.timeout` for the deadline. A first cut
+            // here invented its own flat `timeout_hours` shape, so on the real live
+            // workflow (which nests it) the document silently omitted the timeout
+            // while the card three clicks away stated it. Two readings of one config
+            // is the duplication this whole change exists to remove.
+            const answers = this._routeDomainOf(n);
+            if (answers.length) pairs.push({ k: "They can answer", v: answers.map(a => this._plainLabel(a)).join(" · ") });
+            const to = cfg.timeout;
+            if (to && typeof to === "object") {
+              const after = to.after || to.hours || to.minutes || to.seconds;
+              pairs.push({ k: "If nobody answers", v: (after ? "after " + after + ", " : "") + "it counts as “" + this._plainLabel(to.then || "reject") + "”" });
+            }
           }
           if (isCA) {
             // `Action: airtable_create_record` is the capability id, not a sentence —
