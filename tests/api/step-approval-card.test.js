@@ -76,7 +76,7 @@ const METHODS = [
   // route values through `_plainLabel`; extracting the callers without these
   // yields a half-built component that throws — which is the point of executing
   // the REAL sources rather than copying them.
-  '_stepTypeWords', '_plainLabel', '_plainFilter', '_plainAge', '_plainTarget', '_plainInstruction', '_plainPreview', '_plainText', '_stringify', '_answersAPersonCanGive',
+  '_stepTypeWords', '_plainLabel', '_plainFilter', '_plainAge', '_plainTarget', '_plainInstruction', '_plainPreview', '_refPhrase', '_plainAsk', '_plainEventFilter', '_plainText', '_stringify', '_answersAPersonCanGive',
   '_normRoute', '_routesOf', '_unroutedValues', '_destinationOf', '_connectorOf',
   '_fact', '_stepDetail', '_approvalCard', '_approvalHint',
   '_deJargon', '_humanCron', '_tzLabel', '_titleCase', '_clip',

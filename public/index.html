@@ -7553,31 +7553,99 @@ class Component extends DCLogic {
     })[conn.toLowerCase()] || this._plainId(conn);
     return loc ? loc + ' on ' + name : name;
   }
+  // ── ONE RULE FOR "WHAT DOES {{this}} MEAN" ─────────────────────────────────
+  // Two customer-facing rows on the SAME approval card render templates — the
+  // `preview` and the question itself — and a third surface renders them in step
+  // instructions. Writing the rule twice is how this codebase has repeatedly ended
+  // up with two answers to one question, so both callers share this.
+  //
+  // The FIELD is the informative half when there is one: `{{extract.contactName}}`
+  // reads as "the contact name", which is what the sentence is actually about.
+  // A generic field (`output`, `text`, …) carries no information, so the STEP is
+  // named instead: "the result of “Draft intro email”". A reference to a step we
+  // cannot find is described rather than printed — an unexplained `{{…}}` on a
+  // customer card is the defect this whole family exists to remove.
+  _refPhrase(id, field, nodes) {
+    var GENERIC = { output: 1, text: 1, body: 1, result: 1, value: 1 };
+    var f = String(field || '').trim();
+    if (f && !GENERIC[f.toLowerCase()]) {
+      var words = f.replace(/[_-]+/g, ' ').replace(/([a-z0-9])([A-Z])/g, '$1 $2').toLowerCase().trim();
+      if (words) return 'the ' + words;
+    }
+    var list = Array.isArray(nodes) ? nodes : [];
+    var ref = list.find(function (n) { return n && n.id === id; });
+    var label = ref && String(ref.label || '').trim();
+    return label ? ('the result of “' + label + '”') : 'the result of the step before it';
+  }
+
   // WHAT THE APPROVER SEES, SAID IN WORDS RATHER THAN IN A TEMPLATE.
   //
   // `preview` is almost always a reference to an earlier step's output —
   // `{{draft_reply.output}}` — which is the right thing to store and the wrong
-  // thing to show a person. Resolved against the spec's own nodes so the card can
-  // say "the result of “Draft acknowledgement reply”" instead. A reference we
-  // cannot resolve is described generically rather than printed raw: an unexplained
-  // `{{…}}` on a customer card is the defect this whole family of helpers exists to
-  // remove. Literal preview text is shown as-is — that IS what they will see.
+  // thing to show a person. Literal preview text is shown as-is: that IS what
+  // they will see.
   _plainPreview(v, nodes) {
     const s = (v == null) ? '' : String(v).trim();
     if (!s) return '';
-    var list = Array.isArray(nodes) ? nodes : [];
-    var name = function (id) {
-      var ref = list.find(function (n) { return n && n.id === id; });
-      var label = ref && String(ref.label || '').trim();
-      return label ? ('the result of “' + label + '”') : 'the result of the step before it';
-    };
-    // A reference and nothing else — the usual case.
+    var self = this;
+    var RE = /\{\{\s*([A-Za-z0-9_]+)\s*(?:\.\s*([A-Za-z0-9_]+)\s*)?\}\}/g;
+    // A reference and nothing else — the usual case. The whole value IS the thing
+    // they will be shown, so name the STEP rather than one of its fields.
     var only = s.match(/^\{\{\s*([A-Za-z0-9_]+)\s*(?:\.\s*[A-Za-z0-9_]+\s*)?\}\}$/);
-    if (only) return name(only[1]);
+    if (only) return this._refPhrase(only[1], null, nodes);
     // Prose WITH a reference in it: keep the words they will read and describe the
     // reference in place, rather than throwing the sentence away.
-    return s.replace(/\{\{\s*([A-Za-z0-9_]+)\s*(?:\.\s*[A-Za-z0-9_]+\s*)?\}\}/g,
-      function (_, id) { return name(id); });
+    return s.replace(RE, function (_, id, field) { return self._refPhrase(id, field, nodes); });
+  }
+
+  // ── THE QUESTION A PERSON IS ASKED, IN WORDS ────────────────────────────────
+  // The approval card's `Asks` row printed `cfg.prompt` verbatim. Witnessed on prod
+  // 2026-07-29, directly ABOVE the `They also see` row that had just been fixed:
+  //
+  //   Review this intro email draft for {{extract_contact.contactName}} at
+  //   {{extract_trigger.companyName}}. Approve to send it via Gmail, or reject…
+  //
+  // and on an earlier build with Slack emphasis in it too
+  // (`*{{extract_email.sender_name}}*`). This is the last thing a person reads
+  // before agreeing that Atlas may email a stranger on their behalf.
+  //
+  // Subtractive, like `_plainInstruction`: references are described, Slack's `*…*`
+  // emphasis is unwrapped, and every other word the model wrote is left exactly as
+  // it is. A card that quietly rewrote the question would be worse than one that
+  // reads awkwardly.
+  _plainAsk(v, nodes) {
+    const s = (v == null) ? '' : String(v).trim();
+    if (!s) return '';
+    return this._plainPreview(s, nodes).replace(/\*([^*\n]+)\*/g, '$1');
+  }
+
+  // ── AN EVENT FILTER IS NOT A SENTENCE EITHER ────────────────────────────────
+  // An Airtable record trigger carries `table:Companies AND field:Relationship
+  // Status = Lead`, and the approval card printed it as-is under "Only when it
+  // matches" — query syntax on the one row that says WHEN this workflow will start
+  // running against someone's data.
+  //
+  // `_plainFilter` cannot do this: it is Gmail's grammar, splits on whitespace, and
+  // would shred a value with spaces in it. Anything not of this shape is returned
+  // untouched, because losing a filter silently is worse than reading oddly.
+  _plainEventFilter(v) {
+    const raw = String(v == null ? '' : v).trim();
+    if (!raw || !/^[A-Za-z_]+:/.test(raw)) return raw;
+    const parts = raw.split(/\s+AND\s+/i).map(s => s.trim()).filter(Boolean);
+    const out = [];
+    for (const p of parts) {
+      const m = /^([A-Za-z_]+):\s*(.+)$/.exec(p);
+      if (!m) { out.push(p); continue; }
+      const key = m[1].toLowerCase(), val = m[2].trim();
+      if (key === 'table') { out.push('in the ' + val + ' table'); continue; }
+      if (key === 'field') {
+        const eq = /^(.+?)\s*=\s*(.+)$/.exec(val);
+        out.push(eq ? ('when ' + eq[1].trim() + ' is ' + eq[2].trim()) : ('when ' + val + ' changes'));
+        continue;
+      }
+      out.push(key.replace(/_/g, ' ') + ' ' + val);
+    }
+    return out.join(', ');
   }
 
 
@@ -8115,7 +8183,7 @@ class Component extends DCLogic {
         this._fact(facts, 'Starts on', this._plainId(tt));
         const f = full.filter;
         if (f && typeof f === 'object') Object.keys(f).forEach(k => this._fact(facts, this._plainId(k), f[k]));
-        else this._fact(facts, 'Only when it matches', f);
+        else this._fact(facts, 'Only when it matches', this._plainEventFilter(f));
       }
     } else if (ty === 'classify') {
       if (!what) what = 'An AI step reads what came in and answers with exactly one of the labels below. Nothing else can come out of it.';
@@ -8147,7 +8215,7 @@ class Component extends DCLogic {
       else this._fact(facts, 'Sections', secs);
     } else if (ty === 'human') {
       if (!what) what = 'The workflow stops here and waits for a person to answer. Nothing after this runs until they do.';
-      this._fact(facts, 'Asks', cfg.prompt);
+      this._fact(facts, 'Asks', this._plainAsk(cfg.prompt, nodes));
       // WHAT THE APPROVER ACTUALLY SEES.
       //
       // The `human` node's own schema calls `preview` "what they actually see", and
@@ -8940,7 +9008,25 @@ class Component extends DCLogic {
     const ty = t.type || (t.cron ? "schedule" : "manual");
     if (ty === "schedule") return "Runs automatically on this schedule — nothing needs to arrive to start it.";
     if (ty === "email") { const only = this._plainFilter(t.filter); return only ? ("When an email arrives " + only + ".") : "When a new email arrives."; }
-    if (ty === "event") { const ch = this._hashName((t.filter && (t.filter.channel || t.filter)) || ""); return "When a message is posted" + (ch ? (" in " + ch) : " in Slack") + "."; }
+    // ── NOT EVERY EVENT IS A SLACK MESSAGE ──────────────────────────────────
+    // This said "When a message is posted in Slack." for ANY event trigger. An
+    // Airtable record-change trigger — `{type:'event', connector:'airtable',
+    // filter:'table:Companies AND field:Relationship Status = Lead'}` — was
+    // therefore described to the customer as a Slack message. Not unclear: false,
+    // about the one thing that decides when the workflow runs against their data.
+    // Witnessed on prod 2026-07-29 on a lead-intro build.
+    //
+    // Slack keeps its own wording (its filter is a channel); every other connector
+    // is described by what it actually is, with the filter rendered in words.
+    if (ty === "event") {
+      const conn = String(t.connector || '').toLowerCase();
+      if (!conn || conn === 'slack') {
+        const ch = this._hashName((t.filter && (t.filter.channel || t.filter)) || "");
+        return "When a message is posted" + (ch ? (" in " + ch) : " in Slack") + ".";
+      }
+      const where = (t.filter && typeof t.filter === 'string') ? this._plainEventFilter(t.filter) : '';
+      return "When something changes in " + this._plainId(conn) + (where ? (" — " + where) : "") + ".";
+    }
     if (ty === "manual") return "Runs each time you start it by hand.";
     if (ty === "one_time") return "Runs once, right after you approve it, then turns off.";
     if (ty === "webhook") return "Runs when an external service calls its web address.";

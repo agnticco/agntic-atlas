@@ -36,7 +36,20 @@ const HTML = readFileSync(path.join(ROOT, 'public/index.html'), 'utf8');
 const plainPreview = (() => {
   const i = HTML.indexOf('_plainPreview(v, nodes) {');
   assert.ok(i > 0, '`_plainPreview` is gone — re-point this test');
-  const src = HTML.slice(i, HTML.indexOf('_plainInstruction(v) {', i)).replace(/,\s*$/, '');
+  // Lift each method WHOLE — signature to its close at class-member indentation —
+  // and join with commas. Slicing "up to the next named method" broke the moment
+  // another method was added between them, and concatenating class members without
+  // separators parses as neither a class body nor an object literal.
+  const method = (signature) => {
+    const at = HTML.indexOf(signature);
+    assert.ok(at > 0, `${signature} is gone — re-point this test`);
+    const end = HTML.indexOf('\n  }\n', at);
+    assert.ok(end > at, `could not find the end of ${signature}`);
+    return HTML.slice(at, end + '\n  }'.length);
+  };
+  // `_plainPreview` delegates the "what does this reference mean" rule to
+  // `_refPhrase`, so both are needed to run it.
+  const src = [method('_refPhrase(id, field, nodes) {'), method('_plainPreview(v, nodes) {')].join(',\n');
   // eslint-disable-next-line no-eval
   const host = eval('({' + src + '})');
   return (v, nodes) => host._plainPreview(v, nodes);

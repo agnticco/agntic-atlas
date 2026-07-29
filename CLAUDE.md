@@ -1540,6 +1540,26 @@ fixed on the spot. Fold the relevant ones into whatever increment next touches t
   leaves a hole: ids are seeded per mount, AND the lookup takes the LAST match so a
   conversation restored from before the fix still works. Pinned by
   `tests/api/confirm-button-survives-a-reload.test.js` (6, 3 mutations killed).
+- **Templates and a false claim on the last card before a real send — FIXED
+  (2026-07-29).** Three leaks on the surfaces a person reads before letting Atlas
+  email a stranger. (a) The approval card's `Asks` row printed `cfg.prompt` verbatim
+  — *"Review this intro email draft for `{{extract_contact.contactName}}` at
+  `{{extract_trigger.companyName}}`"* — DIRECTLY ABOVE the `They also see` row fixed
+  hours earlier for exactly this; an earlier build leaked Slack emphasis too
+  (`*{{…}}*`). Now `_plainAsk`: references described, `*…*` unwrapped, every other
+  word left alone. (b) "Only when it matches: `table:Companies AND field:Relationship
+  Status = Lead`" — query syntax on the row that says when the workflow starts
+  touching someone's data. `_plainEventFilter` renders it ("in the Companies table,
+  when Relationship Status is Lead"); `_plainFilter` could not, being Gmail's grammar
+  and whitespace-split. (c) **`_triggerDetail` claimed EVERY event trigger was Slack**
+  — "When a message is posted in Slack." for an Airtable record change. Not unclear:
+  false, about what starts the workflow. **The reference rule lives in ONE place**
+  (`_refPhrase`), shared by `preview` and `prompt`, because two copies is how this
+  file keeps ending up with two answers. Pinned by
+  `tests/api/no-templates-on-the-approval-card.test.js` (25, 7 mutations killed).
+  *Two of those mutations initially survived because the assertions they should have
+  broken passed either way — the guard case (`"Monday AND Friday"`) had to be added
+  before deleting the guard was detectable.*
 - **Approval-channel availability (`email`) is deployment-wide, not per-tenant** — fine today
   (one deployment, one mailer); revisit if tenants ever bring their own sending domain.
 

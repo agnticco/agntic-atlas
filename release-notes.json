@@ -1,5 +1,13 @@
 [
   {
+    "version": "1.6.83",
+    "date": "2026-07-29",
+    "title": "No templates on the last card before a real send",
+    "notes": [
+      "The approval card's question printed raw {{templates}} directly above the row fixed for that hours earlier, the trigger filter showed query syntax, and every event trigger was described as a Slack message — false for an Airtable record change. The reference rule now lives in one place shared by both rows."
+    ]
+  },
+  {
     "version": "1.6.82",
     "date": "2026-07-29",
     "title": "Add a column to a table you named, not just one you identified",
