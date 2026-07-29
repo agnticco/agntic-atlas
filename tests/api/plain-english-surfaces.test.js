@@ -473,6 +473,8 @@ describe('the workflow page draws the real graph', () => {
     assert.match(markup, /background-size:16px 16px/);
     assert.match(markup, /cursor:grab/);
     assert.match(markup, /overflow:hidden/, 'a pannable canvas must clip, not spill');
+    assert.match(markup, /user-select:none/,
+      'left-drag would otherwise select the node titles instead of panning');
   });
 
   test('the wheel zooms about the pointer and does not scroll the page', () => {
@@ -490,12 +492,16 @@ describe('the workflow page draws the real graph', () => {
       'a passive wheel listener cannot preventDefault, so the page would scroll too');
   });
 
-  test('panning is the middle button, and survives leaving the box', () => {
+  test('panning is left OR middle drag, and survives leaving the box', () => {
     const i = HTML.indexOf('_cgDown(e) {');
     assert.ok(i > 0);
-    const body = code(HTML.slice(i, i + 1200));
-    assert.match(body, /e\.button !== 1/, 'middle-drag leaves left-click free');
-    assert.match(body, /e\.preventDefault\(\)/, 'otherwise Chrome opens its autoscroll cursor');
+    const body = code(HTML.slice(i, HTML.indexOf('_cgResetView()', i)));
+    assert.match(body, /e\.button !== 0 && e\.button !== 1/,
+      'left-drag is what most people reach for; nothing in the published graph is clickable');
+    // On middle this stops Chrome's autoscroll cursor; on LEFT it stops the drag
+    // starting a text selection, which would highlight every node title in blue and
+    // make the canvas look like it was not moving at all.
+    assert.match(body, /e\.preventDefault\(\)/);
     // Bound to the window: a listener on the box alone leaves the canvas stuck to
     // the pointer when the drag ends outside it.
     assert.match(body, /window\.addEventListener\('mousemove'/);

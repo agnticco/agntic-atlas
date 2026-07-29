@@ -1669,7 +1669,7 @@
                  the VIEWPORT rather than the page so it can be panned and zoomed with
                  the graph: dragging across empty space with a static background gives
                  no feedback at all, and the drag reads as broken. -->
-            <div ref="{{ consoleGraph.fitRef }}" style="position:relative;box-sizing:content-box;overflow:hidden;padding:0;cursor:grab;background:#0A0A0A;background-image:radial-gradient(rgba(255,255,255,.05) 1px,transparent 1px);background-size:16px 16px">
+            <div ref="{{ consoleGraph.fitRef }}" style="position:relative;box-sizing:content-box;overflow:hidden;padding:0;cursor:grab;user-select:none;-webkit-user-select:none;background:#0A0A0A;background-image:radial-gradient(rgba(255,255,255,.05) 1px,transparent 1px);background-size:16px 16px">
               <div ref="{{ consoleGraph.fitInnerRef }}" style="position:relative;width:{{ consoleGraph.canvasW }};height:{{ consoleGraph.canvasH }};transform-origin:top left;margin:0">
                       <sc-for list="{{ consoleGraph.edges }}" as="ed" hint-placeholder-count="3">
                         <span style="position:absolute;left:0;top:0;width:{{ consoleGraph.canvasW }};height:{{ consoleGraph.canvasH }};display:block;pointer-events:none;opacity:{{ ed.o }};transition:opacity .45s"><svg width="{{ consoleGraph.canvasW }}" height="{{ consoleGraph.canvasH }}" fill="none" style="display:block;overflow:visible"><path d="{{ ed.d }}" stroke="{{ ed.color }}" stroke-width="2" stroke-linecap="round" fill="none"></path><polygon points="{{ ed.arrowPoints }}" fill="{{ ed.color }}"></polygon></svg></span>
@@ -8628,8 +8628,14 @@ class Component extends DCLogic {
   }
 
   _cgDown(e) {
-    if (e.button !== 1 || !this._cgView) return;  // middle button only
-    e.preventDefault();                            // stops Chrome's autoscroll cursor
+    // LEFT OR MIDDLE. Middle-drag is the canvas convention, but nothing inside this
+    // graph is clickable — the confirm/reject controls are stripped from the
+    // published copy — so left-drag costs nothing and is what most people reach for.
+    if ((e.button !== 0 && e.button !== 1) || !this._cgView) return;
+    // Stops Chrome's autoscroll cursor on middle, and on LEFT stops the drag from
+    // starting a text selection: without it, dragging across the graph highlights
+    // every node title in blue and the canvas appears not to move at all.
+    e.preventDefault();
     const o = this._cgOuter;
     const sx = e.clientX, sy = e.clientY, tx0 = this._cgView.tx, ty0 = this._cgView.ty;
     if (o) o.style.cursor = 'grabbing';

@@ -1,5 +1,13 @@
 [
   {
+    "version": "1.6.64",
+    "date": "2026-07-28",
+    "title": "Drag the workflow diagram with either mouse button",
+    "notes": [
+      "Left-click and drag now pans the diagram, as well as the scroll wheel."
+    ]
+  },
+  {
     "version": "1.6.62",
     "date": "2026-07-28",
     "title": "Pan and zoom the workflow diagram",
