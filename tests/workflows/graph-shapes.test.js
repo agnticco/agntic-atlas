@@ -53,7 +53,7 @@ function grab(name) {
 // program nobody runs.
 const METHODS = ['_laneSourceOf', '_isExclusiveSplit', '_splitTargetsOf', '_stepShape',
                  '_stepShapeLabel', '_triggerNodeFrom', '_liveNodesFromSpec', '_triggerCaption', '_humanCron', '_triggerIsMail',
-                 '_titleCase'];
+                 '_titleCase', '_countedSteps'];
 const Graph = new Function('return class G { ' + METHODS.map(grab).join('\n') + ' }')();
 const g = new Graph();
 // `_stepShapeLabel` reads state for the plan cache in `_laneLabelFor`; it does not
@@ -200,6 +200,16 @@ describe('the live graph handles every workflow shape', () => {
     assert.equal(g._stepShape(scheduled).steps, router.nodes.length + 1);
     assert.equal(g._stepShape(scheduled).steps, g._liveNodesFromSpec(scheduled).length,
       'one workflow, one number — whatever the queue walks through');
+  });
+
+  test('a LINEAR workflow counts its trigger too — the other exit', () => {
+    // `_stepShape` has two exits, branching and not. Only the branching one was
+    // fixed first, and a linear workflow shipped to prod still reading "3 steps"
+    // beside "STEP 1 OF 4". Both exits now derive the count from one method.
+    const scheduled = { ...linear, triggers: [{ type: 'schedule', cron: '0 8 * * *' }] };
+    assert.equal(g._stepShape(scheduled).steps, linear.nodes.length + 1);
+    assert.equal(g._stepShape(scheduled).steps, g._liveNodesFromSpec(scheduled).length,
+      'the no-branch path must agree with the queue as well');
   });
 
   test('the panel says "at once" for a broadcast and "paths" for a choice', () => {

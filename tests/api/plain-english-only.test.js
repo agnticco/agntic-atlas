@@ -102,8 +102,11 @@ describe('a schedule is confirmed, never guessed', () => {
 describe('every surface agrees on what the workflow is', () => {
   test('the panel counts every step, as the approval queue does', () => {
     const i = src.indexOf('_stepShape(spec) {');
-    const body = src.slice(i, i + 3000);
-    assert.match(body, /steps: nodes\.length/,
-      'a workflow cannot publish "4 steps" here and "STEP 5 OF 5" in the queue');
+    const body = src.slice(i, i + 4600);
+    // BOTH exits — branching and not — derive the count from one method, which also
+    // counts the trigger the queue prepends. Fixing only one exit shipped a linear
+    // workflow to prod still reading "3 steps" beside "STEP 1 OF 4".
+    assert.equal((body.match(/_countedSteps\(spec, nodes\)/g) || []).length, 2,
+      'a workflow cannot publish one number here and another in the queue');
   });
 });

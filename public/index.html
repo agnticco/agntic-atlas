@@ -8961,7 +8961,12 @@ class Component extends DCLogic {
     const edges = (spec && Array.isArray(spec.edges)) ? spec.edges : [];
     const src = this._laneSourceOf(nodes, edges);
     const brIdx = src ? nodes.indexOf(src) : -1;
-    if (brIdx < 0) return { steps: nodes.length, paths: 0, parallel: false };
+    // A workflow with no branch takes this exit — and it must count the trigger
+    // too. The branching path below was fixed first and this one was not, so a
+    // LINEAR workflow went on reading "3 steps" beside "STEP 1 OF 4" on prod after
+    // the fix shipped. Two exits from one function, one of them corrected: the
+    // count is derived once, below, so this cannot drift again.
+    if (brIdx < 0) return { steps: this._countedSteps(spec, nodes), paths: 0, parallel: false };
     // Count DISTINCT lane targets from the EDGES, off the same `_splitTargetsOf` the
     // graph layout uses, so the panel
     // and the graph cannot disagree about the same spec. Reading `cases` here instead
@@ -9006,18 +9011,25 @@ class Component extends DCLogic {
     // Both figures now come from the whole spec — every node, every branch's lanes
     // — which is also what `laneInventoryOf` certifies against. Panel, queue and
     // oracle agree by construction rather than by coincidence.
-    // …AND THE TRIGGER IS ONE OF THEM. Counting `nodes.length` alone still left the
-    // panel saying "3 steps" beside a queue saying "STEP 1 OF 4" (witnessed on prod,
-    // v1.6.50): `_liveNodesFromSpec` PREPENDS the trigger, because the trigger is a
-    // card the person confirms like any other. Agreeing with the queue means
-    // counting what the queue counts, not merely counting more than before.
-    const trigger = this._triggerNodeFrom(spec) ? 1 : 0;
     return {
-      steps: nodes.length + trigger,
+      steps: this._countedSteps(spec, nodes),
       paths: parallel ? targets.length : (allPaths || targets.length),
       parallel,
     };
   }
+  // ── ONE DERIVATION OF "HOW MANY STEPS" ─────────────────────────────────────
+  // Exactly what the approval queue walks through: `_liveNodesFromSpec` prepends
+  // the trigger, because the trigger is a card the person confirms like any other.
+  //
+  // It lives in its own method because `_stepShape` has TWO exits — branching and
+  // not — and fixing only the branching one shipped a linear workflow to prod still
+  // reading "3 steps" beside "STEP 1 OF 4". A number that must match another number
+  // gets derived once.
+  _countedSteps(spec, nodes) {
+    const n = Array.isArray(nodes) ? nodes.length : 0;
+    return n + (this._triggerNodeFrom(spec) ? 1 : 0);
+  }
+
   _stepShapeLabel(spec) {
     const s = this._stepShape(spec);
     if (!s) return null;
