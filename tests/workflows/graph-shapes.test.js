@@ -47,7 +47,13 @@ function grab(name) {
   return HTML.slice(i, j);
 }
 
-const METHODS = ['_laneSourceOf', '_isExclusiveSplit', '_splitTargetsOf', '_stepShape', '_stepShapeLabel'];
+// `_triggerNodeFrom` and `_liveNodesFromSpec` are pulled in so the step count is
+// exercised through the REAL trigger derivation the approval queue uses — the
+// point of the count is that the two agree, and stubbing either would test a
+// program nobody runs.
+const METHODS = ['_laneSourceOf', '_isExclusiveSplit', '_splitTargetsOf', '_stepShape',
+                 '_stepShapeLabel', '_triggerNodeFrom', '_liveNodesFromSpec', '_triggerCaption', '_humanCron', '_triggerIsMail',
+                 '_titleCase'];
 const Graph = new Function('return class G { ' + METHODS.map(grab).join('\n') + ' }')();
 const g = new Graph();
 // `_stepShapeLabel` reads state for the plan cache in `_laneLabelFor`; it does not
@@ -176,10 +182,24 @@ describe('the live graph handles every workflow shape', () => {
     // same workflow published "4 steps" in the panel and "STEP 5 OF 5" in the
     // approval queue, and a person cannot reconcile two numbers for one thing. The
     // queue's count is the one they walk through and tick off, so it wins.
+    // These fixtures carry no `triggers`, so the queue would show no trigger card
+    // and the counts are the node counts.
     assert.deepEqual(g._stepShape(fanOut),  { steps: 3, paths: 2, parallel: true });
     assert.deepEqual(g._stepShape(router),  { steps: 5, paths: 3, parallel: false });
     assert.equal(g._stepShape(router).steps, router.nodes.length,
-      'the panel must count what the queue counts — every node');
+      'the panel must count what the queue counts');
+  });
+
+  test('and the TRIGGER is one of those steps', () => {
+    // Witnessed on prod at v1.6.50, after the first half of this fix: the panel said
+    // "3 steps" beside a queue saying "STEP 1 OF 4". `_liveNodesFromSpec` PREPENDS
+    // the trigger, because the trigger is a card the person confirms like any other.
+    // Agreeing with the queue means counting what the queue counts, not merely
+    // counting more than before.
+    const scheduled = { ...router, triggers: [{ type: 'schedule', cron: '0 8 * * *' }] };
+    assert.equal(g._stepShape(scheduled).steps, router.nodes.length + 1);
+    assert.equal(g._stepShape(scheduled).steps, g._liveNodesFromSpec(scheduled).length,
+      'one workflow, one number — whatever the queue walks through');
   });
 
   test('the panel says "at once" for a broadcast and "paths" for a choice', () => {

@@ -9006,8 +9006,14 @@ class Component extends DCLogic {
     // Both figures now come from the whole spec — every node, every branch's lanes
     // — which is also what `laneInventoryOf` certifies against. Panel, queue and
     // oracle agree by construction rather than by coincidence.
+    // …AND THE TRIGGER IS ONE OF THEM. Counting `nodes.length` alone still left the
+    // panel saying "3 steps" beside a queue saying "STEP 1 OF 4" (witnessed on prod,
+    // v1.6.50): `_liveNodesFromSpec` PREPENDS the trigger, because the trigger is a
+    // card the person confirms like any other. Agreeing with the queue means
+    // counting what the queue counts, not merely counting more than before.
+    const trigger = this._triggerNodeFrom(spec) ? 1 : 0;
     return {
-      steps: nodes.length,
+      steps: nodes.length + trigger,
       paths: parallel ? targets.length : (allPaths || targets.length),
       parallel,
     };
