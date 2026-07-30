@@ -1915,6 +1915,43 @@ fixed on the spot. Fold the relevant ones into whatever increment next touches t
   indexed as a place a workflow writes, which is wrong for stage 3 where each entry is
   resolved against the real service. Pinned by
   `tests/workflows/one-identity-per-destination.test.js` (19), eight mutations red→green.
+- **A PER-ITEM WORKFLOW CANNOT PROVE ITSELF, BECAUSE ITS TEST HAS NO ITEMS (open, found
+  2026-07-30, the most expensive defect of the ten-shape campaign).** Shape 4 — "every
+  Monday, summarise each unread email from the past week into a row in a sheet" — cost
+  **FIVE paid whole-spec Opus passes and ~7 minutes of generation**, then the rebuild
+  gate refused a sixth, and it still could not be cleared to go live. The workflow was
+  CORRECT: schedule → search Gmail → `foreach` over the results → summarise → append a
+  row. Verified from the stored spec: the promise `sheets:Weekly Inbox Digest` and the
+  `append_row` step INSIDE the loop both carry destination `d1`.
+  **The dry run said *"nothing reached "Weekly Inbox Digest" in Google Sheets — no step
+  in this run attempted it"*, twice** — because the loop iterated over
+  `search_emails.output`, which in a dry run is EMPTY. Zero items, so the write never
+  runs, so the promise about what happens per item is scored BROKEN rather than NOT
+  EXERCISED. **That is the same shape as the quiet-path defect fixed 2026-07-29** — a
+  path that legitimately does nothing being called a broken promise — reappearing
+  through the `foreach` door. Two of the five passes were `verify_failed` rebuilding a
+  spec that was already right.
+  **A second, independent cause in the same build: the sufficiency critic cannot see
+  inside a loop.** It ordered a rebuild for *"An AI step to generate a one-line summary
+  for each email"* — a step the spec already had, inside the `foreach`. On the later
+  pass `sufficiency_overruled` correctly discarded the same complaint, so the guard
+  works; the critic's blindness to loop contents is what generated it.
+  **Third, cheap but real:** one pass was lost to `UNKNOWN_CONFIG_KEY: append_row` — the
+  model invented a config key. Correctly refused; still a paid rebuild.
+  **Not fixed.** The honest fix is that an assertion about per-item work must be
+  reported as *not exercised* when the collection is empty, exactly as a negative
+  example is — and the lane/example machinery needs to be able to give a `foreach` a
+  non-empty collection to run over, or no per-item workflow can ever be certified. Until
+  then this shape reaches the walkthrough but not "cleared to go live".
+- **Jargon is still reaching customer-facing cards from the MODEL, not the renderer
+  (open, 2026-07-30).** Two witnessed the same session: a plan's failure line reading
+  *"the **foreach loop** runs over an empty list"*, and a trigger card rendering a
+  complex Gmail query as *"mentioning "(subject:(buy)", mentioning "OR", mentioning
+  "buying"…"*. The first is the model writing code words into prose the plain-English
+  work never touches (that work fixed RENDERERS); the second is `_plainFilter` meeting a
+  query with parentheses and `OR` groups, which it splits on whitespace and describes
+  fragment by fragment. The trigger card is the FIRST card in the walkthrough, so it is
+  squarely in the demo path.
 - **Approval-channel availability (`email`) is deployment-wide, not per-tenant** — fine today
   (one deployment, one mailer); revisit if tenants ever bring their own sending domain.
 - **Google Sheets has no destination picker, so Atlas asks a customer for a spreadsheet
