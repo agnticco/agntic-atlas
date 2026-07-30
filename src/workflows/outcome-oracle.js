@@ -750,7 +750,7 @@ export function assertionDefect(assertion) {
  * every channel's target into one list would let a node asking over `slack:#ops` and
  * `email:bob@x.com` satisfy `slack:bob@x.com`, which nothing sends.
  */
-function humanAskTargets(node) {
+export function humanAskTargets(node) {
   if (node?.type !== 'human') return [];
   const out = [];
   for (const ch of normalizeChannels(node.config?.channels)) {

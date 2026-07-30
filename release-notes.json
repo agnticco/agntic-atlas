@@ -1,5 +1,13 @@
 [
   {
+    "version": "1.6.92",
+    "date": "2026-07-30",
+    "title": "Atlas checks its own work before showing it to you",
+    "notes": [
+      "Every finished build is now checked for places where it contradicts itself — for example a promise that names one destination while the step it built names another. Findings are recorded, not acted on."
+    ]
+  },
+  {
     "version": "1.6.91",
     "date": "2026-07-30",
     "title": "Connectors decide their own behaviour",

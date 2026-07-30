@@ -46,6 +46,8 @@ import { nodeForAssertion, assertableConnectors, splitTarget, canonicalConnector
 // ONE definition of "could anything ever start a workflow from this trigger",
 // shared with the publish guard — so the merge and the refusal cannot disagree.
 import { isRunnableTrigger } from '../workflows/trigger-runnable.js';
+// Reports where a finished build contradicts itself. Never repairs, never blocks.
+import { selfContradictions, summariseContradictions } from '../workflows/self-consistency.js';
 import { analyzeTable } from '../workflows/decision-analysis.js';
 import { deriveWorkflowName } from '../workflows/workflow-validator.js';
 import { tableOf, valuesOf, HIT_POLICIES, HIT_POLICY_LABELS, DECISION_MAX_INPUTS } from '../workflows/node-types/decision.js';
@@ -4158,6 +4160,34 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
   // the budget here cannot spin the internal loop.
   graph.addNode('walkthrough', async (state, cfg) => {
     const { draft: finalDraft } = materialiseEscalations(state.draft, state.escalatedGaps ?? []);
+
+    // ── DOES THIS BUILD AGREE WITH ITSELF? ────────────────────────────────────
+    //
+    // Reported, never repaired, and never blocking: everything reaching this node is
+    // already valid and publishable, and a general fixer would be a general way to make
+    // a build agree with itself by making it promise less. Repair belongs to the
+    // mechanisms that understand a specific case.
+    //
+    // It runs HERE, at the one point every finished build passes through on its way to
+    // a person, so a shape nobody thought to check is checked anyway. Its whole value
+    // is that the defects it names were previously found ONE AT A TIME, by eye, days
+    // later — see the file header for the list.
+    try {
+      const contradictions = selfContradictions(finalDraft);
+      if (contradictions.length) {
+        logEvent('converger.self_check', {
+          ...who(cfg),
+          summary: summariseContradictions(contradictions),
+          codes:   contradictions.map(c => c.code).join(','),
+          detail:  contradictions.filter(c => c.severity === 'error').map(c => c.message).join(' | ').slice(0, 600),
+        });
+      } else {
+        logEvent('converger.self_check', { ...who(cfg), summary: 'consistent' });
+      }
+    } catch (e) {
+      // A check that can break a build is worse than no check.
+      logEvent('converger.self_check_failed', { ...who(cfg), error: String(e?.message ?? e) });
+    }
 
     const review = await interrupt({
       type: 'generated_workflow',

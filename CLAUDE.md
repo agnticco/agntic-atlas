@@ -1838,6 +1838,45 @@ fixed on the spot. Fold the relevant ones into whatever increment next touches t
   synthetic fixed-destination capability was added rather than the fix left untested.
   The table ids are recorded by HAND in that file rather than imported, because
   importing them would make the guard agree with whatever the table says.
+- **EVERY BUILD NOW ASKS WHETHER IT AGREES WITH ITSELF (2026-07-30, Charles's call).**
+  Almost every defect in the destination family has been two things Atlas already knew,
+  disagreeing, with nothing comparing them — and every one was found by a person reading
+  a screen carefully, days later, one at a time. `src/workflows/self-consistency.js`
+  asks the whole question once, at the `walkthrough` node, of the finished build:
+  do the build-time and run-time halves of the promise check agree; does the promise's
+  own sentence name a destination no step uses; do the human half and the
+  machine-checkable half of one promise name different places; is a promise checkable at
+  all; does a step change the world with nothing promising it.
+  **It REPORTS and never repairs, and never blocks** (`converger.self_check` in the
+  log). Everything reaching that node is already valid and publishable; a general fixer
+  would be a general way to make a build agree with itself by promising less, and repair
+  belongs to the mechanisms that understand a specific case.
+  **Validated by REPLAY against three real prod builds** rather than invented fixtures:
+  it names the defect in the AI-news briefing (promise said `hello@`, only send went to
+  `charles@`) and in the Sheets logger (promise named "Pricing Emails", user said
+  "Pricing Enquiries"), and is **completely silent on the cybersecurity briefing that
+  passed and went live** — which is the property that matters, because a check that
+  fires on a good build teaches people to ignore it and an ignored check looks like
+  cover.
+  **PRECISION OVER RECALL, deliberately.** Only high-precision tokens are read from the
+  sentence (an address, a #channel, a Quoted Name); free prose is not mined; templates,
+  opaque provider ids and destinations nobody stated are silence, not findings.
+  Pinned by `tests/workflows/does-this-build-agree-with-itself.test.js` (24), **eight
+  mutations red→green**. Three defects in the check were found by mutation before it ever
+  ran on prod, and all three were FALSE POSITIVES on correct workflows: the address
+  matcher swallowed a sentence's full stop (so a promise differed from itself); an
+  approval workflow reported its own approver as "a destination no step uses", because a
+  `human` node sends its own DM and has no `nodeEffect` (now reuses the oracle's
+  `humanAskTargets` rather than a second copy of that rule); and a run receipt was being
+  synthesised from a `foreach` WRAPPER, which production never does — the children
+  execute — manufacturing a "the two halves disagree" on a perfectly good loop. That
+  last one is the "a check must construct its subject the way PRODUCTION does" rule
+  catching the checker written to enforce it.
+  **One check is pinned only at SOURCE level and says so in the file:** `HALVES_DISAGREE`
+  cannot be exercised behaviourally while the two halves agree on every capability,
+  spelling and pairing (which `build-and-runtime-agree-everywhere.test.js` proves). It is
+  a regression detector for the ninth instance of that drift; replace the source pin with
+  a behavioural one if a legitimate disagreement ever becomes constructible.
 - **Approval-channel availability (`email`) is deployment-wide, not per-tenant** — fine today
   (one deployment, one mailer); revisit if tenants ever bring their own sending domain.
 - **Google Sheets has no destination picker, so Atlas asks a customer for a spreadsheet

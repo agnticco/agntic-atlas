@@ -1,0 +1,242 @@
+/**
+ * DOES THIS BUILD CONTRADICT ITSELF?
+ *
+ * Almost every defect this product has shipped in the destination family was two
+ * things Atlas already knew, disagreeing with each other, with nothing comparing them.
+ * A sample from 2026-07-29/30, all found by a person reading a screen carefully:
+ *
+ *   · the promise said `gmail:hello@agntic.co`; the only send went to `charles@`
+ *   · the promise said `sheets:Pricing Emails`; the sheet the user named was
+ *     `Pricing Enquiries`
+ *   · the promise said `google:Calendar`; the runtime checked Gmail
+ *   · the contract said `google_drive:`; the delivery went via `docs_create`
+ *   · a card said "review the draft below" with nothing below
+ *
+ * Each was fixed where it was found, and the next shape produced another. This file
+ * asks the whole question once, of the finished build, and REPORTS — it never repairs.
+ * Repair belongs to the specific mechanisms that understand each case
+ * (`retargetStaleAssertion`, `autoRepairStructural`); a general fixer would be a
+ * general way to make a build agree with itself by making it say less.
+ *
+ * WHAT IT IS NOT. It is not a validator: everything here is already valid, publishable
+ * and internally well-formed. It is not a gate — nothing it returns blocks a build.
+ * It is the answer to "we keep finding these one at a time, by eye".
+ *
+ * PRECISION OVER RECALL, DELIBERATELY. A check that cries wolf gets ignored, and an
+ * ignored check is worse than none because it looks like cover. Every check below
+ * fires only on evidence it can name on both sides, and anything undecidable — a
+ * template, an opaque provider id, a destination nobody stated — is silence, not a
+ * finding.
+ */
+
+import {
+  nodeEffect, normalizeDelivery, satisfiesAssertion, checkAssertionAtRuntime,
+  splitTarget, isOpaqueProviderId, humanAskTargets,
+} from './outcome-oracle.js';
+
+/** Every node in a spec, including those nested inside a `foreach`. */
+function allNodes(spec) {
+  const out = [];
+  const walk = (nodes) => {
+    for (const n of (nodes ?? [])) {
+      if (!n || typeof n !== 'object') continue;
+      out.push(n);
+      if (n.type === 'foreach') walk(n.config?.steps);
+    }
+  };
+  walk(spec?.nodes);
+  return out;
+}
+
+/**
+ * The steps that change the outside world, with what they write and where.
+ *
+ * A `foreach` is EXCLUDED even though it reports an effect. `nodeEffect` gives a loop
+ * the effect of the first write inside it — correct, and deliberate — but the loop
+ * itself never executes a delivery: its CHILDREN do, and they are walked separately.
+ * Building a run receipt from the wrapper therefore invents a delivery production never
+ * makes, and it showed up immediately as a false "the two halves disagree" on a
+ * perfectly good loop. A check must construct its subject the way production does; that
+ * rule is in CLAUDE.md because checks that don't have hidden real defects, and here it
+ * nearly manufactured one.
+ */
+function writesOf(spec) {
+  const out = [];
+  for (const node of allNodes(spec)) {
+    if (node.type === 'foreach') continue;
+    const eff = nodeEffect(node);
+    if (eff) out.push({ node, eff });
+  }
+  return out;
+}
+
+const isTemplate = (s) => typeof s === 'string' && s.includes('{{');
+const norm = (s) => String(s ?? '').trim().toLowerCase().replace(/^#/, '');
+
+/**
+ * Destinations a PERSON would recognise in the promise's own sentence.
+ *
+ * High-precision tokens only — an email address, a #channel, or a Quoted Name. Free
+ * prose is deliberately not mined: "the sheet" and "my calendar" name nothing that can
+ * be compared, and guessing at them is how a check starts crying wolf.
+ */
+export function destinationsNamedIn(statement) {
+  const s = String(statement ?? '');
+  const out = new Set();
+  // The trailing dot is NOT part of the address. Written as `[\w.]+` first, it swallowed
+  // the full stop that ends the sentence, so "hello@agntic.co." was reported as
+  // differing from "hello@agntic.co" — a contradiction invented by the checker itself,
+  // on a build whose real defect it had already found. Precision is the whole promise
+  // of this file, so a false positive here costs more than a miss.
+  for (const m of s.matchAll(/[\w.+-]+@[\w-]+(?:\.[\w-]+)+/g)) out.add(m[0].replace(/\.+$/, ''));
+  for (const m of s.matchAll(/#[A-Za-z0-9_-]{2,}/g)) out.add(m[0]);
+  for (const m of s.matchAll(/['"“”']([A-Z][\w .&-]{2,60})['"“”']/g)) out.add(m[1]);
+  return [...out];
+}
+
+/** Every literal string anywhere in a node's config — what the step actually carries. */
+function configValues(node) {
+  const out = [];
+  const walk = (v) => {
+    if (typeof v === 'string') { out.push(v); return; }
+    if (Array.isArray(v)) { v.forEach(walk); return; }
+    if (v && typeof v === 'object') { Object.values(v).forEach(walk); }
+  };
+  walk(node?.config);
+  return out;
+}
+
+const finding = (code, severity, message, detail) => ({ code, severity, message, ...detail });
+
+/**
+ * Every place this build disagrees with itself.
+ *
+ * @param {object} spec  the finished draft — nodes, edges, triggers, outcome
+ * @returns {Array<{code, severity, message, …}>} most serious first, [] when consistent
+ */
+export function selfContradictions(spec) {
+  const findings = [];
+  const outcome = spec?.outcome ?? null;
+  const assertions = Array.isArray(outcome?.assertions) ? outcome.assertions : [];
+  const writes = writesOf(spec);
+
+  // ── 1. THE TWO HALVES OF THE PROMISE CHECK DISAGREE ────────────────────────
+  //
+  // The most expensive shape there is: build time says the promise is kept, run time
+  // says it is broken (or the reverse). One of them gates "go live" and the other
+  // decides what the customer is told after a run, so a disagreement means the product
+  // certifies a workflow it will later fail, or fails one it certified. Eight instances
+  // to date, every one costing paid rebuilds.
+  for (const a of assertions) {
+    for (const { node, eff } of writes) {
+      const build = satisfiesAssertion(a, node);
+      const run   = checkAssertionAtRuntime(a, [normalizeDelivery(node, { dryRun: true, wouldDeliver: true })]).ok;
+      if (build === run) continue;
+      findings.push(finding('HALVES_DISAGREE', 'error',
+        `The check that clears this workflow to go live and the check that reads a real run disagree about "${a.target}" and the step "${node.label || node.id}": one says the promise is kept, the other says it is broken.`,
+        { assertion: a.id ?? null, target: a.target ?? null, nodeId: node.id, build, run, kind: eff.kind }));
+    }
+  }
+
+  // ── 2. THE SENTENCE NAMES A DESTINATION NO STEP USES ───────────────────────
+  //
+  // The half a person reads, against the steps that were built. Witnessed twice on
+  // 2026-07-30: a briefing whose promise said `hello@agntic.co` while the only send
+  // went to `charles@agntic.co`, and a logger promising a sheet called "Pricing Emails"
+  // that nobody had ever mentioned.
+  // AN APPROVAL STEP'S QUESTION IS A DELIVERY. The `human` node sends the DM itself —
+  // which is exactly why a workflow with an approval has no separate send for it, and
+  // was established on 2026-07-28 when a kept promise was certified as unproven for the
+  // same reason. It has no `nodeEffect`, so without this the commonest approval shape
+  // reports its own approver as "a destination no step uses": a false positive on a
+  // correct workflow, found by mutation before this check ever ran on prod.
+  //
+  // It reuses the oracle's own `humanAskTargets` rather than reading `config.channels`
+  // here — a second copy of that rule is how the two halves of this system have drifted
+  // eight times.
+  const askValues = allNodes(spec).flatMap(n => humanAskTargets(n).map(t => norm(t.locator)));
+  const stepValues = new Set([
+    ...writes.flatMap(({ node }) => configValues(node).map(norm)),
+    ...askValues,
+  ]);
+  for (const named of destinationsNamedIn(outcome?.statement)) {
+    if (stepValues.has(norm(named))) continue;
+    // Excused when a step's destination is undecidable — a template resolves at run
+    // time and an opaque id cannot be compared with a human name.
+    const undecidable = writes.some(({ eff }) =>
+      eff.locators.some(l => isTemplate(l) || isOpaqueProviderId(l)));
+    if (undecidable) continue;
+    findings.push(finding('STATEMENT_NAMES_ELSEWHERE', 'error',
+      `The promise tells the customer this workflow delivers to "${named}", but no step in it does — every step names somewhere else.`,
+      { named, stepDestinations: [...new Set(writes.flatMap(({ eff }) => eff.locators))] }));
+  }
+
+  // ── 3. THE PROMISE AND ITS OWN SENTENCE NAME DIFFERENT PLACES ──────────────
+  //
+  // The machine-checkable half against the human half. These are written by the same
+  // model in the same pass and are supposed to be two statements of one deal; when they
+  // drift, whichever the reader happens to look at is the one they will act on.
+  // Compared normalised, DISPLAYED as the person wrote it. Sharing one value between
+  // the two put "pricing enquiries" in a message about a sheet called "Pricing
+  // Enquiries" — a check that mangles the name it is complaining about is hard to act on.
+  const saidRaw = destinationsNamedIn(outcome?.statement);
+  const saidInStatement = saidRaw.map(norm);
+  if (saidInStatement.length) {
+    for (const a of assertions) {
+      const { locator } = splitTarget(a?.target ?? '');
+      if (!locator || isTemplate(locator) || isOpaqueProviderId(locator)) continue;
+      if (saidInStatement.includes(norm(locator))) continue;
+      // Only when the sentence names a destination of the SAME shape — an address
+      // against an address — or this fires on every workflow whose sentence happens
+      // to mention one place and whose promise names another, legitimately.
+      const sameShape = saidInStatement.some(s => s.includes('@') === locator.includes('@'));
+      if (!sameShape) continue;
+      findings.push(finding('PROMISE_AND_SENTENCE_DIFFER', 'error',
+        `The promise a person reads names ${saidRaw.map(s => `"${s}"`).join(', ')}, but the machine-checkable version of the same promise names "${locator}".`,
+        { assertion: a.id ?? null, target: a.target ?? null, statementNames: saidRaw }));
+    }
+  }
+
+  // ── 4. A PROMISE NOTHING CAN EVER CHECK ────────────────────────────────────
+  //
+  // A target that is a template, or names a connector with no destination after it,
+  // cannot be compared with anything — so the workflow can be certified against it
+  // without a single thing having been proved. "Not exercised" is a verdict; a promise
+  // that can never be exercised is a defect in the promise.
+  for (const a of assertions) {
+    const target = String(a?.target ?? '');
+    const { connector, locator } = splitTarget(target);
+    if (isTemplate(target)) {
+      findings.push(finding('PROMISE_UNCHECKABLE', 'error',
+        `The promise "${target}" contains a placeholder that is only filled in when the workflow runs, so nothing can check it before going live.`,
+        { assertion: a.id ?? null, target }));
+    } else if (connector && !locator) {
+      findings.push(finding('PROMISE_UNCHECKABLE', 'warning',
+        `The promise "${target}" names ${connector} but not where in it, so any delivery to ${connector} satisfies it.`,
+        { assertion: a.id ?? null, target }));
+    }
+  }
+
+  // ── 5. A STEP CHANGES THE WORLD AND NOTHING PROMISED IT ────────────────────
+  //
+  // Not necessarily wrong — a workflow may legitimately do more than it promises —
+  // but it is exactly what an unnoticed extra send looks like, and the promise is what
+  // the customer was shown. Reported as a note, never as an error.
+  for (const { node, eff } of writes) {
+    const covered = assertions.some(a => satisfiesAssertion(a, node));
+    if (covered) continue;
+    findings.push(finding('WRITE_UNPROMISED', 'note',
+      `The step "${node.label || node.id}" sends or writes something, and none of the promises mention it — so it is not covered by anything the customer was shown.`,
+      { nodeId: node.id, kind: eff.kind, destinations: eff.locators }));
+  }
+
+  const RANK = { error: 0, warning: 1, note: 2 };
+  return findings.sort((x, y) => RANK[x.severity] - RANK[y.severity]);
+}
+
+/** A one-line summary for the build log. */
+export function summariseContradictions(findings) {
+  if (!findings.length) return 'this build agrees with itself';
+  const by = findings.reduce((m, f) => ({ ...m, [f.severity]: (m[f.severity] ?? 0) + 1 }), {});
+  return Object.entries(by).map(([k, v]) => `${v} ${k}${v > 1 ? 's' : ''}`).join(', ');
+}
