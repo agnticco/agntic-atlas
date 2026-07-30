@@ -1912,6 +1912,86 @@ export function assertionApplicability(assertion, routeInfo) {
 }
 
 /**
+ * ── A PROMISE ABOUT PER-ITEM WORK, ON A RUN THAT HAD NO ITEMS ────────────────
+ *
+ * THE DEFECT, WITNESSED ON PROD 2026-07-30 (`build-platform-1785430634647`), driving
+ * "every Monday, summarise each unread email from the past week into a row in a sheet".
+ * The workflow was CORRECT — schedule → search Gmail → `foreach` → summarise → append a
+ * row — and the promise and the write inside the loop even shared one destination. The
+ * dry run said:
+ *
+ *     nothing reached "Weekly Inbox Digest" in Google Sheets — no step in this run
+ *     attempted it
+ *
+ * …because the loop iterated over the Gmail search results, and in a dry run there were
+ * none. Zero items, so the write never ran, so a promise about what happens PER ITEM was
+ * scored BROKEN. FIVE paid whole-spec Opus passes, two of them rebuilding a spec that
+ * was already right, then the gate refused a sixth — and the workflow could never be
+ * cleared to go live.
+ *
+ * This is the QUIET-PATH DEFECT (fixed 2026-07-29) arriving through the `foreach` door:
+ * something that legitimately does nothing being called a broken promise. "Not
+ * exercised" is the third verdict, and it is the true one here — nothing was proved
+ * either way, because there was nothing to do.
+ *
+ * FOUR NARROWINGS, so this can never become a blanket excuse for a missing delivery.
+ * Each is a way the loop could look empty without the promise being unexercisable:
+ *
+ *   1. EVERY step that could satisfy this promise must be inside a loop. A workflow
+ *      that also writes at the top level and did not deliver has a real miss, and this
+ *      must not launder it.
+ *   2. The loop must have ACTUALLY RUN. A loop absent from the run did not "have no
+ *      items" — something upstream failed, and that is a broken run, not an empty one.
+ *   3. The collection must have been genuinely EMPTY (`total === 0`). If items existed
+ *      and none was processed, work was dropped — the opposite of nothing to do.
+ *   4. Nothing may have been SKIPPED or TRUNCATED. Hitting the per-run item cap is a
+ *      real event with real consequences and must never read as "there was nothing".
+ */
+export function emptyLoopEvidence(assertion, spec, runResult) {
+  const nodes = Array.isArray(spec?.nodes) ? spec.nodes : [];
+  const loops = nodes.filter(n => n?.type === 'foreach');
+  if (!loops.length) return null;
+
+  // Which steps could keep this promise, and are any of them OUTSIDE a loop?
+  const inLoop = [];
+  for (const loop of loops) {
+    for (const sub of normalizeSteps(loop.config?.steps)) {
+      if (satisfiesAssertion(assertion, sub)) inLoop.push({ loop, sub });
+    }
+  }
+  if (!inLoop.length) return null;
+  // NARROWING 1 — a top-level step that could satisfy it means a real miss.
+  for (const n of nodes) {
+    if (n?.type === 'foreach') continue;
+    if (satisfiesAssertion(assertion, n)) return null;
+  }
+
+  const stepById = new Map((runResult?.steps ?? []).map(s => [s?.nodeId, s]));
+  const reasons = [];
+  for (const { loop } of inLoop) {
+    const step = stepById.get(loop.id);
+    if (!step) return null;                                   // NARROWING 2 — never ran
+    let out = step.output;
+    if (typeof out === 'string') { try { out = JSON.parse(out); } catch { return null; } }
+    if (!out || typeof out !== 'object') return null;
+    // `total` SPECIFICALLY, never falling back to `count`. A loop that reports how many
+    // it PROCESSED but not how many there WERE has not told us the collection was
+    // empty — and "I do not know how many there were" must fail closed, or a malformed
+    // output becomes an excuse. The real `foreach` always emits both.
+    const total = Number(out.total);
+    if (!Number.isFinite(total) || total !== 0) return null;   // NARROWING 3 — had items
+    if (out.skipped || out.truncated) return null;             // NARROWING 4 — dropped work
+    reasons.push(loop.label || loop.id);
+  }
+  if (!reasons.length) return null;
+
+  return {
+    empty: true,
+    reason: `there was nothing for "${reasons[0]}" to work through on this run, so the step that would have delivered never ran — this proved nothing either way`,
+  };
+}
+
+/**
  * ── THE RUN-TIME TWIN OF `askSatisfiesAssertion` (the flagship-shape defect) ──
  *
  * THE DEFECT. The two halves of this one oracle disagreed about one node type. At
@@ -2049,6 +2129,15 @@ export function evaluateExampleRun(spec, example, runResult) {
     const ask = approvalAskEvidence(a, spec, runResult);
     if (ask?.issued) return { ...base, applicable: true, ok: true, detail: ask.detail };
     if (ask) return { ...base, applicable: false, skipped: true, ok: true, detail: ask.reason };
+
+    // ── AND ONLY NOW: was there simply nothing to do? ────────────────────────
+    // Same position and same reasoning as the ask above — strictly AFTER the delivery
+    // check has said no, so a real delivery always wins and this can never mask one.
+    // A promise about per-item work, on a run whose collection was empty, is NOT
+    // EXERCISED rather than broken. See `emptyLoopEvidence` for the four narrowings
+    // that stop it excusing a genuine miss.
+    const loop = emptyLoopEvidence(a, spec, runResult);
+    if (loop) return { ...base, applicable: false, skipped: true, ok: true, detail: loop.reason };
 
     return { ...base, applicable: true, ...rt };
   });

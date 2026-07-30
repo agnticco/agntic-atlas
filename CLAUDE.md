@@ -1915,8 +1915,8 @@ fixed on the spot. Fold the relevant ones into whatever increment next touches t
   indexed as a place a workflow writes, which is wrong for stage 3 where each entry is
   resolved against the real service. Pinned by
   `tests/workflows/one-identity-per-destination.test.js` (19), eight mutations red→green.
-- **A PER-ITEM WORKFLOW CANNOT PROVE ITSELF, BECAUSE ITS TEST HAS NO ITEMS (open, found
-  2026-07-30, the most expensive defect of the ten-shape campaign).** Shape 4 — "every
+- **A PER-ITEM WORKFLOW COULD NOT PROVE ITSELF, BECAUSE ITS TEST HAD NO ITEMS — FIXED
+  (2026-07-30; the most expensive defect of the ten-shape campaign).** Shape 4 — "every
   Monday, summarise each unread email from the past week into a row in a sheet" — cost
   **FIVE paid whole-spec Opus passes and ~7 minutes of generation**, then the rebuild
   gate refused a sixth, and it still could not be cleared to go live. The workflow was
@@ -1938,11 +1938,32 @@ fixed on the spot. Fold the relevant ones into whatever increment next touches t
   works; the critic's blindness to loop contents is what generated it.
   **Third, cheap but real:** one pass was lost to `UNKNOWN_CONFIG_KEY: append_row` — the
   model invented a config key. Correctly refused; still a paid rebuild.
-  **Not fixed.** The honest fix is that an assertion about per-item work must be
-  reported as *not exercised* when the collection is empty, exactly as a negative
-  example is — and the lane/example machinery needs to be able to give a `foreach` a
-  non-empty collection to run over, or no per-item workflow can ever be certified. Until
-  then this shape reaches the walkthrough but not "cleared to go live".
+  **THE FIX.** `emptyLoopEvidence` gives the third verdict its due: a promise about
+  per-item work, on a run whose collection was empty, is **not exercised** rather than
+  broken. It sits in exactly the position `approvalAskEvidence` already occupies —
+  consulted strictly AFTER the delivery check has said no — so a real delivery always
+  wins and this can never mask one. Moving it BEFORE that check makes a kept promise read
+  as skipped, and that is mutation M6.
+  **FOUR NARROWINGS, because "not exercised" is one word from "we stopped checking"**, and
+  a blanket version would launder every missing delivery in any workflow containing a
+  loop. Each is a way the loop could LOOK empty without the promise being unexercisable:
+  every step that could keep the promise must be inside a loop (a top-level write that
+  did not deliver is a real miss); the loop must have ACTUALLY RUN (absent means
+  something upstream failed — a broken run, not an empty one); the collection must have
+  been genuinely empty, read from `total` **specifically and never falling back to
+  `count`** (a loop reporting how many it PROCESSED but not how many there WERE has not
+  said the collection was empty, and "I don't know" must fail closed — found by a test,
+  not by reasoning); and nothing may have been SKIPPED or TRUNCATED (hitting the per-run
+  item cap is a real event and must never read as "there was nothing").
+  Pinned by `tests/workflows/nothing-to-do-is-not-a-broken-promise.test.js` (13), six
+  mutations red→green.
+  **STILL OPEN, and it is the other half:** the example machinery cannot give a `foreach`
+  a NON-empty collection to run over, so a per-item workflow is now honestly reported as
+  unproven rather than wrongly failed — but it still cannot be positively certified. The
+  two other causes found in that same build also stand: the **sufficiency critic cannot
+  see inside a loop** (it ordered a rebuild for a step the spec already had, nested in the
+  `foreach`), and one pass was lost to the model inventing a config key
+  (`UNKNOWN_CONFIG_KEY: append_row`).
 - **Jargon is still reaching customer-facing cards from the MODEL, not the renderer
   (open, 2026-07-30).** Two witnessed the same session: a plan's failure line reading
   *"the **foreach loop** runs over an empty list"*, and a trigger card rendering a

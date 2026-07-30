@@ -1,5 +1,13 @@
 [
   {
+    "version": "1.6.95",
+    "date": "2026-07-30",
+    "title": "A workflow with nothing to do is no longer marked failed",
+    "notes": [
+      "When a workflow processes each item in a list and the list is empty, that now reads as 'nothing to prove either way' instead of a broken promise."
+    ]
+  },
+  {
     "version": "1.6.94",
     "date": "2026-07-30",
     "title": "Destinations travel with the workflow",
