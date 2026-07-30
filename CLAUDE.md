@@ -2012,6 +2012,33 @@ fixed on the spot. Fold the relevant ones into whatever increment next touches t
   already receives `capabilities`, and whether this tenant has any workflow-readable
   knowledge source is a fact available at build time. Silence about an empty knowledge
   base is not neutral — it reads as confirmation.
+- **EVERY SLACK-TRIGGERED WORKFLOW IN PRODUCTION IS DEAD, AND PUBLISHES AS LIVE (open,
+  witnessed 2026-07-30 — this is the live confirmation that has been pending since
+  2026-07-24, and it is NEGATIVE).** A Slack-triggered workflow was built, tested
+  ("Contract kept"), published, and fired for real: the Atlas bot is in
+  `#atlas-test-temp` (`"Atlas APP joined #atlas-test-temp. Also, charles joined."`), a
+  human posted a message containing the keyword, and **nothing happened** — no run, no
+  email, no log line.
+  **The cause is upstream of every line of trigger code.** Measured on the box: across
+  the ENTIRE event-log history the only Slack paths ever hit are
+  `/connectors/slack/status` (54), `/callback` (1) and `/authorize` (1). Slack has
+  **never delivered a single event to Atlas.** The endpoint itself is fine — probed from
+  the public internet, `POST /connectors/slack/events` answers the `url_verification`
+  handshake correctly (HTTP 200, echoes the challenge). So the gap is in the **Slack app
+  configuration**: Event Subscriptions is not enabled, or its Request URL is not
+  `https://atlas.agntic.co/connectors/slack/events`, or `message.channels` is not among
+  the subscribed bot events. That is a console setting only the operator can change.
+  **THE PRODUCT DEFECT IS THAT IT PUBLISHED ANYWAY.** The fail-closed publishing rule of
+  2026-07-24 — "a workflow that saves, shows as live, and can never fire is the lie the
+  product exists to prevent" — checks that AIRTABLE triggers can be armed and has no
+  equivalent for Slack. Nothing asks whether Slack will actually deliver. So this is the
+  same silent failure that rule was written for, arriving through a door it does not
+  cover, and it is the third instance of that shape in this file.
+  **What a check would look like:** a Slack `event` trigger is armable only if the
+  workspace's Event Subscriptions point at this deployment. That is not directly
+  readable from the Slack API, but "has this deployment EVER received a Slack event for
+  this tenant" is knowable and would have refused this publish with an actionable
+  sentence instead of a green tick.
 - **Approval-channel availability (`email`) is deployment-wide, not per-tenant** — fine today
   (one deployment, one mailer); revisit if tenants ever bring their own sending domain.
 - **Google Sheets has no destination picker, so Atlas asks a customer for a spreadsheet
