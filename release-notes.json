@@ -1,5 +1,13 @@
 [
   {
+    "version": "1.6.97",
+    "date": "2026-07-30",
+    "title": "Fewer false alarms in Atlas's self-check",
+    "notes": [
+      "The self-check no longer reports a contradiction when a workflow has several promises and its summary mentions only one of them."
+    ]
+  },
+  {
     "version": "1.6.96",
     "date": "2026-07-30",
     "title": "Fewer false alarms in Atlas's self-check",

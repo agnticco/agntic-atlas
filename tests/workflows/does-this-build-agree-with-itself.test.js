@@ -321,6 +321,47 @@ describe('A PLACE THE WORKFLOW LISTENS TO IS NOT A PLACE IT WRITES', () => {
   });
 });
 
+describe('WITH TWO PROMISES AND ONE NAME THERE IS NOTHING TO PAIR', () => {
+  /**
+   * The SECOND false positive from this one check, on prod 2026-07-30 — an
+   * escalating-approval workflow. The sentence named `#atlas-test-temp`, which the
+   * SECOND promise covered exactly; the check compared it against the FIRST promise's
+   * locator ("Refund Approval Request") and reported a contradiction.
+   *
+   * The comparison is now made only when the pairing is unambiguous — one destination
+   * named, one promise. Recall is deliberately sacrificed; the case it exists for (the
+   * Sheets logger) is exactly that shape and still fires.
+   */
+  const ESCALATION = {
+    triggers: [{ type: 'email', filter: 'refund' }],
+    outcome: {
+      statement: 'When a refund-related email arrives, send an approval request to the Atlas inbox; if no decision is made within 30 minutes, post the refund details to #atlas-test-temp so a team member can handle it.',
+      assertions: [
+        { id: 'a1', kind: 'message_sent', target: 'inbox:Refund Approval Request' },
+        { id: 'a2', kind: 'message_sent', target: 'slack:#atlas-test-temp', when: 'escalate' },
+      ],
+    },
+    nodes: [
+      { id: 'ask', type: 'human', label: 'Request refund approval',
+        config: { prompt: 'Approve this refund?', channels: [{ type: 'inbox' }] } },
+      { id: 'post', type: 'deliver', label: 'Post to #atlas-test-temp',
+        config: { channel: 'slack', target: '#atlas-test-temp', body: 'x' } },
+    ],
+    edges: [{ from: 'ask', to: 'post' }],
+  };
+
+  test('a two-promise workflow is not accused of contradicting itself', () => {
+    catalog();
+    assert.deepEqual(selfContradictions(ESCALATION), []);
+  });
+
+  test('but the one-promise case it exists for still fires', () => {
+    catalog();
+    assert.ok(codes(SHEETS).includes('PROMISE_AND_SENTENCE_DIFFER'),
+      'narrowing must not silence the defect this check was built for');
+  });
+});
+
 describe('the guards that stop it crying wolf', () => {
   test('a promise about a SHEET is not compared with an address in the sentence', () => {
     // Two destinations of different shapes are not two versions of one destination. A

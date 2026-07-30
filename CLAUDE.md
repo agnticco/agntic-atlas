@@ -1881,6 +1881,20 @@ fixed on the spot. Fold the relevant ones into whatever increment next touches t
   check running live on a real build rather than by a person, which is the point of it,
   but a check that fires on a good build is worse than no check and this came one build
   from teaching everyone to ignore it. Pinned with that exact workflow as the fixture.
+  **IT CRIED WOLF TWICE, BOTH TIMES FROM THE SAME CHECK, AND BOTH ARE RECORDED HERE.**
+  (a) Shape 8, a Slack-TRIGGERED workflow: *"the promise names #atlas-test-temp but no
+  step delivers there"* — the channel is where it LISTENS. Fixed by `triggerValues`.
+  (b) Shape 9, an escalating approval: the sentence named `#atlas-test-temp`, which the
+  SECOND promise covered exactly, and `PROMISE_AND_SENTENCE_DIFFER` compared it against
+  the FIRST promise's locator. **That check now fires only when the pairing is
+  unambiguous — one destination named, one promise** — because with two promises and one
+  name there is nothing to pair and guessing is what produced the finding. Recall is
+  deliberately sacrificed; the Sheets logger it was built for is exactly that shape and
+  still fires, which is asserted in the same test.
+  **Both were caught by the check running live on real builds rather than by a person,
+  which is what it is for — including when the thing it catches is itself.** But a check
+  that fires on a good build is worse than none, and two in two days on the same rule is
+  why that rule is now the narrowest of the five.
   **One check is pinned only at SOURCE level and says so in the file:** `HALVES_DISAGREE`
   cannot be exercised behaviourally while the two halves agree on every capability,
   spelling and pairing (which `build-and-runtime-agree-everywhere.test.js` proves). It is

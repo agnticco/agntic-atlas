@@ -202,25 +202,31 @@ export function selfContradictions(spec) {
   // ── 3. THE PROMISE AND ITS OWN SENTENCE NAME DIFFERENT PLACES ──────────────
   //
   // The machine-checkable half against the human half. These are written by the same
-  // model in the same pass and are supposed to be two statements of one deal; when they
-  // drift, whichever the reader happens to look at is the one they will act on.
-  // Compared normalised, DISPLAYED as the person wrote it. Sharing one value between
-  // the two put "pricing enquiries" in a message about a sheet called "Pricing
-  // Enquiries" — a check that mangles the name it is complaining about is hard to act on.
+  // model in the same pass and are meant to be two statements of one deal; when they
+  // drift, whichever the reader happens to look at is the one they act on.
+  //
+  // ONLY WHEN THE PAIRING IS UNAMBIGUOUS: exactly one destination named in the
+  // sentence and exactly one promise. With two promises and one name there is nothing
+  // to pair — and guessing produced a FALSE POSITIVE on prod (2026-07-30, an
+  // escalating-approval workflow): the sentence named `#atlas-test-temp`, which the
+  // SECOND promise covered exactly, and this compared it against the FIRST promise's
+  // locator and reported a contradiction. That was the second false positive from this
+  // one check in a day, which is why it is now the narrowest of the five.
+  //
+  // Recall is deliberately sacrificed. The case it was built for — the Sheets logger
+  // whose sentence said "Pricing Enquiries" and whose only promise said "Pricing
+  // Emails" — is exactly this shape and still fires.
   const saidRaw = destinationsNamedIn(outcome?.statement);
-  const saidInStatement = saidRaw.map(norm);
-  if (saidInStatement.length) {
-    for (const a of assertions) {
-      const { locator } = splitTarget(a?.target ?? '');
-      if (!locator || isTemplate(locator) || isOpaqueProviderId(locator)) continue;
-      if (saidInStatement.includes(norm(locator))) continue;
-      // Only when the sentence names a destination of the SAME shape — an address
-      // against an address — or this fires on every workflow whose sentence happens
-      // to mention one place and whose promise names another, legitimately.
-      const sameShape = saidInStatement.some(s => s.includes('@') === locator.includes('@'));
-      if (!sameShape) continue;
+  if (saidRaw.length === 1 && assertions.length === 1) {
+    const a = assertions[0];
+    const { locator } = splitTarget(String(a?.target ?? ''));
+    const named = saidRaw[0];
+    const decidable = locator && !isTemplate(locator) && !isOpaqueProviderId(locator);
+    // An address and a channel are not rival spellings of one place.
+    const sameShape = named.includes('@') === locator.includes('@');
+    if (decidable && sameShape && norm(named) !== norm(locator)) {
       findings.push(finding('PROMISE_AND_SENTENCE_DIFFER', 'error',
-        `The promise a person reads names ${saidRaw.map(s => `"${s}"`).join(', ')}, but the machine-checkable version of the same promise names "${locator}".`,
+        `The promise a person reads names "${named}", but the machine-checkable version of the same promise names "${locator}".`,
         { assertion: a.id ?? null, target: a.target ?? null, statementNames: saidRaw }));
     }
   }
