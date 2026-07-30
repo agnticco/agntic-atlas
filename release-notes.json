@@ -1,5 +1,13 @@
 [
   {
+    "version": "1.6.98",
+    "date": "2026-07-30",
+    "title": "Atlas no longer offers ways to start a workflow that don't work",
+    "notes": [
+      "Two kinds of trigger — a webhook URL and a run-once trigger — were being offered in conversation but could never actually be published. Asking to 'run this once' now sets up a manual trigger, which does the same thing and works."
+    ]
+  },
+  {
     "version": "1.6.97",
     "date": "2026-07-30",
     "title": "Fewer false alarms in Atlas's self-check",

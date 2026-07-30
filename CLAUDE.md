@@ -2053,9 +2053,9 @@ fixed on the spot. Fold the relevant ones into whatever increment next touches t
   readable from the Slack API, but "has this deployment EVER received a Slack event for
   this tenant" is knowable and would have refused this publish with an actionable
   sentence instead of a green tick.
-- **THE PROMPT STILL OFFERS A WEBHOOK TRIGGER THAT NO CONSUMER CAN HONOUR — the
-  `connector_event` defect of 2026-07-27, repeating with a different value (open, found
-  2026-07-30, shape 10 of the campaign).** Asked for a contact form that POSTs to a URL
+- **THE PROMPT OFFERED TWO TRIGGERS NO CONSUMER COULD HONOUR — FIXED, AND NOW ENFORCED
+  (2026-07-30). The third instance of the `connector_event` defect, and the first time
+  anything stops a fourth.** Asked for a contact form that POSTs to a URL
   to start a workflow, Atlas answered:
   > *"your form POSTs to a webhook URL that **Atlas generates when the workflow is
   > built**. That URL becomes the trigger — whenever the form fires, the workflow
@@ -2080,10 +2080,26 @@ fixed on the spot. Fold the relevant ones into whatever increment next touches t
   refusal comes after the whole conversation, and the FIRST sentence already promised a
   mechanism that cannot exist. Same family as "a connector's availability is only
   checked at BUILD time": the user does everything asked and then hits a wall.
-  **The fix is one line of deletion plus its two friends** — remove the webhook trigger
-  from the prompt's trigger list, its intent-routing rule and its example — and, as with
-  `connector_event`, the prompt change is a belief about model behaviour that the
-  publish guard makes safe to be wrong about.
+  **AND `one_time` WAS THE SAME, WORSE, AND NOBODY HAD NOTICED.** Found while fixing the
+  above: `one_time` is also absent from `RUNNABLE_TRIGGER_TYPES`, appears nowhere in
+  `src/` outside the prompt, and is refused at publish — while **"do this now" and "run
+  this once" are among the most natural things a person asks for**, and the prompt routed
+  them straight at it. It sat in TWO copies of the trigger-inference table (lines ~318
+  and ~678), which is the one-rule-in-two-places shape on top of the unrunnable-type one.
+  Both intents now route to `manual`, which does exactly what they mean and can publish.
+  **Removed:** both types from the trigger list, both intent-routing rules in BOTH tables,
+  both worked examples, and both from the contentless-trigger list. **KEPT: `webhook` as a
+  DELIVERY channel** — posting to a URL is real; what was removed is webhook as a way to
+  START a workflow. Deleting both would have been an over-correction, and that is
+  mutation M4.
+  **THE DURABLE PART is `tests/converger/the-prompt-offers-only-runnable-triggers.test.js`
+  (8), which scrapes every trigger type the prompt names and fails if it is not in
+  `RUNNABLE_TRIGGER_TYPES`.** A prompt is a belief about model behaviour and is pinned by
+  nothing; this is what makes being wrong about it cheap. The `connector_event` entry
+  above closes with *"Keep the runnable set in step with the consumers"* — **it happened
+  twice more because nothing enforced that sentence.** Four mutations red→green:
+  re-adding a webhook example (3 red), re-adding `one_time` (2), re-adding
+  `connector_event` (2), and deleting the webhook delivery channel (1).
 - **ATLAS CONFIRMS AND ELABORATES CAPABILITIES IT DOES NOT HAVE — the pattern behind
   shapes 7 AND 10 (open, 2026-07-30).** Twice in one campaign, asked for something the
   product cannot do, Atlas did not check and did not refuse: it agreed, then explained

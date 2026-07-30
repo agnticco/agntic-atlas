@@ -237,14 +237,37 @@ the workflow simply runs at an hour nobody chose.
 `;
 }
 
+/**
+ * ONLY TRIGGERS SOMETHING CAN ACTUALLY START.
+ *
+ * This list must stay equal to `RUNNABLE_TRIGGER_TYPES` in `workflows/trigger-runnable.js`,
+ * and `tests/converger/the-prompt-offers-only-runnable-triggers.test.js` fails if it drifts.
+ *
+ * WITNESSED ON PROD 2026-07-30, and it is the THIRD instance of this shape. Asked for a
+ * contact form that POSTs to a URL, Atlas replied *"your form POSTs to a webhook URL
+ * that Atlas generates when the workflow is built — that URL becomes the trigger"* and
+ * went on to ask detail questions as though it were settled. **No part of that exists.**
+ * `webhook` and `one_time` appeared NOWHERE in `src/` outside this file: no consumer, no
+ * route, no capability, and both refused by the publish guard (`TRIGGER_NOT_RUNNABLE`).
+ *
+ * `one_time` was the worse of the two and nobody had noticed it — "do this now" and "run
+ * this once" are among the most natural things a person asks for, and this file routed
+ * them straight at a type that can never publish.
+ *
+ * The predecessor was `connector_event` (2026-07-27), whose own entry in CLAUDE.md ends:
+ * *"Keep the runnable set in step with the consumers; this check failing a publish is
+ * the signal that someone added one without the other."* It happened again because
+ * nothing enforced it. Now something does.
+ *
+ * NOTE: `webhook` remains a DELIVERY channel — posting to a URL is real and is listed
+ * with the other channels. What was removed is webhook as a way to START a workflow.
+ */
 function triggerSummary(capabilities) {
   const triggers = capabilities?.triggers ?? {};
   const defaults = {
     email:    'Fires when a new Gmail message matches a filter. Config: filter (Gmail query), maxResults',
     schedule: 'Fires on a recurring schedule. Config: cron (cron expression e.g. "0 9 * * 1-5"), timezone (e.g. "America/New_York"), label',
     manual:   'Fires each time the user manually triggers the workflow. No config required.',
-    one_time: 'Runs exactly once immediately when published, then deactivates. Use for "do this now" or "run this once". No config required.',
-    webhook:  'Fires when an HTTP POST is received at a generated endpoint. Config: path (optional slug)',
     event:    'Fires on a connector event (e.g. new Slack message). Config: connector, event, filter (optional)',
   };
   const available = Object.keys(triggers).length ? triggers : defaults;
@@ -313,11 +336,8 @@ ${scheduleClockSummary(capabilities)}
 TRIGGER INFERENCE RULES:
 - Intent mentions "every morning/daily/weekly/hourly/on a schedule/recurring" → schedule trigger
 - Intent mentions "when email/gmail/message arrives" → email trigger
-- Intent mentions "do this now/run this once/one time/just this once/immediately" → one_time trigger
-- Intent mentions "manually/on demand/whenever I want/each time I ask" → manual trigger
-- Intent mentions "webhook/HTTP POST/external call/API call" → webhook trigger
+- Intent mentions "manually/on demand/whenever I want/each time I ask/do this now/run this once" → manual trigger
 - Intent mentions "when Slack message/new row/connector event fires" → event trigger
-- If ambiguous between one_time and manual, ask: "Should this run once immediately, or each time you trigger it manually?"
 - If trigger type genuinely unclear, ask: "What should start this workflow?"
 
 GMAIL MAILBOX GROUNDING (do NOT claim to read a mailbox you cannot open):
@@ -461,7 +481,7 @@ HOW INPUT ENTERS THE WORKFLOW:
      captures the fields you need ({{subject, body, category}}) as JSON, then have EVERY later step read
      those with {{extract.<field>}}. Never chain classify → summarize; both must read the extract.
   Never place a step that needs the raw trigger data downstream of a step that reduced it.
-- A CONTENTLESS trigger (schedule, manual, one_time, webhook) provides NO data. If the
+- A CONTENTLESS trigger (schedule, manual) provides NO data. If the
   workflow then operates on connector data — e.g. "summarize the #general channel", "digest
   my unread emails", "report on yesterday's messages" — the FIRST step MUST be a
   connector-action that fetches that data, because the transform steps
@@ -604,8 +624,6 @@ Trigger examples (use the appropriate type):
 {"component":"trigger","spec":{"type":"email","filter":"from:ups.com","maxResults":5},"rationale":"<one sentence>"}
 {"component":"trigger","spec":{"type":"schedule","cron":"0 9 * * 1-5","timezone":"America/New_York","label":"Weekdays at 9am ET"},"rationale":"<one sentence>"}
 {"component":"trigger","spec":{"type":"manual"},"rationale":"<one sentence>"}
-{"component":"trigger","spec":{"type":"one_time"},"rationale":"<one sentence>"}
-{"component":"trigger","spec":{"type":"webhook","path":"/hooks/my-workflow"},"rationale":"<one sentence>"}
 {"component":"trigger","spec":{"type":"event","connector":"slack","event":"message","filter":{"channel":"#general"}},"rationale":"<one sentence>"}
 
 Node:
@@ -657,9 +675,7 @@ ${prior ? `\nPRIOR CLARIFICATIONS:\n${prior}` : ''}
 TRIGGER TYPE INFERENCE:
 - "every morning/daily/weekly/hourly/on a schedule" → schedule (no need to ask)
 - "when email/gmail/message arrives/from sender X" → email (no need to ask)
-- "do this now/run this once/one time/just this once" → one_time (no need to ask)
-- "manually/on demand/whenever I want" → manual (no need to ask)
-- "webhook/HTTP POST/external call" → webhook (no need to ask)
+- "manually/on demand/whenever I want/do this now/run this once" → manual (no need to ask)
 - "when Slack message/new row/connector event fires" → event (no need to ask)
 - Trigger type genuinely unclear → ask explicitly: "What should start this workflow?"
 
