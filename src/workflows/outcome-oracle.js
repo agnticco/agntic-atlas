@@ -109,7 +109,7 @@ const CONNECTOR_ALIASES = {
   filesystem:['filesystem', 'file', 'disk'],
 };
 
-function aliasesFor(connector) {
+export function aliasesFor(connector) {
   const key = String(connector ?? '').toLowerCase();
   return new Set(CONNECTOR_ALIASES[key] ?? (key ? [key] : []));
 }
@@ -790,6 +790,36 @@ function askSatisfiesAssertion(assertion, node) {
   });
 }
 
+/**
+ * Do a promise and a step refer to the SAME destination BY IDENTITY?
+ *
+ * Three answers, and the third is the point:
+ *   · `true`   — both carry an id and they match. No names need comparing.
+ *   · `false`  — both carry an id and they differ. A definite mismatch, stronger than
+ *                any comparison of spellings can be.
+ *   · `null`   — at least one side has no id. Undecidable HERE, so the caller falls
+ *                back to the string rules — which is every spec built before the
+ *                destination table existed.
+ *
+ * `null` rather than `false` for the unknown case is what makes the whole table safe to
+ * add: silence is not a verdict. Every defect in this family came from a check
+ * answering a question it could not answer, and answering it "no".
+ *
+ * It lives HERE rather than in `destinations.js` to keep the imports one-directional:
+ * that module needs the oracle to read a spec, so the oracle must not need it back.
+ * The cycle loaded fine — nothing runs at module top level — which is exactly the kind
+ * of thing that stops being true later.
+ */
+export function sameDestination(assertion, node) {
+  const want = assertion?.destinationId;
+  // Read from the NODE, never from its config — see `indexDestinations`: a config key
+  // nothing declares is a hard publish failure, and this is bookkeeping about the step
+  // rather than a parameter of it.
+  const have = node?.destinationIds;
+  if (!want || !Array.isArray(have) || !have.length) return null;
+  return have.includes(want);
+}
+
 export function satisfiesAssertion(assertion, node) {
   // An approval step's QUESTION is a real message, but it is not a "write" and must
   // never be mistaken for one — hence its own path, before nodeEffect() is consulted.
@@ -798,6 +828,23 @@ export function satisfiesAssertion(assertion, node) {
   const eff = nodeEffect(node);
   if (!eff) return false;
   if (!kindSatisfies(eff.kind, assertion.kind, eff.connectors)) return false;
+
+  // ── IDENTITY BEATS SPELLING ────────────────────────────────────────────────
+  //
+  // When the promise and the step both carry a destination id, they are pointing at
+  // ONE entry in the workflow's destination table and no comparison of names is needed
+  // — which is the point of the table: two things pointing at one entry cannot disagree
+  // about where they mean, because there is only one of it.
+  //
+  // `null` means at least one side has no id: undecidable here, so fall through to the
+  // string rules below. That is every spec built before the table existed, and it is
+  // why this is safe to add — silence is not a verdict. Every defect in this family
+  // came from a check answering a question it could not answer, and answering "no".
+  //
+  // The KIND check above still runs first: sharing a destination does not make a
+  // promise to send satisfiable by a row written to the same place.
+  const byIdentity = sameDestination(assertion, node);
+  if (byIdentity !== null) return byIdentity;
 
   const { connector, locator } = splitTarget(assertion.target);
   // CANONICALISE, AS THE RUNTIME CHECK ALREADY DID.

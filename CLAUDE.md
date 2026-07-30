@@ -1877,6 +1877,44 @@ fixed on the spot. Fold the relevant ones into whatever increment next touches t
   spelling and pairing (which `build-and-runtime-agree-everywhere.test.js` proves). It is
   a regression detector for the ninth instance of that drift; replace the source pin with
   a behavioural one if a legitimate disagreement ever becomes constructible.
+- **ONE IDENTITY PER DESTINATION — the promise and the step now point at the same thing
+  (2026-07-30, Charles's call: "build the complete fix").** A destination lives in three
+  vocabularies at once — what the customer says ("my calendar", "Pricing Enquiries"),
+  what the spec stores (`spreadsheetId: 1BxiMVs0…`), and what the promise states
+  (`google:Calendar`) — and those were bridged by comparing STRINGS through alias
+  tables, guess lists and canonicalisation in **more than thirty places**. Nine defects
+  came out of that in two days, each costing paid Opus rebuilds and twice a workflow
+  that could not go live. Fixing them one at a time never reduced the rate.
+  **A workflow now carries a table of the destinations it uses.** Each entry is created
+  once and given an id; the step that writes there and the promise about it carry that
+  id, and `satisfiesAssertion` compares ids when both sides have one. Two things
+  pointing at one entry cannot disagree about where they mean — not because a rule keeps
+  them in step, but because there is only one of it. Built by `indexDestinations`, run
+  as the last act of `mergeGeneratedSpec`, deterministic and model-free: it reads what
+  the build already decided, never invents a destination, never moves one, never edits a
+  locator.
+  **ADDITIVE, AND THAT IS THE LOAD-BEARING PART.** The id is consulted only when BOTH
+  sides have one; `sameDestination` returns **null**, not false, when either lacks it,
+  and the caller falls through to the old string rules. So every spec ever stored
+  behaves exactly as before, and a half-stamped spec cannot fail a workflow that
+  publishes today. Returning `false` for the unknown case is mutation M1 and it turns
+  seven tests red — every previous defect in this family came from a check answering a
+  question it could not answer, and answering "no".
+  **A STALE PROMISE IS LEFT UNSTAMPED ON PURPOSE.** Only a place a step actually writes
+  becomes a destination; inventing an entry for a promise that matches nothing would give
+  it an identity of its own and make it look settled, when "this names somewhere no step
+  goes" is the finding that has to survive.
+  **Three defects in the change, all caught by tests before it shipped, and two are
+  instances of the very families this work exists to end:** the ids were first put inside
+  `node.config`, where an undeclared key is a hard publish failure
+  (`UNKNOWN_CONFIG_KEY`) — it made **every workflow in the product unpublishable** and
+  the full suite caught it; the destination's service was taken from `eff.connectors`,
+  an alias SET beginning with the vendor, so a Google Sheets row was indexed as
+  `gmail::leads` — **the same `google → gmail` trap fixed in the runtime hours earlier**,
+  now solved by deriving the service from the capability id; and the cell `range` was
+  indexed as a place a workflow writes, which is wrong for stage 3 where each entry is
+  resolved against the real service. Pinned by
+  `tests/workflows/one-identity-per-destination.test.js` (19), eight mutations red→green.
 - **Approval-channel availability (`email`) is deployment-wide, not per-tenant** — fine today
   (one deployment, one mailer); revisit if tenants ever bring their own sending domain.
 - **Google Sheets has no destination picker, so Atlas asks a customer for a spreadsheet

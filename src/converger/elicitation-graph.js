@@ -48,6 +48,9 @@ import { nodeForAssertion, assertableConnectors, splitTarget, canonicalConnector
 import { isRunnableTrigger } from '../workflows/trigger-runnable.js';
 // Reports where a finished build contradicts itself. Never repairs, never blocks.
 import { selfContradictions, summariseContradictions } from '../workflows/self-consistency.js';
+// One identity per destination, shared by the step that writes there and the promise
+// about it — so the two cannot disagree about where they mean.
+import { indexDestinations } from '../workflows/destinations.js';
 import { analyzeTable } from '../workflows/decision-analysis.js';
 import { deriveWorkflowName } from '../workflows/workflow-validator.js';
 import { tableOf, valuesOf, HIT_POLICIES, HIT_POLICY_LABELS, DECISION_MAX_INPUTS } from '../workflows/node-types/decision.js';
@@ -1042,7 +1045,19 @@ export function mergeGeneratedSpec(draft, generated, opts = {}) {
     errorHandling: base.errorHandling ?? {},
   };
 
-  return wireEdges(merged);
+  // ── GIVE EVERY DESTINATION ONE IDENTITY ───────────────────────────────────
+  //
+  // The last thing done to a merged spec, after the trigger and outcome are settled:
+  // read the destinations this workflow uses, and stamp the step that writes to each
+  // and the promise about it with the SAME id. From here on, those two cannot disagree
+  // about where they mean, because there is only one of it — rather than two strings
+  // kept in step by rules that have drifted apart nine times.
+  //
+  // Deterministic, model-free and non-destructive: it reads what the build already
+  // decided, never invents a destination, never moves one, and never edits a locator.
+  // A promise matching no destination the workflow uses is left WITHOUT an id on
+  // purpose — that is a stale promise, and it must stay visible as one.
+  return indexDestinations(wireEdges(merged)).spec;
 }
 
 // ── Schema-aware destinations (P12 Increment F) ───────────────────────────────
