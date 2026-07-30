@@ -42,7 +42,7 @@ import { scoreGap, unansweredGaps } from './gap-scorer.js';
 import { applyProposal, assembleSpec, wireEdges } from './spec-assembler.js';
 import { materialiseEscalations } from './escalation.js';
 import { nodeForAssertion, assertableConnectors, splitTarget, canonicalConnector,
-         laneInventoryOf } from '../workflows/outcome-oracle.js';
+         laneInventoryOf, nodeEffect } from '../workflows/outcome-oracle.js';
 // ONE definition of "could anything ever start a workflow from this trigger",
 // shared with the publish guard — so the merge and the refusal cannot disagree.
 import { isRunnableTrigger } from '../workflows/trigger-runnable.js';
@@ -111,10 +111,140 @@ export function nameApprovedDraft(draft, plan) {
 // stops the model re-emitting the same blank. Without it the pass is told a fix
 // happened but not what was wrong, which is the half-measure that made the previous
 // loop unfixable.
-export function autoRepairStructural(draft, gaps) {
+/**
+ * WHAT DID THE PERSON ACTUALLY TYPE?
+ *
+ * Only the answers to real questions. Everything the converger writes into
+ * `clarifications` for its own bookkeeping marks itself with a parenthesised
+ * question — `(setup: …)`, `(still missing)`, `(plan change)`, `(user modified …)` —
+ * and those are Atlas talking to itself. Admitting them would let the machine
+ * corroborate its own guess, which is the laundering hop this file's history is full
+ * of.
+ *
+ * `intent` is deliberately NOT admitted either: it is written by a model
+ * (`build_intent`), not typed by the person, so it is not evidence about what they
+ * said. That makes this corpus INCOMPLETE — a destination named only in the opening
+ * message is absent from it — and every consumer must therefore treat "not in here"
+ * as "no evidence", never as "the user did not say it".
+ */
+export function userSuppliedValues(clarifications) {
+  const out = new Set();
+  for (const c of (clarifications ?? [])) {
+    const q = String(c?.q ?? '');
+    if (!q || q.trim().startsWith('(')) continue;      // Atlas's own bookkeeping
+    const a = String(c?.a ?? '').trim();
+    if (!a) continue;
+    out.add(a.toLowerCase());
+    // A person answering "which sheet?" types the name alone, but an answer can also
+    // be a sentence ("put it in Pricing Enquiries please"). Index the words too, so a
+    // multi-word destination inside a sentence is still recognisable.
+    for (const piece of a.split(/[,;\n]+|\s+(?:and|or)\s+/i)) {
+      const p = piece.trim().toLowerCase();
+      if (p) out.add(p);
+    }
+  }
+  return out;
+}
+
+/** Loose equality for a destination a person typed vs one a step carries. */
+const sameDestination = (a, b) => {
+  const n = (s) => String(s ?? '').trim().toLowerCase().replace(/^#/, '');
+  return !!n(a) && n(a) === n(b);
+};
+
+/**
+ * THE PROMISE NAMED A PLACE THE PERSON NEVER MENTIONED.
+ *
+ * WITNESSED ON PROD, 2026-07-30, driving a Gmail→Sheets logger. The contract promised
+ * `record_exists → sheets:Pricing Emails`. The sheet the user named — when Atlas asked
+ * them, one turn later — was **Pricing Enquiries**. So the promise could not match the
+ * step built from their answer: `UNSATISFIED_ASSERTION`, THREE paid whole-spec Opus
+ * passes trying to fix a workflow that was already right, then the rebuild gate
+ * refusing the fourth. The workflow could not go live, and the panel still showed the
+ * user a promise about a spreadsheet they had never heard of.
+ *
+ * THE MECHANISM, which is the part worth remembering. Assertions are written ONCE, by
+ * the `outcome` node, from the opening intent — **before** Atlas asks which
+ * destination to use. When the answer arrives it updates the STEP and nothing else, so
+ * the contract keeps its opening guess forever. `refreshedOutcome` (added the same
+ * morning) does not cover this: it fires on a user REVISION, and answering a question
+ * you were asked is not a revision. Being asked is the commonest path of the two.
+ *
+ * WHY IT MOVES THE PROMISE ONLY ONTO SOMETHING THE PERSON TYPED. Retargeting an
+ * unsatisfied promise to whatever the spec happens to do would destroy the promise
+ * system outright: every workflow that failed its contract would rewrite the contract
+ * and pass. So BOTH must hold, and the second is what makes it safe:
+ *
+ *   · the promise's current destination is NOT among the person's answers, and
+ *   · the step's destination IS.
+ *
+ * Then the promise is demonstrably the stale half and the step is demonstrably what
+ * they asked for. If the person named the destination in their opening message and the
+ * model built a step somewhere else, NEITHER side is in the corpus, the second test
+ * fails, and the promise correctly stands and fails the build — which is the case this
+ * must never break.
+ *
+ * Their WORDS are untouched. Only the machine-checkable target moves, exactly as
+ * `set_assertion_when` restates only the condition.
+ */
+export function retargetStaleAssertion(draft, gap, userSaid) {
+  const assertions = Array.isArray(draft?.outcome?.assertions) ? draft.outcome.assertions : null;
+  if (!assertions || !(userSaid instanceof Set) || userSaid.size === 0) return null;
+
+  // WHICH promise, as DATA. The target rides on the issue precisely so nobody has to
+  // parse it back out of the English sentence. A gap without one therefore matches no
+  // assertion below and is left alone — an explicit `if (!target) return null` here
+  // was proved redundant by mutation (2026-07-30) and removed rather than left as a
+  // guard no test could hold.
+  const target = String(gap?.target ?? '').trim();
+  const index = assertions.findIndex(a => a && a.target === target);
+  if (index < 0) return null;
+  const { connector, locator } = splitTarget(target);
+  if (!connector || !locator) return null;
+
+  // The person named THIS place: the promise is right and the workflow is wrong.
+  for (const said of userSaid) if (sameDestination(said, locator)) return null;
+
+  const want = canonicalConnector(connector);
+  const kind = assertions[index].kind;
+  const found = new Set();
+  for (const n of (draft.nodes ?? [])) {
+    const eff = nodeEffect(n);
+    if (!eff || eff.kind !== kind) continue;
+    if (!eff.connectors.has(want) && !eff.connectors.has(connector)) continue;
+    for (const loc of eff.locators) {
+      for (const said of userSaid) if (sameDestination(said, loc)) found.add(loc);
+    }
+  }
+  // Exactly one, or we would be guessing which of several the promise meant — and a
+  // guess here is a silently rewritten promise.
+  if (found.size !== 1) return null;
+  const [locatorNow] = found;
+  // A promise that is ALREADY right cannot reach here, so there is no check for it:
+  // if the person typed this destination the guard above has already returned, and if
+  // they did not then it is not a candidate. Proved unreachable by mutation
+  // (2026-07-30) and left out rather than kept as a guard no test could hold.
+  return { index, target: `${connector}:${locatorNow}`, from: target };
+}
+
+export function autoRepairStructural(draft, gaps, opts = {}) {
   const applied = [];
   let d = draft;
+  const userSaid = opts.userSaid instanceof Set ? opts.userSaid : null;
   for (const g of (gaps ?? [])) {
+    // A promise left pointing at Atlas's own opening guess, when the person has since
+    // told us the real destination. Handled here rather than as a `fix` from the gap
+    // scorer because only the converger holds what the person typed.
+    if (userSaid && g?.code === 'UNSATISFIED_ASSERTION') {
+      const move = retargetStaleAssertion(d, g, userSaid);
+      if (move) {
+        const as = d.outcome.assertions.map((a, i) => (i === move.index ? { ...a, target: move.target } : a));
+        d = { ...d, outcome: { ...d.outcome, assertions: as } };
+        applied.push({ gapId: g.id, code: g.code, op: 'set_assertion_target',
+                       from: move.from, target: move.target, message: g.message ?? null });
+        continue;
+      }
+    }
     const fix = g?.fix;
     if (!fix) continue;
     try {
@@ -1930,7 +2060,7 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
     let repaired = [];
     if (state._generated) {
       const pre = scoreGap(draft, { capabilities: state.capabilities });
-      const r = autoRepairStructural(draft, pre.gaps);
+      const r = autoRepairStructural(draft, pre.gaps, { userSaid: userSuppliedValues(state.clarifications) });
       if (r.applied.length) {
         draft = r.draft;
         repaired = r.applied;
@@ -3415,8 +3545,9 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
     // idempotent on resume (adding an existing edge is a no-op). This is what
     // stops zero-typing builds stranding at "Incomplete" with Run test disabled.
     const repairs = [];
+    const userSaid = userSuppliedValues(state.clarifications);
     for (let pass = 0; pass < 4; pass++) {
-      const r = autoRepairStructural(draft, result.gaps);
+      const r = autoRepairStructural(draft, result.gaps, { userSaid });
       if (!r.applied.length) break;
       repairs.push(...r.applied);
       draft  = r.draft;

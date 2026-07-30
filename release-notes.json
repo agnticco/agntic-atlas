@@ -1,5 +1,13 @@
 [
   {
+    "version": "1.6.89",
+    "date": "2026-07-30",
+    "title": "The promise follows the answer you gave",
+    "notes": [
+      "When Atlas asks where something should go, your answer now updates the workflow's promise as well as the step. Before, the promise kept Atlas's first guess at the destination, which made correct workflows fail their own check and rebuild several times."
+    ]
+  },
+  {
     "version": "1.6.88",
     "date": "2026-07-30",
     "title": "A build you look away from is no longer lost",

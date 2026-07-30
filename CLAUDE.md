@@ -1727,8 +1727,60 @@ fixed on the spot. Fold the relevant ones into whatever increment next touches t
   red→green**. *NOTE: this was NOT the cause of the build above — that was the prompt
   defect, and no user revision happened. It is a real gap fixed on its own merits; do not
   file it as that build's root cause.*
+- **THE PROMISE NAMED A SPREADSHEET THE PERSON HAD NEVER HEARD OF — FIXED
+  (2026-07-30).** Witnessed on prod (`build-platform-1785419902877`) driving a
+  Gmail→Sheets logger. The contract promised `record_exists → sheets:Pricing Emails`.
+  The sheet the user named — when Atlas asked them, one turn later — was **Pricing
+  Enquiries**. Nobody ever said "Pricing Emails": the `outcome` node invented it from
+  the opening intent, *before* the destination question was asked. So the promise could
+  not match the step built from their answer — `UNSATISFIED_ASSERTION`, **three paid
+  whole-spec Opus passes** trying to fix a workflow that was already correct, then the
+  rebuild gate refusing the fourth. The workflow could not go live, and the panel showed
+  the user *"Adds a row to your spreadsheet (Pricing Emails)"*.
+  **The mechanism, which is the general form of the two destination defects fixed
+  earlier the same day:** assertions are written ONCE, from the opening intent, before
+  any destination is settled; the answer then updates the STEP and nothing else, so the
+  contract keeps its opening guess forever. `refreshedOutcome` does not cover it — that
+  fires on a user REVISION, and **answering a question you were asked is not a
+  revision.** Being asked is the commoner path of the two.
+  **The fix moves the promise only onto a destination the person demonstrably typed**
+  (`retargetStaleAssertion`, applied by `autoRepairStructural` as `set_assertion_target`
+  — no question, no model call, no rebuild, exactly like `set_assertion_when`). BOTH
+  must hold: the promise's current destination is NOT among their answers, and the
+  step's destination IS. **Retargeting on the spec alone would destroy the promise
+  system outright** — every workflow that failed its contract would rewrite the contract
+  and pass — and that mutation is the first one in the test file. If the person named
+  the destination only in their opening message and the model built a step elsewhere,
+  neither side is in the corpus, nothing moves, and the build correctly fails.
+  **The corpus is deliberately incomplete and every consumer must treat "not in here" as
+  "no evidence", never as "they didn't say it".** Only answers to real questions count:
+  entries whose question is parenthesised (`(setup: …)`, `(still missing)`, `(plan
+  change)`, `(user modified …)`) are Atlas talking to itself, and `intent` is
+  model-written — admitting either would let the machine corroborate its own guess,
+  which is the laundering hop this file records on its third and fourth appearances.
+  A destination buried in a sentence is **not** recognised, on purpose: substring
+  matching against free prose would let a one-word destination match almost any answer.
+  This also generalises the Slack-only assertion rewrite in `fillDestination`
+  (`kind === 'slack_channel'`), which was the same idea scoped to one connector.
+  Pinned by `tests/converger/the-promise-follows-the-answer.test.js` (20), **eight
+  mutations red→green — four survived the first pass and the tests were strengthened
+  rather than the mutations dropped**: the "they named it" guard, the kind test and the
+  answer-splitting were all passing for the wrong reason (a second guard blocked the
+  case anyway), and two further guards were proved *unreachable* and removed rather than
+  left as untested code.
 - **Approval-channel availability (`email`) is deployment-wide, not per-tenant** — fine today
   (one deployment, one mailer); revisit if tenants ever bring their own sending domain.
+- **Google Sheets has no destination picker, so Atlas asks a customer for a spreadsheet
+  ID (open, 2026-07-30).** Witnessed on prod: Atlas asked *"Which Google Sheet should I
+  append the rows to? (I need the spreadsheet ID **or name**…)"*, the user answered with
+  a name as invited, and Atlas then refused the name — *"What is the spreadsheet ID for
+  'Pricing Enquiries'? You can find it in the URL of the sheet, between /d/ and
+  /edit."* For Airtable, Atlas reads the tenant's real bases and proposes them; the
+  connector-generic destination discovery built in P13-0 (`schemaDiscovery`,
+  `sheets_describe`) is not wired for Sheets. **This is the banned developer-settings
+  errand in all but name** and it is the most visible thing on a screen recording of the
+  Sheets shape. Also: it never verified the sheet existed (a fabricated id was accepted),
+  and the plan card printed the raw 44-character id to the customer.
 - **`tests/e2e/full-journey.test.js`'s converger test is BROKEN, not skipped** — it dies in
   1.6ms with `ReferenceError: tenantId is not defined`, so it never reaches the model.
   Pre-existing (confirmed by stash, 2026-07-30) and it is the test P11's own gate notes
