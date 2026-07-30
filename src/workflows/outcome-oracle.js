@@ -741,6 +741,21 @@ export function satisfiesAssertion(assertion, node) {
   if (isLocatorFree(connector)) return true;
   // …and likewise when the locator merely repeats the product name.
   if (locatorIsJustTheConnector(locator, connector)) return true;
+  // …INCLUDING when it names the SERVICE the delivery uses while the assertion names
+  // the VENDOR. `google:Calendar` is the natural way to write "an event exists in my
+  // calendar", and the rule above cannot see it: it compares the locator against
+  // `google`, never against `calendar`.
+  //
+  // WITNESSED ON PROD, 2026-07-30 (`build-platform-1785424869443`), a demo-booking
+  // workflow: *"nothing reached "Calendar" in google — this run delivered to
+  // {{compute_event.event_title}} (calendar)"*. Two whole-spec Opus passes and a
+  // refused third, on a correct workflow.
+  //
+  // Additive, exactly like the canonicalisation above: it can only accept a target
+  // that was previously rejected, never reject one that was accepted. The locator is
+  // still compared normally when it names a real destination — "Calendar" is excused
+  // only because it repeats what the connector already said.
+  for (const c of eff.connectors) if (locatorIsJustTheConnector(locator, c)) return true;
 
   // AN OPAQUE PROVIDER ID IS UNDECIDABLE HERE, NOT A MISMATCH (2026-07-19).
   //
@@ -1266,6 +1281,21 @@ export function checkAssertionAtRuntime(assertion, deliveries = []) {
   const wantConnector = canonicalConnector(connector);
   const wantLocator   = normLocator(locator);
 
+  // ASK ABOUT THE NAME AS WRITTEN **AND** ITS CANONICAL FORM — the build-time half
+  // has always done both (`eff.connectors.has(connector) || …has(canonical…)`), and
+  // doing only one here is a drift that costs whole builds.
+  //
+  // The case that exposed it: `canonicalConnector('google')` is **`gmail`**, because
+  // `google` appears in gmail's alias list. So a promise written with the VENDOR name
+  // — `google:Calendar`, `google:My Report` — silently became a promise about GMAIL at
+  // run time, and every non-Gmail Google delivery was recorded as "delivered
+  // somewhere else". Witnessed on prod 2026-07-30 as *"nothing reached "Calendar" in
+  // google"* on a correct demo-booking workflow: two whole-spec Opus passes, then a
+  // refused third. Asking with the raw name as well finds it, because `calendar`
+  // carries `google` among ITS aliases — which is the directed question this check is
+  // supposed to ask.
+  const reaches = (d) => deliveryReaches(d, wantConnector) || deliveryReaches(d, connector);
+
   const locatorFree = isLocatorFree(connector);
 
   // The diagnosis this run already holds, gathered as we go — see undeliveredReason.
@@ -1278,20 +1308,26 @@ export function checkAssertionAtRuntime(assertion, deliveries = []) {
       // most useful thing this run knows about why the promise was not kept, and
       // reading it is the whole difference between "nothing reached them" and
       // "nothing reached them because no Slack user matches that address".
-      if (deliveryReaches(d, wantConnector)) {
+      if (reaches(d)) {
         const why = undeliveredReason(d);
         blocked.push(why ? `${deliveryPlace(d)}: ${why}` : `${deliveryPlace(d)}: the run did not record why`);
       }
       continue;
     }
-    if (!deliveryReaches(d, wantConnector)) { landed.push(deliveryWhere(d)); continue; }
+    if (!reaches(d)) { landed.push(deliveryWhere(d)); continue; }
     // No locator on the assertion, a template locator (resolved at run time), or a
     // locator-free connector (the inbox — its "locator" is a label, not an address)
     // ⇒ "some delivery to this connector" is enough.
     // The build-time half applies `locatorIsJustTheConnector` too; leaving it out
     // here is how these two came to disagree about `google_tasks` in the first place.
+    // …and against the connectors the DELIVERY uses, not only the one the assertion
+    // names, so `google:Calendar` is recognised as naming the service rather than a
+    // specific event. Added with the build-time half on 2026-07-30 and in the same
+    // commit ON PURPOSE: putting it in one side only is precisely how these two came
+    // to disagree about `google_tasks`, and about `google_drive` after that.
     if (!wantLocator || isTemplate(locator) || locatorFree
-        || locatorIsJustTheConnector(locator, connector)) {
+        || locatorIsJustTheConnector(locator, connector)
+        || [...aliasesFor(deliveryConnector(d))].some(c => locatorIsJustTheConnector(locator, c))) {
       return { ok: true, detail: describeDelivery(d) };
     }
     // The delivery reached one or more destinations (its resolved value AND its

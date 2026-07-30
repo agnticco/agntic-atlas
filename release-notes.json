@@ -1,5 +1,13 @@
 [
   {
+    "version": "1.6.90",
+    "date": "2026-07-30",
+    "title": "Calendar workflows stop failing their own check",
+    "notes": [
+      "A workflow that books a calendar event no longer reports that nothing reached your calendar. Promises written as \"Google Calendar\" were being checked against Gmail."
+    ]
+  },
+  {
     "version": "1.6.89",
     "date": "2026-07-30",
     "title": "The promise follows the answer you gave",

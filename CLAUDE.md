@@ -1768,6 +1768,54 @@ fixed on the spot. Fold the relevant ones into whatever increment next touches t
   answer-splitting were all passing for the wrong reason (a second guard blocked the
   case anyway), and two further guards were proved *unreachable* and removed rather than
   left as untested code.
+- **A PROMISE WRITTEN WITH THE VENDOR NAME WAS TREATED AS A PROMISE ABOUT GMAIL —
+  FIXED (2026-07-30).** Witnessed on prod (`build-platform-1785424869443`) driving a
+  demo-booking workflow (read the email → book a 30-minute hold → reply to confirm).
+  The workflow was correct. The oracle said *"nothing reached "Calendar" in google —
+  this run delivered to `{{compute_event.event_title}}` (calendar)"*, and it cost two
+  whole-spec Opus passes before the rebuild gate refused the third.
+  **`canonicalConnector('google')` returns `gmail`** — `google` sits in gmail's alias
+  list — so at RUN TIME every promise written with the vendor name (`google:Calendar`,
+  `google:My Report`) silently became a promise about Gmail, and every non-Gmail Google
+  delivery was recorded as "delivered somewhere else". The BUILD half never had the bug
+  because it asks with the raw name as well (`eff.connectors.has(connector) ||
+  …has(canonicalConnector(connector))`); the runtime asked only canonically. **Eighth
+  instance of the two halves drifting, and the third caused by one of them
+  canonicalising when the other did not.** The runtime now asks both ways
+  (`reaches`), which is the directed question it was always supposed to ask —
+  `calendar` carries `google` among ITS aliases.
+  **Second, smaller half, fixed in the same commit ON PURPOSE:** a locator that names
+  the SERVICE while the assertion names the VENDOR (`google:Calendar`) is excused as
+  adding no information, the same way `locatorIsJustTheConnector` already excused
+  `calendar:Calendar`. Applied to BOTH halves together — putting it in one side only
+  is exactly how `google_tasks` and then `google_drive` drifted. Pinned by
+  `tests/workflows/a-promise-may-name-the-service.test.js` (18), **five mutations
+  red→green — one survived the first pass**: the fixture used a TEMPLATE event title,
+  which is excused by a different rule entirely, so the build-time half could be
+  deleted with the suite still green; only a LITERAL title reaches the locator
+  comparison, and that case was added rather than the mutation dropped.
+- **THE DECLARATION IS DEAD CODE FOR SIX CAPABILITIES (open, found 2026-07-30).** While
+  fixing the above I found that `CHANNEL_EFFECTS` — a hardcoded 13-entry table in
+  `outcome-oracle.js` mapping a channel to its connector, kind and locator keys — is
+  consulted **before** the capability's own declaration, in both `nodeEffect` branches.
+  So for every capability appearing in both (`gmail_send`, `docs_create`,
+  `sheets_append`, `calendar_create_event`, `airtable_create_record`,
+  `airtable_update_record`) the declared `effect` / `assertionKind` / `locatorKeys` are
+  **never read**. That is the ninth instance of one rule living in two places, and it
+  hides in the worst way: the declaration audit asks *"is everything declared?"* and the
+  agreement sweep asks *"do the two consumers agree?"*, and **both pass**, because
+  neither asks whether the declaration is USED. `calendar_create_event` even carries a
+  `locatorKeys: ['title']` declaration written to MATCH the table — they agreed, and
+  were wrong together.
+  **Not fixed, deliberately:** inverting the precedence was attempted and reverted the
+  same session. It is correct, but it changes the destination rules for six shipped
+  capabilities at once and broke four existing tests that each need a judgement call
+  (notably: is `calendar:Standup`, naming the EVENT, a promise that should still pass?).
+  That deserves its own focused pass, not the tail of a long session. **Two traps for
+  whoever takes it:** `locatorKeys: []` currently reads as "undeclared" and falls
+  through to the GUESS list (`Array.isArray(…) && length ? … : null`) — declaring no
+  keys is a declaration, and that conflation must be fixed first; and a third audit
+  question is needed — *"is the declaration reachable?"* — or the same thing recurs.
 - **Approval-channel availability (`email`) is deployment-wide, not per-tenant** — fine today
   (one deployment, one mailer); revisit if tenants ever bring their own sending domain.
 - **Google Sheets has no destination picker, so Atlas asks a customer for a spreadsheet
