@@ -280,6 +280,47 @@ describe('AN APPROVAL STEP\'S QUESTION IS A DELIVERY', () => {
   });
 });
 
+describe('A PLACE THE WORKFLOW LISTENS TO IS NOT A PLACE IT WRITES', () => {
+  /**
+   * WITNESSED ON PROD 2026-07-30 — by this check, about a correct workflow, on its
+   * second day live. "When someone posts in #atlas-test-temp with the word urgent,
+   * email me" produced *"The promise tells the customer this workflow delivers to
+   * "#atlas-test-temp", but no step in it does"*. The channel is the SOURCE; the only
+   * destination is the email.
+   *
+   * That is the crying-wolf failure this file's header warns about, produced by this
+   * file. A destination named in the promise's sentence is only missing if the workflow
+   * does not mention it AT ALL — naming where it listens is not a contradiction.
+   */
+  const SLACK_TRIGGERED = {
+    triggers: [{ type: 'event', connector: 'slack', event: 'slack_message',
+                 channel: '#atlas-test-temp', keywords: 'urgent' }],
+    outcome: {
+      statement: "When a message containing the word 'urgent' is posted in #atlas-test-temp, extract the sender's name and message text, then email hello@agntic.co with the subject 'Urgent message in #atlas-test-temp'.",
+      assertions: [{ id: 'a1', kind: 'message_sent', target: 'gmail:hello@agntic.co' }],
+    },
+    nodes: [
+      { id: 'extract', type: 'llm', label: 'Extract sender and text', config: { mode: 'extract' } },
+      { id: 'mail', type: 'deliver', label: 'Email hello@agntic.co',
+        config: { channel: 'gmail_send', to: 'hello@agntic.co', subject: 'Urgent message' } },
+    ],
+    edges: [{ from: 'extract', to: 'mail' }],
+  };
+
+  test('the channel a workflow LISTENS to is not reported as a missing destination', () => {
+    catalog();
+    assert.deepEqual(selfContradictions(SLACK_TRIGGERED), []);
+  });
+
+  test('but a destination named NOWHERE in the workflow is still caught', () => {
+    catalog();
+    const wrong = { ...SLACK_TRIGGERED, outcome: { ...SLACK_TRIGGERED.outcome,
+      statement: "…then email hello@agntic.co and also post it to #somewhere-else." } };
+    assert.ok(codes(wrong).includes('STATEMENT_NAMES_ELSEWHERE'),
+      'excusing the trigger must not excuse a channel nothing mentions');
+  });
+});
+
 describe('the guards that stop it crying wolf', () => {
   test('a promise about a SHEET is not compared with an address in the sentence', () => {
     // Two destinations of different shapes are not two versions of one destination. A

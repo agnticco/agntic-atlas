@@ -106,6 +106,31 @@ function configValues(node) {
   return out;
 }
 
+/**
+ * Everything the TRIGGER names — the places a workflow listens, not the places it writes.
+ *
+ * WITNESSED ON PROD 2026-07-30, the first build where the two differed: "when someone
+ * posts in #atlas-test-temp with the word urgent, email me" produced
+ * *"The promise tells the customer this workflow delivers to "#atlas-test-temp", but no
+ * step in it does"* — on a completely correct workflow. The channel is the SOURCE. The
+ * only destination is the email.
+ *
+ * That is the crying-wolf failure this file's header warns about, produced by this file,
+ * on its second day. A destination named in the promise's sentence is only missing if
+ * the workflow does not MENTION it at all; naming where it listens is not a contradiction.
+ */
+function triggerValues(spec) {
+  const out = [];
+  const walk = (v) => {
+    if (typeof v === 'string') { out.push(v); return; }
+    if (Array.isArray(v)) { v.forEach(walk); return; }
+    if (v && typeof v === 'object') Object.values(v).forEach(walk);
+  };
+  walk(spec?.triggers);
+  for (const n of allNodes(spec)) if (n?.type === 'trigger') walk(n.config);
+  return out;
+}
+
 const finding = (code, severity, message, detail) => ({ code, severity, message, ...detail });
 
 /**
@@ -159,8 +184,11 @@ export function selfContradictions(spec) {
     ...writes.flatMap(({ node }) => configValues(node).map(norm)),
     ...askValues,
   ]);
+  // A place the workflow LISTENS to is not a place it should be writing.
+  const sourceValues = new Set(triggerValues(spec).map(norm));
   for (const named of destinationsNamedIn(outcome?.statement)) {
     if (stepValues.has(norm(named))) continue;
+    if (sourceValues.has(norm(named))) continue;   // it is the trigger, not a destination
     // Excused when a step's destination is undecidable — a template resolves at run
     // time and an opaque id cannot be compared with a human name.
     const undecidable = writes.some(({ eff }) =>

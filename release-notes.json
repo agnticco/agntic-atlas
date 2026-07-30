@@ -1,5 +1,13 @@
 [
   {
+    "version": "1.6.96",
+    "date": "2026-07-30",
+    "title": "Fewer false alarms in Atlas's self-check",
+    "notes": [
+      "The check that looks for a workflow contradicting itself no longer flags the channel a workflow listens to as a missing destination."
+    ]
+  },
+  {
     "version": "1.6.95",
     "date": "2026-07-30",
     "title": "A workflow with nothing to do is no longer marked failed",

@@ -1872,6 +1872,15 @@ fixed on the spot. Fold the relevant ones into whatever increment next touches t
   execute — manufacturing a "the two halves disagree" on a perfectly good loop. That
   last one is the "a check must construct its subject the way PRODUCTION does" rule
   catching the checker written to enforce it.
+  **IT CRIED WOLF ON ITS SECOND DAY, AND THAT IS RECORDED HERE BECAUSE IT IS THE FAILURE
+  MODE THAT MATTERS.** Driving shape 8 (a Slack-triggered workflow) on prod it reported
+  *"The promise tells the customer this workflow delivers to "#atlas-test-temp", but no
+  step in it does"* — about a completely correct workflow. The channel is where the
+  workflow LISTENS; the only destination is the email. A place a workflow reads from is
+  not a place it should be writing to, and `triggerValues` now excuses it. Caught by the
+  check running live on a real build rather than by a person, which is the point of it,
+  but a check that fires on a good build is worse than no check and this came one build
+  from teaching everyone to ignore it. Pinned with that exact workflow as the fixture.
   **One check is pinned only at SOURCE level and says so in the file:** `HALVES_DISAGREE`
   cannot be exercised behaviourally while the two halves agree on every capability,
   spelling and pairing (which `build-and-runtime-agree-everywhere.test.js` proves). It is
