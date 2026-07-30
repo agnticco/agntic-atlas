@@ -1794,7 +1794,7 @@ fixed on the spot. Fold the relevant ones into whatever increment next touches t
   which is excused by a different rule entirely, so the build-time half could be
   deleted with the suite still green; only a LITERAL title reaches the locator
   comparison, and that case was added rather than the mutation dropped.
-- **THE DECLARATION IS DEAD CODE FOR SIX CAPABILITIES (open, found 2026-07-30).** While
+- **THE DECLARATION WAS DEAD CODE FOR SIX CAPABILITIES — FIXED (2026-07-30).** While
   fixing the above I found that `CHANNEL_EFFECTS` — a hardcoded 13-entry table in
   `outcome-oracle.js` mapping a channel to its connector, kind and locator keys — is
   consulted **before** the capability's own declaration, in both `nodeEffect` branches.
@@ -1807,15 +1807,37 @@ fixed on the spot. Fold the relevant ones into whatever increment next touches t
   neither asks whether the declaration is USED. `calendar_create_event` even carries a
   `locatorKeys: ['title']` declaration written to MATCH the table — they agreed, and
   were wrong together.
-  **Not fixed, deliberately:** inverting the precedence was attempted and reverted the
-  same session. It is correct, but it changes the destination rules for six shipped
-  capabilities at once and broke four existing tests that each need a judgement call
-  (notably: is `calendar:Standup`, naming the EVENT, a promise that should still pass?).
-  That deserves its own focused pass, not the tail of a long session. **Two traps for
-  whoever takes it:** `locatorKeys: []` currently reads as "undeclared" and falls
-  through to the GUESS list (`Array.isArray(…) && length ? … : null`) — declaring no
-  keys is a declaration, and that conflation must be fixed first; and a third audit
-  question is needed — *"is the declaration reachable?"* — or the same thing recurs.
+  **THE FIX IS ORDERED BY CONFIDENCE, NOT BY SOURCE**, and that distinction was found
+  by a failing test rather than by reasoning:
+
+      explicit declaration  >  CHANNEL_EFFECTS  >  inference from the id
+
+  The first attempt was the blunt "declaration always wins", which broke the P13-0 seam
+  test: a capability that is merely REGISTERED declares nothing, and P13-0's rule that
+  silence from something delivery-capable counts as a WRITE is an INFERENCE whose kind
+  comes from a verb regex that knows nothing about Slack. So `slack` — registered,
+  undeclared — became a `record_exists`. The table is hand-written knowledge about a
+  specific channel and must outrank that guess, while never outranking a capability
+  that states its own effect, kind or destination (`declaresExplicitly`).
+  **The blast radius was far smaller than it looked** — measured before changing
+  anything: of the six ids in both, FOUR were byte-identical, and the two that differed
+  (`docs_create`, `calendar_create_event`) differed only by a `subject` locator key that
+  neither capability accepts. The four test failures that caused the first attempt to be
+  reverted came from an unrelated change made in the same pass, not from the inversion.
+  The table's entries are KEPT, not deleted: many checks build the oracle with no
+  catalog, and removing them would silently drop those to the verb regex.
+  **Fixed alongside, latent rather than witnessed:** `locatorKeys: []` read as
+  "undeclared" and fell through to the GUESS list, so a capability with exactly ONE
+  possible destination could not say so. Declaring no keys IS a declaration.
+  **Pinned by `tests/workflows/the-declaration-is-reachable.test.js` (14) — THE THIRD
+  QUESTION, which nothing was asking:** the audit asks *"is everything DECLARED?"*, the
+  sweep asks *"do the two consumers AGREE?"*, and this asks *"is the declaration
+  USED?"*. Both of the others passed throughout the defect's life, because nothing was
+  missing and the two consumers agreed — on the table. Four mutations red→green; the
+  `locatorKeys: []` one survived the first pass (nothing ships `[]` today) and a
+  synthetic fixed-destination capability was added rather than the fix left untested.
+  The table ids are recorded by HAND in that file rather than imported, because
+  importing them would make the guard agree with whatever the table says.
 - **Approval-channel availability (`email`) is deployment-wide, not per-tenant** — fine today
   (one deployment, one mailer); revisit if tenants ever bring their own sending domain.
 - **Google Sheets has no destination picker, so Atlas asks a customer for a spreadsheet

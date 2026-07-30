@@ -1,5 +1,13 @@
 [
   {
+    "version": "1.6.91",
+    "date": "2026-07-30",
+    "title": "Connectors decide their own behaviour",
+    "notes": [
+      "Each connector's own description of what it does — and where it writes — is now what Atlas actually reads. A hardcoded internal list had been silently overriding it for six of them."
+    ]
+  },
+  {
     "version": "1.6.90",
     "date": "2026-07-30",
     "title": "Calendar workflows stop failing their own check",

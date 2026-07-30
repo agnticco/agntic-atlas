@@ -162,6 +162,53 @@ function kindSatisfies(effKind, wantKind, connectors) {
  * only place the destination is named, so this table is how a deliver node gets
  * an effect at all.
  */
+/**
+ * Did this capability actually SAY what it does, or is it merely registered?
+ *
+ * The difference decides whether it outranks `CHANNEL_EFFECTS`. P13-0 established
+ * that silence from something delivery-capable counts as a WRITE — a useful default,
+ * but it is an INFERENCE, and the kind it produces comes from a verb regex that knows
+ * nothing about (say) Slack. The table is hand-written knowledge about a specific
+ * channel, so it beats that inference; it must not beat a capability that states its
+ * own effect, kind or destination.
+ *
+ * Order of confidence, which is what the two call sites below implement:
+ *   explicit declaration  >  CHANNEL_EFFECTS  >  inference from the id.
+ */
+function declaresExplicitly(cap) {
+  if (!cap || typeof cap !== 'object') return false;
+  return cap.effect === 'read' || cap.effect === 'write'
+      || typeof cap.assertionKind === 'string'
+      || Array.isArray(cap.locatorKeys);
+}
+
+/**
+ * CHANNELS THAT DECLARE NOTHING — THE FALLBACK, NOT THE AUTHORITY.
+ *
+ * This table predates capabilities declaring `effect` / `assertionKind` /
+ * `locatorKeys`, and until 2026-07-30 it was consulted FIRST. For every capability
+ * appearing in both, the declaration was therefore DEAD CODE — the ninth instance of
+ * one rule living in two places in this repo, and the best-hidden: the declaration
+ * audit asks "is everything declared?" and the agreement sweep asks "do the two
+ * consumers agree?", and BOTH passed, because neither asks whether the declaration is
+ * REACHED. `calendar_create_event` even carried a `locatorKeys: ['title']` declaration
+ * written to match this table; they agreed, and were wrong together.
+ *
+ * The order is now inverted: a registered capability's DECLARATION decides, and this
+ * answers only for channels no capability declares — today `slack`, `slack_dm`,
+ * `slack_file`, `inbox_deliver`, `in_app` and `webhook`, none of which is a registered
+ * capability. Measured before the change: of the six ids that were in both, FOUR were
+ * byte-identical, and the two that differed (`docs_create`, `calendar_create_event`)
+ * differed only by a `subject` key that neither capability accepts.
+ *
+ * The entries are KEPT rather than deleted so the oracle still answers sensibly when
+ * it is used without a catalog (which many checks do). `declaration-is-reachable.test.js`
+ * holds the invariant that matters: where both exist, the DECLARATION is what is used,
+ * and the two never disagree about the connector or the kind.
+ *
+ * Do not add an entry here for a capability that declares. Put it in the declaration,
+ * where one reader can find it.
+ */
 const CHANNEL_EFFECTS = {
   slack:                  { connector: 'slack',    kind: 'message_sent',    locatorKeys: ['target'] },
   slack_dm:               { connector: 'slack',    kind: 'message_sent',    locatorKeys: ['user'] },
@@ -305,7 +352,20 @@ function declaredWriteEffect(id, cap, config) {
     kind = ASSERTION_KINDS.find(k => WRITE_VERBS[k].test(id)) ?? 'record_exists';
     if (kind === 'record_exists' && DOC_CONNECTORS.has(connector)) kind = 'document_exists';
   }
-  const keys = Array.isArray(cap?.locatorKeys) && cap.locatorKeys.length ? cap.locatorKeys : null;
+  // DECLARING NO KEYS IS A DECLARATION — it is not the absence of one.
+  //
+  // This read `Array.isArray(…) && length ? … : null`, collapsing the two into one
+  // answer and sending `locatorKeys: []` down the GUESS path — the absent-vs-
+  // unrecognised conflation this file's history is made of. Nothing ships `[]` today,
+  // so this is latent rather than witnessed; it was found while giving
+  // `calendar_create_event` a fixed destination and is fixed here so the next
+  // capability with ONE possible destination can say so.
+  //
+  //   · no `locatorKeys` property  → undeclared, from a source we do not control → guess.
+  //   · `locatorKeys: []`          → declared: the destination is FIXED, nothing to
+  //                                  read from config, `defaultLocator` is the answer.
+  const declaredKeys = Array.isArray(cap?.locatorKeys) ? cap.locatorKeys : null;
+  const keys = declaredKeys && declaredKeys.length ? declaredKeys : null;
   // WHY A DECLARED KEY LIST BEATS THE GUESS LIST.
   //
   // `collectLocators` walks LOCATOR_KEYS — a fixed list of key names that USUALLY
@@ -322,11 +382,12 @@ function declaredWriteEffect(id, cap, config) {
   // a rule scoped to the SHAPE of a name rather than to what the thing MEANS. The
   // guess list stays as the fallback for capabilities from sources we do not
   // control, but every capability we ship declares.
-  const declared = keys
-    ? keys.map(k => config?.[k]).filter(v => typeof v === 'string' && v.trim())
+  const declared = declaredKeys
+    ? (keys ?? []).map(k => config?.[k]).filter(v => typeof v === 'string' && v.trim())
     : collectLocators(config);
-  // An implicit destination counts, but never over an explicit one.
-  const locators = (keys && !declared.length && typeof cap?.defaultLocator === 'string' && cap.defaultLocator.trim())
+  // An implicit destination counts, but never over an explicit one. Reached both when
+  // the declared keys are blank on THIS node and when the capability declared none.
+  const locators = (declaredKeys && !declared.length && typeof cap?.defaultLocator === 'string' && cap.defaultLocator.trim())
     ? [cap.defaultLocator.trim()]
     : declared;
   // ── WHAT A PERSON CALLS THE PLACE, AND WHAT THE CONNECTOR CALLS ITSELF ────
@@ -385,6 +446,14 @@ export function nodeEffect(node) {
 
   if (node.type === 'deliver') {
     const channel = String(node.config?.channel ?? '').trim();
+    // AN EXPLICIT DECLARATION OUTRANKS THE TABLE. A capability that is merely
+    // registered does not — see `declaresExplicitly`.
+    const capchannel = capabilityOf(channel);
+    if (declaresExplicitly(capchannel)) {
+      const declaredFirst = declaredEffectOf(channel);
+      if (declaredFirst === 'read')  return null;
+      if (declaredFirst === 'write') return declaredWriteEffect(channel, capchannel, node.config);
+    }
     const eff = CHANNEL_EFFECTS[channel];
     if (eff) {
       return {
@@ -410,6 +479,15 @@ export function nodeEffect(node) {
   if (node.type === 'connector-action') {
     const action = String(node.config?.action ?? '').trim();
     if (!action) return null;
+
+    // AN EXPLICIT DECLARATION OUTRANKS THE TABLE. A capability that is merely
+    // registered does not — see `declaresExplicitly`.
+    const capaction = capabilityOf(action);
+    if (declaresExplicitly(capaction)) {
+      const declaredFirst = declaredEffectOf(action);
+      if (declaredFirst === 'read')  return null;
+      if (declaredFirst === 'write') return declaredWriteEffect(action, capaction, node.config);
+    }
 
     // A registered delivery capability used as a mid-flow step has the same
     // effect it would have as a delivery — the world does not care which node
