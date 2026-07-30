@@ -2053,6 +2053,48 @@ fixed on the spot. Fold the relevant ones into whatever increment next touches t
   readable from the Slack API, but "has this deployment EVER received a Slack event for
   this tenant" is knowable and would have refused this publish with an actionable
   sentence instead of a green tick.
+- **THE PROMPT STILL OFFERS A WEBHOOK TRIGGER THAT NO CONSUMER CAN HONOUR — the
+  `connector_event` defect of 2026-07-27, repeating with a different value (open, found
+  2026-07-30, shape 10 of the campaign).** Asked for a contact form that POSTs to a URL
+  to start a workflow, Atlas answered:
+  > *"your form POSTs to a webhook URL that **Atlas generates when the workflow is
+  > built**. That URL becomes the trigger — whenever the form fires, the workflow
+  > catches the payload and emails the enquiry…"*
+  …and went on to ask two detail questions as though the mechanism were settled. **No
+  part of that exists.**
+  **Ground truth, measured:** `RUNNABLE_TRIGGER_TYPES` is `email · schedule · manual ·
+  event`; the registered trigger capabilities are exactly `gmail_new_message`,
+  `airtable_record_changed`, `slack_message`, `slack_mention`; and the only inbound
+  webhook routes are Stripe billing and the connector-specific ones. There is no URL
+  generation and no route.
+  **Where the belief comes from — `src/converger/prompts.js`, three places:** line 247
+  describes `webhook: 'Fires when an HTTP POST is received at a generated endpoint'`;
+  line 318 actively routes intent (*"Intent mentions webhook/HTTP POST/external call/API
+  call → webhook trigger"*); and line 608 is a worked EXAMPLE emitting
+  `{"type":"webhook","path":"/hooks/my-workflow"}`. So the interview is asking the model
+  for a value the runtime cannot honour — **exactly the sentence written about
+  `connector_event`**, whose entry ends: *"Keep the runnable set in step with the
+  consumers; this check failing a publish is the signal that someone added one without
+  the other."*
+  **The guard would hold** — `TRIGGER_NOT_RUNNABLE` refuses this at publish. But the
+  refusal comes after the whole conversation, and the FIRST sentence already promised a
+  mechanism that cannot exist. Same family as "a connector's availability is only
+  checked at BUILD time": the user does everything asked and then hits a wall.
+  **The fix is one line of deletion plus its two friends** — remove the webhook trigger
+  from the prompt's trigger list, its intent-routing rule and its example — and, as with
+  `connector_event`, the prompt change is a belief about model behaviour that the
+  publish guard makes safe to be wrong about.
+- **ATLAS CONFIRMS AND ELABORATES CAPABILITIES IT DOES NOT HAVE — the pattern behind
+  shapes 7 AND 10 (open, 2026-07-30).** Twice in one campaign, asked for something the
+  product cannot do, Atlas did not check and did not refuse: it agreed, then explained
+  the mechanism in confident detail. *"Perfect — I can pull from your Knowledge docs in
+  the workflow"* (there are none, and browser uploads are unreadable by a workflow); *"a
+  webhook URL that Atlas generates when the workflow is built"* (no such thing exists).
+  **This is the most demo-dangerous behaviour found**, because it happens at the FIRST
+  turn, in the most confident register, before the plan, the promise, the self-check or
+  the publish guard get a chance to act. Every one of those mechanisms is downstream of
+  a claim that has already been made. The product's whole thesis is that it does not lie
+  about what it did; this is lying about what it CAN DO, which no existing guard covers.
 - **Approval-channel availability (`email`) is deployment-wide, not per-tenant** — fine today
   (one deployment, one mailer); revisit if tenants ever bring their own sending domain.
 - **Google Sheets has no destination picker, so Atlas asks a customer for a spreadsheet
