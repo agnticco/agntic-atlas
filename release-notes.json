@@ -1,5 +1,13 @@
 [
   {
+    "version": "1.6.86",
+    "date": "2026-07-30",
+    "title": "Build-time and runtime disagreed about where a Google Doc lives",
+    "notes": [
+      "A digest written to a Google Doc satisfied its promise at build time and failed it at run time: build-time consults the connector alias table, runtime compared two canonical scalars, docs vs drive. Writing the same promise as 'docs:' passed both. Both halves now read the same table, directed rather than symmetric."
+    ]
+  },
+  {
     "version": "1.6.85",
     "date": "2026-07-29",
     "title": "The declaration audit: 19 of 28 capabilities were guesses",

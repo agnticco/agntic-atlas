@@ -1002,6 +1002,44 @@ export function canonicalConnector(name) {
 }
 
 /** The connector a delivery went to, from its `channel` (e.g. `gmail_send` → gmail). */
+/**
+ * DOES THIS DELIVERY REACH THE CONNECTOR THE PROMISE NAMES?
+ *
+ * The build-time half (`satisfiesAssertion`) asks whether the wanted connector is
+ * among the ALIASES of the connector the node writes to — `docs` carries
+ * `['docs','google','drive','gdocs']`, because a Google Doc genuinely does live in
+ * Drive. The runtime half compared two canonical SCALARS instead: `docs` vs `drive`,
+ * not equal, promise broken.
+ *
+ * WITNESSED ON PROD, 2026-07-30 (`build-platform-1785413586868`). A weekly CRM digest
+ * written to a Google Doc. The contract said `google_drive:New Companies This Week`
+ * (canonical `drive`); the delivery went via `docs_create` (canonical `docs`).
+ * Build-time said satisfied, runtime said *"nothing reached … in google drive — this
+ * run delivered to … (Google Docs)"*, and the build spent two more Opus passes trying
+ * to fix a spec that was already right. Writing the very same promise as `docs:`
+ * passed both halves — the workflow was correct and the wording decided the verdict.
+ *
+ * Seventh instance today of one rule living in two places and drifting. Both halves
+ * now consult the same table.
+ *
+ * DIRECTED, NOT SYMMETRIC — and that is the whole safety of it. `gmail` and `docs`
+ * both list `google` among their aliases, so intersecting their alias sets would make
+ * an email satisfy a promise about a document. The question asked is the same one
+ * build-time asks: is the WANTED connector among the aliases of what was actually
+ * written to.
+ */
+function deliveryReaches(delivery, wantConnector) {
+  const got = deliveryConnector(delivery);
+  if (!wantConnector || got === wantConnector) return true;
+  // Mutation-checked three ways. Replacing this with a scalar `===` restores the prod
+  // bug (6 tests red); making it always-true opens it wide (3 red); and INTERSECTING
+  // the two alias SETS — the shape the note above warns about — lets an email satisfy
+  // a promise about a document, because `gmail` and `docs` both list `google` (2 red).
+  // Adding the reverse `aliasesFor(wantConnector).has(got)` is behaviourally
+  // equivalent, not a second guard: no pair reachable here differs on it.
+  return aliasesFor(got).has(wantConnector);
+}
+
 function deliveryConnector(delivery) {
   const ch = String(delivery?.channel ?? '').toLowerCase();
   // A delivery names its channel (`slack`, `gmail_send`, `airtable_create_record`,
@@ -1240,13 +1278,13 @@ export function checkAssertionAtRuntime(assertion, deliveries = []) {
       // most useful thing this run knows about why the promise was not kept, and
       // reading it is the whole difference between "nothing reached them" and
       // "nothing reached them because no Slack user matches that address".
-      if (deliveryConnector(d) === wantConnector) {
+      if (deliveryReaches(d, wantConnector)) {
         const why = undeliveredReason(d);
         blocked.push(why ? `${deliveryPlace(d)}: ${why}` : `${deliveryPlace(d)}: the run did not record why`);
       }
       continue;
     }
-    if (deliveryConnector(d) !== wantConnector) { landed.push(deliveryWhere(d)); continue; }
+    if (!deliveryReaches(d, wantConnector)) { landed.push(deliveryWhere(d)); continue; }
     // No locator on the assertion, a template locator (resolved at run time), or a
     // locator-free connector (the inbox — its "locator" is a label, not an address)
     // ⇒ "some delivery to this connector" is enough.

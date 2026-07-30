@@ -1613,6 +1613,24 @@ fixed on the spot. Fold the relevant ones into whatever increment next touches t
   `update|set|move|rename`: `notion_update_page` is the CONTROL proving a declaration
   does that work. Widening the guess would have made guessing more load-bearing —
   the direction this audit exists to reverse.*
+- **Build-time and runtime disagreed about where a Google Doc lives — FIXED
+  (2026-07-30).** Driving shape 1 of ten (a weekly CRM digest into a Google Doc), the
+  contract said `document_exists → google_drive:New Companies This Week` and the
+  delivery went via `docs_create`. `satisfiesAssertion` said SATISFIED;
+  `checkAssertionAtRuntime` said *"nothing reached … in google drive — this run
+  delivered to … (Google Docs)"*. Two more whole-spec Opus passes were spent trying to
+  fix a spec that was already right, and the rebuild gate refused the third. **Writing
+  the identical promise as `docs:` passed both halves — the WORDING decided the verdict
+  on a correct workflow.** Cause: the build-time half asks whether the wanted connector
+  is among the ALIASES of what the node writes to (`docs` carries
+  `['docs','google','drive','gdocs']`, because a Doc does live in Drive); the runtime
+  half compared two canonical SCALARS, `docs` vs `drive`. **Seventh instance in two
+  days of one rule living in two places and drifting.** Both now consult the same
+  table via `deliveryReaches`, and the check is DIRECTED, not symmetric: `gmail` and
+  `docs` both list `google`, so intersecting the alias sets would let an email satisfy
+  a promise about a document — mutation-verified as the real fail-open. Pinned by
+  `tests/workflows/both-halves-agree-on-the-connector.test.js` (22, 3 of 4 mutations
+  killed; the fourth was proved behaviourally equivalent rather than a missing guard).
 - **Approval-channel availability (`email`) is deployment-wide, not per-tenant** — fine today
   (one deployment, one mailer); revisit if tenants ever bring their own sending domain.
 
