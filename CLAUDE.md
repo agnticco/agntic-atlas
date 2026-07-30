@@ -1973,6 +1973,36 @@ fixed on the spot. Fold the relevant ones into whatever increment next touches t
   query with parentheses and `OR` groups, which it splits on whitespace and describes
   fragment by fragment. The trigger card is the FIRST card in the walkthrough, so it is
   squarely in the demo path.
+- **ATLAS PROMISED TO USE KNOWLEDGE DOCUMENTS THAT DO NOT EXIST, VIA A PATH THAT CANNOT
+  WORK (open, found 2026-07-30 — the most serious truthfulness defect of the ten-shape
+  campaign).** Asked for a support-reply workflow grounded in company documents, Atlas
+  asked the right question — *"Where does your knowledge base live? A Google Doc, a
+  folder of Docs, a Sheet, a website…"* — and, told "I uploaded them to Atlas under
+  Knowledge in the sidebar", answered:
+  > **"Perfect — I can pull from your Knowledge docs in the workflow."**
+  **That is false twice over, and neither half was checked before it was said:**
+  1. **There are no documents.** The tenant's Knowledge section is empty — verified in
+     the browser (no folders, no files) and on the box (no `memory/rag/sources.json`, no
+     `memory/rag/` contents at all).
+  2. **A browser-uploaded document can NEVER be read by a workflow**, whatever the
+     tenant uploads. `src/connectors/filesystem.js` skips any entry without an absolute
+     path (`if (!entry.path || !entry.path.startsWith('/')) continue;`) — only folders
+     indexed server-side via `/rag/index-folder` are eligible. Uploads are chat-context
+     only. This is documented in that file's own header and in this file's P8 notes; the
+     builder does not know it.
+  **Why this is the worst kind:** it is a confident claim about the product's own
+  capability AND about the customer's data, made without consulting either, at the exact
+  moment a person decides to trust it. The workflow that follows would ground on nothing.
+  It is the same family as "Atlas told a user their CONNECTED connector wasn't connected"
+  (2026-07-29) inverted — there it denied a capability it had; here it claims one it does
+  not.
+  **A third, smaller finding in the same exchange:** the list of places a knowledge base
+  can live does not include Atlas's OWN Knowledge section, so a customer who has put
+  documents there is not pointed at them; they have to volunteer it, as was done here.
+  **Not fixed.** The shape of the fix is the connector-availability one: the builder
+  already receives `capabilities`, and whether this tenant has any workflow-readable
+  knowledge source is a fact available at build time. Silence about an empty knowledge
+  base is not neutral — it reads as confirmation.
 - **Approval-channel availability (`email`) is deployment-wide, not per-tenant** — fine today
   (one deployment, one mailer); revisit if tenants ever bring their own sending domain.
 - **Google Sheets has no destination picker, so Atlas asks a customer for a spreadsheet
