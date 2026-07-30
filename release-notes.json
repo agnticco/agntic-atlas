@@ -1,5 +1,13 @@
 [
   {
+    "version": "1.6.88",
+    "date": "2026-07-30",
+    "title": "A build you look away from is no longer lost",
+    "notes": [
+      "If you open another workflow while Atlas is building, the finished build is now waiting for you when you come back instead of disappearing. Atlas also no longer mixes up your Slack account with your email address when you ask it to send something to you."
+    ]
+  },
+  {
     "version": "1.6.87",
     "date": "2026-07-30",
     "title": "The agreement sweep: 262 combinations, zero disagreements",

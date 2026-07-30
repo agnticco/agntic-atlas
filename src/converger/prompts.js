@@ -140,20 +140,53 @@ function knowledgeContextBlock(capabilities) {
  *     ASK. Never guess: DMing the "closest" member sends this person's drafts and
  *     approvals to someone else.
  *   · NEITHER    — behave as before; the email is all we know.
+ *
+ * ── AND EVERY ONE OF THOSE FACTS IS ABOUT SLACK, SO IT MUST SAY SO ──────────
+ *
+ * WITNESSED ON PROD, 2026-07-30 (`build-platform-1785414984862`) — a daily AI-news
+ * briefing EMAILED to the operator. No Slack anywhere in it. The block above was
+ * written as if "send it to me" always meant a Slack DM, so on the CANDIDATES
+ * branch the model was handed a second address under the heading "the workspace
+ * members you could DM" and an instruction to ASK which of them is the user.
+ *
+ * Both halves of that leaked into a workflow that has no Slack step:
+ *   · the promise was written for the LOGIN (`gmail:hello@agntic.co`, right for
+ *     email) while the delivery step was built to the SLACK member address
+ *     (`charles@agntic.co`) — so the contract and the only send named two
+ *     different people, `UNSATISFIED_ASSERTION` fired, and THREE whole-spec Opus
+ *     passes were spent trying to reconcile a contradiction this prompt created,
+ *     before the rebuild gate refused the fourth; and
+ *   · the user was asked a Slack identity question about an email workflow.
+ *
+ * The instruction was not wrong about Slack — it was wrong to be silent about
+ * WHICH CHANNEL it governed. "Send it to me" names a PERSON, not a transport; the
+ * address is whichever one the channel the workflow actually delivers on can
+ * receive. So every sentence below is now scoped to its channel, the login email
+ * is named as the address to EMAIL them at, and the ask-which-is-you instruction
+ * fires only if the workflow reaches them in Slack at all.
+ *
+ * The one rule that must survive intact, because it is why this block exists: the
+ * PROMISE and the STEP must name the SAME address.
  */
 function operatorSummary(capabilities) {
   const op = capabilities?.operator;
   if (!op?.email) return '';
   const who = op.name ? `${op.name} <${op.email}>` : op.email;
-  const head = `\nTHE OPERATOR (the person you are building this for): ${who}.`;
+  // Each load-bearing sentence is kept on ONE line, unwrapped: these strings are
+  // pinned by name in tests/connectors/operator-slack-identity.test.js, and a soft
+  // wrap in the middle of one silently defeats the pin that guards it.
+  const head = `\nTHE OPERATOR (the person you are building this for): ${who}.
+"me", "myself", "send it to me" means THIS PERSON — it does not name a channel. Take the address from the channel the workflow actually delivers on, and make the PROMISE and the STEP name the SAME address:
+  · by EMAIL → to: "${op.email}"`;
   const slack = op.slack;
 
   if (slack?.resolved && slack.email) {
     const asWho = slack.name ? `${slack.name} <${slack.email}>` : slack.email;
     return `${head}
-Their SLACK account is ${asWho} — verified against the connected workspace, and NOT the same string as their login above.
-When they say "me", "myself", "DM me", or "send it to me", deliver via a Slack direct message: { channel:"slack_dm", user:"${slack.email}" }.
-Never address a Slack DM to their login email — it is not a Slack account and the message cannot be delivered.
+  · by SLACK DM → { channel:"slack_dm", user:"${slack.email}" }
+Their Slack account (${asWho}) is verified against the connected workspace and is NOT the same string as their login above. That difference is a fact about SLACK ONLY.
+Never address a Slack DM to their login email — it is not a Slack account and the message cannot be delivered. Equally, never email them at their Slack address unless they asked for it.
+If this workflow has no Slack step, their Slack account is irrelevant to it: do not mention it, and do not use it as an email recipient.
 `;
   }
 
@@ -161,14 +194,15 @@ Never address a Slack DM to their login email — it is not a Slack account and 
     const list = slack.candidates
       .map(c => (c.name ? `${c.name} <${c.email}>` : c.email)).join(', ');
     return `${head}
+  · by SLACK DM → NOT KNOWN YET, see below.
 Their login email has NO matching account in the connected Slack workspace, so a DM to "${op.email}" CANNOT be delivered — do not write it as a slack_dm target.
-The workspace members you could DM are: ${list}.
-If the workflow needs to reach them in Slack, ASK which of those is them (or use a channel, or the Atlas inbox) rather than guessing — a DM sent to the wrong person delivers their private drafts and approvals to a colleague.
+ONLY IF this workflow reaches them in Slack: the members you could DM are ${list}, and you must ASK which of those is them (or use a channel, or the Atlas inbox) rather than guessing — a DM sent to the wrong person delivers their private drafts and approvals to a colleague.
+IF THIS WORKFLOW HAS NO SLACK STEP, none of the above applies to it. Those member addresses are Slack accounts, NOT email recipients: emailing one instead of "${op.email}" sends this person's briefing to a colleague. Do not raise the question at all — asking who they are in Slack about a workflow with no Slack in it is a question they cannot make sense of.
 `;
   }
 
   return `${head}
-When they say "me", "myself", "DM me", or "send it to me", deliver via a Slack direct message: { channel:"slack_dm", user:"${op.email}" }.
+  · by SLACK DM → { channel:"slack_dm", user:"${op.email}" } (their login is all we know here)
 `;
 }
 

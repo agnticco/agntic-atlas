@@ -65,7 +65,7 @@ function compile(names, fakes) {
 
 /** A stub build page carrying the REAL handler pair. */
 function page(state = {}) {
-  const log = { pollBuild: [], buildLost: [], apiError: [], saved: [], sent: [] };
+  const log = { pollBuild: [], buildLost: [], apiError: [], saved: [], sent: [], forgot: [] };
   let clock = 1_000_000;
   let nextId = 1;
   const timers = [];
@@ -88,6 +88,12 @@ function page(state = {}) {
   o._saveWorkflow = (spec) => log.saved.push(spec);
   o._send = (r) => log.sent.push(r);
   o._closeReasoningStream = () => {};
+  // The in-flight build record (2026-07-30). `_handleInterrupt` clears it once the
+  // reply has been DRAWN and `_buildLost` clears it when it gives up, so the double
+  // needs it to run at all. Logged rather than ignored: "was the build forgotten
+  // here?" is a question about the same accountability this file is testing.
+  o._forgetBuild = () => log.forgot.push(true);
+  o._rememberBuild = () => {};
   o._liveNodesFromSpec = () => [];
   o._animateReveal = () => {};
   o.reset = () => {};

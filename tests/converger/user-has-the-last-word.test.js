@@ -74,9 +74,11 @@ describe('the sentence a person reads is brought up to date', () => {
     assert.equal(r.statement, TRUE);
   });
 
-  test('the ASSERTIONS are never rewritten', () => {
+  test('the ASSERTIONS are never DROPPED', () => {
     // The machine-checkable promise is what the user agreed to. A rebuild that could
-    // rewrite it could quietly promise less.
+    // rewrite it freely could quietly promise less — so a shorter set is refused
+    // outright. (Since 2026-07-30 a MOVED DESTINATION is admitted; see the block
+    // below for the one edit allowed and why nothing else can slip through it.)
     const r = refreshedOutcome(base, { statement: TRUE, assertions: [] }, true);
     assert.deepEqual(r.assertions, base.assertions);
   });
@@ -98,6 +100,129 @@ describe('the sentence a person reads is brought up to date', () => {
 
   test('no outcome at all stays no outcome', () => {
     assert.equal(refreshedOutcome(null, { statement: TRUE }, true), null);
+  });
+
+  /**
+   * THE PROMISE MUST DESCRIBE THE WORKFLOW THAT WAS BUILT — WITHOUT EVER
+   * DESCRIBING LESS OF IT.
+   *
+   * Added 2026-07-30. Refreshing only the SENTENCE left the machine-checkable half
+   * naming a destination the workflow no longer used. The assertions are what
+   * `UNSATISFIED_ASSERTION` is measured against, so a stale one does not merely
+   * read wrong — it fails a correct workflow and buys whole-spec Opus rebuilds
+   * trying to "fix" what the user actually asked for.
+   *
+   * Exactly one edit is admitted: the same promises, about a different place.
+   */
+  describe('a destination the user moved', () => {
+    const at = (target, extra = {}) => [{ id: 'a1', kind: 'message_sent', target, ...extra }];
+    const from = { statement: DEAL, assertions: at('gmail:hello@agntic.co') };
+
+    test('THE PROD CASE: the promise follows the recipient', () => {
+      const r = refreshedOutcome(from, { statement: TRUE, assertions: at('gmail:charles@agntic.co') }, true);
+      assert.deepEqual(r.assertions, at('gmail:charles@agntic.co'));
+      assert.equal(r.statement, TRUE, 'both halves move together or the two disagree again');
+    });
+
+    test('and moves even when the sentence happens not to change', () => {
+      // The halves are independent: a reworded destination with the same prose is
+      // still a contract that no longer matches the step.
+      const r = refreshedOutcome(from, { statement: DEAL, assertions: at('gmail:charles@agntic.co') }, true);
+      assert.deepEqual(r.assertions, at('gmail:charles@agntic.co'));
+    });
+
+    test('but NOT without a user revision', () => {
+      // A machine-ordered rebuild moving the promise is the fail-open this guards.
+      const r = refreshedOutcome(from, { statement: TRUE, assertions: at('gmail:someone-else@x.co') }, false);
+      assert.deepEqual(r.assertions, from.assertions);
+    });
+
+    test('a promise may not change KIND', () => {
+      const r = refreshedOutcome(from, { assertions: [{ id: 'a1', kind: 'record_exists', target: 'airtable:Leads' }] }, true);
+      assert.deepEqual(r.assertions, from.assertions, 'a send became a row and nobody agreed to that');
+    });
+
+    test('an unconditional promise may not become a conditional one', () => {
+      // The leak that looks like a rename: gated on one lane, it is only promised
+      // on that lane — weaker, while reading as a moved destination.
+      const r = refreshedOutcome(from, { assertions: at('gmail:charles@agntic.co', { when: 'urgent' }) }, true);
+      assert.deepEqual(r.assertions, from.assertions);
+    });
+
+    test('…and a conditional one keeps its condition', () => {
+      const gated = { statement: DEAL, assertions: at('slack:#ops', { when: 'urgent' }) };
+      const r = refreshedOutcome(gated, { assertions: at('slack:#alerts') }, true);
+      assert.deepEqual(r.assertions, gated.assertions, 'dropping the gate widens the promise silently');
+      const ok = refreshedOutcome(gated, { assertions: at('slack:#alerts', { when: 'urgent' }) }, true);
+      assert.deepEqual(ok.assertions, at('slack:#alerts', { when: 'urgent' }), 'the same gate elsewhere is fine');
+    });
+
+    test('a promise may not be ADDED either', () => {
+      // The user agreed to one thing; certifying against two is a different deal.
+      const two = [...at('gmail:charles@agntic.co'), { id: 'a2', kind: 'record_exists', target: 'airtable:Log' }];
+      assert.deepEqual(refreshedOutcome(from, { assertions: two }, true).assertions, from.assertions);
+    });
+
+    test('a template target is refused — it could never be checked', () => {
+      for (const t of ['gmail:{{extract.sender}}', '{{prev}}', 'gmail:', '   ']) {
+        assert.deepEqual(refreshedOutcome(from, { assertions: at(t) }, true).assertions,
+          from.assertions, t);
+      }
+    });
+
+    test('junk where the assertions should be changes nothing', () => {
+      for (const g of [{ assertions: 'nope' }, { assertions: [null] }, { assertions: [{}] }, {}, null]) {
+        assert.deepEqual(refreshedOutcome(from, g, true).assertions, from.assertions, JSON.stringify(g));
+      }
+    });
+
+    test('an outcome with no assertions at all gains none', () => {
+      // Silence is not an invitation to write the promise for them.
+      const bare = { statement: DEAL, assertions: [] };
+      assert.deepEqual(refreshedOutcome(bare, { assertions: at('gmail:x@y.co') }, true).assertions, []);
+    });
+
+    test('two promises may both move, paired by kind and gate', () => {
+      const pair = { statement: DEAL, assertions: [
+        { id: 'a1', kind: 'message_sent', target: 'gmail:hello@agntic.co' },
+        { id: 'a2', kind: 'record_exists', target: 'airtable:Table 1' },
+      ] };
+      const moved = [
+        { id: 'a1', kind: 'message_sent', target: 'gmail:charles@agntic.co' },
+        { id: 'a2', kind: 'record_exists', target: 'airtable:Briefings' },
+      ];
+      assert.deepEqual(refreshedOutcome(pair, { assertions: moved }, true).assertions, moved);
+    });
+
+    test('…and order is not what pairs them', () => {
+      // The model rewrites the whole spec; the array order is not a promise.
+      const pair = { statement: DEAL, assertions: [
+        { id: 'a1', kind: 'message_sent', target: 'gmail:hello@agntic.co' },
+        { id: 'a2', kind: 'record_exists', target: 'airtable:Table 1' },
+      ] };
+      const swapped = [
+        { id: 'a2', kind: 'record_exists', target: 'airtable:Briefings' },
+        { id: 'a1', kind: 'message_sent', target: 'gmail:charles@agntic.co' },
+      ];
+      assert.deepEqual(refreshedOutcome(pair, { assertions: swapped }, true).assertions, swapped);
+    });
+
+    test('but a swap that DROPS a kind is still refused', () => {
+      const pair = { statement: DEAL, assertions: [
+        { id: 'a1', kind: 'message_sent', target: 'gmail:hello@agntic.co' },
+        { id: 'a2', kind: 'record_exists', target: 'airtable:Table 1' },
+      ] };
+      const both = [
+        { id: 'a1', kind: 'message_sent', target: 'gmail:a@b.co' },
+        { id: 'a2', kind: 'message_sent', target: 'slack:#ops' },
+      ];
+      assert.deepEqual(refreshedOutcome(pair, { assertions: both }, true).assertions, pair.assertions,
+        'the record promise vanished and the count still matched');
+    });
+
+    test('an identical set returns the very same object', () => {
+      assert.equal(refreshedOutcome(from, { statement: DEAL, assertions: at('gmail:hello@agntic.co') }, true), from);
+    });
   });
 
   test('it is wired into the merge, on the same signal as the trigger', () => {

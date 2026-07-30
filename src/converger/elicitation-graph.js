@@ -752,17 +752,78 @@ export function stampScheduleTimezone(triggers, tz) {
 }
 
 /**
- * The agreed contract, with its human sentence brought up to date.
+ * MAY THE MACHINE-CHECKABLE PROMISE FOLLOW A DESTINATION THE USER MOVED?
  *
- * Only the prose moves, only on a user revision, and only when the rebuild wrote
- * something to move it to. Everything else about the outcome — assertions above
- * all — is returned exactly as it came in.
+ * Only when nothing about it except WHERE changes. The rule the assertions exist to
+ * enforce is that a rebuild can never quietly promise less, so this admits exactly
+ * one edit — the same promises, about a different place — and refuses everything
+ * else by construction rather than by inspection:
+ *
+ *   · the COUNT must match. Fewer is a promise dropped; more is a promise the user
+ *     never agreed to.
+ *   · every `kind` must pair off 1:1. A `message_sent` may not become a
+ *     `record_exists`.
+ *   · every `when` must pair off with it. This is the one that would otherwise leak:
+ *     an unconditional promise that gains `when: "urgent"` is only promised on one
+ *     lane, which is weaker while looking like a rename.
+ *
+ * Equal counts plus identical kind+when multisets leaves `target` as the only field
+ * that CAN differ, so no separate check that "only the target moved" is needed.
+ *
+ * A moved target must also still be checkable, which rules out two shapes that are
+ * vaguer than whatever they would replace: a `{{template}}` (undecidable until run
+ * time, so accepting one trades a stale promise for an unprovable one) and a bare
+ * `connector:` with no destination after it (a promise about "somewhere in Gmail"
+ * is not a promise about a recipient).
+ */
+function onlyTheDestinationMoved(base, gen) {
+  if (!Array.isArray(base) || !Array.isArray(gen)) return false;
+  if (!base.length || gen.length !== base.length) return false;
+  const pool = gen.slice();
+  for (const b of base) {
+    const i = pool.findIndex(g => g && typeof g === 'object'
+      && g.kind === b.kind
+      && String(g.when ?? '') === String(b.when ?? ''));
+    if (i === -1) return false;
+    const t = String(pool[i].target ?? '').trim();
+    if (!t || t.includes('{{')) return false;
+    if (t.includes(':') && !t.slice(t.indexOf(':') + 1).trim()) return false;
+    pool.splice(i, 1);
+  }
+  return true;
+}
+
+/**
+ * The agreed contract, brought up to date with the workflow that was built.
+ *
+ * Only on a user revision, and only when the rebuild wrote something to move it to.
+ *
+ * THE SENTENCE moves freely — it is the half a person reads, and a revision that
+ * leaves it describing the old workflow makes Atlas lie about what it built.
+ *
+ * THE ASSERTIONS move only under `onlyTheDestinationMoved`. This half was added
+ * 2026-07-30: the sentence-only version left the contract naming one recipient
+ * while the only delivery named another, and since the assertions are what
+ * `UNSATISFIED_ASSERTION` is measured against, the build then spent whole-spec Opus
+ * passes trying to "fix" a workflow that was already what the user asked for. The
+ * promise must describe the workflow that exists — but it may never describe less
+ * of it, which is what the pairing rule above guarantees.
  */
 export function refreshedOutcome(base, generated, userRevised) {
   if (!base || !userRevised) return base ?? null;
+
   const next = String(generated?.statement ?? '').trim();
-  if (!next || next === String(base.statement ?? '').trim()) return base;
-  return { ...base, statement: next };
+  const statementMoved = !!next && next !== String(base.statement ?? '').trim();
+
+  const gotAsserts = generated?.assertions;
+  const assertionsMoved = onlyTheDestinationMoved(base.assertions, gotAsserts)
+    && JSON.stringify(base.assertions) !== JSON.stringify(gotAsserts);
+
+  if (!statementMoved && !assertionsMoved) return base;
+  const out = { ...base };
+  if (statementMoved)  out.statement  = next;
+  if (assertionsMoved) out.assertions = gotAsserts;
+  return out;
 }
 
 export function mergeGeneratedSpec(draft, generated, opts = {}) {

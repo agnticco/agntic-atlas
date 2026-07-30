@@ -178,3 +178,85 @@ describe('what the converger is told', () => {
     assert.doesNotMatch(buildSystemPrompt({}), /THE OPERATOR/);
   });
 });
+
+/**
+ * EVERY FACT ABOVE IS ABOUT SLACK, AND SAYING SO IS LOAD-BEARING.
+ *
+ * WITNESSED ON PROD, 2026-07-30 (`build-platform-1785414984862`): a daily AI-news
+ * briefing EMAILED to the operator, no Slack step anywhere in it. The block was
+ * phrased as if "send it to me" always meant a Slack DM, so the CANDIDATES branch
+ * handed the model a second address under "the workspace members you could DM" and
+ * told it to ASK which of them is the user. Both halves leaked into an email-only
+ * workflow: the promise was written for the login (`gmail:hello@agntic.co`) while
+ * the delivery step was built to the Slack member address (`charles@agntic.co`), so
+ * the contract and the only send named two different people — and the user was asked
+ * a Slack identity question about a workflow with no Slack in it.
+ *
+ * Cost: three whole-spec Opus passes trying to reconcile a contradiction the prompt
+ * had created, then the rebuild gate refusing the fourth. The instruction was not
+ * wrong about Slack; it was wrong to be silent about which channel it governed.
+ */
+describe('the Slack address never becomes an email recipient', () => {
+  const OP = { name: 'Charles Crepps', email: 'hello@agntic.co' };
+  const promptFor = (slack) => buildSystemPrompt({ operator: { ...OP, ...(slack ? { slack } : {}) } });
+
+  const CANDIDATES = { resolved: false, candidates: [{ email: 'charles@agntic.co', name: 'Charles' }] };
+  const RESOLVED   = { resolved: true, email: 'charles@agntic.co', name: 'Charles' };
+
+  test('THE PROD CASE: the login is named as the address to EMAIL them at', () => {
+    // The half that was missing entirely. With only a Slack address on offer, the
+    // model reached for it — and `to: "charles@agntic.co"` is what shipped.
+    assert.match(promptFor(CANDIDATES), /by EMAIL → to: "hello@agntic\.co"/);
+  });
+
+  test('…in every one of the three states, not just this one', () => {
+    // A branch that forgets it is the branch the next build lands on.
+    for (const [label, slack] of [['candidates', CANDIDATES], ['resolved', RESOLVED], ['neither', null]]) {
+      assert.match(promptFor(slack), /by EMAIL → to: "hello@agntic\.co"/, label);
+    }
+  });
+
+  test('"send it to me" is a PERSON, not a transport', () => {
+    // The root phrasing defect: the old block mapped the phrase straight to
+    // slack_dm, so the channel the workflow actually used was never consulted.
+    const p = promptFor(CANDIDATES);
+    assert.match(p, /does not name a channel/);
+    assert.match(p, /the channel the workflow actually delivers on/);
+  });
+
+  test('the promise and the step are required to name the SAME address', () => {
+    // The invariant that was violated: contract said hello@, step said charles@.
+    assert.match(promptFor(CANDIDATES), /PROMISE and the STEP name the SAME address/);
+  });
+
+  test('the member addresses are marked as Slack accounts, NOT email recipients', () => {
+    const p = promptFor(CANDIDATES);
+    assert.match(p, /Slack accounts, NOT email recipients/);
+    assert.match(p, /sends this person's briefing to a colleague/);
+  });
+
+  test('the ask-which-is-you question is scoped to workflows that use Slack', () => {
+    // Charles was asked which Slack account was his, about an email briefing.
+    const p = promptFor(CANDIDATES);
+    assert.match(p, /ONLY IF this workflow reaches them in Slack/);
+    assert.match(p, /Do not raise the question at all/);
+  });
+
+  test('a verified Slack address is also barred from the email field', () => {
+    const p = promptFor(RESOLVED);
+    assert.match(p, /never email them at their Slack address/);
+    assert.match(p, /If this workflow has no Slack step, their Slack account is irrelevant/);
+  });
+
+  test('and none of this weakened the Slack rules it is scoping', () => {
+    // The scoping must not become an escape hatch: every guard the 2026-07-29 fix
+    // put in is still stated. A "scoped" instruction that no longer forbids the
+    // undeliverable DM would trade one silent failure for another.
+    assert.match(promptFor(RESOLVED), /Never address a Slack DM to their login email/);
+    const p = promptFor(CANDIDATES);
+    assert.match(p, /CANNOT be delivered/);
+    assert.match(p, /ASK which of those is them/);
+    assert.match(p, /delivers their private drafts and approvals to a colleague/);
+    assert.doesNotMatch(p, /user:"hello@agntic\.co"/);
+  });
+});

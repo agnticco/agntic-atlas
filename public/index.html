@@ -3889,8 +3889,102 @@ class Component extends DCLogic {
       if (overrides.inputMode === 'clarify' || overrides.inputMode == null) overrides.inputMode = 'chat';
     }
     this.setState(Object.assign({}, slice, overrides));
+    // A build may have finished while this conversation was off screen. This is the
+    // one place both doors pass through — a page load (`_restoreBuild`) and an in-app
+    // reopen (`openConsole`) — so the pickup is attempted here rather than at each.
+    // It runs AFTER the slice has been applied: the record is matched against the
+    // workflow this slice belongs to, and drawing the build overrides the phase the
+    // restore just chose, which is only correct in that order.
+    this._pickUpPendingBuild(slice);
   }
   _clearBuild() { this._lastBuildStr = ""; try { localStorage.removeItem(this._buildKey()); } catch (e) {} }
+
+  // ── A BUILD IN FLIGHT IS REMEMBERED, SO LEAVING THE PAGE CANNOT LOSE IT ────
+  //
+  // The build was moved onto the server precisely so that "a closed tab, a refresh, a
+  // locked phone or a deploy no longer takes the build with it" (the comment above
+  // `_pollBuild`'s caller). The server half held up. The BROWSER half never did:
+  // nothing anywhere wrote down WHICH build was in flight, so the only thing that
+  // could collect the result was the one poll loop that happened to be running.
+  //
+  // WITNESSED ON PROD, 2026-07-30 (`build-platform-1785414984862`). Charles started a
+  // daily-briefing build and, while it thought, clicked two other workflows in the
+  // sidebar — visible in the server log as two `PUT …/draft` autosaves for other
+  // workflow ids at 12:38:36 and 12:38:41. Opening another workflow replaces
+  // `state.threadId`, and `_pollBuild`'s first line is
+  //
+  //     if (self.state.threadId !== threadId) return;   // conversation moved on
+  //
+  // — a SILENT return, no message, nothing on screen. The build finished 44 seconds
+  // later at 12:39:25 with a complete, correct three-step workflow and paused at its
+  // walkthrough. Nobody was listening. Coming back to the conversation showed the
+  // reasoning and NOTHING ELSE: no steps, no graph, no note, no way to reach it.
+  //
+  // The result was never gone — measured the next day, `/status` still answered
+  // `status:"ready"` with the whole spec in it. It was simply unreachable, because
+  // the only copy of the build's identity was in a closure that had returned.
+  //
+  // Glancing at another workflow while a build thinks for two minutes is an ordinary
+  // thing to do, and the cost was the whole build. So the thread id is written down
+  // as soon as the build starts and cleared only when the build has been SEEN:
+  // drawn, lost, or failed. `_pickUpPendingBuild` below is what collects it.
+  _pendingKey() { return "atlas_pending_build_v1:" + (this.state.tenantId || "") + ":" + (this.state.userEmail || ""); }
+  _rememberBuild(threadId) {
+    if (!threadId) return;
+    try {
+      localStorage.setItem(this._pendingKey(), JSON.stringify({
+        threadId: threadId, workflowId: this.state.workflowId || null, at: Date.now(),
+      }));
+    } catch (e) { /* storage full or blocked — the poll still works, it just cannot be resumed */ }
+  }
+  _forgetBuild() { try { localStorage.removeItem(this._pendingKey()); } catch (e) {} }
+  _rememberedBuild() {
+    try {
+      const r = JSON.parse(localStorage.getItem(this._pendingKey()) || "null");
+      return (r && typeof r.threadId === "string" && r.threadId) ? r : null;
+    } catch (e) { return null; }
+  }
+
+  // Collect a build that finished while nobody was watching.
+  //
+  // Called wherever a conversation is put on screen — a page load and an in-app
+  // reopen both land in `_applyBuildSlice`, so one call site covers both doors.
+  //
+  // It asks the server rather than trusting the record: the record only says which
+  // build to ask about. Three answers matter and the rest are dropped —
+  //   · `ready`   → the build is DONE and waiting. Draw it.
+  //   · `running` → still thinking. Re-attach the reasoning stream and the poll.
+  //   · anything else (unknown / error / done / a 404) → nothing to collect; forget
+  //     it, so a dead record cannot make every future page load ask about it.
+  //
+  // ONLY for the workflow the record belongs to, and only when that is KNOWN on both
+  // sides. Drawing one conversation's build into another would be a worse defect than
+  // the one this fixes, and `null === null` would do exactly that on a first build.
+  _pickUpPendingBuild(slice) {
+    const rec = this._rememberedBuild();
+    if (!rec) return;
+    const mine = rec.workflowId && slice && slice.workflowId && rec.workflowId === slice.workflowId;
+    if (!mine) return;
+    const self = this, threadId = rec.threadId;
+    // Returned so a caller (and a test) can wait for the pickup to settle.
+    return fetch("/api/builder/sessions/" + threadId + "/status", { headers: this._H() })
+      .then(r => self._readJson(r))
+      .then(r => {
+        const d = (r && r.data) || {};
+        if (d.status === "ready" || d.status === "running") {
+          // The thread has to be current before either branch: `_pollBuild` and
+          // `_handleInterrupt` both guard on `state.threadId` matching, and every
+          // answer the user gives from here is sent to it.
+          self.setState({ threadId: threadId });
+          self._openReasoningStream(threadId);
+          if (d.status === "running") { self._pollBuild(threadId); return; }
+          self._handleInterrupt(d.interrupt);
+          return;
+        }
+        self._forgetBuild();
+      })
+      .catch(() => { /* offline — leave the record; the next load tries again */ });
+  }
 
   _H() { return { "Content-Type": "application/json", "Authorization": "Bearer " + this.state.authToken }; }
 
@@ -5252,6 +5346,7 @@ class Component extends DCLogic {
         if (!r.ok || (r.data && r.data.error)) return self._apiError(r.data.error);
         self._undrawableSince = 0;   // a new build starts with a clean stuck-clock
         self.setState({ threadId: r.data.threadId });
+        self._rememberBuild(r.data.threadId);   // so leaving this page cannot lose it
         // Subscribe to the build's reasoning stream. The endpoint replays any beats
         // already emitted before this subscribe, then streams new ones.
         self._openReasoningStream(r.data.threadId);
@@ -5278,6 +5373,7 @@ class Component extends DCLogic {
         // The user answered: this is a fresh exchange, so the "how long have we
         // been unable to draw the reply" clock starts again from here.
         self._undrawableSince = 0;
+        self._rememberBuild(tid);   // an answer restarts the wait, so re-arm the pickup
         self._pollBuild(tid);
       })
       .catch(e => self._apiError(String(e)));
@@ -5294,6 +5390,8 @@ class Component extends DCLogic {
   // from rather than somewhere they have to abandon.
   _buildLost(message) {
     this._closeReasoningStream();
+    // Told the user it is not coming: stop offering to pick it up on every load.
+    this._forgetBuild();
     const cur = this.state.msgs;
     const last = cur[cur.length - 1];
     const base = (last && last.isStreaming) ? [...cur.slice(0, -1), (({ isStreaming, ...rest }) => rest)(last)] : cur;
@@ -5333,7 +5431,18 @@ class Component extends DCLogic {
     if (this._pollTimer) { clearTimeout(this._pollTimer); this._pollTimer = null; }
 
     const tick = () => {
-      if (self.state.threadId !== threadId) return;   // conversation moved on
+      // THE CONVERSATION MOVED ON — stop polling, but do NOT lose the build.
+      //
+      // This return used to be the end of the story: opening another workflow in the
+      // sidebar replaces `state.threadId`, this fired, and the running build became
+      // unreachable even though the server went on to finish it. The record written
+      // by `_rememberBuild` is deliberately LEFT IN PLACE here, so coming back to
+      // this workflow collects the result (`_pickUpPendingBuild`).
+      if (self.state.threadId !== threadId) return;
+      // Keep the record's workflow id current: a first build has none until the
+      // server autosaves the draft, and without it the pickup cannot prove which
+      // conversation the build belongs to and will refuse to draw it.
+      if (self.state.workflowId) self._rememberBuild(threadId);
       fetch("/api/builder/sessions/" + threadId + "/status", { headers: self._H() })
         .then(r => self._readJson(r))
         .then(r => {
@@ -5402,7 +5511,16 @@ class Component extends DCLogic {
   //     it never pretends the step succeeded.
   _handleInterrupt(iv) {
     const threadId = this.state.threadId;
-    if (this._renderInterrupt(iv) === true) { this._undrawableSince = 0; return; }
+    if (this._renderInterrupt(iv) === true) {
+      this._undrawableSince = 0;
+      // DRAWN, so it has been SEEN — the pickup record has done its job. Cleared only
+      // here and in the two give-up paths: clearing it any earlier (on receipt, say)
+      // would drop the build again in exactly the case the record exists for, because
+      // an interrupt this page could not draw is still an interrupt waiting on the
+      // server. A build that pauses again for the next answer re-arms it in `_send`.
+      this._forgetBuild();
+      return;
+    }
     const UNDRAWABLE_GRACE_MS = 20 * 1000;
     const UNDRAWABLE_RETRY_MS = 1500;
     const now = Date.now();

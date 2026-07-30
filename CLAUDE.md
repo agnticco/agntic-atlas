@@ -1649,8 +1649,91 @@ fixed on the spot. Fold the relevant ones into whatever increment next touches t
   `tests/workflows/build-and-runtime-agree-everywhere.test.js` (8 assertions over 262
   generated combinations). *Two guards now stand together: declare everything, and
   prove the consumers agree.*
+- **A FINISHED BUILD WAS LOST BECAUSE THE USER GLANCED AT ANOTHER WORKFLOW — FIXED
+  (2026-07-30).** Charles's own build, witnessed on prod
+  (`build-platform-1785414984862`): a daily 6am AI-news briefing emailed to him. He
+  started it and, while it thought, clicked two other workflows in the sidebar — the
+  server log records it plainly, two `PUT …/draft` autosaves for OTHER workflow ids at
+  12:38:36 and 12:38:41. Opening another workflow replaces `state.threadId`, and the
+  poll loop's first line is `if (self.state.threadId !== threadId) return;` — **a
+  silent return, no message, nothing on screen, no record kept.** The build carried on
+  and finished 44 seconds later at 12:39:25: a complete, correct three-step workflow,
+  paused at its walkthrough, waiting to be approved. **Nobody was listening.** Coming
+  back showed the reasoning and NOTHING ELSE — no steps, no graph, no note, no way to
+  reach it; the panel read "Not started" and a reload changed nothing.
+  **The result was never gone.** Measured against prod the next day, `/status` still
+  answered `status:"ready"` with the entire spec in it. It was unreachable only because
+  the sole copy of the build's identity lived in a closure that had returned.
+  **That is the defect exactly:** the build was moved onto the server so that "a closed
+  tab, a refresh, a locked phone or a deploy no longer takes the build with it" — the
+  comment above the poller says so. The server half held. **The browser half was never
+  built:** nothing anywhere wrote down WHICH build was in flight, so the only thing that
+  could collect the result was the one poll loop that happened to be running. Glancing at
+  another workflow while a build thinks for two minutes is an ordinary thing to do, and it
+  cost the whole build.
+  **Fixed in three parts, because any one alone leaves the hole:** the thread id is
+  written to `localStorage` when the build starts (`_rememberBuild`); the "conversation
+  moved on" return stops POLLING but deliberately keeps the record; and reopening the
+  conversation asks the server and draws what is waiting (`_pickUpPendingBuild`, called
+  from `_applyBuildSlice` — the one place both a page load and an in-app reopen pass
+  through, so neither door can lose it silently). The record is cleared only once the
+  build has been **SEEN** — drawn, lost, or failed — because clearing it on receipt would
+  drop the build in the exact case it exists for. It refuses to draw across
+  conversations: the match needs a workflow id known on BOTH sides, since `null === null`
+  on a first build would render one conversation's workflow into another. Pinned by
+  `tests/api/a-build-survives-you-looking-away.test.js` (22), **nine mutations red→green**.
+  *Two other harnesses' component doubles broke on the new method call and were given it
+  — the fifth time this extract-and-execute family has needed a manual list update.*
+- **THE SLACK IDENTITY GUIDANCE LEAKED ONTO AN EMAIL-ONLY WORKFLOW, AND COST THREE OPUS
+  PASSES — FIXED (2026-07-30).** Same build as above. Its contract promised
+  `message_sent → gmail:hello@agntic.co` (the login, correct for email) while the only
+  delivery step was built to `charles@agntic.co` — so the promise and the send named two
+  different people, `UNSATISFIED_ASSERTION` fired, and **three whole-spec Opus passes
+  were spent trying to reconcile a contradiction the prompt itself had created** before
+  the rebuild gate refused the fourth. Charles was also asked which Slack account was
+  his, about a workflow with no Slack in it.
+  **Cause: `operatorSummary` stated every fact about Slack without saying it was about
+  Slack.** The 2026-07-29 fix (a login email is not a Slack account) was right and is
+  intact; it was simply phrased as though *"send it to me"* always meant a Slack DM. On
+  the CANDIDATES branch that handed the model a second address under the heading *"the
+  workspace members you could DM"* plus an instruction to ASK which of them is the user
+  — and the model, building an email workflow, used the Slack member address as the email
+  recipient and raised the Slack question.
+  **The instruction was not wrong about Slack; it was wrong to be silent about which
+  channel it governed.** *"Send it to me"* names a PERSON, not a transport. Every sentence
+  is now scoped to its channel, the login email is named as the address to EMAIL them at
+  in all three states, the ask-which-is-you fires only if the workflow reaches them in
+  Slack at all, and the invariant is stated outright: **the promise and the step must name
+  the SAME address.** Pinned by the new block in
+  `tests/connectors/operator-slack-identity.test.js` (25 total), four mutations red→green;
+  the guards the earlier fix added are asserted still present, so the scoping cannot
+  become an escape hatch. *Load-bearing prompt sentences are kept UNWRAPPED on one line —
+  a soft wrap mid-phrase silently defeats the test that pins them, which is how the first
+  attempt at this failed.*
+- **The promise may now follow a destination the USER moved — and only that (2026-07-30).**
+  `refreshedOutcome` updated the human sentence on a user revision and never the
+  assertions, so a revised destination left the machine-checkable half naming a place the
+  workflow no longer used — and the assertions are what `UNSATISFIED_ASSERTION` is
+  measured against, so a stale one does not merely read wrong, it **fails a correct
+  workflow and buys rebuilds**. Exactly one edit is now admitted: the same promises about
+  a different place. `onlyTheDestinationMoved` requires an identical COUNT and an
+  identical `kind`+`when` multiset paired 1:1, which leaves `target` as the only field
+  that CAN differ — so "only the destination moved" is guaranteed by construction rather
+  than inspected. The `when` pairing is the one that would otherwise leak: an
+  unconditional promise gaining `when: "urgent"` is promised on one lane only, which is
+  weaker while reading as a rename. A moved target must still be checkable, so a
+  `{{template}}` and a bare `connector:` are both refused. Pinned by the new block in
+  `tests/converger/user-has-the-last-word.test.js` (26 total), **seven mutations
+  red→green**. *NOTE: this was NOT the cause of the build above — that was the prompt
+  defect, and no user revision happened. It is a real gap fixed on its own merits; do not
+  file it as that build's root cause.*
 - **Approval-channel availability (`email`) is deployment-wide, not per-tenant** — fine today
   (one deployment, one mailer); revisit if tenants ever bring their own sending domain.
+- **`tests/e2e/full-journey.test.js`'s converger test is BROKEN, not skipped** — it dies in
+  1.6ms with `ReferenceError: tenantId is not defined`, so it never reaches the model.
+  Pre-existing (confirmed by stash, 2026-07-30) and it is the test P11's own gate notes
+  warn about passing vacuously. Along with the ~5 failing `onboarding.test.js` tests, the
+  E2E suite has 7 broken windows nobody owns.
 
 ## Agents & gate enforcement
 

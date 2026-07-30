@@ -86,6 +86,10 @@ describe('a build paused on a question comes back explained (F8)', () => {
     const o = method('_applyBuildSlice');
     o._retireClarifyChips = method('_retireClarifyChips')._retireClarifyChips;
     o._liveNodesFromSpec = () => [];
+    // Collecting a build that finished off screen (2026-07-30). `_applyBuildSlice` is
+    // the one place both doors into a conversation pass through, so it calls this on
+    // the way out; a double without it cannot run the method at all.
+    o._pickUpPendingBuild = () => {};
     return o;
   }
 
