@@ -1631,6 +1631,24 @@ fixed on the spot. Fold the relevant ones into whatever increment next touches t
   a promise about a document — mutation-verified as the real fail-open. Pinned by
   `tests/workflows/both-halves-agree-on-the-connector.test.js` (22, 3 of 4 mutations
   killed; the fourth was proved behaviourally equivalent rather than a missing guard).
+- **THE AGREEMENT SWEEP (2026-07-30).** The declaration audit asks *"is everything
+  DECLARED?"*. It could never have caught the build-vs-runtime connector drift above,
+  because nothing was missing — two consumers of the same table simply asked the
+  question differently. So this asks the other question, exhaustively rather than for
+  hand-picked pairs (hand-picked pairs are how the first six instances were missed):
+  **for every write capability × every connector spelling × both node forms, and for
+  every promise against every other capability's delivery, do `satisfiesAssertion` and
+  `checkAssertionAtRuntime` agree?** 64 direct combinations and 198 cross pairings, all
+  driven from the LIVE registry so a capability added tomorrow is swept tomorrow.
+  Result: **0 disagreements, 0 fail-opens** — the class is closed for everything
+  shipped. Four mutations confirm the sweep has teeth: reverting the runtime half to a
+  scalar comparison (4 red), making it symmetric so an email satisfies a document
+  promise (2 red), removing the vendor-prefix spellings (1 red), and stopping the
+  BUILD half canonicalising (3 red) — i.e. it catches drift from either side, not just
+  the one that was broken. Pinned by
+  `tests/workflows/build-and-runtime-agree-everywhere.test.js` (8 assertions over 262
+  generated combinations). *Two guards now stand together: declare everything, and
+  prove the consumers agree.*
 - **Approval-channel availability (`email`) is deployment-wide, not per-tenant** — fine today
   (one deployment, one mailer); revisit if tenants ever bring their own sending domain.
 

@@ -1,5 +1,13 @@
 [
   {
+    "version": "1.6.87",
+    "date": "2026-07-30",
+    "title": "The agreement sweep: 262 combinations, zero disagreements",
+    "notes": [
+      "The declaration audit asks whether everything is declared; it could not have caught two consumers of the same table asking the question differently. This sweeps every write capability by every connector spelling by both node forms, plus every promise against every other delivery, and asserts build-time and runtime agree. Registry-driven, so tomorrow's connector is swept tomorrow."
+    ]
+  },
+  {
     "version": "1.6.86",
     "date": "2026-07-30",
     "title": "Build-time and runtime disagreed about where a Google Doc lives",
