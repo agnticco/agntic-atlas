@@ -20,6 +20,7 @@
  */
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 
 import { CapabilityRegistry } from '../../src/connectors/capability-registry.js';
 import { registerGoogleChannels } from '../../src/connectors/google/index.js';
@@ -243,6 +244,18 @@ describe('what it refuses to give an identity to', () => {
     for (const spec of [null, undefined, {}, { nodes: null }, { nodes: [null, 'x'], outcome: { assertions: [null] } }]) {
       assert.doesNotThrow(() => indexDestinations(spec), JSON.stringify(spec));
     }
+  });
+
+  test('the table TRAVELS with the spec, not just the ids', () => {
+    // Confirmed missing on prod 2026-07-30: the build carried the table, the client was
+    // handed `undefined`, because the walkthrough builds its payload from an explicit
+    // field list. The ids on nodes and assertions rode along (they are fields on those
+    // objects) so comparison worked — but the table is what SAYS what `d1` IS, and a
+    // published workflow kept the references while losing what they refer to.
+    const src = readFileSync(new URL('../../src/converger/elicitation-graph.js', import.meta.url), 'utf8');
+    const at = src.indexOf("type: 'generated_workflow',");
+    assert.ok(at > 0, 're-point this test');
+    assert.match(src.slice(at, at + 1200), /destinations: finalDraft\.destinations/);
   });
 
   test('it never edits a locator or moves a destination', () => {

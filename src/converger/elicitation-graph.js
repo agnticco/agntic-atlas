@@ -4212,6 +4212,13 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
         nodes:    finalDraft.nodes,
         edges:    finalDraft.edges,
         outcome:  finalDraft.outcome,
+        // The destination table travels with the spec. The ids on the nodes and the
+        // assertions already do (they are fields on those objects), so the identity
+        // comparison worked without this — but the table is what SAYS what `d1` is, and
+        // dropping it here meant a published workflow kept the references and lost the
+        // thing they refer to. Confirmed on prod 2026-07-30: the build had the table,
+        // the client was handed `undefined`.
+        destinations: finalDraft.destinations ?? [],
       },
       step: state.step,
     });

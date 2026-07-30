@@ -1,5 +1,13 @@
 [
   {
+    "version": "1.6.94",
+    "date": "2026-07-30",
+    "title": "Destinations travel with the workflow",
+    "notes": [
+      "The list of places a workflow writes now stays attached to it when it is published, not just the references to them."
+    ]
+  },
+  {
     "version": "1.6.93",
     "date": "2026-07-30",
     "title": "Where a workflow writes is now settled once",
