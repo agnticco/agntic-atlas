@@ -2251,6 +2251,46 @@ fixed on the spot. Fold the relevant ones into whatever increment next touches t
     google→gmail trap for the third time in one day.** `canonicalConnector` answers "do
     these name the same DESTINATION"; it is not a display-name function. An "ATLAS"
     heading is mildly odd, the regression was not.
+- **ASKING A PERSON IS NOW A TOOL WITH RULES (2026-07-30, Charles's third ask —
+  INCREMENT 1 of "the conversation as a tool").** *"The agent/converger/system should see
+  the conversation as a tool to fill gaps the user could fill with information."*
+  `src/converger/asking.js` applies four rules before any question reaches a person, and
+  each REFUSES rather than rewords, because a question that should not be asked cannot be
+  fixed by phrasing:
+  1. **Never ask for a machine identifier.** The rule with no exception. Prod, same day:
+     *"What is the spreadsheet ID for 'Pricing Enquiries'? You can find it in the URL of
+     the sheet, between /d/ and /edit."* — after offering "ID **or name**" and being given
+     a name. A customer sent to dig an id out of a URL is the developer-settings errand
+     P13 forbids, wearing a chat bubble.
+  2. **Never ask what was never looked up.** The Slack and Airtable destination questions
+     have always been good, and the reason is that they arrive carrying `options` the
+     connector was actually queried for. Sheets had no discovery wired and the same code
+     path produced an errand. **The difference was never the wording.**
+  3. **Never ask the same thing twice.**
+  4. **A budget of three per build** — a CEILING, not a target. Applied LAST so a question
+     refused for a better reason reports that reason (mutation M5).
+  **A refused question is not a dropped requirement.** The build continues with what the
+  person already said — for the Sheets case, the NAME they gave, which is what they know —
+  and a destination that cannot be resolved then fails honestly at test time. That is the
+  product's own promise (publish having answered nothing) rather than an errand.
+  Wired into the `analyze` node's clarification path, where the errand was produced: the
+  model PROPOSES a question, `shouldAsk` decides, and a refusal is logged as
+  `converger.question_refused` rather than silently dropped. The prior-question count
+  reads only the PERSON's answers — `clarifications` entries with a parenthesised question
+  are Atlas talking to itself, and counting them would spend the budget on bookkeeping
+  (mutation M7).
+  Pinned by `tests/converger/asking-is-a-tool-with-rules.test.js` (24), seven mutations
+  red→green. **The wiring assertions are SOURCE-level and say so** — the clarification
+  site closes over the LLM and graph state and cannot be lifted; replace them if that node
+  is ever made extractable.
+  **WHAT REMAINS OF THIS PIECE, and it is most of it:** the model still cannot INVOKE
+  asking as a tool at a moment of its choosing — the graph still asks where the graph
+  arrives. This increment governs whether a question is allowed, not when it is raised.
+  The open items it does not yet fix are the ones about TIMING: destinations settled after
+  the plan, connector availability checked only at build time. Rule 2 is also only as good
+  as the discovery behind it — for Sheets there is still none to attempt, so a legitimate
+  question is refused with nothing to put in its place. **That is the next increment, and
+  it is a discovery problem before it is a conversation one.**
 - **Approval-channel availability (`email`) is deployment-wide, not per-tenant** — fine today
   (one deployment, one mailer); revisit if tenants ever bring their own sending domain.
 - **Google Sheets has no destination picker, so Atlas asks a customer for a spreadsheet

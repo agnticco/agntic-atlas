@@ -51,6 +51,8 @@ import { selfContradictions, summariseContradictions } from '../workflows/self-c
 // One identity per destination, shared by the step that writes there and the promise
 // about it — so the two cannot disagree about where they mean.
 import { indexDestinations } from '../workflows/destinations.js';
+// Asking a person is a tool with rules — see asking.js for the four and why each exists.
+import { shouldAsk } from './asking.js';
 import { analyzeTable } from '../workflows/decision-analysis.js';
 import { deriveWorkflowName } from '../workflows/workflow-validator.js';
 import { tableOf, valuesOf, HIT_POLICIES, HIT_POLICY_LABELS, DECISION_MAX_INPUTS } from '../workflows/node-types/decision.js';
@@ -2411,7 +2413,33 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
     const parsed = await llmJson(llm, [sysmsg, usermsg], tierCfg('fast', sessionId));
 
     if (parsed?.ready === false && parsed.question) {
-      return { ...carryRepair, phase: 'clarifying', _pendingQuestion: parsed.question };
+      // ── ASKING IS A TOOL WITH RULES, NOT A STRING THE MODEL MAY EMIT ────────
+      //
+      // The model proposes the question; this decides whether a PERSON should be put to
+      // it. The rule that bites hardest here is the first: never ask for a machine
+      // identifier. On prod 2026-07-30 this exact path produced *"What is the
+      // spreadsheet ID for 'Pricing Enquiries'? You can find it in the URL of the sheet,
+      // between /d/ and /edit."* — after offering "ID or name" and being given a name.
+      //
+      // A refused question is not a dropped requirement: the build CONTINUES with what
+      // the person already said (here, the sheet's NAME, which is what they know), and a
+      // destination that cannot then be resolved fails honestly at test time. That is the
+      // product's own promise — publish having answered nothing — rather than an errand.
+      const prior = (state.clarifications ?? [])
+        .map(c => String(c?.q ?? ''))
+        .filter(q => q && !q.trim().startsWith('('));
+      const verdict = shouldAsk(
+        { text: String(parsed.question), about: String(parsed.question) },
+        { alreadyAsked: prior, askedCount: prior.length },
+      );
+      if (verdict.ask) {
+        return { ...carryRepair, phase: 'clarifying', _pendingQuestion: parsed.question };
+      }
+      logEvent('converger.question_refused', {
+        ...who(cfg), code: verdict.code, reason: verdict.reason,
+        question: String(parsed.question).slice(0, 200),
+      });
+      // fall through — decide it, and let them correct it on the plan
     }
     // analyze runs before every propose, so counting here counts propose rounds
     // exactly once each — without threading a counter through propose's five

@@ -1,5 +1,13 @@
 [
   {
+    "version": "1.6.103",
+    "date": "2026-07-30",
+    "title": "Atlas won't ask you for things it should look up",
+    "notes": [
+      "Atlas no longer asks for internal identifiers like a spreadsheet ID, no longer asks the same thing twice, and limits itself to three questions per build — deciding the rest so you can correct it on the plan."
+    ]
+  },
+  {
     "version": "1.6.102",
     "date": "2026-07-30",
     "title": "Atlas knows where an inbox message actually goes",
