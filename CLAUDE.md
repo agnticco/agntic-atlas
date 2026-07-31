@@ -310,12 +310,16 @@ refactor them without an explicit decision recorded here:
 - **Filesystem connector (2026-06-21, P8)** — `src/connectors/filesystem.js` registers
   `filesystem_read` and `filesystem_list` capabilities (step position) in the CapabilityRegistry.
   Both are sandboxed to the tenant's approved folders (entries with absolute paths in
-  `sources.json` — browser-upload entries are RAG-only). `injectFilesystemContext()` in
+  `sources.json` — an entry is eligible when its PATH is absolute, which includes browser
+  uploads: `/rag/upload` persists the files and records the absolute folder path. Only an
+  upload where nothing was persisted (image-only) stays RAG-only). `injectFilesystemContext()` in
   `server.js` stamps `_tenantId` into connector-action node configs before each run, mirroring
   the `injectInboxContext` pattern. Called in all four run paths: REST `/workflows/run`,
   scheduler token injector, Slack event dispatch, Airtable event dispatch. Only absolute-path
   entries (added server-side via `/rag/index-folder`) are eligible for workflow file access;
-  browser-upload entries (`source:'upload'`) have no stable server path and cannot be used.
+  an upload where NOTHING WAS PERSISTED (image-only) has no absolute path and cannot be
+  used; a document upload does persist and IS readable. **This sentence used to say all
+  browser uploads were unusable — that was stale and it misled a reader on 2026-07-30.**
 - **search_web in converger prompt (2026-06-21, P8)** — `src/converger/prompts.js` listed
   `search_web` as an available node type (Anthropic native web_search_20260209). Later superseded
   by the Web connector (see below); entry removed from prompts.js.
@@ -1996,8 +2000,7 @@ fixed on the spot. Fold the relevant ones into whatever increment next touches t
   query with parentheses and `OR` groups, which it splits on whitespace and describes
   fragment by fragment. The trigger card is the FIRST card in the walkthrough, so it is
   squarely in the demo path.
-- **ATLAS PROMISED TO USE KNOWLEDGE DOCUMENTS THAT DO NOT EXIST, VIA A PATH THAT CANNOT
-  WORK (open, found 2026-07-30 — the most serious truthfulness defect of the ten-shape
+- **ATLAS PROMISED TO USE KNOWLEDGE DOCUMENTS THAT DO NOT EXIST (open, found 2026-07-30 — the most serious truthfulness defect of the ten-shape
   campaign).** Asked for a support-reply workflow grounded in company documents, Atlas
   asked the right question — *"Where does your knowledge base live? A Google Doc, a
   folder of Docs, a Sheet, a website…"* — and, told "I uploaded them to Atlas under
@@ -2007,12 +2010,16 @@ fixed on the spot. Fold the relevant ones into whatever increment next touches t
   1. **There are no documents.** The tenant's Knowledge section is empty — verified in
      the browser (no folders, no files) and on the box (no `memory/rag/sources.json`, no
      `memory/rag/` contents at all).
-  2. **A browser-uploaded document can NEVER be read by a workflow**, whatever the
-     tenant uploads. `src/connectors/filesystem.js` skips any entry without an absolute
-     path (`if (!entry.path || !entry.path.startsWith('/')) continue;`) — only folders
-     indexed server-side via `/rag/index-folder` are eligible. Uploads are chat-context
-     only. This is documented in that file's own header and in this file's P8 notes; the
-     builder does not know it.
+  2. ~~**A browser-uploaded document can NEVER be read by a workflow.**~~ **THIS WAS
+     WRONG AND IS CORRECTED HERE (same day).** `POST /rag/upload` PERSISTS uploaded files
+     and records the ABSOLUTE folder path, explicitly "so filesystem_read/list can reach
+     it and the converger treats it as a filesystem folder". A document upload IS
+     readable by a workflow; only an image-only upload (nothing persisted) is not. The
+     claim came from `filesystem.js`'s own header and this file's P8 note, **both of
+     which were stale** — corrected in the same commit. The lesson is the one this file
+     already states: a doc that disagrees with `main` is confidently wrong and reads as
+     authoritative. It was asserted to the operator twice before being checked against
+     the upload handler.
   **Why this is the worst kind:** it is a confident claim about the product's own
   capability AND about the customer's data, made without consulting either, at the exact
   moment a person decides to trust it. The workflow that follows would ground on nothing.
@@ -2104,7 +2111,7 @@ fixed on the spot. Fold the relevant ones into whatever increment next touches t
   shapes 7 AND 10 (open, 2026-07-30).** Twice in one campaign, asked for something the
   product cannot do, Atlas did not check and did not refuse: it agreed, then explained
   the mechanism in confident detail. *"Perfect — I can pull from your Knowledge docs in
-  the workflow"* (there are none, and browser uploads are unreadable by a workflow); *"a
+  the workflow"* (there are none — the mechanism is real, the DOCUMENTS are not); *"a
   webhook URL that Atlas generates when the workflow is built"* (no such thing exists).
   **This is the most demo-dangerous behaviour found**, because it happens at the FIRST
   turn, in the most confident register, before the plan, the promise, the self-check or

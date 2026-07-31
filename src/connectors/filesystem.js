@@ -3,9 +3,18 @@
  *
  * Security model: every operation is sandboxed to the tenant's approved folders,
  * which are stored in sources.json (managed via the Filesystem / Knowledge page).
- * Only entries with absolute paths (added server-side via /rag/index-folder) are
- * eligible for workflow file access. Browser-upload entries (source:'upload')
- * have no stable server path and are RAG-only.
+ * Only entries with an ABSOLUTE path are eligible for workflow file access — the check
+ * is on the path, not on where the entry came from.
+ *
+ * ⚠️ THIS COMMENT USED TO SAY browser uploads "have no stable server path and are
+ * RAG-only". THAT IS NO LONGER TRUE and it misled a reader on 2026-07-30 into telling
+ * the operator, twice, that an uploaded document could never be used in a workflow.
+ * `POST /rag/upload` (server.js) PERSISTS uploaded files under an app-managed folder and
+ * records that ABSOLUTE path — its own comment says "so filesystem_read/list can reach
+ * it and the converger treats it as a filesystem folder". So an uploaded document IS
+ * readable by a workflow. The one exception is an upload where nothing was persisted
+ * (image-only), which falls back to storing the folder NAME and therefore stays
+ * RAG-only — which is what the line below actually filters on.
  *
  * _tenantId is stamped into node config by injectFilesystemContext() in server.js
  * before each run, mirroring the injectInboxContext() / injectTenantTokens() pattern.
@@ -17,7 +26,7 @@ import { join, resolve }                                   from 'node:path';
 function findApprovedRoot(approvedFolders, filePath) {
   const abs = resolve(filePath);
   for (const entry of approvedFolders) {
-    if (!entry.path || !entry.path.startsWith('/')) continue; // upload-only entries have no absolute path
+    if (!entry.path || !entry.path.startsWith('/')) continue; // no absolute path ⇒ nothing was persisted (image-only upload)
     const root = resolve(entry.path);
     if (abs === root || abs.startsWith(root + '/')) return root;
   }
