@@ -44,6 +44,17 @@ function capabilitySummary(capabilities) {
     const byConnector = new Map();
     for (const c of catalog) {
       if (!c || c.available === false) continue;
+      // RAW, NOT CANONICALISED — tried and reverted, 2026-07-30. Canonicalising to get a
+      // friendlier heading for the inbox (`atlas` → `inbox`) also sent every GOOGLE
+      // capability to `gmail`, because `canonicalConnector('google')` IS `gmail`: all
+      // fifteen vanished under a Gmail heading and "GOOGLE" rendered as "contributes no
+      // workflow steps". That is the same google→gmail trap fixed in the runtime earlier
+      // the same day, met for the third time.
+      //
+      // `canonicalConnector` answers "do these two names mean the same DESTINATION" — it
+      // is not a display-name function, and using it as one loses information. The
+      // capability ids here (`inbox_deliver`, `search_inbox`) are self-describing, so an
+      // "ATLAS" heading is mildly odd rather than wrong; the regression was not.
       const key = String(c.connector ?? '').toLowerCase();
       if (!key) continue;
       if (!byConnector.has(key)) byConnector.set(key, []);

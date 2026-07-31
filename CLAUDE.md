@@ -2219,6 +2219,38 @@ fixed on the spot. Fold the relevant ones into whatever increment next touches t
   "when a document changes" — a workflow reads Knowledge when it runs. No subscription to
   register, renew, verify or tear down, and no public-reachability requirement, so unlike
   Slack it is fully provable on a laptop.
+- **THE INBOX WAS ALREADY READ+WRITE — WHAT WAS MISSING WAS THE DECLARATION (2026-07-30).**
+  Charles asked for "the inbox should also be read and writable"; checking first showed it
+  **already is**: `src/inbox/index.js` registers `inbox_deliver` (delivery) and
+  `search_inbox` (step, semantic search over past deliveries), both wired at boot.
+  **An earlier measurement of mine reporting `inbox capabilities: (NONE)` was wrong** — my
+  probe never called the inbox registrar. Corrected before building anything.
+  **What WAS wrong: both shipped declaring nothing.** No `effect`, no `assertionKind`, no
+  `locatorKeys`. So `inbox_deliver` fell through to the hardcoded channel table, which
+  lists `locatorKeys: ['subject','title']` — **the oracle believed the step wrote to its
+  own SUBJECT LINE.** Measured: a node with `subject: "Weekly digest for {{today}}"`
+  reported that template as its destination. **Third instance of title-as-destination**
+  (Google Tasks, Calendar, this). No promise failed, because the inbox is exempt from
+  locator comparison (`LOCATOR_FREE_CONNECTORS`) — but it is what a PERSON reads in the
+  failure sentence: *"this run delivered to Weekly digest for {{today}}"*. The exemption
+  was masking it, which is why nobody had seen it.
+  Now declared: `inbox_deliver` is `write` / `message_sent` with a FIXED destination
+  (`locatorKeys: []` + `defaultLocator: 'your Atlas inbox'` — the subject is CONTENT), and
+  `search_inbox` is `read`. Both now face the declaration audit. Four mutations red→green.
+  **Two things found and handled while doing it:**
+  · **`search_inbox` is the one capability named `<verb>_<noun>`** rather than
+    `<connector>_<verb>`, so its id prefix is "search". The audit's prefix rule is now
+    scoped to WRITES — faithful to the rule's own reason, since assertion targets come
+    from the prefix and a read produces no assertion. **Residual: renaming it to
+    `inbox_search` would be tidier; stored specs carry capability ids, so it is not worth
+    breaking them for consistency alone.**
+  · **Canonicalising the prompt's connector grouping was tried and REVERTED.** Grouping by
+    `canonicalConnector` to turn the inbox's internal `connector: 'atlas'` into a friendlier
+    "INBOX" heading also sent every GOOGLE capability to `gmail` — all fifteen vanished
+    under a Gmail heading and GOOGLE rendered as "contributes no workflow steps". **The
+    google→gmail trap for the third time in one day.** `canonicalConnector` answers "do
+    these name the same DESTINATION"; it is not a display-name function. An "ATLAS"
+    heading is mildly odd, the regression was not.
 - **Approval-channel availability (`email`) is deployment-wide, not per-tenant** — fine today
   (one deployment, one mailer); revisit if tenants ever bring their own sending domain.
 - **Google Sheets has no destination picker, so Atlas asks a customer for a spreadsheet

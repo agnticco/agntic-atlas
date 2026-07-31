@@ -32,6 +32,7 @@ import { registerGoogleChannels } from '../../src/connectors/google/index.js';
 import { registerAirtableChannels } from '../../src/connectors/airtable/index.js';
 import { registerSlackTriggers } from '../../src/connectors/slack/index.js';
 import { registerKnowledgeCapabilities } from '../../src/connectors/knowledge/index.js';
+import { registerInboxCapability } from '../../src/inbox/index.js';
 import { canonicalConnector, nodeEffect, setCapabilityCatalog } from '../../src/workflows/outcome-oracle.js';
 import { isWritingAction, isWriteNode } from '../../src/workflows/workflow-validator.js';
 
@@ -47,6 +48,10 @@ function registry() {
     forTenant:   async () => ({ query: async () => [], ingest: async () => 0 }),
     readSources: () => [],
   });
+  // The inbox faces the audit too. Both its capabilities shipped DECLARING NOTHING —
+  // `inbox_deliver` therefore fell back to the hardcoded channel table, which made the
+  // message's own SUBJECT the place it was written.
+  registerInboxCapability(reg, { inboxStore: {}, getRagInbox: async () => ({}) });
   setCapabilityCatalog(reg);
   return reg;
 }
@@ -54,7 +59,7 @@ function registry() {
 /** The connector keys the oracle, validator and gap scorer all reason about. */
 const KNOWN_CONNECTORS = new Set(['slack', 'gmail', 'docs', 'drive', 'sheets', 'calendar',
                                   'airtable', 'inbox', 'webhook', 'filesystem', 'tasks',
-                                  'knowledge']);
+                                  'knowledge', 'atlas']);
 
 /**
  * GROUND TRUTH, written by reading what each capability does — not by asking the
@@ -84,6 +89,8 @@ const TRUTH = {
   slack_message: 'trigger', slack_mention: 'trigger',
   // Knowledge (2026-07-30) — the tenant's own documents as capabilities.
   knowledge_search: 'read', knowledge_write: 'write',
+  // Atlas inbox (declared 2026-07-30 — both had shipped declaring nothing).
+  search_inbox: 'read', inbox_deliver: 'write',
 };
 
 describe('the audit is complete', () => {
@@ -191,14 +198,32 @@ describe('every write names WHERE it writes', () => {
 });
 
 describe('every connector name a model might write resolves', () => {
-  test('each capability id prefix lands on a known connector', () => {
+  test('each WRITE capability id prefix lands on a known connector', () => {
     // Assertions are written in sub-service names (`tasks:My Tasks`), which come from
-    // the id prefix — so every prefix has to be a name the system knows.
+    // the id prefix — so every prefix that can BECOME an assertion target has to be a
+    // name the system knows.
+    //
+    // Scoped to writes, 2026-07-30, and the reason is the rule's own: a READ produces no
+    // assertion, so its prefix is never a destination. `search_inbox` is the one shipped
+    // capability named `<verb>_<noun>` instead of `<connector>_<verb>`, so its prefix is
+    // "search" — meaningless as a connector and harmless as one, because nothing ever
+    // asks where a search wrote. Renaming it to `inbox_search` would be tidier and is
+    // recorded as a residual; it is an ID change and stored specs carry ids, so it is not
+    // worth breaking them for consistency alone.
     for (const c of registry().list()) {
+      if (c.effect !== 'write') continue;
       const prefix = c.id.split('_')[0];
       const canon = canonicalConnector(prefix);
       assert.ok(KNOWN_CONNECTORS.has(canon), `${c.id}: prefix "${prefix}" → "${canon}", unknown`);
     }
+  });
+
+  test('a READ with an odd prefix is still classified correctly', () => {
+    // The other half: relaxing the prefix rule must not stop a read being a read.
+    const searchInbox = registry().list().find(c => c.id === 'search_inbox');
+    assert.ok(searchInbox, 'search_inbox is gone — if it was renamed, update TRUTH too');
+    assert.equal(searchInbox.effect, 'read');
+    assert.equal(nodeEffect({ type: 'connector-action', config: { action: 'search_inbox', query: 'x' } }), null);
   });
 
   test('and so does the connector each capability declares', () => {

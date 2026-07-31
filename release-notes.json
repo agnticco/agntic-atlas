@@ -1,5 +1,13 @@
 [
   {
+    "version": "1.6.102",
+    "date": "2026-07-30",
+    "title": "Atlas knows where an inbox message actually goes",
+    "notes": [
+      "Deliveries to your Atlas inbox were internally recorded as going to the message's own subject line. They now correctly record the inbox itself."
+    ]
+  },
+  {
     "version": "1.6.101",
     "date": "2026-07-30",
     "title": "Workflows can now use your Knowledge documents",

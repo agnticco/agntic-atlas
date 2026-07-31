@@ -24,6 +24,22 @@ export function registerInboxCapability(registry, { inboxStore, getRagInbox }) {
     description:  'Deliver workflow output to the user\'s Atlas inbox and index it for future retrieval',
     positions:    ['delivery'],
     outputFormat: 'plain',
+    // ── DECLARED, 2026-07-30. It said nothing at all before. ──────────────────
+    //
+    // Undeclared, the oracle fell back to the hardcoded channel table, which lists
+    // `locatorKeys: ['subject','title']` — so it believed this step wrote TO ITS OWN
+    // SUBJECT LINE. Measured: a node with `subject: "Weekly digest for {{today}}"`
+    // reported its destination as `"Weekly digest for {{today}}"`, a template. That is
+    // the THIRD instance of title-as-destination (Google Tasks, Calendar, this), and
+    // while the inbox is currently exempt from locator comparison so no promise failed,
+    // it is what a PERSON is shown in the failure sentence: "this run delivered to
+    // Weekly digest for {{today}}".
+    //
+    // The destination is FIXED — there is one inbox per person — so no locator keys and
+    // a `defaultLocator` that names it, the shape the declaration audit now recognises.
+    // The subject is CONTENT: what the message is called, not where it went.
+    effect: 'write', assertionKind: 'message_sent',
+    locatorKeys: [], defaultLocator: 'your Atlas inbox',
     configSchema: [
       { key: 'subject', label: 'Subject', type: 'text', optional: true,
         hint: 'Message title shown in the inbox list. Defaults to the workflow name.' },
@@ -71,6 +87,11 @@ export function registerInboxCapability(registry, { inboxStore, getRagInbox }) {
     name:        'Search Inbox',
     description: 'Retrieve past workflow outputs from the Atlas Inbox using semantic search. Returns the most relevant artifacts as context for subsequent steps.',
     positions:   ['step'],
+    // Declared rather than left to the verb regex. It happened to satisfy nothing
+    // already — `search_inbox` matches no write verb — but "correct by accident" is what
+    // the declaration audit exists to end: `gmail_get_message` matched the message_sent
+    // verb and let READING mail satisfy a promise to SEND it.
+    effect: 'read',
     configSchema: [
       { key: 'query',  label: 'Search query', type: 'text',   required: true,
         hint: 'What to look for in past inbox deliveries.' },
