@@ -2287,14 +2287,63 @@ fixed on the spot. Fold the relevant ones into whatever increment next touches t
   asking as a tool at a moment of its choosing — the graph still asks where the graph
   arrives. This increment governs whether a question is allowed, not when it is raised.
   The open items it does not yet fix are the ones about TIMING: destinations settled after
-  the plan, connector availability checked only at build time. Rule 2 is also only as good
-  as the discovery behind it — for Sheets there is still none to attempt, so a legitimate
-  question is refused with nothing to put in its place. **That is the next increment, and
-  it is a discovery problem before it is a conversation one.**
+  the plan, connector availability checked only at build time. Rule 2 was also only as good
+  as the discovery behind it — for Sheets there was none to attempt, so a legitimate
+  question was refused with nothing to put in its place. **That was the next increment
+  and it is DONE (2026-07-31, see the Sheets picker entry below); the TIMING half is
+  what remains.**
 - **Approval-channel availability (`email`) is deployment-wide, not per-tenant** — fine today
   (one deployment, one mailer); revisit if tenants ever bring their own sending domain.
-- **Google Sheets has no destination picker, so Atlas asks a customer for a spreadsheet
-  ID (open, 2026-07-30).** Witnessed on prod: Atlas asked *"Which Google Sheet should I
+- **A PERSON NOW PICKS THEIR SPREADSHEET INSTEAD OF PASTING ITS ID — FIXED
+  (2026-07-31, increment 2 of "the conversation as a tool").** The errand this replaces,
+  witnessed on prod: *"What is the spreadsheet ID for 'Pricing Enquiries'? You can find
+  it in the URL of the sheet, between /d/ and /edit."* — asked AFTER offering "the
+  spreadsheet ID **or name**" and being given a name. `sheets_describe` now declares
+  `schemaDiscovery`, so the same code path that has always produced good Airtable
+  questions produces one for Sheets: the spreadsheets are read from Drive and offered by
+  name. Asking rule 2 ("never ask what was never looked up") was only as good as the
+  discovery behind it, and for Sheets there was none to attempt.
+  **THE SEAM COULD NEVER HAVE WORKED FOR GOOGLE, WHATEVER IT DECLARED, AND THAT IS THE
+  PART TO REMEMBER.** `usesConnector` — which decides which nodes belong to a connector,
+  on BOTH the read side (`resolveSchemaDiscovery`) and the write side
+  (`fillDestination`) — matched the capability id's PREFIX. That is true of Airtable
+  (`airtable_create_record` / connector `airtable`) and **false of every Google
+  service**: `sheets_append` belongs to connector `google`, and
+  `'sheets_append'.startsWith('google_')` is false. So a correct declaration still
+  resolved to `null`. **The nth instance of a rule scoped to the FORM of a name rather
+  than to what the thing IS** — the capability declares its connector, and the
+  declaration is now what is asked. Had only the read side been fixed, the picker would
+  have appeared, the person would have chosen "Pricing Enquiries", and the id would have
+  been written onto NO node — ending in the very question it exists to replace.
+  **THREE MORE SHAPE MISMATCHES, all Airtable's shape being ASSUMED rather than
+  declared** — the same mistake as the hardcoded connector strings this seam was built to
+  remove, one level down: the list capability was invoked with **no arguments** (Airtable
+  needed none; Drive would have returned every file, PDF and image in the account — now
+  `listArgs`); a Sheets tab returns `{sheet, headers}` with **no `id` and no `name`**,
+  and the consumer read `x.name.toLowerCase()` literally, which would have **thrown on
+  the first Google Sheet** (now `tableIdKey`/`tableNameKey`, defaulting to `id`/`name` so
+  Airtable is untouched); and a column is an OBJECT in Airtable but a bare STRING in
+  Sheets, so every downstream `.name` read — the field mapper, the assertion rewrite, the
+  log line — would have seen `undefined` and mapped the promise onto a row of blanks.
+  Normalised once, where the shape is known, rather than teaching four readers about both.
+  Pinned by `tests/converger/sheets-can-be-picked-not-pasted.test.js` (21), **eight
+  mutations red→green**. Every test drives the REAL registry and the REAL return shapes of
+  `driveListFiles` and `sheetsDescribe`; a fixture shaped the way the author imagines is
+  what hid all four mismatches. **One mutation survived the first pass and the test was
+  rewritten rather than the mutation dropped:** "the consumer actually passes `listArgs`"
+  built its own `invokeCapability` double and then **called it itself** with
+  `descriptor.listArgs`, so it passed whatever the real consumer did. A test that
+  re-implements the code under test proves only that the test can call a function; it is
+  now a SOURCE-level pin that says so in its own header, because the destinations node
+  closes over the LLM and graph state and cannot be lifted.
+  **NOT witnessed in a browser yet** — code-proven only; a live Sheets build is the
+  pending confirmation. **Still open from the original finding:** the picked sheet's
+  existence is proven by the discovery read (a fabricated id can no longer be typed at
+  all), but the plan card's rendering of a raw id is untouched wherever one is already
+  stored.
+
+- ~~**Google Sheets has no destination picker, so Atlas asks a customer for a spreadsheet
+  ID**~~ *(the original finding, 2026-07-30, closed by the entry above).* Witnessed on prod: Atlas asked *"Which Google Sheet should I
   append the rows to? (I need the spreadsheet ID **or name**…)"*, the user answered with
   a name as invited, and Atlas then refused the name — *"What is the spreadsheet ID for
   'Pricing Enquiries'? You can find it in the URL of the sheet, between /d/ and
@@ -3024,8 +3073,9 @@ channel-less ask and cross-channel pooling all still fail).
     build: [`docs/handoff/p13-implementation-brief.md`](docs/handoff/p13-implementation-brief.md).
     Planning merged (#22, 2026-07-15). Start at **P13-0** — generalize three F-era
     seams (effect-from-STRUCTURE not an id-regex; a `deliver`-node effect fallback;
-    connector-generic destination schema discovery, which also wires the built-but-
-    unwired `sheets_describe`). Gate `scripts/gates/p13.sh` is progressive and
+    connector-generic destination schema discovery — `sheets_describe` was
+    finally WIRED on 2026-07-31, and doing so exposed four shape assumptions the seam had
+    inherited from Airtable; see the Sheets picker entry in the residuals). Gate `scripts/gates/p13.sh` is progressive and
     fail-closed. Apply the increment-loop review calibration: block only on defects
     a real user can hit that either look like success or destroy something;
     everything else is recorded and carried. Branch per increment off `main` → PR →

@@ -1,5 +1,13 @@
 [
   {
+    "version": "1.6.104",
+    "date": "2026-07-31",
+    "title": "Pick your spreadsheet, don't paste its ID",
+    "notes": [
+      "Atlas now reads your Google Sheets and offers them by name, the way it already did for Airtable — instead of asking you to dig an ID out of a URL."
+    ]
+  },
+  {
     "version": "1.6.103",
     "date": "2026-07-30",
     "title": "Atlas won't ask you for things it should look up",

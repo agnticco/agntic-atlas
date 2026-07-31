@@ -1129,11 +1129,27 @@ function applyResourcePick(draft, nodeId, kind, value) {
 }
 
 /** Does this node reach into the named connector? */
-function usesConnector(node, connector) {
+function usesConnector(node, connector, catalog = null) {
   const id = node?.type === 'connector-action' ? node.config?.action
            : node?.type === 'deliver'          ? node.config?.channel
            : null;
-  return typeof id === 'string' && id.startsWith(`${connector}_`);
+  if (typeof id !== 'string' || !id) return false;
+
+  // ── ASK THE CAPABILITY WHICH CONNECTOR IT BELONGS TO ──────────────────────
+  //
+  // This matched the id PREFIX, which is true of Airtable (`airtable_create_record`,
+  // connector `airtable`) and FALSE of every Google service: `sheets_append` belongs to
+  // connector `google`, and `'sheets_append'.startsWith('google_')` is false. So schema
+  // discovery could never resolve for Google no matter what the connector declared —
+  // found 2026-07-31 while wiring Sheets, when a correct declaration still produced
+  // `null` and the person would still have been asked to paste an id.
+  //
+  // The nth instance of a rule scoped to the FORM of a name rather than to what the
+  // thing IS. The declaration is the answer; the prefix is a guess that happens to be
+  // right for one connector.
+  const declared = catalog?.get?.(id)?.connector;
+  if (declared) return String(declared).toLowerCase() === String(connector).toLowerCase();
+  return id.startsWith(`${connector}_`);
 }
 
 /**
@@ -1254,14 +1270,19 @@ function readFields(config) {
  * the user is told their table has neither column — which is the truth, and the thing
  * they need to know.
  */
-function fillDestination(nodes, { connector, descriptor, containerId, tableId, fields, columnsRead = false }) {
+export function fillDestination(nodes, { connector, descriptor, containerId, tableId, fields, columnsRead = false, catalog = null }) {
   // P13-0 seam #3: the connector and its config-key names come from the connector's
   // own declaration, not from the literals 'airtable' / `baseId` / `tableId`. Writing
   // a key the target node type does not declare would fail UNKNOWN_CONFIG_KEY at
   // publish, so the keys MUST come from the connector rather than be assumed.
   if (!connector || !descriptor) return nodes;
   return nodes.map((n) => {
-    if (!usesConnector(n, connector)) return n;
+    // The CATALOG decides which nodes belong to this connector. Without it the match
+    // falls back to the id prefix, which is true of `airtable_*` and false of every
+    // Google service — so the spreadsheet the person just PICKED would be written onto
+    // no node at all, and the discovery would end in the id question it exists to
+    // replace. Found 2026-07-31 while wiring Sheets.
+    if (!usesConnector(n, connector, catalog)) return n;
     const config = { ...(n.config ?? {}), [descriptor.containerKey]: containerId };
     if (tableId) config[descriptor.tableKey] = tableId;
     // Only touch `fields` where the node HAS them (a create/update). A search or a
@@ -1455,7 +1476,9 @@ function emitBeat(cfg, beat) {
 export function resolveSchemaDiscovery(catalog, nodes) {
   if (!catalog?.schemaDiscoveryFor) return null;
   for (const connector of (catalog.schemaDiscoveryConnectors?.() ?? [])) {
-    const targets = (nodes ?? []).filter(n => usesConnector(n, connector));
+    // The CATALOG is passed through, so "does this node use that connector" is answered
+    // by the capability's own declaration rather than by its id's prefix.
+    const targets = (nodes ?? []).filter(n => usesConnector(n, connector, catalog));
     if (!targets.length) continue;
     const descriptor = catalog.schemaDiscoveryFor(connector);
     if (descriptor) return { connector, descriptor, targets };
@@ -3285,7 +3308,7 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
           ...state.draft,
           outcome: rewriteAssertionFields(state.draft?.outcome, renames, cached.columns, targetConnector),
           nodes: fillDestination(nodes, {
-            connector: targetConnector, descriptor,
+            connector: targetConnector, descriptor, catalog: capabilityCatalog,
             containerId: cached.baseId, tableId: cached.table, fields: mapped, columnsRead: true,
           }),
         },
@@ -3304,7 +3327,7 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
       // "there is nothing to choose between", and it must not become a lookup of the
       // empty string.
       bases = descriptor.listCapability
-        ? ((await invokeCapability(descriptor.listCapability))?.[descriptor.listResultKey] ?? [])
+        ? ((await invokeCapability(descriptor.listCapability, descriptor.listArgs ?? undefined))?.[descriptor.listResultKey] ?? [])
         : [];
     } catch (err) {
       // A connector that cannot be read is not a connector that can be guessed at.
@@ -3316,8 +3339,14 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
     // A base id the model already put in the draft is honoured ONLY if the tenant
     // actually has it. Anything else is a guess, and a guess writes the customer's
     // lead into a base that does not exist.
-    const already = writeNodes.map(n => n.config?.[descriptor.containerKey]).find(b => isKnownBase(b, bases));
-    let base = already ? bases.find(b => b.id === already) : bases[0];
+    // The CONTAINER's id and name fields are declared too — Airtable returns
+    // `{id, name}`, a Drive file returns `{id, name, mimeType}`, and the next connector
+    // will return something else again.
+    const bId   = (b) => String(b?.[descriptor.listIdKey   ?? 'id']   ?? '');
+    const bName = (b) => String(b?.[descriptor.listNameKey ?? 'name'] ?? '');
+    const already = writeNodes.map(n => n.config?.[descriptor.containerKey])
+      .find(b => isKnownBase(b, bases.map(x => ({ id: bId(x), name: bName(x) }))));
+    let base = already ? bases.find(b => bId(b) === already) : bases[0];
     // ── A QUESTION ALREADY ANSWERED MUST NOT BE ASKED AGAIN ──────────────────
     // `already` is a base the DRAFT names and the tenant genuinely has — which means
     // the model chose it, and it chose it from what the user said. Asking anyway
@@ -3333,22 +3362,22 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
       const answer = await interrupt({
         type: 'clarification',
         question: `Which ${descriptor.containerLabel ?? 'destination'} should this write to?`,
-        choices: bases.map((b, i) => ({ id: b.id, label: b.name, selected: i === 0 })),
+        choices: bases.map((b, i) => ({ id: bId(b), label: bName(b), selected: i === 0 })),
         step: state.step,
       });
-      base = bases.find(b => b.id === answer?.id || b.name === answer?.answer) ?? bases[0];
+      base = bases.find(b => bId(b) === answer?.id || bName(b) === answer?.answer) ?? bases[0];
     }
 
     // ── 2. The table, and its REAL columns ───────────────────────────────────
     let tables = [];
     try {
       tables = (await invokeCapability(
-        descriptor.describeCapability, { [descriptor.describeArg]: base.id },
+        descriptor.describeCapability, { [descriptor.describeArg]: bId(base) },
       ))?.[descriptor.describeResultKey] ?? [];
     } catch { /* fall through: we have a base, and the loop can still ask for a table */ }
     if (!tables.length) {
       return {
-        draft: { ...state.draft, nodes: fillDestination(nodes, { connector: targetConnector, descriptor, containerId: base.id }) },
+        draft: { ...state.draft, nodes: fillDestination(nodes, { connector: targetConnector, descriptor, catalog: capabilityCatalog, containerId: bId(base) }) },
         destinationsResolved: true, step: state.step + 1, phase: 'gapping',
       };
     }
@@ -3356,30 +3385,48 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
     // Same rule as the base: a table the draft already names, which this base really
     // has, is an answer — not a question. Matched on id OR name, because the model
     // writes whichever the user said ("Sheet1").
+    // WHICH FIELD IS THE ID, AND WHICH IS THE NAME, IS DECLARED — not assumed.
+    //
+    // Airtable happens to return `{id, name}`, so this used to read those literally. A
+    // Google Sheet's tabs come back as `{sheet, headers}`: no `id`, no `name`, and
+    // `x.name.toLowerCase()` on the line below would have thrown. Assuming one
+    // connector's field names is the same mistake as the hardcoded connector strings
+    // this whole seam was built to remove, one level down.
+    const tId   = (t) => String(t?.[descriptor.tableIdKey   ?? 'id']   ?? '');
+    const tName = (t) => String(t?.[descriptor.tableNameKey ?? 'name'] ?? '');
     const namedTable = writeNodes
       .map(n => String(n.config?.[descriptor.tableKey] ?? n.config?.table ?? '').trim())
       .filter(Boolean)
-      .map(t => tables.find(x => x.id === t || x.name.toLowerCase() === t.toLowerCase()))
+      .map(t => tables.find(x => tId(x) === t || tName(x).toLowerCase() === t.toLowerCase()))
       .find(Boolean);
     let table = namedTable ?? tables[0];
     if (tables.length > 1 && !namedTable) {
       const answer = await interrupt({
         type: 'clarification',
-        question: `Which ${descriptor.tableLabel ?? 'table'} in "${base.name}"?`,
-        choices: tables.map((t, i) => ({ id: t.id, label: t.name, selected: i === 0 })),
+        question: `Which ${descriptor.tableLabel ?? 'table'} in "${bName(base)}"?`,
+        choices: tables.map((t, i) => ({ id: tId(t), label: tName(t), selected: i === 0 })),
         step: state.step,
       });
-      table = tables.find(t => t.id === answer?.id || t.name === answer?.answer) ?? tables[0];
+      table = tables.find(t => tId(t) === answer?.id || tName(t) === answer?.answer) ?? tables[0];
     }
 
     // ── 3. Map the promised fields onto the columns that ACTUALLY EXIST ───────
     // One cheap call. The alternative is the model inventing `Budget` when the
     // column is called `Deal Size`, which Airtable accepts by silently ignoring —
     // the record is created, the field is empty, and the run reports success.
-    const columns = table[descriptor.tableColumnsKey] ?? [];
+    // NORMALISED to `{name}` objects, because the two connectors do not agree on what a
+    // column IS: Airtable returns field OBJECTS (`{id, name, type}`), a Google Sheet
+    // returns its headers as bare STRINGS. Everything downstream — the mapper, the
+    // assertion rewrite, the log line — reads `.name`, so a string column would have
+    // arrived as `undefined` at every one of them and the mapping would have been made
+    // against a row of blanks. Normalising here keeps that knowledge in ONE place
+    // instead of teaching four readers about both shapes.
+    const columns = (table[descriptor.tableColumnsKey] ?? [])
+      .map(c => (typeof c === 'string' ? { name: c } : c))
+      .filter(c => c?.name);
     const { fields: mapped, renames, unmapped } = await mapFieldsToColumns({
       llm, sessionId, nodes: writeNodes, columns,
-      outcome: state.draft?.outcome, table: table.name,
+      outcome: state.draft?.outcome, table: tName(table),
     });
 
     // ── 4. THE OUTCOME MUST BE REWRITTEN TOO ─────────────────────────────────
@@ -3403,14 +3450,14 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
         ...state.draft,
         outcome,
         nodes: fillDestination(nodes, {
-          connector: targetConnector, descriptor,
-          containerId: base.id, tableId: table.name, fields: mapped, columnsRead: true,
+          connector: targetConnector, descriptor, catalog: capabilityCatalog,
+          containerId: bId(base), tableId: tName(table), fields: mapped, columnsRead: true,
         }),
       },
-      destination: { baseId: base.id, table: table.name, columns },
+      destination: { baseId: bId(base), table: tName(table), columns },
       confirmationLog: [{
         step: state.step, type: 'destination_resolved',
-        base: { id: base.id, name: base.name }, table: table.name,
+        base: { id: bId(base), name: bName(base) }, table: tName(table),
         columns: columns.map(c => c.name), mapped, renames,
         // A field the table simply does not have. Said out loud: it stays in the
         // outcome, fails UNSATISFIED_ASSERTION, and the user is told — rather than

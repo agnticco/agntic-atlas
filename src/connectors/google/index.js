@@ -753,6 +753,40 @@ export function registerGoogleChannels(capabilityRegistry) {
     ],
     requiredScopes: ['https://www.googleapis.com/auth/spreadsheets'],
     isReady: ready,
+    // ── HOW THE CONVERGER DISCOVERS WHERE A SHEETS WRITE LANDS (2026-07-31) ────
+    //
+    // The seam has existed since P13-0 and only Airtable ever declared it, so every
+    // other connector fell back to "make the user paste an id". That is not a
+    // hypothetical: driving the Sheets shape on prod produced *"What is the spreadsheet
+    // ID for 'Pricing Enquiries'? You can find it in the URL of the sheet, between /d/
+    // and /edit."* — a customer sent to dig an identifier out of a URL, which is the
+    // developer-settings errand P13 forbids. `sheets_describe` was built for exactly
+    // this and had been sitting unwired.
+    //
+    // Two things had to generalise for Sheets to fit, both of which were Airtable's
+    // shape being assumed rather than declared:
+    //   · `listArgs` — Sheets has no "list spreadsheets" capability of its own, so the
+    //     container list comes from DRIVE, filtered to spreadsheets. Airtable's list
+    //     needed no arguments, so the consumer passed none.
+    //   · `listIdKey`/`tableIdKey`/`tableNameKey` — a tab comes back as
+    //     `{sheet, headers}`, with no `id` and no `name`. The consumer read those two
+    //     field names literally and would have thrown on the first Google Sheet.
+    schemaDiscovery: {
+      listCapability:    'drive_list_files',
+      listArgs:          { query: "mimeType = 'application/vnd.google-apps.spreadsheet'" },
+      listResultKey:     'files',
+      describeArg:       'spreadsheetId',
+      describeResultKey: 'sheets',
+      // A tab has one name and no separate id — both keys point at it, which is honest
+      // rather than inventing an identifier the API does not issue.
+      tableIdKey:        'sheet',
+      tableNameKey:      'sheet',
+      tableColumnsKey:   'headers',
+      containerKey:      'spreadsheetId',
+      tableKey:          'range',
+      containerLabel:    'Google Sheet',
+      tableLabel:        'tab',
+    },
     handle: makeHandle((gapi, config) => sheetsDescribe(gapi, { spreadsheetId: config.spreadsheetId })),
   });
 
