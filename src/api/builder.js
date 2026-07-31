@@ -1780,6 +1780,15 @@ Rules:
       files: Array.isArray(s.fileNames) ? s.fileNames.slice(0, 40) : [],
     }));
     capabilities.knowledgeUploads = uploadSources.map(s => s.name || s.path);
+    // THE STATE OF KNOWLEDGE IS REPORTED EVEN WHEN IT IS EMPTY.
+    //
+    // Silence about an empty knowledge base is not neutral. On 2026-07-30, told "I
+    // uploaded the documents to Atlas under Knowledge", Atlas replied *"Perfect — I can
+    // pull from your Knowledge docs in the workflow"* with nothing there at all — it had
+    // never been told, so it filled the gap with the agreeable assumption. Connectors
+    // have always said "(none connected)"; knowledge said nothing.
+    capabilities.knowledge = { documentCount: allSources.length,
+                               names: allSources.map(s => s.name || s.path).filter(Boolean).slice(0, 20) };
   } catch { /* non-fatal — converger still works with empty capabilities */ }
 
   // THE CHANNEL CATALOG IS NOT OPTIONAL.

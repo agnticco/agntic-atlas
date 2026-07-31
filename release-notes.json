@@ -1,5 +1,13 @@
 [
   {
+    "version": "1.6.101",
+    "date": "2026-07-30",
+    "title": "Workflows can now use your Knowledge documents",
+    "notes": [
+      "A workflow can search your uploaded documents while it runs, and save new material back to them. Atlas also now tells you plainly when your Knowledge is empty instead of agreeing that it can use it."
+    ]
+  },
+  {
     "version": "1.6.100",
     "date": "2026-07-30",
     "title": "Atlas can see everything your connected apps can do",

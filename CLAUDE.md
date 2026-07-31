@@ -2179,6 +2179,46 @@ fixed on the spot. Fold the relevant ones into whatever increment next touches t
   **Checked and deliberately NOT changed:** the DELIVERY catalogue was already
   registry-driven and rendering correctly (names, descriptions, config fields, output
   formats). It is now pinned so work on its neighbours cannot break it.
+- **KNOWLEDGE IS NOW A REGISTERED CONNECTOR — readable, writable, and usable in a
+  workflow (2026-07-30, Charles's call).** *"We are not exposing the tools that are
+  available to the agent, to the agent properly… Knowledge should be writeable, readable,
+  and contents able to be used in workflows."* Measured that day, the product had a
+  Knowledge page, a per-tenant RAG index and **zero registered capabilities**
+  (`knowledge/rag capabilities: (NONE)`), and the cost was a truthfulness defect, not an
+  inconvenience — see the shape-7 finding above.
+  `src/connectors/knowledge/index.js` registers **`knowledge_search`** (read) and
+  **`knowledge_write`** (write, `document_exists`). Registered rather than special-cased
+  so everything that reads the catalog gets it for free: the interview, the destination
+  oracle, the write/approval guards, the declaration audit, the plain-English step words.
+  **Both halves of the honesty fix shipped together**, because the capability alone would
+  not have stopped the false claim: `capabilities.knowledge` now carries the document
+  count, and the interview is TOLD when it is zero — *"this workspace has NO documents in
+  Knowledge yet… do not offer to use your knowledge base, whatever the user believes they
+  uploaded"*. Silence about an empty base is what read as confirmation.
+  **THREE DEFECTS IN MY OWN WORK, ALL CAUGHT BEFORE SHIPPING, ALL FAMILIES THIS FILE
+  ALREADY NAMES:**
+  · **`isReady` is NOT per-tenant.** The registry calls it with NO arguments — a
+    deployment-level question. My first version asked "does this tenant have documents",
+    which resolved to `readSources(undefined)` → `[]` → **permanently unavailable for
+    everyone**. Measured: a tenant holding a document still got `available:false`.
+    Registering a capability nobody can ever use would have been a quieter version of the
+    defect it exists to fix. Per-tenant emptiness travels `capabilities.knowledge`.
+  · **The tenant injector stamped only one node shape.** `knowledge_write` can occupy a
+    DELIVERY position, where the capability id is `config.channel`, not `config.action` —
+    so that node would never be stamped and the capability (correctly) refuses to run
+    without a tenant. The "added to the top-level executor, not the sub-loop" shape.
+  · **The declaration audit had no category for a FIXED destination.** It demanded
+    non-empty `locatorKeys` of every write, and Knowledge has exactly one destination.
+    Taught the third shape — `locatorKeys: []` **plus** a `defaultLocator` — and held it
+    to its bargain with a new test, rather than weakening the rule.
+  **Isolation is fail-closed:** RAG is physically isolated per tenant, and both handlers
+  REFUSE to run with no tenant in scope rather than searching unscoped. That is mutation
+  M1. Pinned by `tests/connectors/knowledge-is-a-real-capability.test.js` (23), six
+  mutations red→green.
+  **NOT a trigger, deliberately** (the required per-connector answer): nothing happens
+  "when a document changes" — a workflow reads Knowledge when it runs. No subscription to
+  register, renew, verify or tear down, and no public-reachability requirement, so unlike
+  Slack it is fully provable on a laptop.
 - **Approval-channel availability (`email`) is deployment-wide, not per-tenant** — fine today
   (one deployment, one mailer); revisit if tenants ever bring their own sending domain.
 - **Google Sheets has no destination picker, so Atlas asks a customer for a spreadsheet

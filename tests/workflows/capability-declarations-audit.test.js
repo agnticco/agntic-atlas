@@ -31,6 +31,7 @@ import { CapabilityRegistry } from '../../src/connectors/capability-registry.js'
 import { registerGoogleChannels } from '../../src/connectors/google/index.js';
 import { registerAirtableChannels } from '../../src/connectors/airtable/index.js';
 import { registerSlackTriggers } from '../../src/connectors/slack/index.js';
+import { registerKnowledgeCapabilities } from '../../src/connectors/knowledge/index.js';
 import { canonicalConnector, nodeEffect, setCapabilityCatalog } from '../../src/workflows/outcome-oracle.js';
 import { isWritingAction, isWriteNode } from '../../src/workflows/workflow-validator.js';
 
@@ -40,13 +41,20 @@ function registry() {
   registerGoogleChannels(reg);
   registerAirtableChannels(reg);
   registerSlackTriggers(reg);
+  // Knowledge is a connector like any other and must face the same audit — that is the
+  // whole point of this file: a capability added without declaring itself fails HERE.
+  registerKnowledgeCapabilities(reg, {
+    forTenant:   async () => ({ query: async () => [], ingest: async () => 0 }),
+    readSources: () => [],
+  });
   setCapabilityCatalog(reg);
   return reg;
 }
 
 /** The connector keys the oracle, validator and gap scorer all reason about. */
 const KNOWN_CONNECTORS = new Set(['slack', 'gmail', 'docs', 'drive', 'sheets', 'calendar',
-                                  'airtable', 'inbox', 'webhook', 'filesystem', 'tasks']);
+                                  'airtable', 'inbox', 'webhook', 'filesystem', 'tasks',
+                                  'knowledge']);
 
 /**
  * GROUND TRUTH, written by reading what each capability does — not by asking the
@@ -74,6 +82,8 @@ const TRUTH = {
   // triggers never satisfy anything
   gmail_new_message: 'trigger', airtable_record_changed: 'trigger',
   slack_message: 'trigger', slack_mention: 'trigger',
+  // Knowledge (2026-07-30) — the tenant's own documents as capabilities.
+  knowledge_search: 'read', knowledge_write: 'write',
 };
 
 describe('the audit is complete', () => {
@@ -136,11 +146,31 @@ describe('every write names WHERE it writes', () => {
   test('locatorKeys are declared, never guessed from key names', () => {
     // Guessing gave a Google Task's own title as the place it was written, and cost
     // three whole-spec Opus rebuilds before anyone could tell the oracle was wrong.
+    //
+    // THREE legitimate shapes, not two — the third was added 2026-07-30 when
+    // `knowledge_write` became the first shipped capability with ONE fixed destination:
+    //   · keys declared          → read the destination from config
+    //   · `locatorKeys: []` + a `defaultLocator` → the destination is FIXED and says so
+    //   · neither                → undeclared, and that is what this test refuses
+    // Declaring `[]` WITHOUT a default would be the worst of both: a capability that
+    // claims to know where it writes and then names nowhere.
     const undeclared = registry().list()
       .filter(c => c.effect === 'write')
-      .filter(c => !(Array.isArray(c.locatorKeys) && c.locatorKeys.length))
+      .filter(c => !(Array.isArray(c.locatorKeys)
+        && (c.locatorKeys.length || (typeof c.defaultLocator === 'string' && c.defaultLocator.trim()))))
       .map(c => c.id);
-    assert.deepEqual(undeclared, [], 'declare locatorKeys on these');
+    assert.deepEqual(undeclared, [], 'declare locatorKeys (or [] plus a defaultLocator) on these');
+  });
+
+  test('a FIXED-destination write names that destination', () => {
+    // The new category, held to its own bargain: no keys means `defaultLocator` is the
+    // whole answer, so it must exist and must not be blank.
+    for (const c of registry().list()) {
+      if (c.effect !== 'write') continue;
+      if (!Array.isArray(c.locatorKeys) || c.locatorKeys.length) continue;
+      assert.ok(typeof c.defaultLocator === 'string' && c.defaultLocator.trim(),
+        `${c.id} declares no locator keys, so it must declare where it always writes`);
+    }
   });
 
   test('an optional destination declares its default', () => {

@@ -144,6 +144,31 @@ function connectorTriggerSummary(capabilities) {
 // Two kinds of knowledge sources have different capabilities:
 // - filesystem folders (absolute server paths) → accessible via filesystem_read in workflows
 // - knowledge uploads (browser-uploaded, RAG-indexed) → AI can reference in context; NOT via filesystem_read
+/**
+ * WHAT IS IN KNOWLEDGE — INCLUDING WHEN THE ANSWER IS "NOTHING".
+ *
+ * The connector list has always ended `(none connected)` when nothing is connected. The
+ * knowledge block returned an EMPTY STRING, so the prompt said nothing whatsoever about
+ * knowledge — and every other section of this prompt follows the pattern "here is what
+ * you have", so an absent section reads as *not mentioned*, never as *none*.
+ *
+ * WITNESSED 2026-07-30: told "I uploaded the documents to Atlas under Knowledge", Atlas
+ * answered *"Perfect — I can pull from your Knowledge docs in the workflow"*. There were
+ * none. It had not been told, and it did not ask. That is silence read as confirmation —
+ * the same shape as *"a guard that does not recognise a value must not read that as
+ * nothing to check"*, with the model doing the reading.
+ */
+function knowledgeSummary(capabilities) {
+  const k = capabilities?.knowledge;
+  if (!k || typeof k.documentCount !== 'number') return '';   // genuinely unknown — say nothing
+  if (k.documentCount === 0) {
+    return `\nKNOWLEDGE: this workspace has NO documents in Knowledge yet.
+Do not offer to "use your knowledge base", "pull from your docs" or ground anything in company material — there is nothing there, whatever the user believes they uploaded. If they say they have uploaded documents, tell them plainly that you cannot see any and ask them to add them on the Knowledge page, then continue with what you CAN do.\n`;
+  }
+  return `\nKNOWLEDGE: this workspace has ${k.documentCount} document source(s)${k.names?.length ? `: ${k.names.join(', ')}` : ''}.
+A workflow can search them at run time with a "knowledge_search" step, and save new material with "knowledge_write". Prefer a knowledge_search STEP over quoting excerpts into a prompt, so the workflow stays correct when the documents change.\n`;
+}
+
 function filesystemSummary(capabilities) {
   const folders  = capabilities?.filesystem ?? [];
   const uploads  = capabilities?.knowledgeUploads ?? [];
@@ -408,7 +433,7 @@ ${operatorSummary(capabilities)}
 AVAILABLE CONNECTOR ACTIONS:
 ${capabilitySummary(capabilities)}
 ${airtableSchemaSummary(capabilities)}
-${filesystemSummary(capabilities)}
+${filesystemSummary(capabilities)}${knowledgeSummary(capabilities)}
 ${knowledgeContextBlock(capabilities)}
 AVAILABLE TRIGGER TYPES:
 ${triggerSummary()}

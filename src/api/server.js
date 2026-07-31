@@ -83,6 +83,7 @@ import { mountTicketRoutes } from './tickets.js';
 import { registerInboxCapability, INBOX_CAPABILITY_IDS } from '../inbox/index.js';
 import { registerFilesystemCapabilities, FILESYSTEM_CAPABILITY_IDS } from '../connectors/filesystem.js';
 import { registerWebCapabilities, webConnectionStatus, WEB_CAPABILITY_IDS } from '../connectors/web/index.js';
+import { registerKnowledgeCapabilities, knowledgeState } from '../connectors/knowledge/index.js';
 import { mountBuilderRoutes } from './builder.js';
 import { createTenantGuard } from './tenant-guard.js';
 import { mountConsoleRoutes } from './console.js';
@@ -490,9 +491,26 @@ function injectInboxCapabilityContext(spec, tenantId) {
 
 // Inject tenant identity into filesystem_read / filesystem_list nodes so the
 // handler can validate the path against the tenant's approved folders.
+const KNOWLEDGE_CAPABILITY_IDS = new Set(['knowledge_search', 'knowledge_write']);
+
+// Also stamps KNOWLEDGE nodes: RAG is physically isolated per tenant and the capability
+// REFUSES to run without a tenant in scope rather than searching unscoped — so a node
+// that never got stamped fails loudly instead of reading another workspace's documents.
 function injectFilesystemContext(spec, tenantId) {
   if (!tenantId || !(spec?.nodes?.length)) return spec;
-  const isFs = (n) => n?.type === 'connector-action' && FILESYSTEM_CAPABILITY_IDS.has(n?.config?.action);
+  // BOTH NODE SHAPES. `knowledge_write` can occupy a DELIVERY position, where the
+  // capability id lives in `config.channel` rather than `config.action`. Stamping only
+  // `connector-action` would leave that node without a tenant, and the capability
+  // refuses to run without one — a workflow that built cleanly would fail at run time.
+  // This is the "added to the top-level executor, not the sub-loop" shape: handling one
+  // form of a thing and not the other.
+  const capIdOf = (n) => (n?.type === 'connector-action' ? n?.config?.action
+                       :  n?.type === 'deliver'          ? n?.config?.channel
+                       :  null);
+  const isFs = (n) => {
+    const id = capIdOf(n);
+    return !!id && (FILESYSTEM_CAPABILITY_IDS.has(id) || KNOWLEDGE_CAPABILITY_IDS.has(id));
+  };
   if (!someNodeDeep(spec.nodes, isFs)) return spec;
   const nodes = mapNodesDeep(spec.nodes, (n) => isFs(n)
     ? { ...n, config: { ...n.config, _tenantId: tenantId } }
@@ -1302,6 +1320,15 @@ export async function bootSpine() {
   });
 
   registerWebCapabilities(engine.capabilityRegistry, { llm: engine.llm });
+
+  // Knowledge connector — the tenant's own documents, searchable and writable from a
+  // workflow. RAG is physically isolated per tenant, so the handle is resolved per
+  // tenant and `_tenantId` is stamped into the node config before each run (below),
+  // exactly as the filesystem connector does.
+  registerKnowledgeCapabilities(engine.capabilityRegistry, {
+    forTenant:   (tenantId) => spine.rag.forTenant(tenantId),
+    readSources: (tenantId) => readSources(tenantId),
+  });
 
   const slack = createSlackCapabilityProvider({ oauthTokenStore: auth.oauthTokenStore, apiBase: process.env.SLACK_API_URL });
   const slackOAuth = createSlackOAuthFlow();
