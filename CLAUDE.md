@@ -2294,6 +2294,47 @@ fixed on the spot. Fold the relevant ones into whatever increment next touches t
   what remains.**
 - **Approval-channel availability (`email`) is deployment-wide, not per-tenant** — fine today
   (one deployment, one mailer); revisit if tenants ever bring their own sending domain.
+- **A PROMISE ABOUT ONE BRANCH WAS WRITTEN UNCONDITIONAL, AND A REAL EMAIL FAILED IT
+  (open, witnessed on prod 2026-07-31, `build-platform-1785510779068`).** A correct
+  Gmail→Sheets logger — classify, append a row on the "yes" lane, do nothing on the "no"
+  lane — reached *"Contract not met · 1 of 3 promises fell short"* and **could not go
+  live**. It also bought **two paid whole-spec Opus passes** (80s each) before the rebuild
+  gate correctly refused a third.
+  **Measured from the build's own checkpoint, not inferred:**
+  · The single assertion is `{"id":"a1","kind":"record_exists","target":"sheets:Sheet1"}` —
+    **no `when` field at all**. The human half of the same promise IS conditional: *"When a
+    new email arrives **that looks like a pricing enquiry**…"*. So the sentence a person
+    reads is gated and the machine-checkable half is not.
+  · The failing example is `{"id":"19f8b9524a03773d","label":"[Action Required] Enable
+    2-step verification … Google Cloud <CloudPlatform-noreply@google.com>"}` — **no
+    `expect`, no `shouldTrigger`**. It is a REAL email sampled from the connected inbox,
+    and it is plainly not a pricing enquiry.
+  · The two generated lane examples both carry their flags (`lane_2` has
+    `shouldTrigger: false`) and were scored correctly — **kept ✓ and not exercised ○**.
+    Three examples, same workflow, and the two that declared themselves were judged right.
+  **WHY THE EXISTING GUARDS ALL MISS IT, which is the point:** the quiet-path fix
+  (2026-07-29) excuses a negative, and `negative` requires `shouldTrigger === false` or
+  `expect === null` — deliberately, because treating an undeclared example as negative is
+  the F17 regression. And `CONDITIONAL_MISSTATED` (2026-07-28) restates a `when` that names
+  the WRONG route; it does not fire when `when` is **ABSENT**. **Absent and wrong are being
+  treated as different things, and the missing case is the unguarded one** — the same shape
+  as the malformed-trigger defect (*"a guard that does not recognise a value must not read
+  that as nothing to check"*), inverted, and now on its fourth appearance in this file.
+  **Why it matters more than one build:** classify-then-act-on-one-lane is the commonest
+  shape in the product. Other builds of this shape go live only because every one of their
+  examples happened to declare itself. Sampling a REAL inbox message — which is what makes
+  the test meaningful — is what exposes it, and whether a sampled real email matches is
+  unknowable until the classifier runs.
+  **NOT caused by the Sheets discovery work shipped the same day** — checked: the
+  assertion was written by the `outcome` node at step 0, before any of that code runs, and
+  the destination itself resolved correctly (the panel named the real file id
+  `1DG5qZ9mHvTITU34iGRKWf9-vPyegVufENVmoJLcdnSA`, and the row step carried it).
+  **The shape of the fix**, for whoever takes it: derive the `when` for an assertion whose
+  keeping step sits behind a branch, at the point the promise is written or repaired —
+  `gatingRouteFor` already computes exactly that and is what `CONDITIONAL_MISSTATED` uses.
+  An absent `when` on a gated write should be filled the same way a wrong one is restated,
+  with no question and no rebuild.
+
 - **A PERSON NOW PICKS THEIR SPREADSHEET INSTEAD OF PASTING ITS ID — FIXED
   (2026-07-31, increment 2 of "the conversation as a tool").** The errand this replaces,
   witnessed on prod: *"What is the spreadsheet ID for 'Pricing Enquiries'? You can find
