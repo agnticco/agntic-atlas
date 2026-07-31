@@ -511,14 +511,62 @@ export function scoreGap(spec = {}, { capabilities = {}, validator = null } = {}
   const routeDomain = routeDomainOf(spec);
   const specNodes = Array.isArray(spec.nodes) ? spec.nodes : [];
   for (const [i, a] of (Array.isArray(spec.outcome?.assertions) ? spec.outcome.assertions : []).entries()) {
-    if (!a?.when) continue;
-    const whenNorm = String(a.when).trim().toLowerCase();
-    const gated = routeDomain.has(whenNorm);
-
     const owner     = specNodes.find(n => satisfiesAssertion(a, n));
     const gate      = owner ? gatingRouteFor(spec, owner.id) : null;
     const gateOne   = (gate && gate.values.length === 1) ? String(gate.values[0]).trim().toLowerCase() : null;
     const gateNames = (gate?.values ?? []).map(v => String(v).trim().toLowerCase());
+
+    // ── NO CONDITION AT ALL, ON A PROMISE ONLY ONE BRANCH CAN KEEP ────────────
+    //
+    // This loop used to open `if (!a?.when) continue`, so an assertion with NO
+    // condition was never examined. `CONDITIONAL_MISSTATED` restates a `when` that
+    // names the WRONG route; nothing restated one that was simply ABSENT. **Absent
+    // and wrong were treated as different things, and the missing case was the
+    // unguarded one** — the same shape as the malformed-trigger defect ("a guard
+    // that does not recognise a value must not read that as nothing to check"),
+    // inverted, and the fourth appearance of it in CLAUDE.md.
+    //
+    // WITNESSED ON PROD 2026-07-31 (`build-platform-1785510779068`), a correct
+    // Gmail→Sheets logger: classify, append a row on the "yes" lane, do nothing on
+    // the "no" lane. Its one assertion was
+    // `{kind:'record_exists', target:'sheets:Sheet1'}` with no `when`, while the
+    // sentence a person reads was already gated — *"When a new email arrives THAT
+    // LOOKS LIKE A PRICING ENQUIRY…"*. So the human half was conditional and the
+    // machine half claimed a row is written on EVERY run. A REAL email sampled from
+    // the inbox (a Google Cloud 2-step-verification notice) took the quiet lane,
+    // failed the contract, and **the workflow could not go live** — after two paid
+    // whole-spec rebuilds on a spec that was already right.
+    //
+    // The quiet-path rule cannot save it and should not: it excuses only an example
+    // that DECLARES itself negative (`shouldTrigger === false`), deliberately,
+    // because treating an undeclared example as negative is the F17 regression. A
+    // real message declares nothing — which is exactly what makes it worth testing.
+    //
+    // WHY FILLING IT IS EXACT AND NOT A NARROWING. `gatingRouteFor` returns null
+    // unless some lane of a branch genuinely does NOT reach this step, so a promise
+    // that really is unconditional is left alone (mutation M2). When it IS gated,
+    // the step CANNOT run on any other lane — so the unconditional promise is not
+    // merely unproven, it is FALSE AS WRITTEN, and every run down another lane fails
+    // it. Filling the condition makes the checkable half agree with what the
+    // workflow does and with what its own sentence already says. The user's
+    // `statement` is untouched; only how we CHECK it changes.
+    if (!a?.when) {
+      if (!gateOne) continue;                    // nothing, or nothing single, gates it
+      if (!routeDomain.has(gateOne)) continue;   // the gate is not a checkable route value
+      gaps.push({
+        id: `gap_conditional_unstated_${a.id ?? a.target}`.toLowerCase(),
+        class: 'coverage', nodeId: owner?.id ?? null,
+        code: 'CONDITIONAL_UNSTATED', severity: 'warning',
+        message: `The promise to reach ${describeTarget(a.target)} is written as though it happens on every run, but the step that does it only runs after the "${gate.values[0]}" decision.`,
+        hint: `Checking it against "${gate.values[0]}", so a run that took the other answer isn't marked as breaking the promise.`,
+        resolution: 'escalated', decidable: false, blocking: false,
+        fix: { op: 'set_assertion_when', index: i, when: gate.values[0] },
+      });
+      continue;
+    }
+
+    const whenNorm = String(a.when).trim().toLowerCase();
+    const gated = routeDomain.has(whenNorm);
 
     // ── A REAL ROUTE VALUE, BUT NOT THE ONE THAT GATES THIS STEP ──────────────
     // Asking "does SOME branch route on this value?" is the laundering hop from

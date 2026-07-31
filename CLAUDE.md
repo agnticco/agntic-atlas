@@ -2295,7 +2295,7 @@ fixed on the spot. Fold the relevant ones into whatever increment next touches t
 - **Approval-channel availability (`email`) is deployment-wide, not per-tenant** — fine today
   (one deployment, one mailer); revisit if tenants ever bring their own sending domain.
 - **A PROMISE ABOUT ONE BRANCH WAS WRITTEN UNCONDITIONAL, AND A REAL EMAIL FAILED IT
-  (open, witnessed on prod 2026-07-31, `build-platform-1785510779068`).** A correct
+  — FIXED (2026-07-31, witnessed on prod `build-platform-1785510779068`).** A correct
   Gmail→Sheets logger — classify, append a row on the "yes" lane, do nothing on the "no"
   lane — reached *"Contract not met · 1 of 3 promises fell short"* and **could not go
   live**. It also bought **two paid whole-spec Opus passes** (80s each) before the rebuild
@@ -2329,11 +2329,29 @@ fixed on the spot. Fold the relevant ones into whatever increment next touches t
   assertion was written by the `outcome` node at step 0, before any of that code runs, and
   the destination itself resolved correctly (the panel named the real file id
   `1DG5qZ9mHvTITU34iGRKWf9-vPyegVufENVmoJLcdnSA`, and the row step carried it).
-  **The shape of the fix**, for whoever takes it: derive the `when` for an assertion whose
-  keeping step sits behind a branch, at the point the promise is written or repaired —
-  `gatingRouteFor` already computes exactly that and is what `CONDITIONAL_MISSTATED` uses.
-  An absent `when` on a gated write should be filled the same way a wrong one is restated,
-  with no question and no rebuild.
+  **THE FIX.** The loop that restates a condition opened `if (!a?.when) continue`, so an
+  absent one was never looked at. It now handles that case with the SAME mechanism and the
+  same `set_assertion_when` repair — new code `CONDITIONAL_UNSTATED`, applied by
+  `autoRepairStructural` with no question, no model call and no rebuild. The user's
+  `statement` is untouched; only how the promise is CHECKED changes.
+  **WHY FILLING IT IS EXACT AND NOT A NARROWING**, which is the whole correctness argument:
+  `gatingRouteFor` returns `null` unless some lane of a branch genuinely does NOT reach the
+  step, so a promise that really is unconditional is left alone. When it IS gated, the step
+  cannot run on any other lane — so the unconditional promise is not merely unproven, it is
+  **false as written**, and every run down another lane fails it. Filling the condition makes
+  the checkable half agree with what the workflow does and with what its own sentence already
+  said. Two candidate gates are never guessed between, and a promise NO step keeps is left
+  alone so that "this names somewhere no step goes" survives as a finding.
+  Pinned by `tests/converger/a-promise-about-one-branch.test.js` (13), **four mutations
+  red→green** — the two that matter are the dangerous direction: filling a condition when
+  nothing gates the step (4 red) and guessing between two candidate gates (1 red). A promise
+  quietly weakened until it passes is the one thing the promise system may never do.
+  **The fixture is the REAL spec, lifted verbatim from the prod checkpoint.** A hand-written
+  approximation was tried first and the validator rejected it on four counts before it ever
+  reached the check under test — `classify` carries `categories`, the branch's catch-all is a
+  `when: "*"` CASE rather than an `otherwise`, and the quiet lane is a `stop` node. None of
+  that was guessable, and it is the "construct the subject the way PRODUCTION does" rule
+  earning its place again.
 
 - **A PERSON NOW PICKS THEIR SPREADSHEET INSTEAD OF PASTING ITS ID — FIXED
   (2026-07-31, increment 2 of "the conversation as a tool").** The errand this replaces,

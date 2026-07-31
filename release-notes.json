@@ -1,5 +1,13 @@
 [
   {
+    "version": "1.6.105",
+    "date": "2026-07-31",
+    "title": "A workflow that only acts on one path can go live",
+    "notes": [
+      "A workflow that classifies first — act on a match, stay quiet otherwise — no longer fails its own check when a real, unrelated email comes through."
+    ]
+  },
+  {
     "version": "1.6.104",
     "date": "2026-07-31",
     "title": "Pick your spreadsheet, don't paste its ID",
