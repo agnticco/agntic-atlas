@@ -89,6 +89,78 @@ describe('the prompt and the runnable set agree', () => {
   });
 });
 
+describe('THE TRIGGER TYPE LIST IS THE RUNNABLE SET, RENDERED', () => {
+  /**
+   * `triggerSummary` used to render `capabilities.triggers` — the ARRAY of registered
+   * trigger CAPABILITIES — as if it were a map of trigger TYPES. `Object.entries` over
+   * an array yields its indices, so measured against the real registry on 2026-07-30 the
+   * model was told:
+   *
+   *     TRIGGER TYPES:
+   *     - 0: Fires when a new Gmail message arrives…
+   *     - 1: Fires when a message is posted to a Slack channel.
+   *
+   * The words `email`, `schedule`, `manual`, `event` never appeared in the section that
+   * names them — and because that array is never empty in production, the correct
+   * hand-written fallback beneath it was unreachable. The intent tables and worked
+   * examples were the ONLY place a type name could be learned, which is how `webhook`
+   * and `one_time` became real to the model.
+   */
+  const REAL_TRIGGER_CAPABILITIES = [
+    { id: 'gmail_new_message', connector: 'google', name: 'New Gmail Message',
+      description: 'Fires when a new Gmail message arrives matching a query.', available: true },
+    { id: 'slack_message', connector: 'slack', name: 'Slack Message',
+      description: 'Fires when a message is posted to a Slack channel.', available: true },
+  ];
+
+  /** The `- <type>: …` lines of the TRIGGER TYPES section. */
+  function renderedTypes(caps) {
+    const p = buildSystemPrompt(caps);
+    const start = p.indexOf('TRIGGER TYPES:');
+    assert.ok(start > 0, 'the TRIGGER TYPES section is gone — re-point this test');
+    const block = p.slice(start).split('\n\n')[0];
+    return [...block.matchAll(/^- ([a-z_0-9]+):/gm)].map(m => m[1]);
+  }
+
+  test('it lists exactly the runnable types — no more, no fewer', () => {
+    assert.deepEqual(renderedTypes({}).sort(), [...RUNNABLE_TRIGGER_TYPES].sort());
+  });
+
+  test('…and still does when the real trigger CAPABILITIES are supplied', () => {
+    // The production path. This is the case that rendered "0", "1", "2", "3".
+    const types = renderedTypes({ triggers: REAL_TRIGGER_CAPABILITIES });
+    assert.deepEqual(types.sort(), [...RUNNABLE_TRIGGER_TYPES].sort());
+    for (const t of types) assert.ok(Number.isNaN(Number(t)), `"${t}" is an array index, not a trigger type`);
+  });
+
+  test('the description map has no entry for a type that can never render', () => {
+    // Found by mutation: adding `webhook:` back to TRIGGER_TYPE_DESCRIPTIONS changes
+    // nothing, because the renderer iterates RUNNABLE_TRIGGER_TYPES and simply looks up
+    // descriptions. Harmless as output — but it would READ like someone had added
+    // support for it, and the next person would trust it. Keys and runnable set must match.
+    const block = SRC.slice(SRC.indexOf('const TRIGGER_TYPE_DESCRIPTIONS = {'));
+    const keys = [...block.slice(0, block.indexOf('};')).matchAll(/^\s{2}([a-z_]+):/gm)].map(m => m[1]);
+    assert.deepEqual(keys.sort(), [...RUNNABLE_TRIGGER_TYPES].sort(),
+      'a description exists for a type that is not runnable, or a runnable type has none');
+  });
+
+  test('every runnable type is described, not left blank', () => {
+    const p = buildSystemPrompt({ triggers: REAL_TRIGGER_CAPABILITIES });
+    for (const t of RUNNABLE_TRIGGER_TYPES) {
+      assert.match(p, new RegExp(`- ${t}: \\S`), `"${t}" has no description`);
+    }
+  });
+
+  test('the registered trigger CAPABILITIES are still listed separately, by name', () => {
+    // The array is read as an array where it belongs — this block was always correct.
+    const p = buildSystemPrompt({ triggers: REAL_TRIGGER_CAPABILITIES });
+    assert.match(p, /CONNECTOR EVENT TRIGGERS/);
+    assert.match(p, /New Gmail Message —/);
+    assert.match(p, /Slack Message —/);
+    assert.doesNotMatch(p, /^- undefined —/m);
+  });
+});
+
 describe('what a person asks for still reaches a real trigger', () => {
   // Removing a type must not leave the intent unrouted — "run this once" is a common
   // request and has to land somewhere that works.

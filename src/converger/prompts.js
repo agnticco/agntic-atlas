@@ -7,6 +7,8 @@
 
 import { gapLabel, unansweredGaps } from './gap-scorer.js';
 
+import { RUNNABLE_TRIGGER_TYPES } from '../workflows/trigger-runnable.js';
+
 // ── Capability summary for system prompt ─────────────────────────────────────
 
 function capabilitySummary(capabilities) {
@@ -262,18 +264,44 @@ the workflow simply runs at an hour nobody chose.
  * NOTE: `webhook` remains a DELIVERY channel — posting to a URL is real and is listed
  * with the other channels. What was removed is webhook as a way to START a workflow.
  */
-function triggerSummary(capabilities) {
-  const triggers = capabilities?.triggers ?? {};
-  const defaults = {
-    email:    'Fires when a new Gmail message matches a filter. Config: filter (Gmail query), maxResults',
-    schedule: 'Fires on a recurring schedule. Config: cron (cron expression e.g. "0 9 * * 1-5"), timezone (e.g. "America/New_York"), label',
-    manual:   'Fires each time the user manually triggers the workflow. No config required.',
-    event:    'Fires on a connector event (e.g. new Slack message). Config: connector, event, filter (optional)',
-  };
-  const available = Object.keys(triggers).length ? triggers : defaults;
-  return Object.entries(available).map(([type, desc]) =>
-    `- ${type}: ${typeof desc === 'string' ? desc : desc.description ?? ''}`
-  ).join('\n');
+/**
+ * WHAT EACH RUNNABLE TRIGGER TYPE IS, KEYED BY THE ONE RUNNABLE SET.
+ *
+ * `triggerSummary` used to render `capabilities.triggers` here — but that is the ARRAY
+ * of registered trigger CAPABILITIES (`gmail_new_message`, `slack_message`, …), not a
+ * map of trigger TYPES, and `Object.entries` over an array yields its INDICES. Measured
+ * against the real registry on 2026-07-30, the model was being told:
+ *
+ *     TRIGGER TYPES:
+ *     - 0: Fires when a new Gmail message arrives…
+ *     - 1: Fires when a message is posted to a Slack channel.
+ *
+ * …so the words `email`, `schedule`, `manual` and `event` never appeared in the section
+ * that names them. Worse, the array is never empty in production, so the correct
+ * hand-written fallback beneath it was UNREACHABLE.
+ *
+ * That is why the intent-inference tables and the worked examples were load-bearing:
+ * they were the only place the model could learn a type name — which is exactly how
+ * `webhook` and `one_time` in those tables became real to it.
+ *
+ * Now keyed by `RUNNABLE_TRIGGER_TYPES` itself, so the list cannot name a type nothing
+ * can start, and cannot omit one that works.
+ * `tests/converger/the-prompt-offers-only-runnable-triggers.test.js` holds both halves.
+ *
+ * The registered trigger CAPABILITIES are rendered separately and correctly by
+ * `connectorTriggerSummary` — that function reads the array as an array.
+ */
+const TRIGGER_TYPE_DESCRIPTIONS = {
+  email:    'Fires when a new Gmail message matches a filter. Config: filter (Gmail query), maxResults',
+  schedule: 'Fires on a recurring schedule. Config: cron (e.g. "0 9 * * 1-5"), timezone (e.g. "America/New_York"), label',
+  manual:   'Fires each time the user runs the workflow themselves — also the right choice for "do this now" or "run this once". No config required.',
+  event:    'Fires on a connector event (e.g. a new Slack message, an Airtable record change). Config: connector, event, filter (optional). See CONNECTOR EVENT TRIGGERS below for the ones this tenant can actually use.',
+};
+
+function triggerSummary() {
+  return RUNNABLE_TRIGGER_TYPES
+    .map(t => `- ${t}: ${TRIGGER_TYPE_DESCRIPTIONS[t] ?? ''}`)
+    .join('\n');
 }
 
 // Render the tenant's actual Airtable bases + tables so the converger can
@@ -329,7 +357,7 @@ ${airtableSchemaSummary(capabilities)}
 ${filesystemSummary(capabilities)}
 ${knowledgeContextBlock(capabilities)}
 AVAILABLE TRIGGER TYPES:
-${triggerSummary(capabilities)}
+${triggerSummary()}
 ${connectorTriggerSummary(capabilities)}
 ${scheduleClockSummary(capabilities)}
 

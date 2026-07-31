@@ -1,5 +1,13 @@
 [
   {
+    "version": "1.6.99",
+    "date": "2026-07-30",
+    "title": "Atlas now knows what its own triggers are called",
+    "notes": [
+      "The list of ways a workflow can be started was being sent to the AI as numbers instead of names. It now comes from the one place that defines which triggers actually work."
+    ]
+  },
+  {
     "version": "1.6.98",
     "date": "2026-07-30",
     "title": "Atlas no longer offers ways to start a workflow that don't work",

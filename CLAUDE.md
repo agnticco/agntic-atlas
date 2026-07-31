@@ -2111,6 +2111,37 @@ fixed on the spot. Fold the relevant ones into whatever increment next touches t
   the publish guard get a chance to act. Every one of those mechanisms is downstream of
   a claim that has already been made. The product's whole thesis is that it does not lie
   about what it did; this is lying about what it CAN DO, which no existing guard covers.
+- **THE MODEL WAS NEVER TOLD THE NAMES OF THE TRIGGER TYPES — FIXED (2026-07-30).**
+  Found while starting the registry-driven-prompt work Charles asked for, and it explains
+  the two defects fixed hours earlier. `triggerSummary` rendered `capabilities.triggers`
+  as if it were a map of trigger TYPES. It is the **ARRAY** of registered trigger
+  CAPABILITIES (`gmail_new_message`, `slack_message`, …) that `builder.js` builds from
+  `capabilityRegistry.list({position:'trigger'})`, and `Object.entries` over an array
+  yields its INDICES. Measured against the real registry, the prompt read:
+      TRIGGER TYPES:
+      - 0: Fires when a new Gmail message arrives…
+      - 1: Fires when a message is posted to a Slack channel.
+  **The words `email`, `schedule`, `manual` and `event` never appeared in the section
+  that names them**, and because that array is never empty in production the correct
+  hand-written fallback beneath it was UNREACHABLE. The model could only learn a type
+  name from the intent-inference tables and the worked examples — **which is exactly how
+  `webhook` and `one_time` became real to it**, and why deleting them mattered more than
+  it looked.
+  Now keyed by `RUNNABLE_TRIGGER_TYPES` itself, so the list cannot name a type nothing
+  can start nor omit one that works, and the registered trigger CAPABILITIES are rendered
+  separately by the block that reads the array AS an array (that block was always
+  correct — an `undefined` seen while investigating was a bad test fixture of mine, not a
+  defect; checked before reporting).
+  Pinned by `tests/converger/the-prompt-offers-only-runnable-triggers.test.js` (13),
+  **three mutations red→green — one survived the first pass**: an extra entry in the
+  description map renders nothing, so it is harmless as output, but it would READ as
+  support for a type that can never fire, so keys are now asserted equal to the runnable
+  set rather than the mutation being dropped.
+  **THE GENERAL LESSON, and it is the one Charles named:** the failures cluster where the
+  agent's picture of its own tools is wrong. Here the derived path existed and was
+  BROKEN, while the hand-written fallback was correct and unreachable — so "derive it
+  from the registry" is necessary but not sufficient; the derivation has to be *checked*,
+  or it fails silently and hand-written examples quietly become the real source of truth.
 - **Approval-channel availability (`email`) is deployment-wide, not per-tenant** — fine today
   (one deployment, one mailer); revisit if tenants ever bring their own sending domain.
 - **Google Sheets has no destination picker, so Atlas asks a customer for a spreadsheet
