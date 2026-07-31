@@ -2353,6 +2353,24 @@ fixed on the spot. Fold the relevant ones into whatever increment next touches t
   that was guessable, and it is the "construct the subject the way PRODUCTION does" rule
   earning its place again.
 
+- **CONFIRMED LIVE (2026-07-31, v1.6.105), and what it did NOT fix.** The same build
+  re-run on prod (`build-platform-1785513701920`) after the condition fix:
+  `converger.pre_regen_repair {applied: ["CONDITIONAL_UNSTATED"]}` in the log, then
+  **verify in 5.5s with no rebuild at all** — against 42.9s and two paid whole-spec passes
+  before. Plan-approval to walkthrough: **96 seconds, was 4m10s.** In the panel the
+  example that used to read *broken* — a non-matching email — now reads **not exercised**,
+  and the run reports *"nothing broke"*. Three examples, **zero broken**, where it was one.
+  **It is still not cleared to go live, for a DIFFERENT and correct reason:** this build's
+  second path is an ERROR lane that no example took, so the verdict is the honest
+  *"Contract not verified — nothing went down one path"*. That is the by-design rule that a
+  workflow which routes is only proved on the routes you test, not a residue of this defect.
+  **A NEW FINDING FROM THE SAME SESSION, not fixed:** the panel invites you to *"describe a
+  real case that should trigger it and I'll test against that"* — and doing so took the
+  `ratify_feedback` route into a **107-second whole-spec regenerate** that renamed the
+  route from `error` to `none` and **did not add the example**. So the one action the
+  product offers for closing an unproved path costs a paid rebuild and does not close it.
+  Asking for a TEST CASE is not asking for a CHANGE, and the two share a door.
+
 - **A PERSON NOW PICKS THEIR SPREADSHEET INSTEAD OF PASTING ITS ID — FIXED
   (2026-07-31, increment 2 of "the conversation as a tool").** The errand this replaces,
   witnessed on prod: *"What is the spreadsheet ID for 'Pricing Enquiries'? You can find
