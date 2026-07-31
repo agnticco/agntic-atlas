@@ -11,12 +11,66 @@ import { RUNNABLE_TRIGGER_TYPES } from '../workflows/trigger-runnable.js';
 
 // ── Capability summary for system prompt ─────────────────────────────────────
 
+/**
+ * WHAT EACH CONNECTED SERVICE CAN ACTUALLY DO.
+ *
+ * Derived from the CHANNEL CATALOG — the same registry-built list the delivery block
+ * already uses successfully — and not from the per-connector STATUS objects.
+ *
+ * WHY: `capabilities.connectors` is a map of connection status
+ * (`{slack:{connected}, google:{connected, actions}, airtable:{connected}, web:{connected}}`)
+ * and **only Google carries an `actions` array**. Reading `c.actions ?? []` off the
+ * others therefore rendered, measured 2026-07-30:
+ *
+ *     SLACK:
+ *     GOOGLE: gmail_search, sheets_read
+ *     AIRTABLE:
+ *     WEB:
+ *
+ * — three connected services listed as having NO capabilities, which is false and is
+ * worse than omitting them: the model is told a connected service can do nothing.
+ * This is the defect family the operator named: the tools the agent has were not being
+ * exposed to the agent.
+ *
+ * The catalog knows every capability's `connector`, so grouping it is exact. A connector
+ * that is connected but contributes nothing to the catalog is reported as such in words,
+ * never as a bare empty list.
+ */
 function capabilitySummary(capabilities) {
   const connectors = capabilities?.connectors ?? {};
+  const catalog = Array.isArray(capabilities?.channels) ? capabilities.channels : null;
+
+  if (catalog?.length) {
+    const byConnector = new Map();
+    for (const c of catalog) {
+      if (!c || c.available === false) continue;
+      const key = String(c.connector ?? '').toLowerCase();
+      if (!key) continue;
+      if (!byConnector.has(key)) byConnector.set(key, []);
+      byConnector.get(key).push(c.id);
+    }
+    // Every connector the tenant has CONNECTED, so a connected service with nothing in
+    // the catalog is still accounted for — in words, not as a blank line.
+    const connected = Object.entries(connectors)
+      .filter(([, c]) => c?.connected !== false)
+      .map(([id]) => id.toLowerCase());
+    const names = [...new Set([...connected, ...byConnector.keys()])];
+    if (!names.length) return '(none connected)';
+    return names.map((id) => {
+      const ids = byConnector.get(id) ?? [];
+      return ids.length
+        ? `${id.toUpperCase()}: ${ids.join(', ')}`
+        : `${id.toUpperCase()}: connected, but it contributes no workflow steps — use it only as a delivery destination if one is listed below.`;
+    }).join('\n');
+  }
+
+  // Fallback: the pre-catalog shape. Only Google ever populated it.
   if (!Object.keys(connectors).length) return '(none connected)';
   return Object.entries(connectors).map(([id, c]) => {
     const available = (c.actions ?? []).filter(a => a.available !== false);
-    return `${id.toUpperCase()}: ${available.map(a => a.id).join(', ')}`;
+    return available.length
+      ? `${id.toUpperCase()}: ${available.map(a => a.id).join(', ')}`
+      : `${id.toUpperCase()}: connected (its capability list was not available when this prompt was built)`;
   }).join('\n');
 }
 

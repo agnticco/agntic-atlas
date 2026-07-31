@@ -2149,6 +2149,36 @@ fixed on the spot. Fold the relevant ones into whatever increment next touches t
   BROKEN, while the hand-written fallback was correct and unreachable — so "derive it
   from the registry" is necessary but not sufficient; the derivation has to be *checked*,
   or it fails silently and hand-written examples quietly become the real source of truth.
+- **THREE CONNECTED SERVICES WERE LISTED AS HAVING NO CAPABILITIES — FIXED (2026-07-30,
+  the registry-driven-prompt work Charles asked for).** The per-connector capability list
+  read `c.actions` off the connection-STATUS objects in `capabilities.connectors`, and
+  **only Google carries one** (from `resolveGoogleCapabilities`). Measured against the
+  production shape, the prompt read:
+      SLACK:
+      GOOGLE: gmail_search, sheets_read
+      AIRTABLE:
+      WEB:
+  Three connected services listed with nothing after the colon — **worse than omitting
+  them**, because a blank list is a claim, and the claim is "this service can do
+  nothing". Airtable's nine step capabilities and Web's two were invisible to the model
+  while being fully registered and runnable.
+  Now derived from the CHANNEL CATALOG — the same registry-built list the delivery block
+  already used correctly — which carries every capability's `connector`, so the grouping
+  is exact. A connected service that contributes no STEP capabilities (Slack, whose
+  registrations are triggers) says so **in words**. Google now offers 15 and Airtable 9.
+  Pinned by `tests/converger/the-agent-is-told-what-it-can-do.test.js` (9), four
+  mutations red→green; restoring the production bug turns FIVE red.
+  **THE METHOD THAT FOUND IT, and it is the transferable part:** every test in that file
+  builds the ACTUAL registry and passes the ACTUAL catalog. Both defects in this pass
+  were invisible to a fixture shaped the way the author imagined — and in BOTH a derived
+  path already existed and was silently producing garbage while a correct hand-written
+  fallback sat underneath, unreachable. **"Derive it from the registry" is necessary but
+  not sufficient: the derivation must be checked against real objects, or hand-written
+  examples elsewhere quietly become the real source of truth.** That is how `webhook` and
+  `one_time` became real to the model.
+  **Checked and deliberately NOT changed:** the DELIVERY catalogue was already
+  registry-driven and rendering correctly (names, descriptions, config fields, output
+  formats). It is now pinned so work on its neighbours cannot break it.
 - **Approval-channel availability (`email`) is deployment-wide, not per-tenant** — fine today
   (one deployment, one mailer); revisit if tenants ever bring their own sending domain.
 - **Google Sheets has no destination picker, so Atlas asks a customer for a spreadsheet

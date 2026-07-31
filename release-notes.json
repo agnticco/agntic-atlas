@@ -1,5 +1,13 @@
 [
   {
+    "version": "1.6.100",
+    "date": "2026-07-30",
+    "title": "Atlas can see everything your connected apps can do",
+    "notes": [
+      "Airtable's and the web connector's abilities were invisible to the AI while building — three connected services were being described as able to do nothing. The list now comes from the same place the app itself uses."
+    ]
+  },
+  {
     "version": "1.6.99",
     "date": "2026-07-30",
     "title": "Atlas now knows what its own triggers are called",
