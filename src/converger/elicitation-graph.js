@@ -53,6 +53,7 @@ import { selfContradictions, summariseContradictions } from '../workflows/self-c
 import { indexDestinations } from '../workflows/destinations.js';
 import { unprovedLanes, laneKeyOf, buildTestCaseRequestPrompt, readTestCaseRequest, withTestCase }
   from './test-case-request.js';
+import { sufficiencyUnactionable } from './sufficiency-actionable.js';
 // Asking a person is a tool with rules — see asking.js for the four and why each exists.
 import { shouldAsk } from './asking.js';
 import { analyzeTable } from '../workflows/decision-analysis.js';
@@ -2254,12 +2255,22 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
         // is untouched. It still RUNS and still logs, so the signal is not lost —
         // it simply may not spend a rebuild disagreeing with the person.
         const contradictsUser = userRevisedThisBuild(state._regenReason);
-        if (covered || repeated || contradictsUser) {
+        // ── A FOURTH WAY, AND MEASURED AS THE COMMONEST ───────────────────────
+        //
+        // Ask the SPEC whether the complaint is actionable at all. Driving two
+        // workflows as a new customer on 2026-08-01, this critic ordered 3 of the 5
+        // total rebuild passes, and two of the three were answerable from the spec:
+        // one named only ids that were already there (the branch cases it demanded
+        // WERE the branch's cases), and one named `search_sent`, which is not a
+        // capability — no rebuild could ever add it. See `sufficiency-actionable.js`.
+        const unactionable = sufficiencyUnactionable(verdict.missing, draft, capabilityCatalog);
+        if (covered || repeated || contradictsUser || unactionable) {
           logEvent('converger.sufficiency_overruled', {
             ...who(cfg),
             reason: covered ? 'contract_already_covers_it'
                   : repeated ? 'same_complaint_as_last_rebuild'
-                  : 'user_revised_this_build',
+                  : contradictsUser ? 'user_revised_this_build'
+                  : unactionable,
             detail: String(verdict.missing).slice(0, 200),
           });
           return {

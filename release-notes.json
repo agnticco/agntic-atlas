@@ -1,5 +1,13 @@
 [
   {
+    "version": "1.6.112",
+    "date": "2026-08-01",
+    "title": "Fewer rebuilds — Atlas stops re-checking things it already did",
+    "notes": [
+      "The build reviewer no longer orders a rebuild for something the workflow already contains, or for a tool that doesn't exist."
+    ]
+  },
+  {
     "version": "1.6.111",
     "date": "2026-08-01",
     "title": "The spreadsheet picker only appears when you're writing to a spreadsheet",

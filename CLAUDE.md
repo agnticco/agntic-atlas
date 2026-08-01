@@ -2349,6 +2349,43 @@ fixed on the spot. Fold the relevant ones into whatever increment next touches t
   question was refused with nothing to put in its place. **That was the next increment
   and it is DONE (2026-07-31, see the Sheets picker entry below); the TIMING half is
   what remains.**
+- **THE SUFFICIENCY CRITIC BOUGHT REBUILDS FOR COMPLAINTS THE SPEC COULD ANSWER — FIXED
+  (2026-08-01).** Measured by driving two workflows as a new customer on a fresh tenant:
+  **the critic ordered 3 of the 5 total rebuild passes across both builds**, and two of
+  the three were answerable from the spec itself.
+  · *"the branch must route on `classify_inquiry` output with cases for
+    'pricing_inquiry' (to `compose_summary`) and 'none' (to `stop_no_action`)"* — the
+    branch did **exactly that already**, and the walkthrough card listed those very cases.
+    On the NEXT round the same complaint was correctly discarded as already-covered, so
+    the product already knew — one paid pass too late.
+  · *"the workflow lacks the actual connector-action configs for `search_inbox` and
+    `search_sent`"* — **`search_sent` is not a capability.** No rebuild could ever add it;
+    that pass was unwinnable before it started.
+  **Both are the same failure: the critic asserted something about the spec that the spec
+  itself can answer, and nobody asked the spec.** `sufficiency-actionable.js` asks two
+  mechanical questions — does everything it names already exist, and does it name
+  something that exists nowhere (not in the spec, not in the catalog). Either way the
+  rebuild is refused and logged. This extends the existing *"an unverified opinion may not
+  overrule a passing check"* rule from destinations (`sufficiencyClaimAlreadyCovered`,
+  which reads assertion locators only) to the structure the complaint actually talks about.
+  **IT FAILS TOWARD SPENDING THE PASS.** A complaint naming nothing checkable — the third
+  of the three, *"a step that extracts individual email metadata"*, which may well have
+  been right — is untouched. Discarding a real gap ships a deficient workflow; an
+  unnecessary pass costs time and money, and the first is worse.
+  **The identifier class is `snake_case`, and the spec is scanned WHOLE.** Node ids, branch
+  case values and extracted field names are all quoted by a critic reading the workflow,
+  and all are equally "already there" — scanning node ids alone sent the first complaint
+  down the phantom-capability branch, the right verdict for the wrong reason, which is a
+  bug waiting to be believed. Pinned by
+  `tests/converger/a-complaint-must-be-actionable.test.js` (16), five mutations. **One
+  survived and a source pin was added rather than the mutation dropped:** neutralising the
+  call site left all 14 behavioural tests green, meaning the whole module could have been
+  dead code with nothing to say so.
+  **A stale pin in `user-has-the-last-word.test.js` was RE-POINTED, not weakened:** it
+  matched the disqualifier condition verbatim (`if (covered || repeated ||
+  contradictsUser)`) and so broke the moment a fourth term was added, though its invariant
+  — that a user revision is *one of* the disqualifiers — was untouched.
+
 - **A NEW USER WAS TOLD THEIR INBOX WAS CONNECTED WHEN NOTHING WAS — FIXED (witnessed
   2026-08-01 on a genuinely fresh tenant — the first time the product has been driven as
   someone who has just been given a login).** Brand-new workspace, nothing connected.

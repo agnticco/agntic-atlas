@@ -40,7 +40,13 @@ describe('a fast-tier opinion may not overrule what the person just said', () =>
 
   test('a user revision disproves the verdict, like the other two ways', () => {
     assert.match(suff, /const contradictsUser = userRevisedThisBuild\(state\._regenReason\)/);
-    assert.match(suff, /if \(covered \|\| repeated \|\| contradictsUser\)/);
+    // RE-POINTED 2026-08-01. This pinned the whole condition verbatim — `if (covered ||
+    // repeated || contradictsUser)` — so it broke the moment a FOURTH disqualifier was
+    // added (`unactionable`), even though the invariant it exists for was untouched. The
+    // invariant is that a user revision is ONE OF the things that disqualifies the
+    // verdict; how many siblings it has is not this test's business.
+    assert.match(suff, /if \((?:\w+ \|\| )*contradictsUser(?: \|\| \w+)*\)/,
+      'a user revision no longer disqualifies the sufficiency verdict');
   });
 
   test('and it is recorded as its own reason, not folded into the others', () => {
