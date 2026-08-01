@@ -55,6 +55,7 @@ import { unprovedLanes, laneKeyOf, buildTestCaseRequestPrompt, readTestCaseReque
   from './test-case-request.js';
 import { sufficiencyUnactionable } from './sufficiency-actionable.js';
 import { resolveNamedContainer, headersFor } from './destination-create-or-pick.js';
+import { isTransientFailure } from '../workflows/error-translator.js';
 // Asking a person is a tool with rules — see asking.js for the four and why each exists.
 import { shouldAsk } from './asking.js';
 import { analyzeTable } from '../workflows/decision-analysis.js';
@@ -4221,7 +4222,30 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
     // fail — so it is excluded from the tally rather than counted as a failure that
     // would trigger a pointless fix.
     const judged = [];
-    for (const ex of examples) {
+    // ── SAY WHICH SAMPLE, AND SAY IT BEFORE THE WAIT, NOT AFTER ──────────────
+    //
+    // Charles, watching a build on prod 2026-08-01: *"there is no chain of thought
+    // movement so to a user it looks stalled."* He was right, and it was not a near
+    // miss — the self-test ran for 385 seconds, then 373 more, and this node emitted
+    // exactly ONE line before the first of them and nothing again until it was over.
+    // Twelve of that build's fourteen minutes were a still screen.
+    //
+    // This codebase has already shipped a page that was genuinely dead while a curated
+    // fact rotated underneath, looking alive (2026-07-28). Once a person has seen that,
+    // a motionless build is indistinguishable from a broken one — so the fix is not a
+    // nicer spinner, it is SAYING WHAT IS HAPPENING while it happens.
+    const exLabel = (ex, i) => {
+      const l = String(ex?.label ?? '').replace(/\s+/g, ' ').trim();
+      const short = l.length > 60 ? `${l.slice(0, 57)}…` : l;
+      return short ? `“${short}”` : `sample ${i + 1}`;
+    };
+    for (const [exIndex, ex] of examples.entries()) {
+      if (examples.length > 1) {
+        emitBeat(cfg, {
+          kind: 'check',
+          text: `Sample ${exIndex + 1} of ${examples.length} — ${exLabel(ex, exIndex)}.`,
+        });
+      }
       // A sample that RAN but FAILED is retried (up to 3 attempts). The workflow's own
       // llm nodes are non-deterministic: a summarize can misjudge its (present) input and
       // fire its "missing data" guard on one run even when the SPEC is correct — a per-run
@@ -4249,9 +4273,26 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
         oracle = r.oracleResult;
         passed = oracle.contractPassed === true;
         if (passed) break;                                                  // passed — no retry
-        // failed — the loop retries once before believing it
+        // failed — the loop retries once before believing it. SAY SO: this is where the
+        // minutes go, and a retry is the most reassuring thing a waiting person can read.
+        if (attempt < 2) {
+          const why = oracle?.error && isTransientFailure(oracle.error)
+            ? 'the AI step ran out of time'
+            : "that didn't come out right";
+          emitBeat(cfg, { kind: 'check', text: `${why} — trying ${exLabel(ex, exIndex)} again.` });
+        }
       }
       if (!oracle) continue;   // unjudgeable — skip
+      // The verdict, per sample, as it lands — so the count at the end confirms
+      // something the person has already watched happen rather than announcing it.
+      emitBeat(cfg, {
+        kind: 'check',
+        text: passed
+          ? `${exLabel(ex, exIndex)} came out right.`
+          : (oracle?.error && isTransientFailure(oracle.error)
+              ? `${exLabel(ex, exIndex)} couldn't be checked — the AI step kept running out of time. That is not a fault in your workflow.`
+              : `${exLabel(ex, exIndex)} didn't come out right.`),
+      });
       judged.push({ example: ex, passed, oracle });
     }
 
@@ -4300,9 +4341,25 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
     // So: regenerate ONLY on a STRUCTURAL failure — a delivery that genuinely did not
     // happen, or a run that errored. A flake-only failure means the workflow is correct;
     // present it plainly (no rebuild, no give-up) and let the user run the real test.
+    //
+    // ── AND A TEST WE COULD NOT RUN HAS NOT SHOWN THE WORKFLOW TO BE WRONG ───
+    //
+    // The paragraph above argues exactly this for a CONTENT flake, and the code did not
+    // cover the other half: `isContentFlake` requires `!o.error`, so ANY run error was a
+    // structural wiring defect — including `LLM call timed out after 120s`, which says
+    // nothing about the spec at all.
+    //
+    // Measured on prod (`build-zz-firstrun-test-1785616455964`, watched live): a correct
+    // Gmail→Sheets workflow spent 881 seconds and THREE paid Opus passes, two of them
+    // `verify_failed` rebuilds ordered by that same timeout twice over. **No rebuild can
+    // make a model answer faster.** Both passes were unwinnable before they started.
+    //
+    // `isTransientFailure` is deliberately narrow and reads the SAME table the
+    // user-facing error message comes from. An unrecognised error is still REAL.
     const isContentFlake = (o) => !!o?.contentError && !o?.error && o?.ran !== false;
+    const isUnrunnable   = (o) => !!o?.error && isTransientFailure(o.error);
     const fails      = judged.filter(j => !j.passed);
-    const structural = fails.filter(j => !isContentFlake(j.oracle));
+    const structural = fails.filter(j => !isContentFlake(j.oracle) && !isUnrunnable(j.oracle));
 
     const firstFail = structural[0] ?? fails[0];
     const runErr    = firstFail?.oracle?.error ?? null;

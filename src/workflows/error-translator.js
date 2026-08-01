@@ -232,6 +232,54 @@ const PATTERNS = [
 ];
 
 /**
+ * "WE COULD NOT RUN THE TEST" IS NOT "THE WORKFLOW IS WRONG" (2026-08-01).
+ *
+ * WITNESSED ON PROD, `build-zz-firstrun-test-1785616455964`, watched live by Charles: a
+ * correct Gmail→Sheets workflow spent **881 seconds and THREE paid Opus passes**, of which
+ * two were `verify_failed` rebuilds ordered by the same sentence both times —
+ * `extract_email: LLM step failed: LLM call timed out after 120s`. The self-test ran for
+ * 385s, then 373s. **No rebuild can make a model answer faster**, so the second and third
+ * passes were unwinnable before they started, and the finished workflow was identical in
+ * substance to the first draft.
+ *
+ * The verify node already draws exactly this distinction for CONTENT flakes, and its
+ * comment makes the argument in full: *"Rebuilding the whole spec to 'fix' it is futile —
+ * the new spec has the same guard and flakes the same way."* That reasoning applies word
+ * for word to a timeout, and the code did not cover it: `isContentFlake` requires
+ * `!o.error`, so ANY run error — including one that says nothing about the spec — counted
+ * as a structural wiring defect.
+ *
+ * This is the same shape as the file's oldest rule, one door further along: **an
+ * unexercised promise is a verdict distinct from pass and from fail.** A test that could
+ * not be run has not shown the workflow to be wrong.
+ *
+ * Derived from the SAME pattern table the user-facing message comes from, deliberately —
+ * a second regex list here is the one-rule-in-two-places defect this repo has paid for
+ * more than any other, and it would drift the moment anyone added a provider.
+ */
+const TRANSIENT_CODES = new Set([
+  'LLM_TIMEOUT',       // the model did not answer in time — says nothing about the spec
+  'LLM_RATE_LIMIT',    // 429: too many calls recently
+  'BRAVE_RATE_LIMIT',
+  'DDG_BLOCKED',       // the provider refused us, not the workflow
+  'NETWORK',           // the box could not reach the service at all
+]);
+
+/**
+ * Did this run fail because of the WORKFLOW, or because we could not run it?
+ *
+ * Deliberately NARROW. Anything unrecognised is treated as a real failure, because
+ * excusing a genuine wiring defect ships a broken workflow, while excusing nothing costs
+ * a rebuild. `LLM_AUTH`, a bad JSON extraction and an unwired channel are all REAL — they
+ * are facts about this deployment or this spec and they do not go away on a retry.
+ */
+export function isTransientFailure(rawError, ctx = {}) {
+  const msg = typeof rawError === 'string' ? rawError : (rawError?.message ?? '');
+  if (!msg) return false;
+  return TRANSIENT_CODES.has(translateError(msg, ctx).code);
+}
+
+/**
  * Translate a raw error message into a structured, user-friendly explanation.
  *
  * @param {string} rawError

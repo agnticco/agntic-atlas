@@ -66,8 +66,27 @@ export class ChatModel extends Runnable {
     // bump to 4 for sustained 429/529 (overloaded) during provider incidents. A
     // per-request timeout aborts a hung connection so the SDK's own retry can fire.
     // Env-overridable so ops can tune without a code change.
+    //
+    // ── THE RETRIES WERE UNREACHABLE, AND THE COMMENT ABOVE SAYS WHAT THEY WERE FOR ──
+    //
+    // `requestTimeoutMs` defaulted to 120000 — **the same number as the `llm` node's own
+    // whole-call ceiling** (`node-types/llm.js`, `cfg.timeoutMs ?? 120_000`). The node
+    // races the entire `invoke()` against that, so the very first slow request consumed
+    // the node's whole budget and `maxRetries: 4` could never fire once. The line above
+    // states the intent — *"a per-request timeout aborts a hung connection SO THE SDK'S
+    // OWN RETRY CAN FIRE"* — and setting the two ceilings equal quietly disabled it.
+    //
+    // Two limits that must differ, set to the same value, so one silently switches the
+    // other off. Measured on prod 2026-08-01: an `extract_email` step timed out at 120s,
+    // twice, on a build that then paid for two whole-spec Opus rebuilds it could never
+    // have won.
+    //
+    // 45s leaves room for TWO attempts plus backoff inside a 120s node budget, and is
+    // still far above a healthy call. It is a fraction of the node ceiling by
+    // construction, not by coincidence — a bare number here is what drifted last time.
     this.maxRetries       = options.maxRetries       ?? numEnv('LLM_MAX_RETRIES', 4);
-    this.requestTimeoutMs = options.requestTimeoutMs ?? numEnv('LLM_TIMEOUT_MS', 120000);
+    this.requestTimeoutMs = options.requestTimeoutMs
+      ?? numEnv('LLM_TIMEOUT_MS', Math.floor(numEnv('LLM_NODE_BUDGET_MS', 120000) / 2.5));
 
     this._client = null;
   }

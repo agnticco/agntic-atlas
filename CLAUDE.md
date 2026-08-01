@@ -2729,6 +2729,48 @@ fixed on the spot. Fold the relevant ones into whatever increment next touches t
   node's config — an undeclared key, which is a hard publish failure. Pinned by four new
   cases in `sheets-can-be-picked-not-pasted.test.js` (25), two mutations red→green.
 
+- **A TEST WE COULD NOT RUN IS NOT A BROKEN WORKFLOW — FIXED (2026-08-01), AND THE SDK'S
+  RETRIES HAD BEEN UNREACHABLE ALL ALONG.** Charles watched a build on prod
+  (`build-zz-firstrun-test-1785616455964`) and said *"it looks stalled"*, then *"there is
+  no chain of thought movement so to a user it looks stalled."* It was not stalled. It was
+  inside the self-test — **385 seconds, then 373 more** — and this is what it cost: **881
+  seconds and THREE paid Opus passes**, two of them `verify_failed` rebuilds ordered by
+  the same sentence both times, `extract_email: LLM step failed: LLM call timed out after
+  120s`. **No rebuild can make a model answer faster.** Both passes were unwinnable before
+  they started; the workflow that came out was the first draft in substance, and the
+  self-check called it `consistent`.
+  **THE ARGUMENT WAS ALREADY IN THE FILE, ONE DOOR ALONG.** The verify node draws exactly
+  this distinction for CONTENT flakes and its comment says why — *"Rebuilding the whole
+  spec to 'fix' it is futile — the new spec has the same guard and flakes the same way."*
+  Word for word true of a timeout. But `isContentFlake` requires `!o.error`, so **any** run
+  error counted as a structural wiring defect, including one that says nothing about the
+  spec at all. The nth appearance of this file's oldest rule — *"not exercised" is a verdict
+  distinct from pass and from fail* — through a door it did not cover.
+  `isTransientFailure` (`error-translator.js`) is **derived from the same pattern table the
+  user-facing error message comes from**, never a second regex list, and is deliberately
+  NARROW: excusing a real wiring defect ships a broken workflow, excusing nothing costs a
+  rebuild, so anything unrecognised stays REAL. A bad API key, an invalid-JSON extraction
+  and an unwired channel are facts about this deployment or this spec and do not go away on
+  a retry.
+  **THE SECOND HALF, FOUND WHILE DIAGNOSING THE FIRST: `maxRetries: 4` COULD NEVER FIRE
+  ONCE.** `ChatModel.requestTimeoutMs` defaulted to **120000 — the same number as the `llm`
+  node's whole-call ceiling** (`cfg.timeoutMs ?? 120_000`). The node races the entire
+  `invoke()`, so the first slow request consumed the whole budget and the SDK's retry
+  machinery was unreachable — **while the comment beside it said the per-request timeout
+  existed "so the SDK's own retry can fire"**. Two limits that must differ, set to the same
+  value, so one silently switches the other off. Now derived as a fraction of the node
+  budget by construction, not by a bare number that can drift.
+  **AND THE SILENCE ITSELF.** The node emitted ONE line before a 385-second wait and
+  nothing again until it ended — twelve of that build's fourteen minutes were a still
+  screen. This codebase has already shipped a page that was genuinely dead while a curated
+  fact rotated underneath looking alive (2026-07-28); once someone has seen that, a
+  motionless build is indistinguishable from a broken one. Every sample is now announced
+  BEFORE it is waited on, every retry says so, every verdict lands as it happens, and a
+  sample that could not be checked says **"That is not a fault in your workflow"** rather
+  than reading as an accusation.
+  Pinned by `tests/converger/a-test-we-could-not-run.test.js` (16), **five mutations
+  red→green** — including both dangerous directions: no longer excusing the timeout (2 red)
+  and excusing EVERYTHING (3 red).
 - **ONE DEFECT, THREE ACCUSATIONS, ONE PAID PASS: `isOpaqueProviderId` KNEW EXACTLY ONE
   VENDOR — FIXED (2026-08-01).** Measured on `build-zz-firstrun-test-1785614912754`, a
   completely correct Gmail→Sheets logger built minutes after the entry below. The promise

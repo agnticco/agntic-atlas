@@ -1,5 +1,13 @@
 [
   {
+    "version": "1.6.118",
+    "date": "2026-08-01",
+    "title": "The build tells you what it's doing while it tests",
+    "notes": [
+      "And a workflow is no longer rebuilt because the AI ran out of time — that's not a fault in your workflow."
+    ]
+  },
+  {
     "version": "1.6.117",
     "date": "2026-08-01",
     "title": "A correct workflow is no longer told it delivers nowhere",
