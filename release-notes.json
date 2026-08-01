@@ -1,5 +1,13 @@
 [
   {
+    "version": "1.6.109",
+    "date": "2026-08-01",
+    "title": "Slack events now reach every workspace that connected them",
+    "notes": [
+      "If the same Slack workspace is connected by more than one Atlas workspace, events and approval clicks now reach all of them instead of whichever one was found first."
+    ]
+  },
+  {
     "version": "1.6.108",
     "date": "2026-08-01",
     "title": "A Slack-triggered workflow can no longer go live if Slack can't reach Atlas",

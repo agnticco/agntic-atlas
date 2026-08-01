@@ -2078,6 +2078,40 @@ fixed on the spot. Fold the relevant ones into whatever increment next touches t
   `connector_event` shape (eight stored workflows carry it) was added as the case that
   distinguishes them — it is refused earlier and more accurately by `TRIGGER_NOT_RUNNABLE`,
   and claiming it here would answer with a Slack sentence that is not the user's problem.
+  **A SECOND, INDEPENDENT REASON THE SAME WORKFLOW COULD NEVER FIRE — FIXED
+  (2026-08-01), and it would have made the console fix look like a failure.** The Slack
+  workspace `T0B3RTT3Z5X` is installed on **BOTH** `agntic` (11 July) and `platform`
+  (26 July). Tenant resolution was `SELECT tenant_id … WHERE connector_id=? AND account=?
+  **LIMIT 1**`, which returns `agntic`. The only live Slack-triggered workflow lives in
+  **`platform`**. So even with Slack delivering perfectly, every event would have been
+  matched against the wrong tenant's workflows, found nothing, and returned silently.
+  **`LIMIT 1` on a key that legitimately has several rows** is the arbitrary-answer shape
+  this file records over and over. `findTenantsByAccount` (plural) now returns EVERY
+  tenant that installed the account, in install order, deduplicated — a re-install writes
+  a second row and would otherwise have dispatched every event twice, which for a workflow
+  that sends email is a duplicate message to a real person.
+  **Dispatching to all of them is not a leak:** each of those tenants ran the OAuth flow
+  and authorised the app, so the event is genuinely theirs, and each is dispatched against
+  its OWN workflows with its OWN token.
+  **The approval BUTTON path had the identical defect** — a click on a run owned by the
+  other tenant resolved to the wrong one and silently found nothing. It now asks each
+  candidate and keeps the first ANSWER rather than the first attempt.
+  Pinned by `tests/api/one-workspace-many-tenants.test.js` (10), six mutations, **five
+  killed**. The sixth is honestly unkillable and is recorded as such rather than contrived
+  into a kill: the early return on a blank account is belt-and-braces over a query that
+  already cannot match (`account = NULL` is never true in SQL). A seventh needed the
+  fixture rebuilt twice — dropping the `ORDER BY` survived because `GROUP BY` returns
+  tenants alphabetically and `agntic` < `platform` happened to match install order, so a
+  workspace whose alphabetical and install orders DISAGREE had to be added before the sort
+  was observable at all.
+  **THE OPERATOR HAS CONFIRMED (2026-08-01) that Event Subscriptions is on, all bot and
+  workspace event scopes are enabled, and the Request URL is correct.** That is not
+  reconcilable with zero inbound requests, and the remaining candidates are: Slack having
+  DISABLED delivery after past failures against an earlier address (it does this and shows
+  a banner), or the app whose subscriptions are configured not being the app installed to
+  the workspace. **Do not assert a cause — measure.** The next real event settles it, and
+  both known code-side blockers are now removed so the next test is clean.
+
   **STILL CHARLES'S TO DO, AND THE ONLY THING THAT MAKES SLACK TRIGGERS WORK:** enable
   Event Subscriptions in the Slack app, point the Request URL at
   `https://atlas.agntic.co/connectors/slack/events`, and subscribe to `message.channels`.

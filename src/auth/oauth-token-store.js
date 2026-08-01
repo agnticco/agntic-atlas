@@ -139,11 +139,37 @@ export class OAuthTokenStore {
    * first; account should be globally unique per connector install.)
    */
   findTenantByAccount({ connectorId, account }) {
-    if (!connectorId || !account) return null;
-    const row = this.db
-      .prepare('SELECT tenant_id FROM oauth_tokens WHERE connector_id = ? AND account = ? LIMIT 1')
-      .get(connectorId, account);
-    return row?.tenant_id ?? null;
+    // ONE arbitrary answer to a question that can have several. Kept because callers
+    // that genuinely only need "is this account known at all" still use it — but
+    // ANYTHING THAT ACTS on the result must use `findTenantsByAccount` instead. See the
+    // note there; picking one of two silently is how a live workflow never fired.
+    return this.findTenantsByAccount({ connectorId, account })[0] ?? null;
+  }
+
+  /**
+   * EVERY tenant that has connected this external account — not an arbitrary one.
+   *
+   * One external workspace can legitimately be installed on several Atlas tenants: each
+   * of them ran the OAuth flow and authorised the app, so an inbound event from it is
+   * genuinely relevant to all of them. This is not a leak — each tenant is dispatched
+   * against its OWN workflows with its OWN token, and sees nothing belonging to another.
+   *
+   * WITNESSED 2026-08-01. The Slack workspace `T0B3RTT3Z5X` is installed on BOTH
+   * `agntic` (11 July) and `platform` (26 July). `findTenantByAccount`'s `LIMIT 1`
+   * returned `agntic`; the only live Slack-triggered workflow lived in `platform`. So
+   * even with Slack delivering perfectly, every event would have been matched against the
+   * wrong tenant's workflows, found nothing, and returned silently — a second, invisible
+   * reason for the same symptom the operator was already chasing.
+   *
+   * Ordered by install time so the result is deterministic rather than whatever the
+   * database happens to return.
+   */
+  findTenantsByAccount({ connectorId, account }) {
+    if (!connectorId || !account) return [];
+    const rows = this.db
+      .prepare('SELECT DISTINCT tenant_id, MIN(created_at) AS first_at FROM oauth_tokens WHERE connector_id = ? AND account = ? GROUP BY tenant_id ORDER BY first_at')
+      .all(connectorId, account);
+    return rows.map(r => r.tenant_id).filter(Boolean);
   }
 
   /** Delete the row. Returns true if a row was removed. Tenant-scoped. */

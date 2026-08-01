@@ -704,9 +704,20 @@ async function dispatchSlackEvent(spine, body) {
   if (!teamId || !wantEvent) return;
   const isMention = wantEvent === 'app_mention';
 
-  const tenantId = spine.auth.oauthTokenStore.findTenantByAccount?.({ connectorId: 'slack', account: teamId });
-  if (!tenantId) { logEvent('slack.event.no_tenant', { teamId }); return; }
+  // EVERY tenant that installed this Slack workspace, not an arbitrary one. The same
+  // workspace can be connected by several tenants — each ran the OAuth flow — and an
+  // event from it is genuinely theirs. Picking one silently is what made a live workflow
+  // never fire: `T0B3RTT3Z5X` resolved to `agntic` while the only Slack-triggered
+  // workflow lived in `platform` (2026-08-01).
+  const tenants = spine.auth.oauthTokenStore.findTenantsByAccount?.({ connectorId: 'slack', account: teamId }) ?? [];
+  if (!tenants.length) { logEvent('slack.event.no_tenant', { teamId }); return; }
+  for (const tenantId of tenants) {
+    await dispatchSlackEventForTenant(spine, { tenantId, ev, wantEvent, isMention });
+  }
+}
 
+/** One tenant's share of an inbound Slack event. Isolated: its own workflows, its own token. */
+async function dispatchSlackEventForTenant(spine, { tenantId, ev, wantEvent, isMention }) {
   const flows = await selectSlackFlows({
     flows: spine.engine.workflowStore.list({ tenantId, kind: 'flow', status: 'active' }),
     ev, wantEvent,
@@ -2154,16 +2165,25 @@ export function createApp(spine) {
 
       // The tenant this Slack workspace belongs to. If the workspace is not
       // connected to any tenant, there is no run it could possibly answer.
-      const tenantId = spine.auth.oauthTokenStore.findTenantByAccount?.({ connectorId: 'slack', account: teamId });
-      if (!tenantId) {
+      // The SAME ambiguity as the event path, with the same consequence: a workspace
+      // installed on two tenants resolved to one of them, and an approval click for a run
+      // in the other silently found nothing. A run id belongs to exactly ONE tenant, so
+      // ask each in install order and use the one that owns it.
+      const tenants = spine.auth.oauthTokenStore.findTenantsByAccount?.({ connectorId: 'slack', account: teamId }) ?? [];
+      if (!tenants.length) {
         logEvent('approval.slack.no_tenant', { teamId });
         return res.status(200).json({ text: 'This Slack workspace isn\'t connected to an Atlas workspace.' });
       }
 
-      const result = await spine.approvals.resolveFromSlack({
-        tenantId, slackUserId, runId, nodeId, decision,
-      });
-      logEvent('approval.slack', { tenant: tenantId, runId, nodeId, decision, ok: result.ok });
+      let result = null, tenantId = null;
+      for (const t of tenants) {
+        const r = await spine.approvals.resolveFromSlack({ tenantId: t, slackUserId, runId, nodeId, decision });
+        // Keep the first ANSWER, not the first attempt: a tenant that does not own this
+        // run says so, and that is not the outcome to report.
+        if (r?.ok) { result = r; tenantId = t; break; }
+        result ??= r; tenantId ??= t;
+      }
+      logEvent('approval.slack', { tenant: tenantId, runId, nodeId, decision, ok: result.ok, candidates: tenants.length });
 
       // `replace_original` swaps the message with the outcome, so the buttons are
       // gone and a second reader cannot click a question that has been answered.
