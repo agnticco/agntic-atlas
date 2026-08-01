@@ -1,5 +1,13 @@
 [
   {
+    "version": "1.6.113",
+    "date": "2026-08-01",
+    "title": "A calendar booking is checked against your calendar, not the event's name",
+    "notes": [
+      "Atlas no longer treats an event's title as the place it was saved, so a correctly booked demo is no longer reported as a broken promise."
+    ]
+  },
+  {
     "version": "1.6.112",
     "date": "2026-08-01",
     "title": "Fewer rebuilds — Atlas stops re-checking things it already did",

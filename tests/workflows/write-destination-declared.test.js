@@ -113,7 +113,13 @@ describe('THE THIRD DECIDER — the one this test file originally missed', () =>
     ['gmail_send',             { to: 'sam@acme.com', subject: 's', body: 'b' },  'message_sent',    'gmail:sam@acme.com'],
     ['docs_create',            { title: 'Weekly report', content: 'c' },         'document_exists', 'docs:Weekly report'],
     ['sheets_append',          { spreadsheetId: 'Leads', range: 'A:C' },         'record_exists',   'sheets:Leads'],
-    ['calendar_create_event',  { title: 'Standup', start: 's', end: 'e' },       'record_exists',   'calendar:Standup'],
+    // RE-POINTED 2026-08-01, and the old row ASSERTED THE DEFECT: it expected a promise
+    // naming the EVENT TITLE ("calendar:Standup") to be kept, i.e. that a booking is
+    // written to whatever it is called. `calendar_create_event` declares no `calendarId`
+    // and can only ever write to the account's default calendar, which Google calls
+    // `primary`. The title is the event's CONTENT, never its destination — the same
+    // correction already made for Google Tasks and the Atlas inbox.
+    ['calendar_create_event',  { title: 'Standup', start: 's', end: 'e' },       'record_exists',   'calendar:primary'],
     ['drive_create_folder',    { name: 'Invoices' },                             'document_exists', 'drive:Invoices'],
     ['airtable_create_record', { baseId: 'appX', tableId: 'Leads', fields: {} }, 'record_exists',   'airtable:Leads'],
   ];
@@ -408,9 +414,15 @@ describe('the DECLARATION decides, not the name', () => {
     // A trait one capability declares is a trait the next one silently skips. This
     // reads the live registry, so a new write added without a declaration fails here.
     const reg = realCatalog();
+    // THREE SHAPES COUNT AS DECLARED, not two. A capability with exactly ONE possible
+    // destination says so with `locatorKeys: []` PLUS a `defaultLocator` — the bargain
+    // Knowledge and the Atlas inbox already keep. This audit knew only the non-empty
+    // shape, so `calendar_create_event` failed it the moment its destination was declared
+    // honestly (2026-08-01). Empty AND no default is still undeclared, and still fails.
     const undeclared = reg.list()
       .filter(c => c.effect === 'write')
-      .filter(c => !(Array.isArray(c.locatorKeys) && c.locatorKeys.length))
+      .filter(c => !(Array.isArray(c.locatorKeys)
+                     && (c.locatorKeys.length || (c.defaultLocator ?? '').trim())))
       .map(c => c.id);
     assert.deepEqual(undeclared, [], 'these fall back to guessing key names');
   });

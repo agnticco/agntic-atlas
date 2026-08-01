@@ -112,14 +112,27 @@ describe('IT DID NOT BECOME A FAIL-OPEN', () => {
   // The rule excuses a locator that merely repeats the product name. Everything that
   // names a REAL destination must still be compared, or the promise means nothing.
 
-  test('a promise about a NAMED calendar event is still checked', () => {
-    // "calendar:Standup" names a specific event, not the calendar itself.
+  test('a promise about a NAMED calendar is still checked', () => {
+    /**
+     * RE-POINTED 2026-08-01. This asserted that `calendar:Standup` — the EVENT'S TITLE —
+     * was kept, which is the title-as-destination defect the comment eleven lines above
+     * warns about in the same file: *"Making it decide WHERE the event went is the defect
+     * family this repo has paid for three times."* One test stated the principle and the
+     * next contradicted it.
+     *
+     * The property this guard exists for is untouched and is what is asserted now: a real
+     * destination must still be COMPARED, so the calendar actually written to is kept and
+     * a different calendar fails. `calendar_create_event` declares no `calendarId`, so
+     * the destination is always the account default — `primary`.
+     */
     const standup = { id: 'c', type: 'deliver', config: {
       channel: 'calendar_create_event', title: 'Standup',
       start: '2026-07-31T10:00:00-05:00', end: '2026-07-31T10:30:00-05:00' } };
-    assert.equal(verdicts('calendar:Standup', 'record_exists', standup).build, true);
-    assert.equal(verdicts('calendar:Some Other Event', 'record_exists', standup).build, false,
-      'a promise about a different event must still fail');
+    assert.equal(verdicts('calendar:primary', 'record_exists', standup).build, true);
+    assert.equal(verdicts('calendar:team-offsite', 'record_exists', standup).build, false,
+      'a promise about a different calendar must still fail');
+    assert.equal(verdicts('calendar:Standup', 'record_exists', standup).build, false,
+      "the event's own title must never be read as the place it was written");
   });
 
   test('the WRONG CONNECTOR is still refused', () => {

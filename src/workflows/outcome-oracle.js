@@ -1224,7 +1224,31 @@ export function normalizeDelivery(node, output) {
   const push = (v) => { if (typeof v === 'string' && v.trim()) locators.push(v); };
   push(o.target); push(o.to); push(o.user); push(o.slackChannel); push(o.channelName);
   if (o.channel && o.channel !== channel) push(o.channel);
-  if (eff) for (const k of eff.locatorKeys) { push(o[k]); push(node?.config?.[k]); }
+  // ── THE CAPABILITY'S OWN DECLARATION, BEFORE THE HARDCODED TABLE ──────────
+  //
+  // `nodeEffect` already implements the precedence this file settled on 2026-07-30 —
+  // explicit declaration > CHANNEL_EFFECTS > inference from the id — so ask IT rather
+  // than deciding again here. Deciding again is how these two drifted in the first place.
+  //
+  // THE ENTRY FOR THAT FIX SAYS "Both now read the one declaration." IT WAS HALF TRUE.
+  // Only `nodeEffect` was corrected; here the declaration sat behind `if (!eff)`, so for
+  // the six ids that appear in BOTH the table and the catalog the table still won. The
+  // receipt is the half `checkAssertionAtRuntime` matches, so the halves disagreed for
+  // exactly those six.
+  //
+  // WITNESSED 2026-08-01 on a demo-booking build — the first time the self-check's
+  // `HALVES_DISAGREE` has fired on a real workflow: *"one says the promise is kept, the
+  // other says it is broken"* about `google_calendar:primary`. Tenth instance of this
+  // family, and the second time a fix reached one of two places.
+  // ORDER: what the RUN reported, THEN what the node declared. A real run must always
+  // be able to correct a wrong declaration — that is the only way a bad declaration is
+  // ever caught — so the handler's own answer keeps its place at the front.
+  const decl = capabilityOf(channel);
+  if (Array.isArray(decl?.locatorKeys)) for (const k of decl.locatorKeys) push(o[k]);
+  if (eff) for (const k of eff.locatorKeys) push(o[k]);
+  const declared = nodeEffect(node);
+  if (declared) for (const l of declared.locators) push(l);
+  if (eff) for (const k of eff.locatorKeys) push(node?.config?.[k]);
   // ── THE CAPABILITY'S OWN DECLARATION, AHEAD OF ANY GUESS ──────────────────
   // This function is the SECOND place that decides where a delivery went; the
   // first is `nodeEffect`. They were separate rules over the same question, and
@@ -1245,7 +1269,6 @@ export function normalizeDelivery(node, output) {
   if (!eff) {
     const cap = capabilityOf(String(node?.config?.action ?? node?.config?.channel ?? ''));
     if (Array.isArray(cap?.locatorKeys)) for (const k of cap.locatorKeys) push(o[k]);
-    const d = nodeEffect(node); if (d) for (const l of d.locators) push(l);
   }
   // Fallback for a capability that declares nothing (an imported server, a
   // generated connector) — a guess is still better than losing the target.

@@ -694,7 +694,30 @@ export function registerGoogleChannels(capabilityRegistry) {
     // The event's own title IS its identity here — this capability takes no
     // calendar id, so it always writes to the connected primary calendar.
     effect: 'write', assertionKind: 'record_exists',
-    locatorKeys: ['title'], defaultLocator: 'your calendar',
+    // THE DESTINATION IS THE CALENDAR, NEVER THE EVENT'S OWN NAME.
+    //
+    // This declared `locatorKeys: ['title']`, so the oracle believed a booking was
+    // written to whatever the event was CALLED — the fourth instance of
+    // title-as-destination after Google Tasks, the Atlas inbox and this same capability's
+    // entry in the old hardcoded table. It was even NOTICED when the declaration was made
+    // reachable (2026-07-30: *"`calendar_create_event` even carries a `locatorKeys:
+    // ['title']` declaration written to MATCH the table — they agreed, and were wrong
+    // together"*) — the precedence was fixed and the wrong declaration was left in place.
+    // Reading a wrong declaration instead of a wrong table is still reading the wrong
+    // thing.
+    //
+    // WITNESSED 2026-08-01 on a demo-booking build, and it is the first time the
+    // self-check's `HALVES_DISAGREE` has fired on a real workflow: *"one says the promise
+    // is kept, the other says it is broken"* about `google_calendar:primary`. The two
+    // halves disagreed precisely because the declared locator was a TEMPLATE
+    // (`{{prepare_event.event_title}}`) — excused as undecidable by one half and not the
+    // other.
+    //
+    // This capability declares NO `calendarId`, so it can only ever write to the account's
+    // default calendar — a FIXED destination, the shape Knowledge and the Inbox already
+    // use: no locator keys, and the provider's own name for the default. Google calls it
+    // `primary`, which is also what a generated promise names it.
+    locatorKeys: [], defaultLocator: 'primary',
     outputFormat: 'plain',
     configSchema: [
       { key: 'title',       label: 'Title',                            type: 'string', optional: false },

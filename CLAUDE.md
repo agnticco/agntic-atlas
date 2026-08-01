@@ -2372,11 +2372,38 @@ fixed on the spot. Fold the relevant ones into whatever increment next touches t
   'Create calendar event': one says the promise is kept, the other says it is broken."*
   **This is the tenth instance of the build-vs-runtime drift family, and the first one
   caught by the mechanism built for it rather than by a person reading a screen days
-  later.** CLAUDE.md records that this check was pinned only at SOURCE level because it
-  "cannot be exercised behaviourally while the two halves agree on every capability,
-  spelling and pairing" — that is no longer true: `google_calendar:primary` is a
-  constructible disagreement, so **the source pin can and should now be replaced with a
-  behavioural one.** Not yet diagnosed; the build still reached a finished workflow.
+  later.** DIAGNOSED AND FIXED the same day — and it was TWO defects, one hiding the other.
+  · **`calendar_create_event` declared `locatorKeys: ['title']`** — the event's own NAME
+    read as the place it was written. The FOURTH instance of title-as-destination after
+    Google Tasks, the Atlas inbox and this capability's own row in the old hardcoded
+    table. **It had already been NOTICED** (2026-07-30: *"it even carries a `locatorKeys:
+    ['title']` declaration written to MATCH the table — they agreed, and were wrong
+    together"*): the precedence was fixed so the declaration is READ, and the wrong
+    declaration was left in place. Reading a wrong declaration instead of a wrong table is
+    still reading the wrong thing. The capability declares no `calendarId` and can only
+    write to the account default, so it is a FIXED destination — `locatorKeys: []` plus
+    `defaultLocator: 'primary'`, the shape Knowledge and the inbox already use, with the
+    provider's own name for its default exactly as the Tasks fix used "My Tasks".
+  · **`normalizeDelivery` still let the TABLE beat the declaration.** The 2026-07-30 entry
+    says *"Both now read the one declaration."* **It was half true.** Only `nodeEffect`
+    was corrected; in the receipt the declaration sat behind `if (!eff)`, so for the SIX
+    ids present in both the table and the catalog the table still won — and the receipt is
+    the half `checkAssertionAtRuntime` matches. **The second time a fix in this family
+    reached one of two places.** Both now genuinely read it, via `nodeEffect` so the
+    precedence is decided once rather than re-derived.
+  **Order is load-bearing and was got wrong first:** the declared locator was pushed ahead
+  of what the RUN reported, which broke *"a real run can correct the declaration"* — the
+  only way a wrong declaration is ever caught. Run-reported first, declared second.
+  **THREE TESTS ASSERTED THE DEFECT AND WERE RE-POINTED, NOT WEAKENED.** One expected
+  `calendar:Standup` — the event's title — to be a kept promise; one guarded against
+  fail-open using that same title, in a file whose comment eleven lines above warns that
+  *"making it decide WHERE the event went is the defect family this repo has paid for
+  three times"* (one test stated the principle, the next contradicted it); and the
+  declaration audit knew only two of the three declared shapes, so an honest fixed
+  destination failed it. Each keeps the property it existed for, against the right
+  destination. Three mutations red→green — and **the agreement sweep CANNOT catch the
+  wrong declaration**, only the drift, because with `title` on both sides the two halves
+  agree while both being wrong. That is why the destination tests exist separately.
 
 - **THE SUFFICIENCY CRITIC BOUGHT REBUILDS FOR COMPLAINTS THE SPEC COULD ANSWER — FIXED
   (2026-08-01).** Measured by driving two workflows as a new customer on a fresh tenant:
