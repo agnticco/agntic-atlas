@@ -2769,12 +2769,47 @@ fixed on the spot. Fold the relevant ones into whatever increment next touches t
   with ONE spreadsheet in the account and a different one named, no question was asked at all;
   and the `!bases.length` pass-through swallowed the case a brand-new workspace hits every
   time — no spreadsheets, one named, nothing to pick and one real thing to do.
-  Pinned by `tests/converger/a-sheet-you-do-not-have-yet.test.js` (24), **seven mutations
-  red→green** including both halves of the count gate. Four pins are SOURCE-level and say so:
-  the `destinations` node closes over the LLM, the graph state and `interrupt` and cannot be
-  lifted, and "the decision was right and nothing consulted it" is how the P13-0 destination
-  fix was silently reverted with the suite green. **NOT witnessed in a browser** — a live
-  build that names a sheet the tenant does not have is the pending confirmation.
+  **CONFIRMED LIVE (2026-08-01, v1.6.115) — AND THE FIX WAS THE WRONG SHAPE. Say both.**
+  Driven on the fresh tenant: the option appeared FIRST and pre-selected — *Create a new
+  Google Sheet called "Buyer Inquiries"* above ten real spreadsheets — clicking it really
+  called `sheets_create` against Google (`builder.capability.ok`), and the workflow bound to
+  the new id in one paid pass. The dead end was gone. **Charles, watching it:** *"It did it
+  again. All questions and details should be worked out before the build commences."*
+  **He is right, and it is his own call from 2026-07-28** — carried since as the top open
+  item, *table-shaped destinations must be settled BEFORE the plan, for every connector*.
+  The fix above changed WHICH ANSWERS the question offers; it never touched the fact that a
+  build stops and asks. Two defects, one shipped.
+  **AND THE OLDER HALF WAS A REAL BUG NOBODY HAD NAMED: `isKnownBase` COMPARED IDS ONLY.**
+  Airtable's model writes a base id it learned from `airtable_describe_base`; a Sheets user
+  says *"Agntic CRM"*, and that is what the build records. So the "this was already
+  answered" test **could never fire for Google Sheets**, and the picker asked on **every
+  single Sheets build** — including when the person had named a spreadsheet they own and
+  the plan card had quoted it back to them. That is why this kept being seen as "it asks
+  again"; it was not a create-vs-pick problem at all.
+  **NOW THE QUESTION IS ASKED ONLY WHEN THE BUILD GENUINELY DOES NOT KNOW.** One decision
+  with three answers (`resolveNamedContainer`), and each branch is a different argument:
+  · **they have it** — matched by NAME as well as id ⇒ use it, ask nothing;
+  · **they named one they do not have** ⇒ CREATE it, ask nothing. Not un-answered: they
+    named it, the plan card names it, and they approved that plan. **Request a change is
+    the door if the name is wrong**; asking again here is the interruption being removed;
+  · **nothing usable recorded** ⇒ ask, exactly as before. The only ambiguity left.
+  **The picker's create option was DELETED rather than left unreachable** — with a name
+  present the build never reaches the picker, so an option that cannot be shown is code
+  claiming to do something it cannot. An unresolvable machine ID still falls through to the
+  question rather than being created, which is what keeps *"a base id the connector never
+  listed cannot survive into the spec"* green.
+  Pinned by `tests/converger/a-sheet-you-do-not-have-yet.test.js` (25), **seven mutations
+  red→green**; the two that matter most are reinstating the id-only match (3 red) and
+  putting the interrupt back on the settled path (1 red). **One survived the first pass and
+  the fixture was strengthened rather than the mutation dropped:** "the first usable answer
+  decides" was not a real invariant and could not distinguish first-wins from last-wins —
+  replaced by the one that is (*a blank or a template must be SKIPPED, not read as "no
+  destination"*, which would send a build that knows its destination into the question).
+  Five pins are SOURCE-level and say so: the `destinations` node closes over the LLM, the
+  graph state and `interrupt` and cannot be lifted, and "the decision was right and nothing
+  consulted it" is how the P13-0 destination fix was silently reverted with the suite green.
+  **The remaining "nothing was recorded" case still asks mid-build** — rare, since the model
+  almost always records what the person said, and genuinely un-answerable any earlier.
 - **A PERSON NOW PICKS THEIR SPREADSHEET INSTEAD OF PASTING ITS ID — FIXED
   (2026-07-31, increment 2 of "the conversation as a tool").** The errand this replaces,
   witnessed on prod: *"What is the spreadsheet ID for 'Pricing Enquiries'? You can find

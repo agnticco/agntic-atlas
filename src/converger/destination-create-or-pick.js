@@ -40,8 +40,34 @@
  * and how to read the answer; the creating is done by the connector's own capability.
  */
 
-/** The choice id that means "make the one I named". Never a real container's id. */
-export const CREATE_CHOICE_ID = '__atlas_create_destination__';
+/**
+ * ── AND THEN THE QUESTION ITSELF WAS THE DEFECT (Charles, 2026-08-01) ─────────
+ *
+ * The above shipped, the create option appeared first in the picker, and the spreadsheet
+ * really was created. Watching it, Charles: *"It did it again. All questions and details
+ * should be worked out before the build commences."* He is right, and it is his own call
+ * from 2026-07-28, carried since as the top open item: **table-shaped destinations must be
+ * settled before the plan, for every connector.** The fix above changed WHICH ANSWERS the
+ * question offers. It did not change that the build stops and asks.
+ *
+ * So the question is not asked at all when the build already knows the answer:
+ *
+ *   · **They have it** → use it. This alone removes the interruption in the common case,
+ *     and it was a real bug: `isKnownBase` compared IDS ONLY. Airtable's model writes an
+ *     id (it learned one from `airtable_describe_base`); a Sheets user says a NAME. So for
+ *     Google Sheets the "already answered" test could never fire and the picker asked
+ *     **every single time**, even when the person had named a spreadsheet they own and the
+ *     plan card had quoted it back to them.
+ *   · **They named one they do not have** → create it. The plan card names the
+ *     spreadsheet, they approved that plan, and Request a change is the door if the name
+ *     is wrong. Creating is the only way to honour a plan they have already accepted.
+ *   · **They named nothing** → ask, exactly as before. That is a real ambiguity and the
+ *     only one left.
+ *
+ * The picker's create option is deliberately GONE rather than left unreachable: with a
+ * name present the build never reaches the picker, so an option that could not be shown
+ * would be code claiming to do something it cannot.
+ */
 
 const norm = (s) => String(s ?? '').trim().toLowerCase().replace(/\s+/g, ' ');
 
@@ -64,86 +90,54 @@ export function looksLikeAnIdentifier(value) {
 }
 
 /**
- * The container the build settled on that the tenant does not have — or null.
+ * WHAT THE BUILD ALREADY KNOWS ABOUT WHERE THIS WRITES.
  *
- * Reads the WRITE NODES, which is where the build recorded what it decided. It does NOT
- * mine the conversation for a name: substring-matching free prose is how a one-word
- * destination comes to match almost any sentence, and that trap is already recorded
- * against `retargetStaleAssertion`.
+ * Reads the WRITE NODES, which is where the build recorded what the conversation decided.
+ * It does NOT mine the conversation for a name: substring-matching free prose is how a
+ * one-word destination comes to match almost any sentence, and that trap is already
+ * recorded against `retargetStaleAssertion`.
+ *
+ * Three answers, and the caller must treat them as three:
+ *   · `{container}` — they have it, matched by id OR by name. Use it and ask nothing.
+ *   · `{create}`    — they named one they do not have, and this connector can make it.
+ *   · `null`        — nothing usable was recorded. A real ambiguity: ASK.
  *
  * @param {object[]} writeNodes  the nodes writing to this connector
  * @param {object}   descriptor  the connector's declared `schemaDiscovery`
  * @param {{id:string,name:string}[]} containers  what the connector just listed
- * @returns {string|null} the name to offer to create
  */
-export function nameToCreate(writeNodes, descriptor, containers) {
-  // Rule 3: the connector must say it can create one.
-  if (!descriptor?.createCapability) return null;
-  // Rule 1: and we must have genuinely listed, or "they do not have it" is not a fact.
-  if (!descriptor.listCapability) return null;
-
-  const key = descriptor.containerKey;
+export function resolveNamedContainer(writeNodes, descriptor, containers) {
+  const key = descriptor?.containerKey;
   if (!key) return null;
-
-  const known = new Set();
-  for (const c of (containers ?? [])) {
-    if (c?.id)   known.add(norm(c.id));
-    if (c?.name) known.add(norm(c.name));
-  }
+  const list = containers ?? [];
 
   for (const n of (writeNodes ?? [])) {
     const raw = String(n?.config?.[key] ?? '').trim();
     if (!raw) continue;
     // A template is not a name — it is a value that does not exist until the run.
     if (raw.includes('{{') || raw.includes('<')) continue;
-    if (looksLikeAnIdentifier(raw)) continue;          // rule 2
-    if (known.has(norm(raw))) continue;                // they DO have it: pick, do not create
-    return raw;
+
+    // ── THEY HAVE IT ────────────────────────────────────────────────────────
+    // BY NAME AS WELL AS BY ID. Matching ids only is true of Airtable, whose model
+    // learned real base ids from `airtable_describe_base`, and false of Google Sheets,
+    // where a person says "Agntic CRM" and that is what gets recorded — so the picker
+    // asked every time, about a spreadsheet they had already named and the plan card
+    // had already quoted back to them.
+    const hit = list.find(c => c?.id === raw || (c?.name && norm(c.name) === norm(raw)));
+    if (hit) return { container: hit };
+
+    // ── THEY NAMED ONE THEY DO NOT HAVE ─────────────────────────────────────
+    // Rule 2: a value shaped like a machine identifier is a model's guess at an id, not
+    // a person's name for a thing. Offering to create `1DG5qZ9mHvTl…` is nonsense, and
+    // an unresolvable id must still fall through to the question.
+    if (looksLikeAnIdentifier(raw)) continue;
+    // Rule 3: the connector must DECLARE it can create one — Airtable declares nothing,
+    // because a base needs a workspace id nobody has been asked for.
+    // Rule 1: and we must genuinely have listed, or "they do not have it" is not a fact.
+    if (!descriptor.createCapability || !descriptor.listCapability) continue;
+    return { create: raw };
   }
   return null;
-}
-
-/**
- * The choices to put in front of a person.
- *
- * WHEN A NAMED CONTAINER IS ABSENT, CREATING IT IS THE DEFAULT. The alternative default
- * is `containers[0]` — an unrelated spreadsheet the person never mentioned — and writing
- * a customer's data into the wrong existing file is the worse mistake of the two. A new,
- * empty spreadsheet nobody wanted is noise; a row appended to their real CRM is not.
- * Fail toward the harmless option.
- */
-export function pickerChoices({ containers, createName, containerLabel = 'destination' }) {
-  const existing = (containers ?? []).map((c, i) => ({
-    id: c.id, label: c.name, selected: !createName && i === 0,
-  }));
-  if (!createName) return existing;
-  return [
-    { id: CREATE_CHOICE_ID, label: `Create a new ${containerLabel} called "${createName}"`, selected: true },
-    ...existing,
-  ];
-}
-
-/**
- * What did they choose?
- *
- * Always answers — there is no "unreadable, so do nothing" branch, because the caller has
- * to write SOMETHING onto the node. An answer that matches nothing resolves to whatever
- * was on screen as the default, which is the one option the person had already been shown
- * as the outcome of pressing return.
- *
- * @returns {{create:string}|{container:object}}
- */
-export function readPick(answer, { containers, createName }) {
-  const list = containers ?? [];
-  const fallback = createName ? { create: createName } : { container: list[0] };
-
-  const id  = answer?.id;
-  const txt = norm(answer?.answer);
-  if (id === CREATE_CHOICE_ID) return { create: createName };
-  if (createName && txt && txt === norm(createName)) return { create: createName };
-
-  const hit = list.find(c => (id && c.id === id) || (txt && norm(c.name) === txt));
-  return hit ? { container: hit } : fallback;
 }
 
 /**

@@ -54,7 +54,7 @@ import { indexDestinations } from '../workflows/destinations.js';
 import { unprovedLanes, laneKeyOf, buildTestCaseRequestPrompt, readTestCaseRequest, withTestCase }
   from './test-case-request.js';
 import { sufficiencyUnactionable } from './sufficiency-actionable.js';
-import { nameToCreate, pickerChoices, readPick, headersFor } from './destination-create-or-pick.js';
+import { resolveNamedContainer, headersFor } from './destination-create-or-pick.js';
 // Asking a person is a tool with rules — see asking.js for the four and why each exists.
 import { shouldAsk } from './asking.js';
 import { analyzeTable } from '../workflows/decision-analysis.js';
@@ -1233,26 +1233,19 @@ function usesConnector(node, connector, catalog = null) {
   return id.startsWith(`${connector}_`);
 }
 
-/**
- * Is this base id one the TENANT ACTUALLY HAS?
- *
- * The first version asked a different and much weaker question — "does this LOOK
- * like a base id?" — and an LLM asked for an id it cannot know does not produce
- * `appXXXXXXXXXXXXXX`. It produces something PLAUSIBLE: `appABCDEFGHIJKLMN` passes
- * a shape test perfectly. And because the whole `destinations` node was gated on
- * that test, one plausible hallucination skipped the base lookup, the table lookup
- * AND the column mapping — the entire increment — and the fake id rode into the
- * ratified spec. (Found by the test-adversary.)
- *
- * A shape test cannot answer this. Only the LIST can: an id is resolved iff it is
- * one of the bases the connector just told us the tenant has. That is decidable,
- * and it is the same discipline as §11.7 — do not guess at a domain you can read.
- */
-function isKnownBase(v, bases) {
-  const s = String(v ?? '').trim();
-  if (!s || s.includes('{{') || s.includes('<')) return false;
-  return (bases ?? []).some(b => b.id === s);
-}
+// ── `isKnownBase` LIVED HERE AND IS NOW `resolveNamedContainer` ──────────────
+//
+// Its rule survives whole and is worth restating, because it was paid for: **a base id
+// in a ratified spec is one the connector listed.** A shape test cannot answer that —
+// an LLM asked for an id it cannot know produces something PLAUSIBLE, and
+// `appABCDEFGHIJKLMN` passes any regex — so only the LIST can, and we hold the token.
+//
+// What it got WRONG, found 2026-08-01: it compared IDS ONLY. That is true of Airtable,
+// whose model learned real ids from `airtable_describe_base`, and false of Google
+// Sheets, where a person says "Agntic CRM" and that is what the build records. So the
+// "already answered" test could never fire for Sheets and the picker asked every single
+// time. Matching by name as well is the fix, and it lives beside the create decision in
+// `destination-create-or-pick.js` because they are one question with three answers.
 
 /**
  * Restate the outcome's promise in the REAL column names.
@@ -3436,85 +3429,80 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
     const bName = (b) => String(b?.[descriptor.listNameKey ?? 'name'] ?? '');
     const listed = bases.map(x => ({ id: bId(x), name: bName(x) }));
 
-    // ── THE ONE THEY NAMED MAY NOT EXIST YET ─────────────────────────────────
-    // The picker can only offer what the tenant HAS. Asked to "create a fresh sheet
-    // called Buyer Inquiries", it listed ten existing spreadsheets and none of them was
-    // that — a question with no correct answer. `nameToCreate` returns the name only
-    // when the connector says it can create one, we genuinely listed, and the value is
-    // a NAME rather than a machine id. See `destination-create-or-pick.js`.
-    const createName = nameToCreate(writeNodes, descriptor, listed);
+    // ── WHAT DID THE CONVERSATION ALREADY SETTLE? ────────────────────────────
+    //
+    // Charles, 2026-08-01, watching a build stop to ask: *"All questions and details
+    // should be worked out before the build commences."* So the question is asked ONLY
+    // when the build genuinely does not know — see `destination-create-or-pick.js` for
+    // the three answers and why each is safe.
+    const settled = resolveNamedContainer(writeNodes, descriptor, listed);
     // Anything worth recording that happens before the node's own return points.
     const extraLog = [];
 
     // Nothing listed and nothing to create is the old pass-through: the ordinary loop
-    // asks. Nothing listed but a name to create is a real, answerable choice — a brand
-    // new workspace has no spreadsheets at all, and that is exactly when a person is
-    // most likely to have named one that does not exist.
-    if (!bases.length && !createName) return { phase: 'gapping' };
+    // asks. Nothing listed but a name to create is not a dead end — a brand new
+    // workspace has NO spreadsheets at all, which is exactly when a person names one
+    // that does not exist yet.
+    if (!bases.length && !settled?.create) return { phase: 'gapping' };
 
-    const already = writeNodes.map(n => n.config?.[descriptor.containerKey])
-      .find(b => isKnownBase(b, listed));
-    let base = already ? bases.find(b => bId(b) === already) : bases[0];
-    // ── A QUESTION ALREADY ANSWERED MUST NOT BE ASKED AGAIN ──────────────────
-    // `already` is a base the DRAFT names and the tenant genuinely has — which means
-    // the model chose it, and it chose it from what the user said. Asking anyway
-    // (this was `if (bases.length > 1)`) made the build re-ask a question answered
-    // moments earlier in the same conversation: observed live, the user said "Agntic
-    // CRM Sheet1", the plan named it, the schema was quoted back to them, and then a
-    // chip list appeared asking which base to write to.
-    //
-    // Only ask when there is a real ambiguity — no valid pre-resolved base AND more
-    // than one to choose from. A guessed or unknown id still asks, because a guess
-    // writes the customer's lead into a base that does not exist.
-    //
-    // A NAME THAT IS NOT ON THE LIST IS ALSO A REAL AMBIGUITY, even with one container
-    // or none: "the one you named, or one of these?" is a question only a person can
-    // settle, and the answer they gave in chat is on the list as the FIRST option.
-    if ((bases.length > 1 || createName) && !already) {
+    let base = bases[0];
+
+    if (settled?.container) {
+      // ── A QUESTION ALREADY ANSWERED MUST NOT BE ASKED AGAIN ────────────────
+      // Matched by NAME as well as by id, which is the half that was missing: a Sheets
+      // user says "Agntic CRM" and that is what the build records, so an id-only test
+      // could never fire and the picker asked every single time.
+      base = bases.find(b => bId(b) === settled.container.id) ?? bases[0];
+
+    } else if (settled?.create) {
+      // ── CREATED, NOT ASSUMED, AND NOT ASKED ABOUT ──────────────────────────
+      // The invariant that an unlisted container may not reach the spec is KEPT. It
+      // reaches the spec by being made real: the connector returns an id, and every
+      // check downstream passes for the ordinary reason.
+      //
+      // Not a question, because it is not un-answered: the person named it, the plan
+      // card names it, and they approved that plan. Request a change is the door if
+      // the name is wrong — asking again here is the interruption Charles rejected.
+      let made = null;
+      try {
+        made = await invokeCapability(descriptor.createCapability, {
+          [descriptor.createNameArg ?? 'name']: settled.create,
+          ...(descriptor.createColumnsArg
+            ? { [descriptor.createColumnsArg]: headersFor(writeNodes, state.draft?.outcome, readFields) }
+            : {}),
+        });
+      } catch (err) {
+        // A creation that failed leaves us with no destination we can stand behind.
+        // Fall through to the ordinary loop, which ASKS — the same honest degradation
+        // as a connector that will not answer a lookup.
+        return {
+          phase: 'gapping',
+          confirmationLog: [{ step: state.step, type: 'destination_create_failed', name: settled.create, error: String(err?.message ?? err) }],
+        };
+      }
+      const newId = String(made?.[descriptor.createIdKey ?? 'id'] ?? '').trim();
+      if (!newId) {
+        return {
+          phase: 'gapping',
+          confirmationLog: [{ step: state.step, type: 'destination_create_failed', name: settled.create, error: 'the connector returned no id' }],
+        };
+      }
+      base = { [descriptor.listIdKey ?? 'id']: newId, [descriptor.listNameKey ?? 'name']: settled.create };
+      bases = [...bases, base];
+      extraLog.push({ step: state.step, type: 'destination_created', id: newId, name: settled.create });
+
+    } else if (bases.length > 1) {
+      // ── THE ONE REMAINING AMBIGUITY: NOTHING WAS RECORDED ──────────────────
+      // Only reachable when the build wrote down no destination at all, or wrote an
+      // identifier the tenant does not have. Nobody can settle that but a person.
       const label = descriptor.containerLabel ?? 'destination';
       const answer = await interrupt({
         type: 'clarification',
         question: `Which ${label} should this write to?`,
-        choices: pickerChoices({ containers: listed, createName, containerLabel: label }),
+        choices: listed.map((c, i) => ({ id: c.id, label: c.name, selected: i === 0 })),
         step: state.step,
       });
-      const pick = readPick(answer, { containers: listed, createName });
-
-      if (pick.create) {
-        // ── CREATED, NOT ASSUMED ───────────────────────────────────────────────
-        // The invariant that an unlisted container may not reach the spec is KEPT.
-        // It reaches the spec by being made real: the connector returns an id, and
-        // every check downstream passes for the ordinary reason.
-        let made = null;
-        try {
-          made = await invokeCapability(descriptor.createCapability, {
-            [descriptor.createNameArg ?? 'name']: pick.create,
-            ...(descriptor.createColumnsArg
-              ? { [descriptor.createColumnsArg]: headersFor(writeNodes, state.draft?.outcome, readFields) }
-              : {}),
-          });
-        } catch (err) {
-          // A creation that failed leaves us with no destination we can stand behind.
-          // Fall through to the ordinary loop, which ASKS — the same honest degradation
-          // as a connector that will not answer a lookup.
-          return {
-            phase: 'gapping',
-            confirmationLog: [{ step: state.step, type: 'destination_create_failed', name: pick.create, error: String(err?.message ?? err) }],
-          };
-        }
-        const newId = String(made?.[descriptor.createIdKey ?? 'id'] ?? '').trim();
-        if (!newId) {
-          return {
-            phase: 'gapping',
-            confirmationLog: [{ step: state.step, type: 'destination_create_failed', name: pick.create, error: 'the connector returned no id' }],
-          };
-        }
-        base = { [descriptor.listIdKey ?? 'id']: newId, [descriptor.listNameKey ?? 'name']: pick.create };
-        bases = [...bases, base];
-        extraLog.push({ step: state.step, type: 'destination_created', id: newId, name: pick.create });
-      } else {
-        base = pick.container ?? bases[0];
-      }
+      base = bases.find(b => bId(b) === answer?.id || bName(b) === answer?.answer) ?? bases[0];
     }
 
     // ── 2. The table, and its REAL columns ───────────────────────────────────

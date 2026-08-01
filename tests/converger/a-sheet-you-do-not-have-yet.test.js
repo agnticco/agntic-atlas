@@ -33,7 +33,7 @@ import { CapabilityRegistry } from '../../src/connectors/capability-registry.js'
 import { registerGoogleChannels } from '../../src/connectors/google/index.js';
 import { registerAirtableChannels } from '../../src/connectors/airtable/index.js';
 import {
-  CREATE_CHOICE_ID, looksLikeAnIdentifier, nameToCreate, pickerChoices, readPick, headersFor,
+  looksLikeAnIdentifier, resolveNamedContainer, headersFor,
 } from '../../src/converger/destination-create-or-pick.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
@@ -59,88 +59,98 @@ const WROTE = (v) => [{ id: 'row', type: 'connector-action',
   config: { action: 'sheets_append', spreadsheetId: v, range: 'Sheet1' } }];
 
 describe('THE WITNESSED CASE', () => {
-  test('the sheet they named is offered, not silently swapped for one they have', () => {
-    const name = nameToCreate(WROTE('Buyer Inquiries'), sheets(), TEN);
-    assert.equal(name, 'Buyer Inquiries');
-
-    const choices = pickerChoices({ containers: TEN, createName: name, containerLabel: 'Google Sheet' });
-    assert.equal(choices.length, 4, 'the ten real spreadsheets must still be offered');
-    assert.equal(choices[0].id, CREATE_CHOICE_ID);
-    assert.equal(choices[0].label, 'Create a new Google Sheet called "Buyer Inquiries"');
-    assert.equal(choices[0].selected, true,
-      'the default was an unrelated spreadsheet the person never mentioned');
-    assert.equal(choices.filter(c => c.selected).length, 1);
+  test('the sheet they named is created — it is not swapped for one they have', () => {
+    assert.deepEqual(resolveNamedContainer(WROTE('Buyer Inquiries'), sheets(), TEN),
+      { create: 'Buyer Inquiries' });
   });
 
-  test('and pressing it means CREATE, not "the first one on the list"', () => {
-    const pick = readPick({ id: CREATE_CHOICE_ID }, { containers: TEN, createName: 'Buyer Inquiries' });
-    assert.deepEqual(pick, { create: 'Buyer Inquiries' });
+  test('AND NOBODY IS ASKED ABOUT IT', () => {
+    // Charles, watching the first fix work: "It did it again. All questions and details
+    // should be worked out before the build commences." The answer being right is not
+    // enough when the question should not have been asked.
+    const out = resolveNamedContainer(WROTE('Buyer Inquiries'), sheets(), TEN);
+    assert.ok(out, 'a null here is the code saying "I do not know" — which is the question');
+  });
+});
+
+describe('THE QUESTION THAT SHOULD NEVER HAVE BEEN ASKED AT ALL', () => {
+  /**
+   * The older half, and the reason the picker appeared on EVERY Sheets build: the
+   * already-answered test compared IDS ONLY. Airtable's model writes a real base id it
+   * learned from `airtable_describe_base`; a Sheets user says "Agntic CRM". So a person
+   * who named a spreadsheet they own, and saw the plan card quote it back, was still
+   * asked which spreadsheet to use.
+   */
+  test('a spreadsheet they own, named the way a PERSON names it, is just used', () => {
+    assert.deepEqual(resolveNamedContainer(WROTE('Agntic CRM'), sheets(), TEN),
+      { container: TEN[0] });
   });
 
-  test('typing the name means the same thing', () => {
-    // A person answering in prose says the name they already said. Case and spacing are
-    // not a different answer.
-    const pick = readPick({ answer: '  buyer   inquiries ' }, { containers: TEN, createName: 'Buyer Inquiries' });
-    assert.deepEqual(pick, { create: 'Buyer Inquiries' });
+  test('case and spacing are not a different spreadsheet', () => {
+    for (const v of ['agntic crm', '  Agntic   CRM  ', 'AGNTIC CRM'])
+      assert.deepEqual(resolveNamedContainer(WROTE(v), sheets(), TEN), { container: TEN[0] }, v);
+  });
+
+  test('and an id still resolves, so Airtable is exactly as it was', () => {
+    assert.deepEqual(resolveNamedContainer(WROTE(TEN[1].id), sheets(), TEN),
+      { container: TEN[1] });
+  });
+
+  test('nothing recorded is the ONE remaining ambiguity, and it still asks', () => {
+    // The build wrote down no destination. Nobody but a person can settle that, and
+    // this is the only case left that reaches the picker.
+    assert.equal(resolveNamedContainer(WROTE(''), sheets(), TEN), null);
+    assert.equal(resolveNamedContainer([], sheets(), TEN), null);
   });
 });
 
 describe('the guard that made the first attempt wrong is still standing', () => {
-  test('an unlisted name is never quietly accepted as a destination', () => {
-    // `nameToCreate` decides what to OFFER. It must never be readable as "so use it" —
-    // the whole point is that the name becomes valid by being created, not by being
-    // believed. Nothing here returns a container.
-    const out = nameToCreate(WROTE('Buyer Inquiries'), sheets(), TEN);
-    assert.equal(typeof out, 'string');
-    assert.ok(!TEN.some(c => c.name === out || c.id === out));
+  test('an unlisted name never becomes a destination by being believed', () => {
+    // The whole point: the name becomes valid by being CREATED, not by being trusted.
+    // `{create}` is an instruction to the connector, never a container.
+    const out = resolveNamedContainer(WROTE('Buyer Inquiries'), sheets(), TEN);
+    assert.equal(out.container, undefined);
+    assert.ok(!TEN.some(c => c.name === out.create || c.id === out.create));
   });
 
-  test('a spreadsheet they DO have is picked, never re-created', () => {
-    // The commonest case by far, and the one a needless "create" would damage: a second
-    // "Agntic CRM" appears in their Drive and the workflow writes to the empty one.
-    assert.equal(nameToCreate(WROTE('Agntic CRM'), sheets(), TEN), null);
-    assert.equal(nameToCreate(WROTE('agntic crm'), sheets(), TEN), null, 'matched case-sensitively');
-    assert.equal(nameToCreate(WROTE(TEN[0].id), sheets(), TEN), null, 'matched by name only');
+  test('an id the tenant does not have is NOT created — it falls through to asking', () => {
+    // A model's invented id is a guess at an identifier, not a name for a thing.
+    // Creating a spreadsheet called `appABCDEFGHIJKLMN` would be nonsense, and this is
+    // the case the destination-adversarial suite exists to hold.
+    for (const junk of [
+      '1DG5qZ9mHvTlTU34iGRKWf9-vPyegVufENVmoJLcdnSAxx',
+      'appABCDEFGHIJKLMN',
+      'tblbQ0PmkA2o1P17Q',
+    ]) assert.equal(resolveNamedContainer(WROTE(junk), sheets(), TEN), null, junk);
   });
 });
 
 describe('three rules, each a way this could have been made dangerous', () => {
-  test('1. a connector that cannot create one is never offered the option', () => {
+  test('1. a connector that cannot create one never tries', () => {
     // Airtable declares no create capability — a base needs a workspace id nobody has
-    // been asked for. Declared, never inferred: its picker is untouched.
+    // been asked for. Declared, never inferred: its behaviour is untouched.
     const nodes = [{ id: 'r', type: 'connector-action',
       config: { action: 'airtable_create_record', baseId: 'Buyer Inquiries', tableId: 'Leads' } }];
     assert.equal(airtable().createCapability, undefined);
-    assert.equal(nameToCreate(nodes, airtable(), TEN), null);
+    assert.equal(resolveNamedContainer(nodes, airtable(), TEN), null);
   });
 
-  test('2. and neither is a connector we never actually listed', () => {
+  test('2. and neither does a connector we never actually listed', () => {
     // "They do not have it" is a claim. With no list capability there is one implicit
     // container and nothing was compared — so nothing can be concluded.
     const d = { ...sheets(), listCapability: null };
-    assert.equal(nameToCreate(WROTE('Buyer Inquiries'), d, []), null);
+    assert.equal(resolveNamedContainer(WROTE('Buyer Inquiries'), d, []), null);
   });
 
-  test('3. a machine identifier is a guess at an id, not a name for a thing', () => {
-    // Offering "Create a new Google Sheet called 1DG5qZ9mHvTl…" is nonsense, and it is
-    // what a model produces when it invents an id it cannot know.
-    for (const junk of [
-      '1DG5qZ9mHvTlTU34iGRKWf9-vPyegVufENVmoJLcdnSA',   // a real-shaped Drive file id
-      'appXXXXXXXXXXXXXX',                                // an Airtable base id
-      'tblbQ0PmkA2o1P17Q',                                // …and a table id
-    ]) assert.equal(nameToCreate(WROTE(junk), sheets(), TEN), null, junk);
-  });
-
-  test('a template is not a name either — it does not exist until the run', () => {
-    for (const v of ['{{extract.sheet}}', '<the spreadsheet>', '   ', ''])
-      assert.equal(nameToCreate(WROTE(v), sheets(), TEN), null, JSON.stringify(v));
+  test('3. a template is not a name — it does not exist until the run', () => {
+    for (const v of ['{{extract.sheet}}', '<the spreadsheet>', '   '])
+      assert.equal(resolveNamedContainer(WROTE(v), sheets(), TEN), null, JSON.stringify(v));
   });
 
   test('but a real name with digits or punctuation still reads as a name', () => {
-    // The identifier test must not be so eager that it silences a legitimate offer —
-    // a false positive here puts the dead end back.
+    // A false positive on the identifier test puts the dead end back.
     for (const v of ['2026 Buyer Inquiries', 'Leads (Q3)', 'CRM-2026', 'Inquiries'])
-      assert.equal(nameToCreate(WROTE(v), sheets(), TEN), v, v);
+      assert.deepEqual(resolveNamedContainer(WROTE(v), sheets(), TEN), { create: v }, v);
   });
 
   test('the identifier test, directly', () => {
@@ -155,42 +165,34 @@ describe('three rules, each a way this could have been made dangerous', () => {
 
 describe('a brand-new workspace has NO spreadsheets at all', () => {
   test('which is exactly when someone names one that does not exist', () => {
-    // With an empty list the node used to pass straight through to the ordinary ask
-    // loop — the errand. There is nothing to pick, and one real thing to do.
-    assert.equal(nameToCreate(WROTE('Buyer Inquiries'), sheets(), []), 'Buyer Inquiries');
-    const choices = pickerChoices({ containers: [], createName: 'Buyer Inquiries', containerLabel: 'Google Sheet' });
-    assert.deepEqual(choices.map(c => c.id), [CREATE_CHOICE_ID]);
+    assert.deepEqual(resolveNamedContainer(WROTE('Buyer Inquiries'), sheets(), []),
+      { create: 'Buyer Inquiries' });
   });
 
   test('and with nothing listed and nothing named, nothing changes', () => {
-    assert.equal(nameToCreate(WROTE(''), sheets(), []), null);
+    assert.equal(resolveNamedContainer(WROTE(''), sheets(), []), null);
   });
 });
 
-describe('reading an answer can never leave the build with no destination', () => {
-  test('an unreadable answer resolves to what was on screen as the default', () => {
-    // The caller has to write SOMETHING onto the node. With a create option offered as
-    // the default, falling back to an unrelated existing spreadsheet would be the
-    // wrong-file write this whole design avoids.
-    assert.deepEqual(readPick({ answer: 'yes please' }, { containers: TEN, createName: 'Buyer Inquiries' }),
-      { create: 'Buyer Inquiries' });
-    assert.deepEqual(readPick(undefined, { containers: TEN, createName: 'Buyer Inquiries' }),
-      { create: 'Buyer Inquiries' });
+describe('a step that says nothing does not silence the step that does', () => {
+  test('a blank and a template are SKIPPED, not read as "no destination"', () => {
+    // The loop must keep looking. Treating the first unusable value as the answer would
+    // send a build that knows exactly where it writes into the question — which is the
+    // interruption this whole round removes.
+    const nodes = [
+      { id: 'a', type: 'connector-action', config: { action: 'sheets_append', spreadsheetId: '' } },
+      { id: 'b', type: 'connector-action', config: { action: 'sheets_append', spreadsheetId: '{{pick.sheet}}' } },
+      { id: 'c', type: 'connector-action', config: { action: 'sheets_append', spreadsheetId: 'Agntic CRM' } },
+    ];
+    assert.deepEqual(resolveNamedContainer(nodes, sheets(), TEN), { container: TEN[0] });
   });
 
-  test('with no name to create, the old behaviour is byte-for-byte what it was', () => {
-    assert.deepEqual(readPick({ id: TEN[1].id }, { containers: TEN, createName: null }), { container: TEN[1] });
-    assert.deepEqual(readPick({ answer: 'Q3 Planning' }, { containers: TEN, createName: null }), { container: TEN[2] });
-    assert.deepEqual(readPick({ answer: 'nonsense' },  { containers: TEN, createName: null }), { container: TEN[0] });
-    assert.deepEqual(pickerChoices({ containers: TEN, createName: null }).map(c => c.selected),
-      [true, false, false], 'the first existing option must still be the default');
-  });
-
-  test('picking a real spreadsheet still wins over the create option', () => {
-    // Offering to create must never make picking harder. They said Buyer Inquiries in
-    // chat and then chose Agntic CRM in the picker: the picker is the later word.
-    assert.deepEqual(readPick({ id: TEN[0].id }, { containers: TEN, createName: 'Buyer Inquiries' }),
-      { container: TEN[0] });
+  test('and the same holds for one it has to create', () => {
+    const nodes = [
+      { id: 'a', type: 'connector-action', config: { action: 'sheets_append', spreadsheetId: '{{x}}' } },
+      { id: 'b', type: 'connector-action', config: { action: 'sheets_append', spreadsheetId: 'Buyer Inquiries' } },
+    ];
+    assert.deepEqual(resolveNamedContainer(nodes, sheets(), TEN), { create: 'Buyer Inquiries' });
   });
 });
 
@@ -246,18 +248,35 @@ describe('the node consults all of this — SOURCE level, and weaker than the re
    */
   const SRC = readFileSync(path.join(ROOT, 'src/converger/elicitation-graph.js'), 'utf8');
 
-  test('it asks whether there is something to create', () => {
-    assert.match(SRC, /const createName = nameToCreate\(writeNodes, descriptor, listed\)/);
+  test('it asks the shared decision what the conversation already settled', () => {
+    assert.match(SRC, /const settled = resolveNamedContainer\(writeNodes, descriptor, listed\)/);
   });
 
-  test('the question fires for a named-but-absent sheet even with one option or none', () => {
-    // The gate was `bases.length > 1`, which is a COUNT. With one spreadsheet in the
-    // account and a different one named, no question was asked at all.
-    assert.match(SRC, /if \(\(bases\.length > 1 \|\| createName\) && !already\)/);
+  test('THE INTERRUPT IS REACHED ONLY WHEN NOTHING WAS SETTLED', () => {
+    // The whole point of this round. `interrupt` must sit in the LAST branch — the one
+    // taken when the build recorded no usable destination — never on the path where it
+    // has a container or a name to create.
+    const at = SRC.indexOf('const settled = resolveNamedContainer');
+    const block = SRC.slice(at, at + 4000);
+    const ask = block.indexOf('await interrupt(');
+    assert.ok(ask > 0, 're-point this test');
+    const branch = block.lastIndexOf('} else if (bases.length > 1) {', ask);
+    assert.ok(branch > 0 && branch < ask,
+      'the question is no longer guarded by "nothing was settled" — it can interrupt a build that knows the answer');
   });
 
-  test('and the empty-list pass-through no longer swallows a creatable name', () => {
-    assert.match(SRC, /if \(!bases\.length && !createName\) return \{ phase: 'gapping' \}/);
+  test('and neither the container nor the create branch can reach it', () => {
+    const at = SRC.indexOf('const settled = resolveNamedContainer');
+    const block = SRC.slice(at, at + 4000);
+    const container = block.indexOf('if (settled?.container)');
+    const create    = block.indexOf('} else if (settled?.create) {');
+    const ask       = block.indexOf('await interrupt(');
+    assert.ok(container > 0 && create > container && ask > create,
+      'the branches were reordered — a settled destination may now fall into the question');
+  });
+
+  test('the empty-list pass-through does not swallow a creatable name', () => {
+    assert.match(SRC, /if \(!bases\.length && !settled\?\.create\) return \{ phase: 'gapping' \}/);
   });
 
   test('a creation that fails degrades to ASKING, never to a made-up id', () => {

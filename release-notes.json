@@ -1,5 +1,13 @@
 [
   {
+    "version": "1.6.116",
+    "date": "2026-08-01",
+    "title": "The build stops asking what you already told it",
+    "notes": [
+      "Name a spreadsheet you own and Atlas just uses it; name one you don't and it creates it. No question mid-build."
+    ]
+  },
+  {
     "version": "1.6.115",
     "date": "2026-08-01",
     "title": "Create a spreadsheet you don't have yet",
