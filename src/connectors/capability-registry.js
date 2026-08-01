@@ -62,13 +62,23 @@ export class CapabilityRegistry {
    *   containerKey      — the WRITE node's config key naming the container
    *   tableKey          — the WRITE node's config key naming the table
    *   containerLabel/tableLabel — plain words for the questions the user is asked
+   *   createCapability  — capability id that MAKES a container; omit if it cannot
+   *   createNameArg     — argument on it that takes the new container's name
+   *   createColumnsArg  — optional argument that takes its starting column names
+   *   createIdKey       — key on its result holding the id of what it made
    *
-   * Only connectors whose write model is "container → table → NAMED columns" can
-   * declare this. Google Sheets deliberately does NOT: `sheets_append` takes a
-   * positional `values` array of arrays, its tab lives inside a `range` string
-   * rather than its own key, and it has no capability that lists spreadsheets — so
-   * it needs name→column-INDEX mapping, which is a different feature, not this one.
-   * Declaring it here would be a schema nothing can honour.
+   * THIS COMMENT USED TO SAY GOOGLE SHEETS DELIBERATELY DECLARES NONE OF THIS. That
+   * was true when written and false from 2026-07-31, when `sheets_describe` was
+   * wired — and the four shape assumptions the seam had inherited from Airtable came
+   * out with it (`listArgs`, `listIdKey`, `tableIdKey`/`tableNameKey`, and a column
+   * being an object in one connector and a bare string in the other). A doc that
+   * disagrees with `main` is confidently wrong and reads as authoritative.
+   *
+   * `createCapability` is the other half, added 2026-08-01: the picker could only ever
+   * offer what the tenant already HAD, so a person who asked for a new spreadsheet was
+   * shown ten they did not want. Declared, never inferred — Airtable declares none,
+   * because creating a base needs a workspace id nobody has been asked for, and its
+   * picker is unchanged.
    *
    * A capability's read/write effect is a property it DECLARES, never something
    * inferred from its id. `outcome-oracle.js` used to derive it by testing the id

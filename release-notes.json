@@ -1,5 +1,13 @@
 [
   {
+    "version": "1.6.115",
+    "date": "2026-08-01",
+    "title": "Create a spreadsheet you don't have yet",
+    "notes": [
+      "Asked for a sheet that doesn't exist, Atlas now offers to create it instead of listing ten you didn't ask for."
+    ]
+  },
+  {
     "version": "1.6.114",
     "date": "2026-08-01",
     "title": "Clearer wording on the cards you read before going live",

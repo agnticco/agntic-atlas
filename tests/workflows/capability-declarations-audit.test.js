@@ -78,6 +78,10 @@ const TRUTH = {
   sheets_append: 'write', docs_create: 'write', tasks_create: 'write',
   airtable_create_record: 'write', airtable_update_record: 'write',
   airtable_create_field: 'write',
+  // Creates a CONTAINER, so its name really is the destination — unlike an event's
+  // title. One-time setup, like `airtable_create_field`: `SETUP_ACTION_AS_STEP` keeps
+  // it out of the run path, and it is invoked by the build's create-or-pick question.
+  sheets_create: 'write',
   // MUTATIONS THAT ASSERT NOTHING. They change the world, so every guard must treat
   // them as writes — but "a record exists" is false of both, so they deliberately do
   // NOT declare an effect: that would let a delete satisfy a promise that something

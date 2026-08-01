@@ -54,6 +54,7 @@ import { indexDestinations } from '../workflows/destinations.js';
 import { unprovedLanes, laneKeyOf, buildTestCaseRequestPrompt, readTestCaseRequest, withTestCase }
   from './test-case-request.js';
 import { sufficiencyUnactionable } from './sufficiency-actionable.js';
+import { nameToCreate, pickerChoices, readPick, headersFor } from './destination-create-or-pick.js';
 // Asking a person is a tool with rules — see asking.js for the four and why each exists.
 import { shouldAsk } from './asking.js';
 import { analyzeTable } from '../workflows/decision-analysis.js';
@@ -3425,8 +3426,6 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
       // Fall through to the ordinary loop, which ASKS.
       return { phase: 'gapping', confirmationLog: [{ step: state.step, type: 'destination_lookup_failed', error: String(err?.message ?? err) }] };
     }
-    if (!bases.length) return { phase: 'gapping' };
-
     // A base id the model already put in the draft is honoured ONLY if the tenant
     // actually has it. Anything else is a guess, and a guess writes the customer's
     // lead into a base that does not exist.
@@ -3435,8 +3434,26 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
     // will return something else again.
     const bId   = (b) => String(b?.[descriptor.listIdKey   ?? 'id']   ?? '');
     const bName = (b) => String(b?.[descriptor.listNameKey ?? 'name'] ?? '');
+    const listed = bases.map(x => ({ id: bId(x), name: bName(x) }));
+
+    // ── THE ONE THEY NAMED MAY NOT EXIST YET ─────────────────────────────────
+    // The picker can only offer what the tenant HAS. Asked to "create a fresh sheet
+    // called Buyer Inquiries", it listed ten existing spreadsheets and none of them was
+    // that — a question with no correct answer. `nameToCreate` returns the name only
+    // when the connector says it can create one, we genuinely listed, and the value is
+    // a NAME rather than a machine id. See `destination-create-or-pick.js`.
+    const createName = nameToCreate(writeNodes, descriptor, listed);
+    // Anything worth recording that happens before the node's own return points.
+    const extraLog = [];
+
+    // Nothing listed and nothing to create is the old pass-through: the ordinary loop
+    // asks. Nothing listed but a name to create is a real, answerable choice — a brand
+    // new workspace has no spreadsheets at all, and that is exactly when a person is
+    // most likely to have named one that does not exist.
+    if (!bases.length && !createName) return { phase: 'gapping' };
+
     const already = writeNodes.map(n => n.config?.[descriptor.containerKey])
-      .find(b => isKnownBase(b, bases.map(x => ({ id: bId(x), name: bName(x) }))));
+      .find(b => isKnownBase(b, listed));
     let base = already ? bases.find(b => bId(b) === already) : bases[0];
     // ── A QUESTION ALREADY ANSWERED MUST NOT BE ASKED AGAIN ──────────────────
     // `already` is a base the DRAFT names and the tenant genuinely has — which means
@@ -3449,14 +3466,55 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
     // Only ask when there is a real ambiguity — no valid pre-resolved base AND more
     // than one to choose from. A guessed or unknown id still asks, because a guess
     // writes the customer's lead into a base that does not exist.
-    if (bases.length > 1 && !already) {
+    //
+    // A NAME THAT IS NOT ON THE LIST IS ALSO A REAL AMBIGUITY, even with one container
+    // or none: "the one you named, or one of these?" is a question only a person can
+    // settle, and the answer they gave in chat is on the list as the FIRST option.
+    if ((bases.length > 1 || createName) && !already) {
+      const label = descriptor.containerLabel ?? 'destination';
       const answer = await interrupt({
         type: 'clarification',
-        question: `Which ${descriptor.containerLabel ?? 'destination'} should this write to?`,
-        choices: bases.map((b, i) => ({ id: bId(b), label: bName(b), selected: i === 0 })),
+        question: `Which ${label} should this write to?`,
+        choices: pickerChoices({ containers: listed, createName, containerLabel: label }),
         step: state.step,
       });
-      base = bases.find(b => bId(b) === answer?.id || bName(b) === answer?.answer) ?? bases[0];
+      const pick = readPick(answer, { containers: listed, createName });
+
+      if (pick.create) {
+        // ── CREATED, NOT ASSUMED ───────────────────────────────────────────────
+        // The invariant that an unlisted container may not reach the spec is KEPT.
+        // It reaches the spec by being made real: the connector returns an id, and
+        // every check downstream passes for the ordinary reason.
+        let made = null;
+        try {
+          made = await invokeCapability(descriptor.createCapability, {
+            [descriptor.createNameArg ?? 'name']: pick.create,
+            ...(descriptor.createColumnsArg
+              ? { [descriptor.createColumnsArg]: headersFor(writeNodes, state.draft?.outcome, readFields) }
+              : {}),
+          });
+        } catch (err) {
+          // A creation that failed leaves us with no destination we can stand behind.
+          // Fall through to the ordinary loop, which ASKS — the same honest degradation
+          // as a connector that will not answer a lookup.
+          return {
+            phase: 'gapping',
+            confirmationLog: [{ step: state.step, type: 'destination_create_failed', name: pick.create, error: String(err?.message ?? err) }],
+          };
+        }
+        const newId = String(made?.[descriptor.createIdKey ?? 'id'] ?? '').trim();
+        if (!newId) {
+          return {
+            phase: 'gapping',
+            confirmationLog: [{ step: state.step, type: 'destination_create_failed', name: pick.create, error: 'the connector returned no id' }],
+          };
+        }
+        base = { [descriptor.listIdKey ?? 'id']: newId, [descriptor.listNameKey ?? 'name']: pick.create };
+        bases = [...bases, base];
+        extraLog.push({ step: state.step, type: 'destination_created', id: newId, name: pick.create });
+      } else {
+        base = pick.container ?? bases[0];
+      }
     }
 
     // ── 2. The table, and its REAL columns ───────────────────────────────────
@@ -3470,6 +3528,7 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
       return {
         draft: { ...state.draft, nodes: fillDestination(nodes, { connector: targetConnector, descriptor, catalog: capabilityCatalog, containerId: bId(base) }) },
         destinationsResolved: true, step: state.step + 1, phase: 'gapping',
+        ...(extraLog.length ? { confirmationLog: extraLog } : {}),
       };
     }
 
@@ -3546,7 +3605,7 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
         }),
       },
       destination: { baseId: bId(base), table: tName(table), columns },
-      confirmationLog: [{
+      confirmationLog: [...extraLog, {
         step: state.step, type: 'destination_resolved',
         base: { id: bId(base), name: bName(base) }, table: tName(table),
         columns: columns.map(c => c.name), mapped, renames,

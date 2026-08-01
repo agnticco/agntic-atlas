@@ -2729,6 +2729,52 @@ fixed on the spot. Fold the relevant ones into whatever increment next touches t
   node's config — an undeclared key, which is a hard publish failure. Pinned by four new
   cases in `sheets-can-be-picked-not-pasted.test.js` (25), two mutations red→green.
 
+- **THE PICKER COULD ONLY OFFER SHEETS THEY ALREADY HAD — FIXED (2026-08-01), AND THE
+  FIRST ATTEMPT WAS WORSE THAN THE BUG.** Witnessed on a fresh tenant the day after the
+  picker shipped. It worked: ten real spreadsheets by name, no ids, the chosen sheet's real
+  columns read back and a mismatch flagged. Then, told *"don't touch that one — create a
+  fresh sheet called Buyer Inquiries for this instead"*, the build stopped mid-way and asked
+  *"Which Google Sheet should this write to?"*, listing the same ten, **none of them Buyer
+  Inquiries**. A question with no correct answer. Slack has had create-or-pick since
+  2026-07-24 (*"a genuinely un-defaultable choice — a destination that doesn't exist — is
+  still asked conversationally and applied DIRECTLY"*); **Sheets got the pick half and never
+  got the create half.**
+  **THE FIX TRIED FIRST IS THE PART WORTH REMEMBERING.** Skipping the picker and carrying the
+  named sheet through turned **eight** destination-adversarial tests red, one of them *"a base
+  id the connector never listed cannot survive into the spec"*, whose own comment reads *"a
+  guess writes the customer's lead into a base that does not exist."* That guard is right: a
+  workflow bound to a spreadsheet nobody has writes a customer's data nowhere and reports
+  success. **It traded a dead end for a silent failure. It was reverted before shipping.**
+  So the invariant is KEPT and the missing half is BUILT: the sheet reaches the spec by being
+  **created**, after which it is a real container with a real id and every existing check
+  passes for the ordinary reason. New `sheets_create` (declaring `oneTimeSetup`, so
+  `SETUP_ACTION_AS_STEP` keeps it out of the run path exactly as it does for
+  `airtable_create_field` — a spreadsheet re-created on every email is that defect again),
+  and `createCapability`/`createNameArg`/`createColumnsArg`/`createIdKey` on the
+  `schemaDiscovery` descriptor.
+  **THREE RULES, each a way this could have been made dangerous** (`destination-create-or-pick.js`):
+  a name is offered for creation **only** when the connector DECLARES it can create one
+  (Airtable declares none — a base needs a workspace id nobody has been asked for — so its
+  picker is untouched); **only** when we genuinely listed, because *"they do not have it"* is a
+  claim and a connector with no list capability compared nothing; and **only** when the value
+  reads as a NAME rather than a machine id, since offering *"Create a new Google Sheet called
+  1DG5qZ9mHvTl…"* is what a model's invented id looks like. It reads the WRITE NODES, never
+  the conversation — substring-matching free prose is the trap already recorded against
+  `retargetStaleAssertion`.
+  **CREATING IS THE DEFAULT when a named sheet is absent, and that is a deliberate choice of
+  which mistake to make.** The alternative default is `containers[0]`, an unrelated
+  spreadsheet the person never mentioned: a new empty sheet nobody wanted is noise, a row
+  appended to their real CRM is not. The same reasoning governs an unreadable answer.
+  **The count gate had the same defect the lane top-up had**: `bases.length > 1` meant that
+  with ONE spreadsheet in the account and a different one named, no question was asked at all;
+  and the `!bases.length` pass-through swallowed the case a brand-new workspace hits every
+  time — no spreadsheets, one named, nothing to pick and one real thing to do.
+  Pinned by `tests/converger/a-sheet-you-do-not-have-yet.test.js` (24), **seven mutations
+  red→green** including both halves of the count gate. Four pins are SOURCE-level and say so:
+  the `destinations` node closes over the LLM, the graph state and `interrupt` and cannot be
+  lifted, and "the decision was right and nothing consulted it" is how the P13-0 destination
+  fix was silently reverted with the suite green. **NOT witnessed in a browser** — a live
+  build that names a sheet the tenant does not have is the pending confirmation.
 - **A PERSON NOW PICKS THEIR SPREADSHEET INSTEAD OF PASTING ITS ID — FIXED
   (2026-07-31, increment 2 of "the conversation as a tool").** The errand this replaces,
   witnessed on prod: *"What is the spreadsheet ID for 'Pricing Enquiries'? You can find

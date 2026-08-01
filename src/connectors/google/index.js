@@ -499,6 +499,49 @@ export async function sheetsDescribe(gapi, { spreadsheetId }) {
   return { spreadsheetId, title: meta.properties?.title ?? null, sheets: described };
 }
 
+/**
+ * sheets_create — a NEW spreadsheet, because the one a person named does not exist yet.
+ *
+ * The picker built on 2026-07-31 could only ever OFFER what the tenant already had.
+ * Witnessed on a fresh tenant 2026-08-01: told *"don't touch that one — create a fresh
+ * sheet called Buyer Inquiries"*, the build asked *"Which Google Sheet should this write
+ * to?"* and listed ten existing spreadsheets, none of them the one that had just been
+ * agreed. **A question with no correct answer.** Slack has had create-or-pick since
+ * 2026-07-24; Sheets got the pick half and never got the create half.
+ *
+ * ONE-TIME SETUP, never a workflow step: a spreadsheet is something a workflow needs to
+ * EXIST, not something it makes on every run. `SETUP_ACTION_AS_STEP` refuses it a place
+ * in the run path, exactly as it does for `airtable_create_field` — which was put inside
+ * an email-triggered workflow and re-created its columns on every email.
+ *
+ * `headers` are written as row 1 when the caller knows what the workflow will log. A
+ * spreadsheet whose first row is blank is not wrong, only less useful, so an empty list
+ * writes nothing rather than inventing column names.
+ */
+export async function sheetsCreate(gapi, { title, headers } = {}) {
+  const name = String(title ?? '').trim();
+  if (!name) throw new Error('sheets_create: needs a title — a spreadsheet needs a name.');
+  const cols = (Array.isArray(headers) ? headers : [])
+    .map(h => String(h ?? '').trim()).filter(Boolean);
+
+  const made = await gapi('POST', '/sheets/v4/spreadsheets', { body: { properties: { title: name } } });
+  const spreadsheetId = made?.spreadsheetId;
+  // Never return a half-answer. A caller that got no id would write `undefined` into the
+  // workflow's destination, which is the "wrote the lead into nothing" failure this whole
+  // seam exists to prevent.
+  if (!spreadsheetId) throw new Error('sheets_create: Google returned no spreadsheet id.');
+  const sheet = made?.sheets?.[0]?.properties?.title ?? 'Sheet1';
+
+  if (cols.length) {
+    await gapi('PUT', `/sheets/v4/spreadsheets/${spreadsheetId}/values/${encodeURIComponent(`${sheet}!A1`)}`,
+      { body: { values: [cols] }, params: { valueInputOption: 'USER_ENTERED' } });
+  }
+  return {
+    spreadsheetId, title: name, sheet, headers: cols,
+    link: `https://docs.google.com/spreadsheets/d/${spreadsheetId}/edit`,
+  };
+}
+
 /** sheets_append — append rows. */
 export async function sheetsAppend(gapi, { spreadsheetId, range = 'Sheet1', values }) {
   const rows = typeof values === 'string' ? JSON.parse(values) : values;
@@ -809,8 +852,48 @@ export function registerGoogleChannels(capabilityRegistry) {
       tableKey:          'range',
       containerLabel:    'Google Sheet',
       tableLabel:        'tab',
+      // ── AND THE OTHER HALF: THE ONE THEY NAMED MAY NOT EXIST YET (2026-08-01) ──
+      //
+      // Discovery could only ever offer what the tenant ALREADY had. Asked to "create a
+      // fresh sheet called Buyer Inquiries", the build listed ten existing spreadsheets
+      // and none of them was that — a question with no correct answer.
+      //
+      // Declared, so a connector that CANNOT create a container simply says nothing and
+      // the picker behaves exactly as it does today (Airtable declares none: a base needs
+      // a workspace id nobody has been asked for). Nothing here is inferred from a name.
+      createCapability: 'sheets_create',
+      createNameArg:    'title',
+      createColumnsArg: 'headers',
+      createIdKey:      'spreadsheetId',
     },
     handle: makeHandle((gapi, config) => sheetsDescribe(gapi, { spreadsheetId: config.spreadsheetId })),
+  });
+
+  capabilityRegistry.register({
+    id: 'sheets_create', connector: 'google', positions: ['step'],
+    name: 'Create Google Sheet', icon: 'table',
+    // A spreadsheet is something the workflow needs to EXIST, not work it does per run.
+    // Same bargain as `airtable_create_field`: declaring the write keeps every guard
+    // honest, and `SETUP_ACTION_AS_STEP` refuses it a place in the run path, so it can
+    // never be reached to satisfy a promise.
+    oneTimeSetup: true,
+    effect: 'write', assertionKind: 'document_exists',
+    // The spreadsheet IS the destination here, so its name genuinely names where the
+    // write landed — unlike `calendar_create_event`, whose title is content INSIDE a
+    // calendar and cost four rounds of the title-as-destination defect. Mirrors
+    // `drive_create_folder`, which creates a container the same way.
+    locatorKeys: ['title'], defaultLocator: 'a new Google Sheet',
+    description: 'Creates a new Google Sheet. Use it when the spreadsheet a person named does not exist yet — never ask them to make one and paste its id.',
+    configSchema: [
+      { key: 'title',   label: 'Spreadsheet name', type: 'string', optional: false },
+      { key: 'headers', label: 'Column headers',   type: 'string', optional: true, hint: 'JSON array of column names, written as row 1' },
+    ],
+    requiredScopes: ['https://www.googleapis.com/auth/spreadsheets'],
+    isReady: ready,
+    handle: makeHandle((gapi, config) => sheetsCreate(gapi, {
+      title: config.title,
+      headers: typeof config.headers === 'string' ? JSON.parse(config.headers) : config.headers,
+    })),
   });
 
   capabilityRegistry.register({
