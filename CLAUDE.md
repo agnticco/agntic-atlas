@@ -2386,6 +2386,20 @@ fixed on the spot. Fold the relevant ones into whatever increment next touches t
     a rule about what a person's MESSAGE MEANS, written twice, is the shape this file
     records paying for most. A test case is added to the spec and the SAME spec is
     re-presented; nothing is rebuilt.
+  **CONFIRMED LIVE (2026-08-01, v1.6.106), and the honest split.** Same request, fresh
+  build (`build-platform-1785550053796`): `converger.lane_examples {lanes: 2, had: 1,
+  added: 2}` — the top-up RAN where it had skipped — verify passed with no rebuild, the
+  self-check reported **`consistent`** (the `PROMISE_AND_SENTENCE_DIFFER` false positive
+  did not recur), and the panel read **"Contract kept · every promise held — it's cleared
+  to go live"** with **Go live unlocked**. The real inbox email that was scored BROKEN two
+  builds earlier is now correctly `not exercised`. That is the first time in this campaign
+  a classify-then-branch Sheets workflow reached go-live.
+  **NOT witnessed live: the test-case door itself.** With every path claimed there was no
+  unproved path left, so the state that offers the door never arose — the upstream fix
+  removed the need for it. Its code is pinned by 21 tests and six mutations and is
+  UNPROVEN IN A BROWSER; say so rather than implying the whole change was seen working.
+  Reaching it now requires a build whose paths the top-up genuinely cannot cover.
+
   **THE DECISION IS NOT SCOPED TO THE WORDING.** "Test the error path" and "it should also
   handle an empty body" are one sentence to a regex and opposite requests to a person. Two
   things must hold: a path is genuinely unproved (so Atlas actually asked), and the model
