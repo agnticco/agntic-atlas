@@ -1,5 +1,13 @@
 [
   {
+    "version": "1.6.110",
+    "date": "2026-08-01",
+    "title": "Atlas won't design a workflow it can't build",
+    "notes": [
+      "On a workspace with nothing connected, Atlas now leads with what to connect instead of designing the workflow first and mentioning the problem at the end."
+    ]
+  },
+  {
     "version": "1.6.109",
     "date": "2026-08-01",
     "title": "Slack events now reach every workspace that connected them",

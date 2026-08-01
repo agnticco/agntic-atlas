@@ -2399,11 +2399,34 @@ fixed on the spot. Fold the relevant ones into whatever increment next touches t
   **This is the file's own rule earning its place again: a prompt is a belief about model
   behaviour and is pinned by nothing.** The guard is what made being wrong about it
   harmless, and being wrong about it is exactly what happened, immediately.
-  **RESIDUAL, with the fix direction:** the remaining half is a claim about the customer's
-  setup inside free prose, which the button gate cannot reach. It wants the same treatment
-  as `scrubInventedNavigation` — a scrubber that rewrites "your connected inbox" and
-  friends when the connector is absent, applied to the streamed text rather than to the
-  flag. Do NOT reach for a sterner prompt; that door has been tried twice on this endpoint.
+  **CORRECTED THE SAME DAY, ON CHARLES'S CALL, AND THE FIRST VERSION WAS TOO TIMID.**
+  Reading the live result: *"the system should not try and build workflows at all with no
+  connectors connected… it already affirmed building was possible without slack being
+  connected."* He was right. Appending a notice left the model's design ON SCREEN ABOVE
+  the correction — *"hit 'Build it' and I'll walk you through each step"*, an action that
+  had just been withdrawn, over *"whenever a new email arrives in your connected inbox"*,
+  which is false when nothing is connected. **A correction underneath a contradiction is
+  not a correction: the reader believes the confident part.**
+  Now the reply IS the instruction. The model's words are WITHDRAWN and replaced
+  (`withdrawPartial` + `sendChunk`, the same path the navigation backstop uses) with a
+  deterministic message that says what to connect, where, and what happens next — and
+  never describes a setup that does not exist. Pinned by assertions that the reply
+  contains no "Build it" and no "your connected".
+  **AND THE PROMPT NOW STATES WHAT IS *NOT* CONNECTED, not only what is.** Listing only
+  the connected services left the model to infer absence, and it inferred wrongly every
+  time. The block names the missing ones and forbids asking for their settings.
+  **EMAIL AS A TRIGGER IS GMAIL; EMAIL AS A DESTINATION IS NOT.** The first version missed
+  the witnessed case entirely because a bare "email" is deliberately ambiguous — "email me
+  the summary" can mean the Atlas inbox, which needs nothing connected, and treating the
+  word as a Gmail requirement would block the one shape a brand-new user can build. But
+  *"when a new email ARRIVES"* can only mean a mailbox Atlas reads, and the only one it can
+  read is the connected Google account. Anchored on the ARRIVAL verbs, so "send me an
+  email" and "reply by email" are untouched. Both senses are pinned, in both directions.
+  **TWO MORE FIXTURES WERE WRONG, NOT THE FIX** — the same `build-offer-actionable.test.js`
+  harnesses, now needing Google connected because their `BUILD_INTENT` is email-triggered.
+  A workspace with Slack but no Google could not run that workflow, so asserting a build
+  offer for it asserted a state production never produces. That rule has now caught the
+  same file twice in one day.
 
   **AN EXISTING TEST WENT RED AND THE FIXTURE WAS WRONG, NOT THE FIX.**
   `build-offer-actionable.test.js` mounted the endpoint with `spine = {llm}` — no

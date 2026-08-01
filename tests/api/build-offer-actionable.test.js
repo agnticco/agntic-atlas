@@ -207,7 +207,13 @@ describe('POST /api/builder/chat — the turn that offers to build carries the B
     spine = {
       llm: fakeLLM(''),
       slack:    { resolveForTenant: async () => ({ connected: true }) },
-      google:   { resolveForTenant: async () => ({ connected: false }) },
+      // GOOGLE CONNECTED TOO, and it has to be: `BUILD_INTENT` is EMAIL-TRIGGERED
+      // ("when an email arrives"), and since 2026-08-01 that is read as requiring Gmail —
+      // email as a TRIGGER can only mean the connected Google account, even though email
+      // as a DESTINATION may mean the Atlas inbox. A workspace with Slack but no Google
+      // could not run this workflow, so asserting a build offer for it was asserting a
+      // state production never produces.
+      google:   { resolveForTenant: async () => ({ connected: true }) },
       airtable: { resolveForTenant: () => ({ connected: false }) },
     };
     mountBuilderRoutes(app, {
@@ -415,7 +421,13 @@ describe('POST /api/builder/chat — a turn that ends on the FORCED-FINAL path s
       llm: fakeToolLoopLLM(''),
       engine:   { capabilityRegistry: registry },
       slack:    { resolveForTenant: async () => ({ connected: true }) },
-      google:   { resolveForTenant: async () => ({ connected: false }) },
+      // GOOGLE CONNECTED TOO, and it has to be: `BUILD_INTENT` is EMAIL-TRIGGERED
+      // ("when an email arrives"), and since 2026-08-01 that is read as requiring Gmail —
+      // email as a TRIGGER can only mean the connected Google account, even though email
+      // as a DESTINATION may mean the Atlas inbox. A workspace with Slack but no Google
+      // could not run this workflow, so asserting a build offer for it was asserting a
+      // state production never produces.
+      google:   { resolveForTenant: async () => ({ connected: true }) },
       airtable: { resolveForTenant: () => ({ connected: false }) },
       auth: {
         oauthTokenStore: { get: () => ({ access_token_enc: 'enc', scope: 'channels:read', account: 'acme' }) },

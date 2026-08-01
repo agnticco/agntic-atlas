@@ -439,18 +439,29 @@ function pubUser(u) {
 // Build the conversational system prompt with live connector context injected.
 // connectorLines: string[] of "- ConnectorName: what it can do" per connected connector.
 // user: { name, email } — injected so the model knows who it's talking to.
-function buildChatSystem(connectorLines = [], user = null) {
-  const connectorBlock = connectorLines.length
+function buildChatSystem(connectorLines = [], user = null, connectedSet = new Set()) {
+  // WHAT IS MISSING IS AS LOAD-BEARING AS WHAT IS PRESENT. Listing only the connected
+  // services left the model to infer absence, and it inferred wrongly every time — it
+  // asked which Slack channel to use on a workspace with no Slack, and described "your
+  // connected inbox" to someone who had connected nothing.
+  const ALL_CONNECTABLE = [['slack', 'Slack'], ['google', 'Google (Gmail, Sheets, Docs, Calendar, Drive)'], ['airtable', 'Airtable']];
+  const missingNames = ALL_CONNECTABLE.filter(([id]) => !connectedSet.has(id)).map(([, label]) => label);
+  const missingBlock = missingNames.length
+    ? `\n\nNOT CONNECTED TO THIS WORKSPACE: ${missingNames.join(' · ')}.
+If what they describe needs one of these, SAY SO IN YOUR FIRST REPLY and offer to get it
+connected — before any other question. Do NOT ask which channel, which sheet, which
+mailbox or which calendar; those are settings for a service they do not have yet. Do NOT
+describe their setup back to them as though it exists — "your connected inbox" is a FALSE
+STATEMENT when nothing is connected. Point them at Connections in the left sidebar and
+stop there. You CAN still build workflows that need none of these — a schedule, web
+research, and delivery to their Atlas inbox all work today — so offer one of those if it
+genuinely fits what they asked for.`
+    : '';
+
+  const connectorBlock = (connectorLines.length
     ? `\nConnectors this workspace has connected:\n${connectorLines.join('\n')}`
     : `\nNOTHING IS CONNECTED TO THIS WORKSPACE YET — no Gmail, no Slack, no Airtable, nothing.
-This is a brand-new workspace and it is almost certainly the person's first workflow.
-Do NOT wait to be asked. The moment they describe automation that needs an outside
-service, SAY SO in your first reply and offer to get it connected — never ask which
-channel, which sheet or which mailbox, and never describe their setup back to them as
-though it exists ("your connected inbox" is a false statement here). Point them at
-Connections in the left sidebar and stop there. You CAN still build workflows that need
-nothing connected — a schedule, web research, and delivery to their Atlas inbox all work
-today — so offer one of those if it fits what they asked for.`;
+This is a brand-new workspace and it is almost certainly the person's first workflow.`) + missingBlock;
 
   const userBlock = user
     ? `\nYou are speaking with ${user.name}${user.email ? ` (${user.email})` : ''}.`
@@ -1194,7 +1205,7 @@ Rules:
       //   2. If the model issued tool calls, execute each capability and append results.
       //   3. Repeat until no tool calls or max iterations reached.
       const msgArray = [
-        { role: 'system', content: buildChatSystem(connectorLines, chatUser) + ragBlock },
+        { role: 'system', content: buildChatSystem(connectorLines, chatUser, connectedSet) + ragBlock },
         ...history,
       ];
       // When tools are in play Claude can drift from the JSON envelope and reply in prose.
@@ -1278,8 +1289,14 @@ Rules:
        */
       const applyConnectorGap = (readyToBuild, buildIntent) => {
         const d = connectorGapDecision({ readyToBuild, buildIntent }, connectedSet);
-        if (d.notice && !closed) {
-          sendChunk(`\n\n${d.notice}`);
+        if (d.reply && !closed) {
+          // WITHDRAW AND REPLACE, not append. Appending left the model's design on
+          // screen above the correction — "hit 'Build it'" and "your connected inbox" —
+          // so the user read a confident affirmation and a contradiction underneath it.
+          // Same withdraw-and-replace path the navigation backstop uses, so they end up
+          // with one clean bubble that says only what is true.
+          withdrawPartial();
+          sendChunk(d.reply);
           logEvent('chat.connector_gap', { tenant: req.tenant?.id ?? null, missing: d.missing });
         }
         return d;

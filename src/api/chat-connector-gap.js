@@ -57,6 +57,26 @@ const SERVICE_WORDS = [
   { connector: 'google',    label: 'Google Calendar',  re: /\bgoogle\s+calendar\b/i },
   { connector: 'google',    label: 'Google Drive',     re: /\bgoogle\s+drive\b/i },
   { connector: 'airtable',  label: 'Airtable',         re: /\bairtable\b/i },
+
+  // ── EMAIL AS A TRIGGER IS GMAIL. EMAIL AS A DESTINATION IS NOT. ────────────
+  //
+  // A bare "email" stays ambiguous on purpose (see the header): "email me the summary"
+  // can mean the Atlas inbox, which needs nothing connected, and treating the word as a
+  // Gmail requirement would block the one shape a brand-new user can actually build.
+  //
+  // But "when a new email ARRIVES" can only mean a mailbox Atlas reads, and the only one
+  // it can read is the connected Google account. Nothing else in the product can start a
+  // workflow from incoming mail. So the TRIGGER sense is unambiguous where the delivery
+  // sense is not, and it is the sense that matters: witnessed 2026-08-01, a workspace
+  // with nothing connected was told its workflow would run "whenever a new email arrives
+  // in your connected inbox".
+  //
+  // Deliberately anchored on the ARRIVAL verbs rather than on the word "email", so
+  // "send me an email", "email the report" and "reply by email" are all left alone.
+  { connector: 'google', label: 'Gmail',
+    re: /\b(?:new |incoming |inbound )?e-?mails?\b[^.!?]{0,40}?\b(?:arrives?|arriving|lands?|comes? in|is received)\b/i },
+  { connector: 'google', label: 'Gmail',
+    re: /\bwhen(?:ever)?\b[^.!?]{0,40}?\be-?mails?\s+(?:us|me|in)\b/i },
 ];
 
 /**
@@ -86,12 +106,27 @@ export function missingConnectorsFor(intent, connected) {
 }
 
 /**
- * The sentence a person is shown instead of a button they should not be given.
+ * The WHOLE reply a person gets instead of a design they cannot build.
  *
- * Composed deterministically, never by a model — the whole point is that this cannot be
- * the thing that gets it wrong. It names Connections in the left sidebar and stops there,
- * which is the ONE place in Atlas the product is allowed to name (2026-07-26); it must not
- * grow a description of what is inside it.
+ * Composed deterministically, never by a model — the point is that this cannot be the
+ * thing that gets it wrong.
+ *
+ * **IT REPLACES THE MODEL'S WORDS RATHER THAN FOLLOWING THEM, and that was a correction.**
+ * The first version appended a notice and kept the model's prose, on the reasoning that
+ * the restatement was useful. Charles, 2026-08-01, looking at the result on a fresh
+ * workspace: *"it already affirmed building was possible without slack being connected."*
+ * He was right. The kept prose said *"hit 'Build it' and I'll walk you through each
+ * step"* — affirming an action that had just been withdrawn — and described the workflow
+ * running *"whenever a new email arrives in your connected inbox"*, which is a false
+ * statement about the customer's own account. A correction underneath a contradiction is
+ * not a correction; the user reads the confident part.
+ *
+ * So the reply IS the instruction. It says what to connect, where to do it, and what
+ * happens next — and it never describes a setup that does not exist.
+ *
+ * It names Connections in the left sidebar and stops there, which is the ONE place in
+ * Atlas the product is allowed to name (2026-07-26). It must not grow a description of
+ * what is inside it.
  */
 export function connectFirstMessage(missing) {
   if (!missing?.length) return null;
@@ -99,33 +134,33 @@ export function connectFirstMessage(missing) {
   const list = names.length === 1 ? names[0]
              : names.length === 2 ? `${names[0]} and ${names[1]}`
              : `${names.slice(0, -1).join(', ')} and ${names.at(-1)}`;
-  const it = names.length === 1 ? 'it' : 'them';
-  return `Before I can build this, ${list} ${names.length === 1 ? 'needs' : 'need'} to be connected to this workspace — open Connections in the left sidebar to set ${it} up. Once that's done, tell me and I'll put this together.`;
+  const one = names.length === 1;
+  return `I can't build this yet — it needs ${list}, and ${one ? 'that is' : 'those are'} not connected to this workspace.
+
+Open **Connections** in the left sidebar to connect ${one ? 'it' : 'them'}. It takes a minute and you only do it once.
+
+Once ${one ? 'it is' : 'they are'} connected, tell me and I'll put this together and walk you through every step before anything goes live.`;
 }
 
 /**
  * The decision for one outgoing chat turn.
  *
- * Pure, so it can be tested without a server, and returning BOTH halves so the caller
- * cannot apply one and forget the other: `notice` is the sentence to stream, and
+ * Pure, so it can be tested without a server, and returning every half so the caller
+ * cannot apply one and forget another: `reply` REPLACES what the model wrote,
  * `readyToBuild` is the flag the button is gated on.
  *
- * The model's own words are never replaced — the notice is appended. The reply usually
- * contains a useful restatement of what the person asked for, and discarding it to print
- * one sentence would make the product feel like it stopped listening.
- *
- * @returns {{readyToBuild: boolean, buildIntent: string|null, notice: string|null,
+ * @returns {{readyToBuild: boolean, buildIntent: string|null, reply: string|null,
  *            missing: string[]}}
  */
 export function connectorGapDecision({ readyToBuild, buildIntent }, connected) {
   const missing = missingConnectorsFor(buildIntent, connected);
   if (!missing.length) {
-    return { readyToBuild: !!readyToBuild, buildIntent: buildIntent ?? null, notice: null, missing: [] };
+    return { readyToBuild: !!readyToBuild, buildIntent: buildIntent ?? null, reply: null, missing: [] };
   }
   return {
     readyToBuild: false,
     buildIntent: null,
-    notice: connectFirstMessage(missing),
+    reply: connectFirstMessage(missing),
     missing: missing.map(m => m.connector),
   };
 }
