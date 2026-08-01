@@ -74,20 +74,15 @@ const norm = (s) => String(s ?? '').trim().toLowerCase().replace(/\s+/g, ' ');
 /**
  * Does this read as a machine identifier rather than a name a person would say?
  *
- * Two shapes, both taken from identifiers this product actually handles: Airtable's
- * `app…`/`tbl…` keys, and the 25+ character opaque Drive/Sheets file id — the same
- * threshold the step card already uses to decide it must never print one to a customer
- * (`_destinationOf` in `public/index.html`).
- *
- * Whitespace settles it either way: no real Google file id contains a space, and almost
- * every name a person says does.
+ * THIS WAS WRITTEN HERE AS ITS OWN COPY AND THAT LASTED TWO HOURS. The oracle already
+ * owned the same question (`isOpaqueProviderId`) — it simply knew only Airtable's answer,
+ * which is precisely the defect that cost this build an extra Opus pass on the same
+ * afternoon. Two copies of one rule is the shape this repo has paid for more than any
+ * other, and writing the second one while fixing the first is not an excuse for keeping
+ * it. One definition, imported.
  */
-export function looksLikeAnIdentifier(value) {
-  const s = String(value ?? '').trim();
-  if (!s || /\s/.test(s)) return false;
-  if (/^(app|tbl|rec|fld|viw)[A-Za-z0-9]{14}$/.test(s)) return true;
-  return s.length >= 25 && /^[A-Za-z0-9_-]+$/.test(s);
-}
+export { isOpaqueProviderId as looksLikeAnIdentifier } from '../workflows/outcome-oracle.js';
+import { isOpaqueProviderId as looksLikeAnIdentifier } from '../workflows/outcome-oracle.js';
 
 /**
  * WHAT THE BUILD ALREADY KNOWS ABOUT WHERE THIS WRITES.

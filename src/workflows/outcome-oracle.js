@@ -690,8 +690,47 @@ function locatorIsJustTheConnector(locator, connector) {
  * the base's schema and fails the run when the table genuinely is not there, so
  * existence is still proven — by the mechanism equipped to prove it.
  */
+/**
+ * ── IT KNEW EXACTLY ONE VENDOR'S ANSWER (2026-08-01, witnessed on prod) ───────
+ *
+ * Everything above was written about Airtable, and the pattern below only ever matched
+ * Airtable. **A Google Drive file id — 44 characters of `[A-Za-z0-9_-]` — matched none of
+ * it**, so for Google Sheets this rule may as well not have existed.
+ *
+ * Measured on `build-zz-firstrun-test-1785614912754`, a completely correct build: the
+ * promise said `sheets:Agntic CRM` (the words the person used), the step carried the
+ * spreadsheet id discovery had just resolved, and the two were compared as strings. One
+ * defect, reported THREE times and costing a whole extra Opus pass:
+ *
+ *   · `UNSATISFIED_ASSERTION` — a paid whole-spec rebuild of a spec that was right;
+ *   · `gap_answer` — *"no step in this workflow does that — the request would be silently
+ *     dropped"*, refused by the rebuild gate only because it had been said once already;
+ *   · the self-check's `STATEMENT_NAMES_ELSEWHERE` — *"the promise tells the customer this
+ *     workflow delivers to 'Agntic CRM', but no step in it does"*.
+ *
+ * All three consult this one function, which is why one line fixes all three — and why
+ * getting it wrong cost three separate false accusations about the same workflow.
+ *
+ * THE QUESTION IS "COULD A PERSON HAVE SAID THIS?", NOT "IS THIS AIRTABLE'S FORMAT?".
+ * The threshold is the one `_destinationOf` in `public/index.html` already uses to decide
+ * it must never print an id to a customer — deliberately the same number, so the product
+ * has ONE answer to "is this a name or an identifier" rather than two that drift.
+ * Whitespace settles it in both directions: no provider id contains a space, and a
+ * destination a person names almost always does — which both branches already enforce,
+ * one by being anchored and one through its character class. An explicit `\s` test was
+ * written here first and proved UNKILLABLE by mutation (2026-08-01): removing it changed
+ * no answer for any input. Removed rather than left as a guard no test can hold, which is
+ * this file's own standing rule.
+ *
+ * The exposure is unchanged from the one already accepted for Airtable, and narrower than
+ * it looks: an id in a spec is one the connector's own list produced (`destinations`
+ * resolves it), and a wrong one fails the write at run time.
+ */
 export function isOpaqueProviderId(s) {
-  return /^(app|tbl|rec|fld|viw)[A-Za-z0-9]{14}$/.test(String(s ?? '').trim());
+  const t = String(s ?? '').trim();
+  if (!t) return false;
+  if (/^(app|tbl|rec|fld|viw)[A-Za-z0-9]{14}$/.test(t)) return true;
+  return t.length >= 25 && /^[A-Za-z0-9_-]+$/.test(t);
 }
 
 /**

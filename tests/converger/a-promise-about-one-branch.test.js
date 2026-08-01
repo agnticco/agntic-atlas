@@ -269,9 +269,31 @@ describe('IT MUST NOT WEAKEN A PROMISE THAT REALLY IS UNCONDITIONAL', () => {
     // With no owner there is no gate to read, and inventing one would put a condition on
     // a promise nothing fulfils — making "this names somewhere no step goes" harder to
     // see, which is a finding that must survive.
+    //
+    // THE STEP IS GIVEN A READABLE SPREADSHEET NAME ON PURPOSE (2026-08-01). The real
+    // prod fixture carries the 44-character Drive id, and from that day `isOpaqueProviderId`
+    // recognises it — so "no step goes there" became genuinely UNDECIDABLE for that spec
+    // and this invariant could no longer be stated about it. See the case below, which
+    // records the honest answer for the opaque version. The invariant itself is unchanged
+    // and is asserted here where it CAN be decided.
     const spec = pricingLogger();
+    spec.nodes.find(n => n.id === 'append_row').config.spreadsheetId = 'Agntic CRM';
     spec.outcome.assertions[0].target = 'sheets:Some Other Tab';
     assert.equal(findCode(spec, 'CONDITIONAL_UNSTATED'), null);
+  });
+
+  test('…but with an OPAQUE id we cannot say that, and must not pretend to', () => {
+    // The cost of teaching `isOpaqueProviderId` about Google's ids, stated out loud.
+    // A 44-character Drive key could name any spreadsheet, including one called "Some
+    // Other Tab", so nothing here can rule the step out as the promise's owner. Claiming
+    // otherwise is the false accusation this change removes — it cost a real build a
+    // whole extra Opus pass and three separate complaints about one correct workflow.
+    //
+    // This is the SAME trade already accepted for Airtable on 2026-07-28, and it is
+    // bounded the same way: an id in a spec is one the connector's own list produced.
+    const spec = pricingLogger();
+    spec.outcome.assertions[0].target = 'sheets:Some Other Tab';
+    assert.equal(findCode(spec, 'CONDITIONAL_UNSTATED')?.code, 'CONDITIONAL_UNSTATED');
   });
 });
 

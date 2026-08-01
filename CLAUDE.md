@@ -2729,6 +2729,48 @@ fixed on the spot. Fold the relevant ones into whatever increment next touches t
   node's config — an undeclared key, which is a hard publish failure. Pinned by four new
   cases in `sheets-can-be-picked-not-pasted.test.js` (25), two mutations red→green.
 
+- **ONE DEFECT, THREE ACCUSATIONS, ONE PAID PASS: `isOpaqueProviderId` KNEW EXACTLY ONE
+  VENDOR — FIXED (2026-08-01).** Measured on `build-zz-firstrun-test-1785614912754`, a
+  completely correct Gmail→Sheets logger built minutes after the entry below. The promise
+  said `sheets:Agntic CRM` — the words the person used — and the step carried the
+  spreadsheet id discovery had just resolved. Compared as strings, they differ, so the
+  build was told three separate times that it delivered nowhere:
+  · `UNSATISFIED_ASSERTION` → **a paid whole-spec Opus pass rebuilding a spec that was
+    already right** (87s + 66s, two passes where one was needed);
+  · `gap_answer` → *"no step in this workflow does that — the request would be silently
+    dropped"*, and the rebuild gate refused a THIRD pass only because the same complaint
+    had been made once already;
+  · the self-check's `STATEMENT_NAMES_ELSEWHERE` → *"the promise tells the customer this
+    workflow delivers to 'Agntic CRM', but no step in it does"*.
+  **All three consult one function**, which is why one line fixed all three — and why
+  getting it wrong produced three independent false statements about one workflow.
+  **The rule was `/^(app|tbl|rec|fld|viw)[A-Za-z0-9]{14}$/` — Airtable's id format and
+  nothing else.** A Google Drive file id is 44 characters of `[A-Za-z0-9_-]` and matched
+  none of it, so for Google Sheets this protection may as well not have existed. It is
+  **the same defect fixed for Airtable on 2026-07-28** (*"a successful Airtable write was
+  reported as a broken promise"*), arriving through a door that fix did not cover, and the
+  nth instance of a rule scoped to the FORM of one vendor's name.
+  The question it actually asks is *"could a person have said this?"*, and the threshold is
+  now **the one `_destinationOf` in `public/index.html` already uses** to decide it must
+  never print an id to a customer — deliberately the same number, so the product has ONE
+  answer to "name or identifier" rather than two that drift.
+  **THE COST IS REAL AND IS RECORDED IN THE TESTS, NOT ARGUED AWAY.** A 44-character key
+  could name any spreadsheet, so *"no step goes there"* becomes genuinely UNDECIDABLE for a
+  spec carrying one. An existing pin — *"a promise no step keeps is NOT quietly given a
+  condition"* — was asserted against the real prod fixture, which carries exactly such an
+  id; it now names the spreadsheet readably so the invariant is stated where it CAN be
+  decided, and **a new case records the honest answer for the opaque version** rather than
+  hiding it. Same trade already accepted for Airtable, bounded the same way: an id in a spec
+  is one the connector's own list produced, and a wrong one fails the write at run time.
+  **AND THE DUPLICATE I HAD WRITTEN TWO HOURS EARLIER WAS DELETED.** `looksLikeAnIdentifier`
+  in `destination-create-or-pick.js` was a second copy of this same rule, written while
+  fixing the entry below — the exact shape this file records paying for more than any other,
+  committed by the person documenting it. One definition, imported.
+  Four mutations, **three killed** (Airtable-only → 1 red; threshold 25→5, i.e. fail wide
+  open → **12 red across five files**; dropping the Airtable branch → 2 red). **The fourth
+  was an explicit whitespace guard and proved UNKILLABLE — both branches already exclude
+  whitespace, one by anchoring and one through its character class — so it was REMOVED
+  rather than left as a guard no test can hold.**
 - **THE PICKER COULD ONLY OFFER SHEETS THEY ALREADY HAD — FIXED (2026-08-01), AND THE
   FIRST ATTEMPT WAS WORSE THAN THE BUG.** Witnessed on a fresh tenant the day after the
   picker shipped. It worked: ten real spreadsheets by name, no ids, the chosen sheet's real
