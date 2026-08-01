@@ -2349,6 +2349,35 @@ fixed on the spot. Fold the relevant ones into whatever increment next touches t
   question was refused with nothing to put in its place. **That was the next increment
   and it is DONE (2026-07-31, see the Sheets picker entry below); the TIMING half is
   what remains.**
+- **TWELVE BUILDS, MEASURED: THE REBUILD RATE FELL FROM 2.5 PAID PASSES TO 1.11
+  (2026-08-01).** Driven end to end as the fresh tenant through the real API — the same
+  endpoints the browser uses — across twelve genuine small-business processes (email
+  triage, daily digest, spreadsheet logging, approval-before-send, web research briefing,
+  calendar booking, weekly doc report, urgent escalation, inbox delivery, multi-destination).
+  · **12 attempted · 9 reached a finished workflow · 0 verify-failed rebuilds · mean 1.33
+    paid passes.**
+  · **BEFORE the sufficiency fix: 2 and 3 passes (mean 2.5). AFTER it: eight of nine
+    builds took EXACTLY ONE pass** (mean 1.11). That is the ideal the whole rebuild-gate
+    family has been chasing since 2026-07-29, reached and measured rather than asserted.
+  · The three that did not finish **were not failures** — each paused correctly on a
+    CLARIFICATION (at `destinations`, at `generate`) and my driver can only approve plans,
+    not answer questions. Stated plainly because the raw number would otherwise read as a
+    25% failure rate, and it is not one. It *is* a real measurement of something else: a
+    quarter of these processes needed one more human turn.
+  · Auto-repairs fired 5 times with no rebuild: `CONDITIONAL_UNSTATED` ×3 (the fix from
+    this morning) and `CONDITIONAL_MISSTATED` ×2. Self-check: 8 consistent, 1 finding.
+- **`HALVES_DISAGREE` HAS FIRED ON A REAL BUILD FOR THE FIRST TIME (open, 2026-08-01).**
+  The calendar-booking build: *"The check that clears this workflow to go live and the
+  check that reads a real run disagree about `google_calendar:primary` and the step
+  'Create calendar event': one says the promise is kept, the other says it is broken."*
+  **This is the tenth instance of the build-vs-runtime drift family, and the first one
+  caught by the mechanism built for it rather than by a person reading a screen days
+  later.** CLAUDE.md records that this check was pinned only at SOURCE level because it
+  "cannot be exercised behaviourally while the two halves agree on every capability,
+  spelling and pairing" — that is no longer true: `google_calendar:primary` is a
+  constructible disagreement, so **the source pin can and should now be replaced with a
+  behavioural one.** Not yet diagnosed; the build still reached a finished workflow.
+
 - **THE SUFFICIENCY CRITIC BOUGHT REBUILDS FOR COMPLAINTS THE SPEC COULD ANSWER — FIXED
   (2026-08-01).** Measured by driving two workflows as a new customer on a fresh tenant:
   **the critic ordered 3 of the 5 total rebuild passes across both builds**, and two of
