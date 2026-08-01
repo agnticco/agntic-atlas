@@ -4070,8 +4070,26 @@ class Component extends DCLogic {
   // tutorial instead, so we silently mark them caught up (no backlog later).
   _loadWhatsNew() {
     const self = this;
-    let isNewUser = false;
-    try { isNewUser = !localStorage.getItem('atlas_tutorial_done'); } catch (e) {}
+    // WHETHER THIS PERSON IS NEW IS A FACT ABOUT THE ACCOUNT, NOT ABOUT THE BROWSER.
+    //
+    // This read a single `atlas_tutorial_done` key, which is per-ORIGIN and therefore
+    // SHARED BY EVERY ATLAS USER WHO HAS EVER SIGNED IN ON THIS BROWSER. Witnessed
+    // 2026-08-01: a brand-new workspace's first-ever login showed the full v1.6.106
+    // release notes — five engineering changes describing fixes to problems they had
+    // never had — because the flag was already set from a different account in the same
+    // Chrome profile. A changelog as a welcome mat.
+    //
+    // Keyed per user now, so one person's history cannot answer a question about another.
+    // Absent key ⇒ new ⇒ silently caught up, which is the safe direction: a new user
+    // seeing no notes loses nothing, while seeing the backlog is the defect.
+    let isNewUser = true;
+    try {
+      const uid = (this.state.user && (this.state.user.id || this.state.user.email)) || '';
+      isNewUser = !localStorage.getItem('atlas_tutorial_done:' + uid)
+               // Honour the pre-2026-08-01 unscoped key for people already using Atlas,
+               // so an existing user is not handed the backlog once by this change.
+               && !localStorage.getItem('atlas_tutorial_done');
+    } catch (e) {}
     fetch("/api/builder/whats-new", { headers: { "Authorization": "Bearer " + this.state.authToken } })
       .then(r => r.ok ? r.json() : null)
       .then(d => {
@@ -7827,8 +7845,43 @@ class Component extends DCLogic {
   _plainFilter(filter) {
     const raw = String(filter == null ? '' : filter).trim();
     if (!raw) return '';
+    // ── A GMAIL QUERY IS NOT A LIST OF WORDS ──────────────────────────────────
+    //
+    // This split on whitespace and described every fragment, so a real query with
+    // parentheses and OR groups came out as garbage on the FIRST card of the walkthrough:
+    //   subject:(buy OR buying OR purchase)
+    //     → mentioning "(subject:(buy)", mentioning "OR", mentioning "buying"…
+    // Recorded as open since 2026-07-30 and squarely in the demo path.
+    //
+    // A grouped term is ONE condition, so it is read as one: the group is lifted out and
+    // its alternatives joined with "or". Deliberately narrow — only `key:( … )` is
+    // handled, because that is the shape the converger actually writes. Anything else
+    // falls through to the token walk exactly as before, which keeps every existing
+    // rendering identical.
+    const groups = [];
+    const flat = raw.replace(/(-?)([A-Za-z_]+):\(([^)]*)\)/g, (_, neg, key, inner) => {
+      const parts = String(inner).split(/\s+OR\s+/i).map(x => x.replace(/^["']|["']$/g, '').trim()).filter(Boolean);
+      if (!parts.length) return '';
+      groups.push({ neg: neg === '-', key: key.toLowerCase(), parts });
+      return ' \u0000G' + (groups.length - 1) + '\u0000 ';
+    });
     const out = [];
-    for (const tok of raw.split(/\s+/).filter(Boolean)) {
+    for (const tok of flat.split(/\s+/).filter(Boolean)) {
+      const g = /^\u0000G(\d+)\u0000$/.exec(tok);
+      if (g) {
+        const grp = groups[Number(g[1])];
+        const list = grp.parts.length === 1 ? grp.parts[0]
+                   : grp.parts.slice(0, -1).join(', ') + ' or ' + grp.parts[grp.parts.length - 1];
+        const p = grp.key === 'subject' ? 'with ' + list + ' in the subject'
+                : grp.key === 'from'    ? 'from ' + list
+                : grp.key === 'to'      ? 'sent to ' + list
+                : grp.key === 'label'   ? 'labelled ' + list
+                : grp.key.replace(/_/g, ' ') + ' ' + list;
+        out.push(grp.neg ? 'not ' + p : p);
+        continue;
+      }
+      // A bare OR left between ungrouped terms reads as noise; the join already says "or".
+      if (/^or$/i.test(tok)) continue;
       const m = /^(-?)([A-Za-z_]+):(.+)$/.exec(tok);
       if (!m) { out.push('mentioning "' + tok + '"'); continue; }
       const neg = m[1] === '-', key = m[2].toLowerCase();
@@ -8118,7 +8171,20 @@ class Component extends DCLogic {
     if (ch === 'in_app' || ch === 'inbox_deliver') return 'your Atlas inbox';
     if (ch === 'webhook') return c.url ? String(c.url) : 'a web address — none set yet';
     if (ch === 'docs_create') return 'a new Google Doc';
-    if (ch === 'sheets_append') return 'a Google Sheet';
+    if (ch === 'sheets_append') {
+      // NAME IT WHEN WE HONESTLY CAN. "a Google Sheet" sat on the step card immediately
+      // before Run test, on a build that knew perfectly well which sheet and tab it meant.
+      // The spreadsheet id is opaque once discovery has resolved it, so it is never shown
+      // — a 44-character key tells a reader nothing. The TAB always helps, and the id is
+      // used only while it is still the human name the person typed.
+      const tab = c.range ? String(c.range).split('!')[0].trim() : '';
+      const sid = c.spreadsheetId ? String(c.spreadsheetId).trim() : '';
+      const named = sid && !/^[A-Za-z0-9_-]{25,}$/.test(sid) ? sid : '';
+      if (named && tab) return 'the ' + tab + ' tab of the ' + named + ' Google Sheet';
+      if (named) return 'the ' + named + ' Google Sheet';
+      if (tab) return 'the ' + tab + ' tab of your Google Sheet';
+      return 'a Google Sheet';
+    }
     if (ch === 'airtable_create_record') return 'a new Airtable record';
     if (ch === 'airtable_update_record') return 'an existing Airtable record';
     if (ch === 'calendar_create_event') return 'a new Google Calendar event';

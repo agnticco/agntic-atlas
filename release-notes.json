@@ -1,5 +1,13 @@
 [
   {
+    "version": "1.6.114",
+    "date": "2026-08-01",
+    "title": "Clearer wording on the cards you read before going live",
+    "notes": [
+      "Email filters read as plain English, the step card names the sheet it writes to, and a brand-new account no longer opens on a list of release notes."
+    ]
+  },
+  {
     "version": "1.6.113",
     "date": "2026-08-01",
     "title": "A calendar booking is checked against your calendar, not the event's name",

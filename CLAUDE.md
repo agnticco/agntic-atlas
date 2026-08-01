@@ -2544,7 +2544,36 @@ fixed on the spot. Fold the relevant ones into whatever increment next touches t
   return the invite link ALWAYS so it can be delivered another way, and surface it for
   re-sending. Full write-up:
   [`docs/handoff/first-run-findings-2026-08-01.md`](docs/handoff/first-run-findings-2026-08-01.md).
-- **A new user's first screen is a CHANGELOG (open, 2026-08-01).** The What's-New modal
+- **THREE PIECES OF TEXT A CUSTOMER READS CLOSELY — ALL FIXED (2026-08-01).** Each was
+  found by using the product, each sits on a screen someone points at, and none broke
+  anything: they only ever looked broken.
+  · **A Gmail query rendered as garbage.** `_plainFilter` split on whitespace, so
+    `subject:(buy OR buying OR purchase)` came out as *mentioning "(subject:(buy)",
+    mentioning "OR", mentioning "buying"…* — on the FIRST card of the walkthrough. Open
+    since 2026-07-30. A grouped term is now lifted out and read as ONE condition
+    (*"with buy, buying or purchase in the subject"*). Deliberately narrow: only
+    `key:( … )` is handled, because that is the shape the converger writes, and every
+    ungrouped filter renders byte-identically — asserted for six of them, because a
+    regression there would be worse than the bug.
+  · **"a Google Sheet"** on the step card immediately before Run test, on a build that
+    knew exactly which sheet and tab it meant. Now *"the Sheet1 tab of the Agntic CRM
+    Google Sheet"* — and **the opaque id is never shown**: once discovery resolves the
+    sheet, the 44-character key tells a reader nothing, and printing it is the errand
+    this product spent a day removing. Falls back to the tab alone, then to the old
+    wording, so it can only ever say something true.
+  · **THE CHANGELOG-AS-WELCOME-MAT WAS NOT A MISSING GATE — THE GATE LOOKED IN THE WRONG
+    PLACE.** `_loadWhatsNew` tested `localStorage.getItem('atlas_tutorial_done')`, which is
+    per-ORIGIN and therefore **shared by every Atlas account ever signed in on that
+    browser**. The fresh tenant's first-ever login showed the full v1.6.106 release notes
+    because the flag was already set by a different account in the same Chrome profile.
+    Keyed per user now, with the old unscoped key honoured so an existing user is not
+    handed the backlog once by the change, and defaulting to NEW when nothing can be read
+    — a new user seeing no notes loses nothing; seeing the backlog is the defect.
+  Pinned by `tests/api/three-things-a-viewer-reads.test.js` (15), three mutations
+  red→green. The renderers are EXTRACTED FROM THE PAGE AND EXECUTED, never copied. The
+  page was served on :8899 and loaded in a browser with a clean console before deploying,
+  per the rule written after v1.6.65.
+- ~~**A new user's first screen is a CHANGELOG**~~ *(open item, closed by the entry above.)* The What's-New modal
   fires once per user on the login after a release; a user whose FIRST login follows one
   gets five engineering changes — *"Give Atlas a test case without it rebuilding your
   workflow"*, *"A workflow that only acts on one path can go live"* — describing repairs
