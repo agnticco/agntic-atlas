@@ -166,6 +166,61 @@ describe('the container list is filtered to spreadsheets', () => {
   });
 });
 
+describe('THE PICKER MUST ONLY FIRE FOR A SPREADSHEET WRITE', () => {
+  /**
+   * REGRESSION, witnessed on prod 2026-08-01 on a fresh tenant, and it BLOCKED A BUILD.
+   * A Gmail→filter→Slack workflow with no spreadsheet anywhere in it stopped and asked
+   * *"Which Google Sheet should this write to?"*, listing ten of the customer's real
+   * spreadsheets, and sat waiting for an answer to a question about a resource it does
+   * not use.
+   *
+   * Caused by the fix EARLIER THE SAME DAY. Making the connector match read the
+   * capability's DECLARED connector was right — `sheets_append` belongs to `google`, not
+   * to `google_*` — but `schemaDiscovery` is declared per CONNECTOR while describing ONE
+   * resource shape, so `gmail_search`, `calendar_*` and `docs_*` all started matching.
+   *
+   * The test is now the descriptor's own declaration: a node must ACCEPT the container
+   * key the descriptor fills. Scoped to what the capability can hold rather than to who
+   * it belongs to — the same lesson as the original fix, one level further in.
+   */
+  test('a Gmail read with a Slack post offers NO spreadsheet picker', () => {
+    const nodes = [
+      { id: 's', type: 'connector-action', config: { action: 'gmail_search', query: 'newer_than:1d' } },
+      { id: 'p', type: 'deliver', config: { channel: 'slack', target: '#atlas-test-temp' } },
+    ];
+    assert.equal(resolveSchemaDiscovery(live(), nodes), null,
+      'a workflow with no spreadsheet in it was asked which spreadsheet to write to');
+  });
+
+  test('nor does a calendar event, or a Google Doc', () => {
+    for (const nodes of [
+      [{ id: 'c', type: 'connector-action', config: { action: 'calendar_create_event' } }],
+      [{ id: 'd', type: 'deliver', config: { channel: 'docs_create' } }],
+      [{ id: 'g', type: 'connector-action', config: { action: 'gmail_send' } }],
+    ]) assert.equal(resolveSchemaDiscovery(live(), nodes), null, JSON.stringify(nodes[0].config));
+  });
+
+  test('…but a Sheets write still does — the feature must survive its own fix', () => {
+    assert.ok(resolveSchemaDiscovery(live(), SHEETS_WRITE), 'the picker stopped working entirely');
+  });
+
+  test('and nothing is stamped onto a node that cannot hold it', () => {
+    // The write half has to narrow identically, or a spreadsheet id is written into a
+    // Gmail search node's config — an undeclared key, which is a hard publish failure.
+    const reg = live();
+    const nodes = [
+      { id: 's', type: 'connector-action', config: { action: 'gmail_search', query: 'x' } },
+      ...SHEETS_WRITE,
+    ];
+    const out = fillDestination(nodes, {
+      connector: 'google', descriptor: reg.schemaDiscoveryFor('google'), catalog: reg,
+      containerId: '1Bxi', tableId: 'Sheet1',
+    });
+    assert.equal(out[0].config.spreadsheetId, undefined, 'a spreadsheet id was written onto a Gmail search');
+    assert.equal(out[1].config.spreadsheetId, '1Bxi', 'the real Sheets write was skipped');
+  });
+});
+
 describe('Airtable is untouched', () => {
   // The generalisation must not change the connector that already worked. Its
   // descriptor declares no id/name keys, so the defaults must still apply.

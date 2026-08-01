@@ -2588,6 +2588,25 @@ fixed on the spot. Fold the relevant ones into whatever increment next touches t
   broken because a braced callback added a `return {` the counter mistook for a node exit;
   the code was written the other way rather than the test weakened.
 
+- **THE SPREADSHEET PICKER FIRED ON A WORKFLOW WITH NO SPREADSHEET, AND BLOCKED THE
+  BUILD — FIXED (2026-08-01). A regression from the SAME MORNING'S fix, found by driving
+  a real build on a fresh tenant.** A Gmail→filter→Slack workflow stopped mid-build and
+  asked *"Which Google Sheet should this write to?"*, listing ten of the customer's real
+  spreadsheets, then sat waiting for an answer about a resource it does not use.
+  **Cause:** making `usesConnector` read the capability's DECLARED connector was right for
+  the write side — `sheets_append` belongs to `google`, not to `google_*` — but
+  `schemaDiscovery` is declared per CONNECTOR while describing ONE resource shape. So
+  `gmail_search`, `calendar_*` and `docs_*` all began matching Google's spreadsheet
+  descriptor. **A fix scoped one level too wide, by the same author, on the same day.**
+  Now a node must ACCEPT the container key the descriptor fills (`spreadsheetId`,
+  `baseId`): scoped to what the capability CAN HOLD rather than to who it belongs to.
+  **It fails OPEN on an undeclared schema** — a capability with no `configSchema` has not
+  said it cannot hold the key, and narrowing on silence would have excluded the P13-0
+  synthetic MCP connector, whose own test caught exactly that on the first attempt.
+  Both halves narrow identically, or a spreadsheet id gets written into a Gmail search
+  node's config — an undeclared key, which is a hard publish failure. Pinned by four new
+  cases in `sheets-can-be-picked-not-pasted.test.js` (25), two mutations red→green.
+
 - **A PERSON NOW PICKS THEIR SPREADSHEET INSTEAD OF PASTING ITS ID — FIXED
   (2026-07-31, increment 2 of "the conversation as a tool").** The errand this replaces,
   witnessed on prod: *"What is the spreadsheet ID for 'Pricing Enquiries'? You can find

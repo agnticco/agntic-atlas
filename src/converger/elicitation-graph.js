@@ -1167,6 +1167,47 @@ function applyResourcePick(draft, nodeId, kind, value) {
 }
 
 /** Does this node reach into the named connector? */
+/**
+ * Does this node use a capability that the DESCRIPTOR is actually about?
+ *
+ * `schemaDiscovery` is declared per CONNECTOR but describes ONE resource shape — Google's
+ * is about spreadsheets. Matching every node of the connector therefore offered the
+ * spreadsheet picker to any workflow touching any Google capability at all.
+ *
+ * WITNESSED 2026-08-01 on a fresh tenant, and it BLOCKED THE BUILD: a Gmail→filter→Slack
+ * workflow with no spreadsheet anywhere in it stopped and asked *"Which Google Sheet
+ * should this write to?"*, listing ten of the customer's real spreadsheets. The build sat
+ * waiting for an answer to a question about a resource it does not use.
+ *
+ * **This was a regression from the same morning's fix.** Making `usesConnector` read the
+ * capability's DECLARED connector was right for the write side — `sheets_append` belongs
+ * to `google`, not to `google_*` — but it also made `gmail_search`, `calendar_*` and
+ * `docs_*` match, because they declare the same connector.
+ *
+ * The test is the descriptor's own declaration: a node it applies to must accept the
+ * container key the descriptor fills (`spreadsheetId` for Sheets, `baseId` for Airtable).
+ * `gmail_search` has no `spreadsheetId`, so it is not a spreadsheet write, so it is not
+ * this descriptor's business. Scoped to what the capability CAN HOLD rather than to who
+ * it belongs to — which is the same lesson, one level further in.
+ */
+function usesDiscoverable(node, connector, descriptor, catalog) {
+  if (!usesConnector(node, connector, catalog)) return false;
+  const key = descriptor?.containerKey;
+  if (!key) return true;                        // nothing declared ⇒ do not narrow
+  const id = node?.type === 'connector-action' ? node.config?.action
+           : node?.type === 'deliver'          ? node.config?.channel
+           : null;
+  const cap = catalog?.get?.(id);
+  if (!cap) return true;                        // unknown capability ⇒ fail open, as before
+  const keys = (cap.configSchema ?? []).map(f => f?.key).filter(Boolean);
+  // A capability that declares NO config keys has not said it cannot hold this one.
+  // Silence is not refusal — narrowing on it would exclude an MCP-sourced connector that
+  // declares `schemaDiscovery` but no schema, which is exactly the P13-0 seam's own
+  // synthetic case. Only a DECLARED schema that omits the key is a real answer.
+  if (!keys.length) return true;
+  return keys.includes(key);
+}
+
 function usesConnector(node, connector, catalog = null) {
   const id = node?.type === 'connector-action' ? node.config?.action
            : node?.type === 'deliver'          ? node.config?.channel
@@ -1320,7 +1361,7 @@ export function fillDestination(nodes, { connector, descriptor, containerId, tab
     // Google service — so the spreadsheet the person just PICKED would be written onto
     // no node at all, and the discovery would end in the id question it exists to
     // replace. Found 2026-07-31 while wiring Sheets.
-    if (!usesConnector(n, connector, catalog)) return n;
+    if (!usesDiscoverable(n, connector, descriptor, catalog)) return n;
     const config = { ...(n.config ?? {}), [descriptor.containerKey]: containerId };
     if (tableId) config[descriptor.tableKey] = tableId;
     // Only touch `fields` where the node HAS them (a create/update). A search or a
@@ -1516,10 +1557,11 @@ export function resolveSchemaDiscovery(catalog, nodes) {
   for (const connector of (catalog.schemaDiscoveryConnectors?.() ?? [])) {
     // The CATALOG is passed through, so "does this node use that connector" is answered
     // by the capability's own declaration rather than by its id's prefix.
-    const targets = (nodes ?? []).filter(n => usesConnector(n, connector, catalog));
-    if (!targets.length) continue;
     const descriptor = catalog.schemaDiscoveryFor(connector);
-    if (descriptor) return { connector, descriptor, targets };
+    if (!descriptor) continue;
+    const targets = (nodes ?? []).filter(n => usesDiscoverable(n, connector, descriptor, catalog));
+    if (!targets.length) continue;
+    return { connector, descriptor, targets };
   }
   return null;
 }

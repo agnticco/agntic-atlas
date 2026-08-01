@@ -1,5 +1,13 @@
 [
   {
+    "version": "1.6.111",
+    "date": "2026-08-01",
+    "title": "The spreadsheet picker only appears when you're writing to a spreadsheet",
+    "notes": [
+      "A workflow that reads email and posts to Slack no longer stops to ask which Google Sheet to write to."
+    ]
+  },
+  {
     "version": "1.6.110",
     "date": "2026-08-01",
     "title": "Atlas won't design a workflow it can't build",
