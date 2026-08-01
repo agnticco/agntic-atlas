@@ -2292,6 +2292,45 @@ fixed on the spot. Fold the relevant ones into whatever increment next touches t
   question was refused with nothing to put in its place. **That was the next increment
   and it is DONE (2026-07-31, see the Sheets picker entry below); the TIMING half is
   what remains.**
+- **A NEW USER IS TOLD THEIR INBOX IS CONNECTED WHEN NOTHING IS (open, witnessed
+  2026-08-01 on a genuinely fresh tenant — the first time the product has been driven as
+  someone who has just been given a login).** Brand-new workspace, nothing connected.
+  First message: *"When a customer emails us asking about pricing, send me a summary in
+  Slack."* Atlas asked **which Slack channel**, then said it would run *"whenever a new
+  email lands in **your connected inbox**"* and offered a **Build it** button.
+  **Ground truth, read from `oauth_tokens`, not inferred: ZERO rows for that tenant.**
+  Six rows exist, all `agntic` and `platform`.
+  **This is the open residual *"a connector's availability is only checked at BUILD
+  time"* meeting *"Atlas confirms and elaborates capabilities it does not have"* — and
+  both were filed against an experienced user losing an interview. For a NEW user it is
+  the entire first impression, it is a false claim about their own account, and a fresh
+  workspace has no connectors BY DEFINITION, so it happens every single time.** The
+  hand-provisioned model Charles chose makes this the first thing every customer meets.
+  Fix direction: `capabilities.connectors` is already known before the first reply is
+  composed. Offer to CONNECT, never to configure. Do not solve it by describing the
+  Connections screen — that is barred (2026-07-26); name it and stop.
+- **"THEY HAVE BEEN EMAILED" IS A CLAIM ATLAS CANNOT SUPPORT (open, 2026-08-01).**
+  Provisioning a workspace for `firstrun@example.test` — a **reserved, non-routable TLD
+  (RFC 2606)** — reported *"has been emailed a secure link to set their password"* and
+  logged `invited: true`. `sendMail` returns `delivered: true` when the provider call does
+  not throw, i.e. *Resend accepted it*; bounces are asynchronous and **nothing consumes
+  them** — no webhook, no record, no retry. The word degrades at every hop: *accepted* →
+  `delivered` → `invited` → *"has been emailed"*, and the last hop is a promise to the
+  operator about someone else's mailbox. **This is the only onboarding path in the
+  hand-provisioned model and it is the one step the operator cannot observe.**
+  *Circumstantial, NOT proven, and must not be reported as cause:* of five real people
+  provisioned 8–10 July, **four never signed in** and the fifth signed in once. Whether
+  their invites bounced **cannot be established** — the logs retain only back to 25 July.
+  It is a reason to instrument, not a conclusion. Fix: say "queued with the mail provider",
+  return the invite link ALWAYS so it can be delivered another way, and surface it for
+  re-sending. Full write-up:
+  [`docs/handoff/first-run-findings-2026-08-01.md`](docs/handoff/first-run-findings-2026-08-01.md).
+- **A new user's first screen is a CHANGELOG (open, 2026-08-01).** The What's-New modal
+  fires once per user on the login after a release; a user whose FIRST login follows one
+  gets five engineering changes — *"Give Atlas a test case without it rebuilding your
+  workflow"*, *"A workflow that only acts on one path can go live"* — describing repairs
+  to problems they have never met, in vocabulary they do not have, before they have seen
+  the product. Suppress it when the account has never signed in.
 - **Approval-channel availability (`email`) is deployment-wide, not per-tenant** — fine today
   (one deployment, one mailer); revisit if tenants ever bring their own sending domain.
 - **A PROMISE ABOUT ONE BRANCH WAS WRITTEN UNCONDITIONAL, AND A REAL EMAIL FAILED IT
