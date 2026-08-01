@@ -1,5 +1,13 @@
 [
   {
+    "version": "1.6.107",
+    "date": "2026-08-01",
+    "title": "Atlas says what needs connecting before it designs with it",
+    "notes": [
+      "On a new workspace, Atlas now tells you which apps to connect instead of asking which Slack channel to use and calling an inbox you haven't connected 'your connected inbox'."
+    ]
+  },
+  {
     "version": "1.6.106",
     "date": "2026-07-31",
     "title": "Give Atlas a test case without it rebuilding your workflow",

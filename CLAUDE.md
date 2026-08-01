@@ -2292,7 +2292,7 @@ fixed on the spot. Fold the relevant ones into whatever increment next touches t
   question was refused with nothing to put in its place. **That was the next increment
   and it is DONE (2026-07-31, see the Sheets picker entry below); the TIMING half is
   what remains.**
-- **A NEW USER IS TOLD THEIR INBOX IS CONNECTED WHEN NOTHING IS (open, witnessed
+- **A NEW USER WAS TOLD THEIR INBOX WAS CONNECTED WHEN NOTHING WAS — FIXED (witnessed
   2026-08-01 on a genuinely fresh tenant — the first time the product has been driven as
   someone who has just been given a login).** Brand-new workspace, nothing connected.
   First message: *"When a customer emails us asking about pricing, send me a summary in
@@ -2306,9 +2306,37 @@ fixed on the spot. Fold the relevant ones into whatever increment next touches t
   the entire first impression, it is a false claim about their own account, and a fresh
   workspace has no connectors BY DEFINITION, so it happens every single time.** The
   hand-provisioned model Charles chose makes this the first thing every customer meets.
-  Fix direction: `capabilities.connectors` is already known before the first reply is
-  composed. Offer to CONNECT, never to configure. Do not solve it by describing the
-  Connections screen — that is barred (2026-07-26); name it and stop.
+  **THE FIX, IN TWO HALVES, BECAUSE THE PROMPT ALONE ALREADY EXISTED AND FAILED.** The
+  fact was in the prompt the whole time; it read *"No connectors are connected yet. **If
+  asked**, say none are set up"* — and the user had not asked, they had described a
+  workflow. Four words, and they are the entire defect. That block is now unconditional,
+  says not to describe their setup back to them, and names what CAN be built with nothing
+  connected (a schedule, web research, delivery to the Atlas inbox) so an empty workspace
+  is not a dead end.
+  The mechanism that makes being wrong about the model harmless is
+  `src/api/chat-connector-gap.js`: when the proposed `build_intent` names a service the
+  workspace does not have, the **Build it button is withdrawn** and a deterministic
+  sentence names what to connect. Same fail-closed principle as *"publishing FAILS CLOSED
+  when a trigger cannot be armed"*, moved to the first turn where it costs nothing.
+  **IT FAILS *OPEN* ON EVERY DOUBT, and that direction is most of what the tests pin:**
+  wrongly withdrawing the button traps someone at the first message of their first
+  workflow with no way forward, while wrongly allowing only reproduces today's behaviour.
+  So it fires only on an unambiguously named service that Atlas actually connects and
+  definitely lacks. **A bare "email" deliberately does NOT imply Gmail** — "email me the
+  summary" can mean the Atlas inbox, which needs no connector, and treating the word as a
+  Gmail requirement would block the one shape a new user can actually build.
+  Applied at **BOTH** `done` emitters — the ordinary one and the forced-final path — via
+  one shared helper, because this file records a previous fix to this same endpoint that
+  was blind to the second copy and left four guards green while the real path was
+  unprotected. Pinned by `tests/api/no-build-button-for-what-you-lack.test.js` (19), six
+  mutations red→green.
+  **AN EXISTING TEST WENT RED AND THE FIXTURE WAS WRONG, NOT THE FIX.**
+  `build-offer-actionable.test.js` mounted the endpoint with `spine = {llm}` — no
+  connector resolvers at all — and then asserted a Slack build offer, i.e. it was asking
+  for a Slack button on an EMPTY workspace, a state production never produces. Its sibling
+  harness in the same file already resolved connectors properly; the two now agree. That
+  is the *"a check must construct its subject the way PRODUCTION does"* rule catching a
+  fixture that had been under-specified all along.
 - **"THEY HAVE BEEN EMAILED" IS A CLAIM ATLAS CANNOT SUPPORT (open, 2026-08-01).**
   Provisioning a workspace for `firstrun@example.test` — a **reserved, non-routable TLD
   (RFC 2606)** — reported *"has been emailed a secure link to set their password"* and

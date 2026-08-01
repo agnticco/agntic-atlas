@@ -197,7 +197,19 @@ describe('POST /api/builder/chat — the turn that offers to build carries the B
     app.use(express.json());
     // `spine` is a live reference the fake model is swapped into per-test, so the
     // route is mounted exactly once, the way server.js mounts it.
-    spine = { llm: fakeLLM('') };
+    // SLACK IS CONNECTED HERE, and it has to be: `BUILD_INTENT` posts to a Slack
+    // channel, and since 2026-08-01 the endpoint withdraws the Build it button when the
+    // intent names a service the workspace does not have (a fresh tenant was offered a
+    // build for Slack it did not own — see `no-build-button-for-what-you-lack.test.js`).
+    // This harness modelled no connectors at all, so it was asking the endpoint to offer
+    // a Slack build on an EMPTY workspace — a state production never puts it in. The
+    // sibling harness below already resolves connectors; these two now agree.
+    spine = {
+      llm: fakeLLM(''),
+      slack:    { resolveForTenant: async () => ({ connected: true }) },
+      google:   { resolveForTenant: async () => ({ connected: false }) },
+      airtable: { resolveForTenant: () => ({ connected: false }) },
+    };
     mountBuilderRoutes(app, {
       spine,
       requireActiveTenant: tenantMiddleware,

@@ -54,6 +54,7 @@ import { keepAlive } from './keep-alive.js';
 // before the user can act on it. See the module for why the prompt rule alone
 // is not enough.
 import { scrubInventedNavigation } from './chat-navigation-guard.js';
+import { connectorGapDecision } from './chat-connector-gap.js';
 // Stops Atlas offering an output the workflow has no instruction to produce.
 import { unbackedArtifacts, artifactCorrectionFor } from './chat-artifact-guard.js';
 
@@ -439,7 +440,15 @@ function pubUser(u) {
 function buildChatSystem(connectorLines = [], user = null) {
   const connectorBlock = connectorLines.length
     ? `\nConnectors this workspace has connected:\n${connectorLines.join('\n')}`
-    : `\nNo connectors are connected yet. If asked, say none are set up and suggest visiting Connections in the sidebar.`;
+    : `\nNOTHING IS CONNECTED TO THIS WORKSPACE YET — no Gmail, no Slack, no Airtable, nothing.
+This is a brand-new workspace and it is almost certainly the person's first workflow.
+Do NOT wait to be asked. The moment they describe automation that needs an outside
+service, SAY SO in your first reply and offer to get it connected — never ask which
+channel, which sheet or which mailbox, and never describe their setup back to them as
+though it exists ("your connected inbox" is a false statement here). Point them at
+Connections in the left sidebar and stop there. You CAN still build workflows that need
+nothing connected — a schedule, web research, and delivery to their Atlas inbox all work
+today — so offer one of those if it fits what they asked for.`;
 
   const userBlock = user
     ? `\nYou are speaking with ${user.name}${user.email ? ` (${user.email})` : ''}.`
@@ -1253,6 +1262,27 @@ Rules:
         return true;
       };
 
+      /**
+       * DO NOT HAND SOMEONE A BUILD BUTTON FOR SERVICES THIS WORKSPACE DOES NOT HAVE.
+       *
+       * Sits beside `correctInventedNavigation` on purpose: both are deterministic
+       * corrections applied to a finished turn, because the prompt that should have
+       * prevented it is a belief about the model and is pinned by nothing.
+       *
+       * Called from BOTH places that emit `done` — the ordinary tool-round exit and the
+       * forced-final one. CLAUDE.md records a previous fix to this endpoint that was
+       * blind to the second copy and left four guards green while the real path was
+       * unprotected; that is why this is one helper and not two edits.
+       */
+      const applyConnectorGap = (readyToBuild, buildIntent) => {
+        const d = connectorGapDecision({ readyToBuild, buildIntent }, connectedSet);
+        if (d.notice && !closed) {
+          sendChunk(`\n\n${d.notice}`);
+          logEvent('chat.connector_gap', { tenant: req.tenant?.id ?? null, missing: d.missing });
+        }
+        return d;
+      };
+
       const processStreamChar = (ch) => {
         if (escapeNext) {
           const MAP = { '"': '"', '\\': '\\', '/': '/', n: '\n', r: '\r', t: '\t', b: '\b', f: '\f' };
@@ -1431,8 +1461,9 @@ Rules:
         const readyToBuild = parsedMeta ? !!parsedMeta.ready_to_build : false;
         const buildIntent  = (parsedMeta && typeof parsedMeta.build_intent === 'string' && parsedMeta.build_intent.trim()) ? parsedMeta.build_intent.trim() : null;
 
-        logEvent('chat.reply', { tenant: req.tenant?.id ?? null, turns: messages.length, readyToBuild, parsed: !!parsedMeta?.reply, retried: envelopeRetried, pending: pendingActions.length });
-        sseWrite({ type: 'done', readyToBuild, buildIntent, pendingActions });
+        const gap = applyConnectorGap(readyToBuild, buildIntent);
+        logEvent('chat.reply', { tenant: req.tenant?.id ?? null, turns: messages.length, readyToBuild: gap.readyToBuild, parsed: !!parsedMeta?.reply, retried: envelopeRetried, pending: pendingActions.length });
+        sseWrite({ type: 'done', readyToBuild: gap.readyToBuild, buildIntent: gap.buildIntent, pendingActions });
         clearInterval(heartbeat);
         res.end();
         return;
@@ -1460,8 +1491,9 @@ Rules:
         try { parsedMeta = JSON.parse(extractJsonLoose(streamedText)); } catch {}
         const readyToBuild = parsedMeta ? !!parsedMeta.ready_to_build : false;
         const buildIntent  = (parsedMeta && typeof parsedMeta.build_intent === 'string' && parsedMeta.build_intent.trim()) ? parsedMeta.build_intent.trim() : null;
-        logEvent('chat.reply', { tenant: req.tenant?.id ?? null, turns: messages.length, readyToBuild, parsed: !!parsedMeta?.reply, forcedFinal: true, pending: pendingActions.length });
-        sseWrite({ type: 'done', readyToBuild, buildIntent, pendingActions });
+        const gap = applyConnectorGap(readyToBuild, buildIntent);
+        logEvent('chat.reply', { tenant: req.tenant?.id ?? null, turns: messages.length, readyToBuild: gap.readyToBuild, parsed: !!parsedMeta?.reply, forcedFinal: true, pending: pendingActions.length });
+        sseWrite({ type: 'done', readyToBuild: gap.readyToBuild, buildIntent: gap.buildIntent, pendingActions });
         clearInterval(heartbeat);
         res.end();
         return;
