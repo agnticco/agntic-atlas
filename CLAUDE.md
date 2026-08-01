@@ -2033,7 +2033,7 @@ fixed on the spot. Fold the relevant ones into whatever increment next touches t
   already receives `capabilities`, and whether this tenant has any workflow-readable
   knowledge source is a fact available at build time. Silence about an empty knowledge
   base is not neutral — it reads as confirmation.
-- **EVERY SLACK-TRIGGERED WORKFLOW IN PRODUCTION IS DEAD, AND PUBLISHES AS LIVE (open,
+- **EVERY SLACK-TRIGGERED WORKFLOW IN PRODUCTION IS DEAD — IT NO LONGER PUBLISHES AS LIVE (half-fixed 2026-08-01;
   witnessed 2026-07-30 — this is the live confirmation that has been pending since
   2026-07-24, and it is NEGATIVE).** A Slack-triggered workflow was built, tested
   ("Contract kept"), published, and fired for real: the Atlas bot is in
@@ -2055,11 +2055,34 @@ fixed on the spot. Fold the relevant ones into whatever increment next touches t
   equivalent for Slack. Nothing asks whether Slack will actually deliver. So this is the
   same silent failure that rule was written for, arriving through a door it does not
   cover, and it is the third instance of that shape in this file.
-  **What a check would look like:** a Slack `event` trigger is armable only if the
-  workspace's Event Subscriptions point at this deployment. That is not directly
-  readable from the Slack API, but "has this deployment EVER received a Slack event for
-  this tenant" is knowable and would have refused this publish with an actionable
-  sentence instead of a green tick.
+  **THE PRODUCT HALF IS NOW FIXED (2026-08-01).**
+  `src/connectors/slack/delivery-record.js` gives Slack the equivalent of Airtable's
+  `checkAirtableTriggersArmable` — same `{ok, code, error}` shape, same plain-language
+  sentence — applied at **BOTH** publish paths (POST and the PUT that is the real publish
+  path for most workflows). The events route records every `event_callback` first, before
+  dispatch, because an event matching no workflow still proves the plumbing works; the
+  `url_verification` handshake returns before anything is recorded, so a probe cannot
+  masquerade as a delivery (mutation M7).
+  **THE REFUSAL IS SCOPED TO THE ONE UNAMBIGUOUS STATE, and this is the whole design.**
+  The obvious rule — *"refuse unless we have seen an event for THIS tenant"* — traps every
+  correctly-configured workspace at its FIRST Slack workflow, because no event can arrive
+  before one is published. So: **never received an event from anyone, ever** ⇒ Event
+  Subscriptions is not delivering here ⇒ refuse, naming what to change. **Received events,
+  but none yet for this tenant** ⇒ the deployment is wired and this workspace may simply be
+  quiet, or the bot may not be in the channel ⇒ ALLOW. "Not yet" and "never" are different
+  answers. That trapping mutation is M2 and it is the one that matters most.
+  Pinned by `tests/api/slack-trigger-must-be-able-to-fire.test.js` (18), **seven mutations
+  red→green — one survived the first pass and the test was strengthened rather than the
+  mutation dropped**: dropping the `type === 'event'` check was invisible because every
+  case that could have caught it also lacked a `connector`, so the LEGACY
+  `connector_event` shape (eight stored workflows carry it) was added as the case that
+  distinguishes them — it is refused earlier and more accurately by `TRIGGER_NOT_RUNNABLE`,
+  and claiming it here would answer with a Slack sentence that is not the user's problem.
+  **STILL CHARLES'S TO DO, AND THE ONLY THING THAT MAKES SLACK TRIGGERS WORK:** enable
+  Event Subscriptions in the Slack app, point the Request URL at
+  `https://atlas.agntic.co/connectors/slack/events`, and subscribe to `message.channels`.
+  Until then the product now refuses the publish honestly instead of showing a green tick;
+  it does not make the trigger fire.
 - **THE PROMPT OFFERED TWO TRIGGERS NO CONSUMER COULD HONOUR — FIXED, AND NOW ENFORCED
   (2026-07-30). The third instance of the `connector_event` defect, and the first time
   anything stops a fourth.** Asked for a contact form that POSTs to a URL
@@ -2330,6 +2353,24 @@ fixed on the spot. Fold the relevant ones into whatever increment next touches t
   was blind to the second copy and left four guards green while the real path was
   unprotected. Pinned by `tests/api/no-build-button-for-what-you-lack.test.js` (19), six
   mutations red→green.
+  **CONFIRMED LIVE (2026-08-01, v1.6.107) — AND HALF OF IT DID NOT LAND. Say both.**
+  Re-driven on the same fresh tenant with the same opening message. The MECHANISM works:
+  no Build it button, and the deterministic sentence named BOTH missing services —
+  *"Before I can build this, Slack and Gmail need to be connected to this workspace — open
+  Connections in the left sidebar to set them up."* **The PROMPT half did not:** turn one
+  still asked *"Which Slack channel (or DM) should the summary land in?"*, and the model
+  still wrote *"whenever a new email arrives in your connected inbox"* in the paragraph
+  directly above the correction — so the false claim is now printed and then contradicted
+  in the same message. Better than uncorrected, and not yet right.
+  **This is the file's own rule earning its place again: a prompt is a belief about model
+  behaviour and is pinned by nothing.** The guard is what made being wrong about it
+  harmless, and being wrong about it is exactly what happened, immediately.
+  **RESIDUAL, with the fix direction:** the remaining half is a claim about the customer's
+  setup inside free prose, which the button gate cannot reach. It wants the same treatment
+  as `scrubInventedNavigation` — a scrubber that rewrites "your connected inbox" and
+  friends when the connector is absent, applied to the streamed text rather than to the
+  flag. Do NOT reach for a sterner prompt; that door has been tried twice on this endpoint.
+
   **AN EXISTING TEST WENT RED AND THE FIXTURE WAS WRONG, NOT THE FIX.**
   `build-offer-actionable.test.js` mounted the endpoint with `spine = {llm}` — no
   connector resolvers at all — and then asserted a Slack build offer, i.e. it was asking

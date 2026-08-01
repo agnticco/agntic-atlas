@@ -1,5 +1,13 @@
 [
   {
+    "version": "1.6.108",
+    "date": "2026-08-01",
+    "title": "A Slack-triggered workflow can no longer go live if Slack can't reach Atlas",
+    "notes": [
+      "Atlas now refuses to publish a workflow that starts from Slack when Slack has never delivered an event — instead of showing it as live while nothing happens."
+    ]
+  },
+  {
     "version": "1.6.107",
     "date": "2026-08-01",
     "title": "Atlas says what needs connecting before it designs with it",

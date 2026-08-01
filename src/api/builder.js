@@ -55,6 +55,8 @@ import { keepAlive } from './keep-alive.js';
 // is not enough.
 import { scrubInventedNavigation } from './chat-navigation-guard.js';
 import { connectorGapDecision } from './chat-connector-gap.js';
+import { checkSlackTriggersArmable, isSlackEventTrigger, slackDeliveryRecord }
+  from '../connectors/slack/delivery-record.js';
 // Stops Atlas offering an output the workflow has no instruction to produce.
 import { unbackedArtifacts, artifactCorrectionFor } from './chat-artifact-guard.js';
 
@@ -2680,6 +2682,18 @@ Rules:
       }
     }
 
+    // SAME FAIL-CLOSED RULE, FOR SLACK. Airtable has had this since 2026-07-24; Slack
+    // never did, so a Slack-triggered workflow published as live and sat silent —
+    // measured on prod, Slack has never delivered one event to this deployment.
+    if ((spec.triggers ?? []).some(isSlackEventTrigger)) {
+      const slack = await spine.slack.resolveForTenant(req.tenant.id).catch(() => ({ connected: false }));
+      const armable = checkSlackTriggersArmable(spec, slack, slackDeliveryRecord());
+      if (!armable.ok) {
+        logEvent('builder.slack_trigger_not_armable', { tenant: req.tenant?.id ?? null, code: armable.code });
+        return res.status(422).json({ ok: false, code: armable.code, error: armable.error });
+      }
+    }
+
     // Same fail-closed rule as first publish: this route IS the publish path for
     // most workflows. An edit that cannot be armed must not be accepted, or the
     // user is left with a live-looking workflow that stopped being able to fire.
@@ -2889,6 +2903,18 @@ Rules:
       if (!runnable.ok) {
         logEvent('persist.trigger_not_runnable', { tenant: req.tenant?.id ?? null, code: runnable.code });
         return res.status(422).json({ ok: false, code: runnable.code, error: runnable.error });
+      }
+    }
+
+    // SAME FAIL-CLOSED RULE, FOR SLACK. Airtable has had this since 2026-07-24; Slack
+    // never did, so a Slack-triggered workflow published as live and sat silent —
+    // measured on prod, Slack has never delivered one event to this deployment.
+    if ((spec.triggers ?? []).some(isSlackEventTrigger)) {
+      const slack = await spine.slack.resolveForTenant(req.tenant.id).catch(() => ({ connected: false }));
+      const armable = checkSlackTriggersArmable(spec, slack, slackDeliveryRecord());
+      if (!armable.ok) {
+        logEvent('builder.slack_trigger_not_armable', { tenant: req.tenant?.id ?? null, code: armable.code });
+        return res.status(422).json({ ok: false, code: armable.code, error: armable.error });
       }
     }
 

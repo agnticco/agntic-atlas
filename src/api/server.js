@@ -88,6 +88,7 @@ import { mountBuilderRoutes } from './builder.js';
 import { createTenantGuard } from './tenant-guard.js';
 import { mountConsoleRoutes } from './console.js';
 import { mountAdminRoutes } from '../admin/server.js';
+import { recordSlackEventSeen } from '../connectors/slack/delivery-record.js';
 import { logEvent, errFields } from '../utils/event-log.js';
 import { boolEnv, numEnv } from '../utils/env.js';
 import { FileCheckpointer } from '../graph/checkpointer/index.js';
@@ -2096,6 +2097,16 @@ export function createApp(spine) {
     if (!verifySlackSignature(req, secret)) return res.status(401).json({ error: 'bad signature' });
     res.status(200).end(); // ack immediately
     if (body.type === 'event_callback') {
+      // RECORD THAT SLACK CAN REACH US AT ALL, before dispatch and regardless of whether
+      // any workflow matches. This is the only evidence Atlas can ever have that Event
+      // Subscriptions is delivering here, and the publish gate reads it — see
+      // `checkSlackTriggersArmable`. Deliberately outside the dispatch path: an event
+      // that matches nothing still proves the plumbing works.
+      try {
+        const teamId = body?.team_id;
+        const tid = teamId ? spine.auth.oauthTokenStore.findTenantByAccount?.({ connectorId: 'slack', account: teamId }) : null;
+        recordSlackEventSeen(tid ?? null);
+      } catch { /* bookkeeping must never cost an event */ }
       dispatchSlackEvent(spine, body).catch((err) => logEvent('slack.event.error', errFields(err)));
     }
   });
