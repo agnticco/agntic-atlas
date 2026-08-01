@@ -92,11 +92,28 @@ describe('the prompt asks for one sample per path', () => {
 describe('when the top-up runs, and what it must not break', () => {
   const src = verifySource();
 
-  test('only when there are fewer samples than paths', () => {
-    // The comparison moved into `skipReason` on 2026-07-28 so the SKIP is logged too
-    // — see below. The invariant is unchanged: enough samples ⇒ no model call.
-    assert.match(src, /lanes\.length <= have\.length/,
-      'a workflow that does not branch must not pay for a model call it does not need');
+  test('only when some path has nobody aimed at it', () => {
+    /**
+     * RE-POINTED 2026-07-31, and the invariant it used to state was WRONG.
+     *
+     * This asserted `lanes.length <= have.length` — "enough samples ⇒ no model call" —
+     * two COUNTS. Witnessed on prod (`build-platform-1785513701920`): TWO paths, THREE
+     * samples, all three aimed at the SAME path, logged `enough_samples_already`, and
+     * the other path was left unproved. The workflow could not go live and the person
+     * was asked to write a test case by hand — the typing this top-up exists to remove.
+     *
+     * The real invariant, kept: a workflow that needs no top-up must not pay for a
+     * model call. What changed is how "needs" is decided — by path coverage, not by
+     * arithmetic on two totals.
+     *
+     * NOTE this asserts the GATE EXPRESSION, not the words: the old text still appears
+     * in the comment above the gate explaining why it was wrong, so a looser search
+     * would pass against the very code it is meant to forbid.
+     */
+    assert.match(src, /:\s*!openLanes\.length\s+\?\s*'every_path_already_claimed'/,
+      'a workflow with every path already claimed must not pay for a model call it does not need');
+    assert.doesNotMatch(src, /\?\s*'enough_samples_already'/,
+      'the count-based skip is back — samples piled on one path will skip the top-up again');
   });
 
   test('a skipped top-up says WHY it was skipped', () => {
@@ -108,7 +125,7 @@ describe('when the top-up runs, and what it must not break', () => {
     const i = src.indexOf('const skipReason');
     assert.ok(i > 0, 'the gate must name its reason');
     const around = src.slice(i, i + 900);
-    for (const reason of ['no_dry_runner', 'no_contract_to_prove', 'enough_samples_already']) {
+    for (const reason of ['no_dry_runner', 'no_contract_to_prove', 'every_path_already_claimed']) {
       assert.match(around, new RegExp(reason), `the skip reason ${reason} must be distinguishable`);
     }
     assert.match(around, /lane_examples_skipped/);
@@ -120,8 +137,10 @@ describe('when the top-up runs, and what it must not break', () => {
   });
 
   test('a failed top-up falls through instead of failing the build', () => {
-    const i = src.indexOf('buildLaneExamplesPrompt');
-    const around = src.slice(i - 900, i + 2600);
+    // Anchored to the whole node rather than a byte window: the window was 900/2600
+    // characters wide and the node grew past it on 2026-07-31, so the assertion started
+    // failing over formatting rather than behaviour.
+    const around = src;
     // The invariant is that the top-up is CAUGHT, not that the catch is parameterless.
     // It became `catch (err)` on 2026-07-28 so the failure can be logged — see below.
     assert.match(around, /catch\s*(\([^)]*\)\s*)?\{/,
@@ -133,8 +152,7 @@ describe('when the top-up runs, and what it must not break', () => {
     // still reached the test panel with ONE example, with nothing in the log to say
     // why — the catch was bare and the "returned zero" path did not exist at all.
     // A run that proves nothing about four of five paths must never be silent.
-    const i = src.indexOf('buildLaneExamplesPrompt');
-    const around = src.slice(i - 900, i + 2200);
+    const around = src;
     assert.match(around, /lane_examples_empty/, 'a zero-example top-up must be recorded');
     assert.match(around, /lane_examples_failed/, 'a thrown top-up must be recorded');
   });

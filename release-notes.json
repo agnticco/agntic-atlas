@@ -1,5 +1,13 @@
 [
   {
+    "version": "1.6.106",
+    "date": "2026-07-31",
+    "title": "Give Atlas a test case without it rebuilding your workflow",
+    "notes": [
+      "Every path in a workflow now gets its own test input, and describing a case yourself adds it instead of rebuilding the whole thing."
+    ]
+  },
+  {
     "version": "1.6.105",
     "date": "2026-07-31",
     "title": "A workflow that only acts on one path can go live",

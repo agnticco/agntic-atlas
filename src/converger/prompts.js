@@ -1448,15 +1448,19 @@ The finished workflow can take these different paths, and a test only proves the
 it actually goes down. Propose ONE realistic input for EACH path below — chosen so the
 workflow would genuinely take that path:
 
-${lanes.map((l, i) => `${i + 1}. ${l.label}`).join('\n')}
+${lanes.map((l, i) => `${i + 1}. ${l.label}   (id: ${String(l.to ?? l.label).trim().toLowerCase()})`).join('\n')}
 ${had ? `\nCases they already have (do not repeat these):\n${had}\n` : ''}
 ${triggerGivenGuidance(triggers)}
 
 Each input must be specific and realistic — a real-looking subject line, a real-looking
 amount — never a generic placeholder, and never a label describing the path.
 
+Each entry must name the path it is aimed at in \`lane\`, using that path's id exactly as
+given above. The id is what records WHICH path this input proves — an entry that names no
+path counts as proving nothing, so a path left unnamed stays unproved.
+
 Return JSON only, one entry per path, in the same order:
-{"examples":[{"id":"lane1","label":"<short label naming the path in plain words>","given":{…},"expect":{…},"shouldTrigger":true}]}`;
+{"examples":[{"id":"lane1","lane":"<the id of the path this input takes>","label":"<short label naming the path in plain words>","given":{…},"expect":{…},"shouldTrigger":true}]}`;
 }
 
 /**

@@ -51,6 +51,8 @@ import { selfContradictions, summariseContradictions } from '../workflows/self-c
 // One identity per destination, shared by the step that writes there and the promise
 // about it — so the two cannot disagree about where they mean.
 import { indexDestinations } from '../workflows/destinations.js';
+import { unprovedLanes, laneKeyOf, buildTestCaseRequestPrompt, readTestCaseRequest, withTestCase }
+  from './test-case-request.js';
 // Asking a person is a tool with rules — see asking.js for the four and why each exists.
 import { shouldAsk } from './asking.js';
 import { analyzeTable } from '../workflows/decision-analysis.js';
@@ -232,6 +234,42 @@ export function retargetStaleAssertion(draft, gap, userSaid) {
   // they did not then it is not a candidate. Proved unreachable by mutation
   // (2026-07-30) and left out rather than kept as a guard no test could hold.
   return { index, target: `${connector}:${locatorNow}`, from: target };
+}
+
+/**
+ * Is this message an ANSWER to "give me an example that takes that path"?
+ *
+ * Shared by BOTH doors into the whole-spec regenerate — the walkthrough's "request
+ * changes" and ratify's feedback — because a rule about what a person's message MEANS,
+ * written twice, is the defect shape this codebase has paid for most.
+ *
+ * Returns the draft with their example added, or `null` for "treat this as a change",
+ * which is the behaviour that existed before. Every failure path returns `null`: a
+ * change wrongly read as a test case silently ignores someone asking for their workflow
+ * to be different, which is far worse than the rebuild this avoids.
+ */
+async function testCaseFromFeedback(draft, feedback, { llm, cfg }) {
+  try {
+    if (!llm || !String(feedback ?? '').trim()) return null;
+    const lanes = unprovedLanes(assembleSpec(draft));
+    // Nothing is unproved ⇒ Atlas never asked for an example ⇒ this is not an answer.
+    if (!lanes.length) return null;
+    const parsed = await llmJson(llm, [
+      new HumanMessage(buildTestCaseRequestPrompt({
+        feedback, lanes, intent: draft?.intent, outcome: draft?.outcome,
+      })),
+    ], tierCfg('fast', cfg?.configurable?.threadId));
+    const example = readTestCaseRequest(parsed, lanes);
+    if (!example) return null;
+    logEvent('converger.test_case_added', {
+      ...who(cfg), lane: example.lane, label: example.label,
+    });
+    return withTestCase(draft, example);
+  } catch (err) {
+    // A failed classification must never block a change request.
+    logEvent('converger.test_case_failed', { ...who(cfg), error: String(err?.message ?? err).slice(0, 200) });
+    return null;
+  }
 }
 
 export function autoRepairStructural(draft, gaps, opts = {}) {
@@ -3952,6 +3990,37 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
     // exactly today's behaviour.
     const lanes = laneInventoryOf(assembleSpec(draft));
     const have  = (draft?.outcome?.examples ?? []).filter(e => e && e.given != null);
+
+    // ── WHICH PATHS HAVE NOBODY AIMED AT THEM ────────────────────────────────
+    //
+    // COUNTING IS NOT COVERAGE. The gate below used to read
+    // `lanes.length <= have.length` — two counts — so a workflow with TWO paths and
+    // THREE samples all aimed at the SAME path skipped the top-up as
+    // `enough_samples_already`, and the other path was left with nothing. The panel
+    // then correctly refused to certify, and the only remedy the product offered was
+    // to ask the person to write a test case by hand: exactly the typing this top-up
+    // exists to remove. Witnessed on prod 2026-07-31
+    // (`build-platform-1785513701920`): `lanes: 2, had: 3`, the error path unproved,
+    // and the workflow could not go live.
+    //
+    // The nth instance of a check scoped to the SHAPE of a value — here its
+    // quantity — rather than to what it is for.
+    //
+    // An example now CLAIMS a lane, and a claim is the only thing that counts as
+    // cover. An example with no claim covers nothing: attribution is unknowable for
+    // samples generated before the workflow existed, and "we cannot tell" must never
+    // read as "covered" — that is how an unproved path is reported as tested.
+    // ONE definition of "which paths is nobody aimed at", shared with the door that
+    // accepts a person's own example (`test-case-request.js`). Written twice, the two
+    // would answer differently the first time either changed — and this file records
+    // that shape costing a paid rebuild on nine separate occasions.
+    const openLanes = unprovedLanes(assembleSpec(draft));
+    /** Which open path a returned sample is aimed at — declared if it says so, positional if not. */
+    const claimOf = (e, i) => {
+      const named = openLanes.find(l => laneKeyOf(l) === String(e?.lane ?? '').trim().toLowerCase());
+      const lane  = named ?? openLanes[i];
+      return lane ? laneKeyOf(lane) : undefined;
+    };
     // ── WHY THE TOP-UP DID NOT RUN, EVERY TIME IT DOES NOT RUN ────────────────
     // The failure branches below record themselves, but the GATE did not: when it
     // was false nothing was logged at all, so "correctly skipped, there were
@@ -3961,11 +4030,12 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
     // database. A loop whose observations need a database query is not observable.
     const skipReason = typeof runDryRun !== 'function' ? 'no_dry_runner'
                      : !assertions.length              ? 'no_contract_to_prove'
-                     : lanes.length <= have.length     ? 'enough_samples_already'
+                     : !openLanes.length               ? 'every_path_already_claimed'
                      : null;
     if (skipReason) {
       logEvent('converger.lane_examples_skipped', {
         ...who(cfg), reason: skipReason, lanes: lanes.length, had: have.length,
+        openLanes: openLanes.length,
       });
     }
     if (!skipReason) {
@@ -3974,7 +4044,9 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
           new SystemMessage(buildSystemPrompt(state.capabilities)),
           new HumanMessage(buildLaneExamplesPrompt({
             intent: state.intent, outcome: draft.outcome, triggers: draft.triggers,
-            lanes, existing: have,
+            // Only the paths nobody is aimed at. Asking for all of them again would
+            // pay for samples that already exist and re-open a lane that is covered.
+            lanes: openLanes, existing: have,
           })),
         ], tierCfg('fast', cfg?.configurable?.threadId));
         const extra = (parsed?.examples ?? [])
@@ -3982,7 +4054,16 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
           // Ids must not collide with what is already there: `checkOutcome` keys by
           // index precisely because a colliding key silently drops an entry, and a
           // dropped sample is a path reported as tested that never ran.
-          .map((e, i) => ({ ...e, id: `lane_${i + 1}` }));
+          // The CLAIM is stamped here, from the lane the model says it aimed at, and
+          // positionally only as a fallback — the prompt asks for one per path in
+          // order, but a model that returns fewer would otherwise mis-attribute every
+          // one after the gap, marking a path proved that nothing was aimed at.
+          // NOTE the shape: a concise arrow, deliberately. `lane-examples.test.js`
+          // proves that every exit from this node carries the topped-up draft by
+          // COUNTING braced returns, so a braced callback here would be counted as an
+          // exit that discards it — a true invariant reported as broken. (Written the
+          // braced way first; the suite caught it.)
+          .map((e, i) => ({ ...e, id: `lane_${i + 1}`, lane: claimOf(e, i) }));
         if (extra.length) {
           draft = { ...draft, outcome: { ...draft.outcome, examples: [...have, ...extra] } };
           logEvent('converger.lane_examples', { ...who(cfg), lanes: lanes.length, had: have.length, added: extra.length });
@@ -4303,6 +4384,18 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
     // as ratify's request-changes does — otherwise analyze would route straight past
     // `generate` (the counters are at their caps by now) and silently ignore the ask.
     if (review?.type === 'modify' && String(review.modification ?? '').trim()) {
+      // AN EXAMPLE IS NOT A CHANGE. If a path is unproved and this describes an input
+      // rather than an edit, add it and re-present — no regenerate. Falls through to
+      // the rebuild below on any doubt, so a real change request is never swallowed.
+      const withCase = await testCaseFromFeedback(state.draft, review.modification, { llm, cfg });
+      if (withCase) {
+        return {
+          draft:           withCase,
+          confirmationLog: [{ step: state.step, type: 'test_case_added', modification: review.modification }],
+          phase:           'ratifying',
+          step:            state.step + 1,
+        };
+      }
       return {
         clarifications:  [{ q: '(revise the built workflow)', a: review.modification }],
         confirmationLog: [{ step: state.step, type: 'walkthrough_revise', modification: review.modification }],
@@ -4398,6 +4491,16 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
     // straight to `gaps` without ever rebuilding the change the user just asked for —
     // the build would appear to ignore them.
     if (confirmation?.feedback) {
+      // Same rule, same helper — see the walkthrough door above.
+      const withCase = await testCaseFromFeedback(state.draft, confirmation.feedback, { llm, cfg });
+      if (withCase) {
+        return {
+          draft:           withCase,
+          confirmationLog: [{ ...logEntry, type: 'test_case_added' }],
+          phase:           're_ratifying',
+          step:            state.step + 1,
+        };
+      }
       return {
         clarifications:  [{ q: '(ratify feedback)', a: confirmation.feedback }],
         phase:           'proposing',
@@ -4594,7 +4697,11 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
   // loop bounds, so the user's feedback REGENERATES the whole spec (again, never the
   // UI-less `propose`). approve → END.
   graph.addConditionalEdges('ratify', (state) => {
-    return state.phase === 'done' ? END : 'generate';
+    if (state.phase === 'done') return END;
+    // A test case was added rather than a change requested: re-present the SAME spec
+    // with the new sample on it. Nothing was rebuilt, so there is nothing to rebuild.
+    if (state.phase === 're_ratifying') return 'ratify';
+    return 'generate';
   });
 
   return graph.compile({

@@ -2364,12 +2364,50 @@ fixed on the spot. Fold the relevant ones into whatever increment next touches t
   second path is an ERROR lane that no example took, so the verdict is the honest
   *"Contract not verified — nothing went down one path"*. That is the by-design rule that a
   workflow which routes is only proved on the routes you test, not a residue of this defect.
-  **A NEW FINDING FROM THE SAME SESSION, not fixed:** the panel invites you to *"describe a
-  real case that should trigger it and I'll test against that"* — and doing so took the
-  `ratify_feedback` route into a **107-second whole-spec regenerate** that renamed the
-  route from `error` to `none` and **did not add the example**. So the one action the
-  product offers for closing an unproved path costs a paid rebuild and does not close it.
-  Asking for a TEST CASE is not asking for a CHANGE, and the two share a door.
+  **TWO MORE DEFECTS FOUND THE SAME WAY, BOTH NOW FIXED (2026-07-31), and they
+  compounded into "a correct workflow cannot be cleared to go live":**
+  · **COUNTING IS NOT COVERAGE.** The top-up that gives every path a test input skipped,
+    because its gate read `lanes.length <= have.length` — two COUNTS. Measured on that
+    build: `lanes: 2, had: 3`, all three samples aimed at the SAME path, the other path
+    left with nothing, logged as `enough_samples_already`. The nth instance of a check
+    scoped to the SHAPE of a value — here its quantity — rather than to what it is for.
+    An example now CLAIMS a path (`lane`), and only a claim counts as cover; an example
+    that claims nothing covers nothing, because attribution is unknowable for samples
+    generated before the workflow existed and **"we cannot tell" must never read as
+    "covered"**. The top-up is then asked only for the paths still open.
+  · **ASKING FOR A TEST CASE IS NOT ASKING FOR A CHANGE.** Because the path was unproved,
+    the panel asked for an example in its own words — *"give me an example that takes it
+    and I'll check the rest"* — and typing one took the `ratify_feedback` route into a
+    **107-second whole-spec regenerate** that renamed the route from `error` to `none` and
+    **did not add the example**. The one remedy the product offers cost a paid rebuild,
+    did not work, and moved the spec underneath someone who had asked for nothing to move.
+    `src/converger/test-case-request.js` now decides it, and **both doors into the
+    regenerate share it** (the walkthrough's "request changes" and ratify's feedback) —
+    a rule about what a person's MESSAGE MEANS, written twice, is the shape this file
+    records paying for most. A test case is added to the spec and the SAME spec is
+    re-presented; nothing is rebuilt.
+  **THE DECISION IS NOT SCOPED TO THE WORDING.** "Test the error path" and "it should also
+  handle an empty body" are one sentence to a regex and opposite requests to a person. Two
+  things must hold: a path is genuinely unproved (so Atlas actually asked), and the model
+  says it describes an INPUT. **Every doubt, malformed answer and failure resolves to
+  CHANGE** — exactly the behaviour that shipped before — because reading a real change
+  request as a test case would silently ignore someone asking for their workflow to be
+  different, which is far worse than the rebuild this removes.
+  Pinned by `tests/converger/an-example-is-not-a-change.test.js` (21), **six mutations
+  red→green**; the ones that matter are the dangerous direction (an unrecognised answer
+  read as a test case, an example accepted that names no path).
+  **THREE PINS IN `lane-examples.test.js` WERE RE-POINTED, NOT DELETED, AND ONE WAS
+  ASSERTING SOMETHING FALSE:** *"only when there are fewer samples than paths"* stated the
+  count rule as an invariant. Its real invariant — a build that needs no top-up must not
+  pay for a model call — is kept; only how "needs" is decided changed. Two others used
+  fixed byte windows (900/2600 chars) that the node outgrew, so they failed over
+  formatting rather than behaviour, and are now anchored to the node.
+  **AND TWICE IN ONE SESSION A SOURCE-LEVEL TEST MATCHED A COMMENT RATHER THAN CODE** —
+  once mine, once the existing one, both searching for the very expression the comment
+  above the fix quotes in order to explain why it was wrong. A source pin must be scoped
+  to the GATE EXPRESSION, never to the words. A third was a true invariant reported as
+  broken because a braced callback added a `return {` the counter mistook for a node exit;
+  the code was written the other way rather than the test weakened.
 
 - **A PERSON NOW PICKS THEIR SPREADSHEET INSTEAD OF PASTING ITS ID — FIXED
   (2026-07-31, increment 2 of "the conversation as a tool").** The errand this replaces,
