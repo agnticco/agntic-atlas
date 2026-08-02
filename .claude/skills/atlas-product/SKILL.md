@@ -51,6 +51,12 @@ The two most useful:
   decisions → gaps → verify → walkthrough → ratify`. `generate` is the expensive
   one (a whole-workflow model pass, 60–180s is normal). `paused: true` means it
   stopped for the user.
+  **`verify` no longer runs the workflow** (2026-08-01). It is a logical pass — it
+  prepares one test case per path and checks the build hangs together — and it has no
+  rebuild route. It should be FAST; if a build stalls, `generate` is the suspect, not
+  this. Proving the promise is the test panel's job, so **a build reaching the
+  walkthrough has NOT been proved to keep its promise** — do not read "it built" as
+  "it works", and do not report the absence of a self-test failure as evidence.
 - `converger.blocker_to_chat` — Atlas gave up rebuilding and took a question to the
   user instead. Seeing this is usually *correct*; seeing it repeatedly for the same
   code means the user is being asked something they cannot resolve.

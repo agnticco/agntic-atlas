@@ -35,6 +35,10 @@ import assert from 'node:assert/strict';
 
 import { CapabilityRegistry } from '../../src/connectors/capability-registry.js';
 import { registerGoogleChannels } from '../../src/connectors/google/index.js';
+import { FlowTester } from '../../src/workflows/flow-tester.js';
+import { NodeTypeRegistry } from '../../src/workflows/node-type-registry.js';
+import { registerBuiltInNodeTypes } from '../../src/workflows/node-types/index.js';
+import { runSpecDryRun } from '../../src/workflows/dry-run-runner.js';
 import {
   normalizeDelivery, checkAssertionAtRuntime, setCapabilityCatalog,
 } from '../../src/workflows/outcome-oracle.js';
@@ -130,6 +134,131 @@ describe('docsCreate returns the title', () => {
     const out = await callDocsCreate({ id: 'file3', name: RESOLVED });
     const r = checkAssertionAtRuntime(PROMISE, [normalizeDelivery(DOC, { ...out, wouldDeliver: true })]);
     assert.equal(r.ok, true, r.reason ?? '');
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// THE HALF THAT ACTUALLY GATES GO LIVE.
+//
+// Teaching `docsCreate` to return its title fixes a REAL run — and did nothing for the
+// case that was witnessed, because EVERY TEST IS DRY. The handler is never called, so
+// the receipt is built by `_dryRunDeliver`, which carried `target` and the content
+// preview but none of the capability's DECLARED locator keys. `normalizeDelivery` then
+// fell back to the node's raw config and reported the template.
+//
+// Witnessed on prod 2026-08-01 AFTER the handler fix shipped: a correct web-research
+// build was told *"nothing reached "Daily AI Briefing" in gdrive — this run delivered
+// to {{write_briefing.date_title}}"*, 2 of 3 promises "fell short", and it could not go
+// live. I had verified the handler fix against the oracle directly instead of through
+// the dry runner — the "construct the subject the way PRODUCTION does" rule, catching
+// the person who had just invoked it.
+//
+// This drives the REAL engine, so it fails if the receipt stops carrying the resolved
+// value for any reason — not merely if this one line is deleted.
+describe('a DRY run reports the destination it resolved, not the template', () => {
+  const nodeTypes = registerBuiltInNodeTypes(new NodeTypeRegistry());
+
+  /** docs_create, declaring `title` as its locator, exactly as the real catalog does. */
+  function registry() {
+    const sent = [];
+    return {
+      sent,
+      get: (id) => ({ id, available: true, locatorKeys: id === 'docs_create' ? ['title'] : [], effect: 'write' }),
+      getHandler: (id) => async (args) => { sent.push({ id, args }); return { delivered: true }; },
+      getProbe: () => null,
+    };
+  }
+
+  // The title is a reference to an upstream step — unknowable until the run happens,
+  // which is the entire case.
+  const docSpec = () => ({
+    name: 'Daily briefing', version: 2, triggers: [{ type: 'schedule' }],
+    outcome: {
+      statement: 'A briefing is saved as a Google Doc.',
+      assertions: [{ id: 'a1', kind: 'document_exists', target: 'gdocs:Daily AI Briefing' }],
+    },
+    nodes: [
+      { id: 'write', type: 'llm',     label: 'Write briefing', config: { mode: 'summarize' } },
+      { id: 'save',  type: 'deliver', label: 'Save as Doc',
+        config: { channel: 'docs_create', title: 'Daily AI Briefing — {{write.output}}' } },
+    ],
+    edges: [{ from: 'write', to: 'save' }],
+  });
+
+  test('the receipt carries the RESOLVED title, and nothing was really sent', async () => {
+    const reg = registry();
+    const ft = new FlowTester({ nodeTypes, channelRegistry: reg,
+      llm: { invoke: async () => ({ content: 'August 1, 2026' }) } });
+    const r = await runSpecDryRun({ flowTester: ft, spec: docSpec(), initialContext: 'go' });
+
+    assert.equal(reg.sent.length, 0, 'a dry run must still fire no real handler');
+    const receipt = (r.deliveries ?? []).find(d => d.channel === 'docs_create');
+    assert.ok(receipt, 'the doc delivery produced a receipt');
+    assert.ok(typeof receipt.title === 'string' && receipt.title.includes('Daily AI Briefing'),
+      'the receipt must name where it WOULD have landed, resolved: ' + JSON.stringify(receipt.title));
+    assert.doesNotMatch(String(receipt.title), /\{\{/,
+      'a template is not a destination — this is the sentence the customer was shown');
+  });
+
+  test('and the promise is therefore KEPT, where it used to fall short', async () => {
+    const reg = registry();
+    const ft = new FlowTester({ nodeTypes, channelRegistry: reg,
+      llm: { invoke: async () => ({ content: 'August 1, 2026' }) } });
+    const r = await runSpecDryRun({ flowTester: ft, spec: docSpec(), initialContext: 'go' });
+    assert.equal(r.oracleResult?.contractPassed, true,
+      'a correct workflow could not go live: ' + JSON.stringify(r.oracleResult?.contract));
+  });
+
+  test('a reference that resolves to NOTHING is not reported as a destination', async () => {
+    // The fail-safe direction, on a REACHABLE input. An unresolved reference substitutes
+    // to empty, so a title that is nothing but a dead reference must leave the receipt
+    // silent and let the existing raw-config fallback report it — quietly inventing a
+    // destination would be the fail-open this file's last section guards.
+    const reg = registry();
+    const spec = docSpec();
+    spec.nodes[1].config.title = '{{nowhere.output}}';   // a step that does not exist
+    const ft = new FlowTester({ nodeTypes, channelRegistry: reg,
+      llm: { invoke: async () => ({ content: 'x' }) } });
+    const r = await runSpecDryRun({ flowTester: ft, spec, initialContext: 'go' });
+    const receipt = (r.deliveries ?? []).find(d => d.channel === 'docs_create');
+    assert.equal(receipt?.title, undefined,
+      'an empty destination must not be claimed as one');
+  });
+
+  test('only DECLARED locator keys are copied — a config value is not a destination', async () => {
+    // The receipt must carry what the capability SAYS is its destination, not whatever
+    // happens to be in its config. Copying every key would let an unrelated value be
+    // read as a place by any capability that declares a key of that name — the
+    // guess-from-the-shape-of-a-name defect this repo has paid for repeatedly.
+    const reg = registry();
+    const spec = docSpec();
+    // `slack` declares NO locator keys in this registry, yet its config carries `title`.
+    spec.nodes[1] = { id: 'save', type: 'deliver', label: 'Post',
+                      config: { channel: 'slack', target: '#ops', title: 'Not a destination' } };
+    const ft = new FlowTester({ nodeTypes, channelRegistry: reg,
+      llm: { invoke: async () => ({ content: 'x' }) } });
+    const r = await runSpecDryRun({ flowTester: ft, spec, initialContext: 'go' });
+    const receipt = (r.deliveries ?? []).find(d => d.channel === 'slack');
+    assert.ok(receipt, 'the slack delivery produced a receipt');
+    assert.equal(receipt.title, undefined,
+      'a capability that declares no locator must not have one invented from its config');
+  });
+
+  test('and a PARTLY-resolved title reports what actually resolved, never braces', async () => {
+    // Measured: `"Doc {{nowhere.output}}"` arrives here as `"Doc "` — non-empty, so it IS
+    // reported. The invariant a person relies on is that whatever the receipt names, it
+    // is never a template: that sentence ("this run delivered to {{write.date_title}}")
+    // is the one they were shown.
+    const reg = registry();
+    const spec = docSpec();
+    spec.nodes[1].config.title = 'Briefing {{nowhere.output}}';
+    const ft = new FlowTester({ nodeTypes, channelRegistry: reg,
+      llm: { invoke: async () => ({ content: 'x' }) } });
+    const r = await runSpecDryRun({ flowTester: ft, spec, initialContext: 'go' });
+    const receipt = (r.deliveries ?? []).find(d => d.channel === 'docs_create');
+    assert.ok(receipt?.title, 'a partly-resolved title is still a destination');
+    assert.doesNotMatch(String(receipt.title), /\{\{/,
+      'the receipt must never hand a raw template to the customer as a place');
   });
 });
 

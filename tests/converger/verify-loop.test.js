@@ -1,26 +1,38 @@
 /**
- * The converger's self-verification loop — the `verify` node. (Increment #23.)
+ * THE `verify` NODE — A LOGICAL PASS, NOT A PROMISE TEST.
  *
- * The converger now behaves like a coding agent: after it builds a spec it runs its
- * OWN draft through the real engine (in DRY-RUN mode — no real sends) on the sample
- * examples, reads the outcome-oracle verdict, and, on a failure, regenerates a fix and
- * re-runs. "Run test" becomes a demonstration of something already watched pass.
+ * Charles, 2026-08-01, watching a build sit for seven minutes on prod: *"The verify in
+ * the converger should simply be a pass that verifies there is a logically built
+ * workflow, not that it keeps its promise. That is what the test is for."*
  *
- * These tests drive the REAL graph through the production call path (`createConverger`
- * → run → resume, the way `src/api/builder.js` drives it), injecting a STUB `runDryRun`
- * so the routing/narration/bounds are exercised deterministically. The engine's own
- * "dry-run causes zero real sends" contract is pinned separately, at the engine
- * boundary, in `tests/workflows/dry-run-verify.test.js`.
+ * WHAT THIS NODE USED TO DO, and why it stopped. It ran the draft through the real
+ * engine on every sample, retried each failure up to three times, and on a consistent
+ * failure bought a whole-spec Opus rebuild (bounded by MAX_VERIFY_ROUNDS). Then the user
+ * pressed Run test and the panel executed the very same samples again. The workflow was
+ * tested twice and the first time was invisible — measured on a web-research build:
+ * `generate` 110s, then SEVEN MINUTES here, then 3.5 more in the panel.
  *
- * WHAT THESE PIN (and the mutation each guards):
- *   • a would-satisfy sample → verify routes to ratify with a PASS report, and the
- *     dry-runner was actually invoked (delete the verify call ⇒ never invoked);
- *   • a failing sample → verify NARRATES the failure and REGENERATES a fix (a second
- *     whole-spec pass), bounded — never an endless build/fix spin;
- *   • no examples / runDryRun THROWS / no tester wired → PASS-THROUGH to ratify (the
- *     build is never blocked on the self-test);
- *   • the loop feeds the engine through `runDryRun` and NEVER fires a real delivery —
- *     the stub records every call; a spec that reaches ratify has run only in dry mode.
+ * That route was also the largest single source of futile paid rebuilds in this repo's
+ * history: whole-spec passes bought for an LLM timeout ("no rebuild can make a model
+ * answer faster"), for a locator that was an unresolved template, and for a promise
+ * about a path the run never took.
+ *
+ * WHAT THESE PIN — the new contract, and the mutation each guards:
+ *   • verify NEVER executes the draft — `runDryRun` is injected and must go uncalled
+ *     (restore the execution loop ⇒ red);
+ *   • verify NEVER buys a second whole-spec pass, even for a draft whose promise a run
+ *     would have failed — this is the money invariant (restore the fix route ⇒ red);
+ *   • the per-path test cases are STILL prepared here, because Run test needs one input
+ *     per path or a router can never be proved (drop the top-up ⇒ red);
+ *   • the walkthrough is still presented exactly once, on the settled spec;
+ *   • the build is never blocked — no tester, no examples, a throwing tester all still
+ *     reach ratify;
+ *   • the report says `ran:false`, so nothing downstream can call a promise tested on
+ *     the strength of this node, and the narration does not claim a run it did not do.
+ *
+ * The engine's own "a dry run fires nothing real" contract is pinned separately at the
+ * engine boundary in `tests/workflows/dry-run-verify.test.js`, and the promise itself is
+ * proved by the test panel — see `tests/api/test-panel-certification.test.js`.
  */
 
 import { test, describe, after } from 'node:test';
@@ -104,302 +116,92 @@ async function drive({ llm, runDryRun, intent = 'summarize report emails to ops'
   return { spec: iv?.spec ?? null, seen, beats, ratify };
 }
 
+
 // ═══════════════════════════════════════════════════════════════════════════════
-describe('a would-satisfy sample → verified, presented, ZERO real sends', () => {
-  test('verify runs the draft, reports a pass, and reaches ratify', async () => {
+describe('verify does not run the workflow', () => {
+  test('the dry-runner is never invoked, and the build still reaches ratify', async () => {
     const calls = [];
-    // The oracle says the contract is kept. (Its shape mirrors evaluateExampleRun.)
     const runDryRun = async (spec, given) => {
       calls.push({ spec, given });
-      return { outputs: [], deliveries: [{ delivered: true, channel: 'slack', target: '#ops' }],
-               oracleResult: { contractPassed: true, ran: true, error: null,
-                 contract: [{ id: 'a1', target: 'slack:#ops', kind: 'message_sent', ok: true }] } };
+      return { outputs: [], deliveries: [],
+               oracleResult: { contractPassed: true, ran: true, error: null, contract: [] } };
     };
     const r = await drive({ llm: makeLlm(), runDryRun });
 
     assert.ok(r.spec, 'the run reaches a ratified spec');
-    // THE ONE-WALKTHROUGH INVARIANT: a clean first-try build shows the step-approval
-    // walkthrough EXACTLY ONCE — on the final, verified spec — never mid-build.
+    assert.deepEqual(calls, [],
+      'verify executed the workflow — that is the TEST’s job, and doing it here means '
+      + 'every build pays for the run twice');
+    // THE ONE-WALKTHROUGH INVARIANT, unchanged: the step-approval fires exactly once,
+    // on the settled spec, never mid-build.
     assert.equal(r.seen.filter(iv => iv.type === 'generated_workflow').length, 1,
-      'the walkthrough is presented exactly once, on the settled spec');
-    assert.ok(calls.length >= 1, 'the converger actually RAN its own draft — verify invoked runDryRun');
-    // The sample it ran on is the example gathered onto the outcome, not a blank.
-    assert.ok(calls[0].given && (calls[0].given.subject || calls[0].given.body),
-      'the draft was run on the sample example event, not on nothing');
-    // A pass beat was narrated.
-    assert.ok(r.beats.some(b => b.kind === 'check' && /produced the right result|passed/i.test(b.text ?? '')),
-      'the pass is narrated to the reasoning panel');
-    // ratify carries the honest verification report.
-    assert.ok(r.ratify?.verification, 'ratify surfaces the verification report');
-    assert.equal(r.ratify.verification.ran, true);
-    assert.equal(r.ratify.verification.note, null, 'a clean pass carries no failure note');
-    // ZERO real deliveries: the ONLY execution path used was the dry-runner stub.
-    // (The stub is where dryRunDeliveries lives; the engine-level pin is separate.)
-    assert.ok(r.seen.every(iv => iv.type !== 'real_delivery'), 'sanity: nothing fired a real delivery interrupt');
+      'the walkthrough is presented exactly once');
+  });
+
+  test('the report says nothing was run, so nothing downstream can claim it was', async () => {
+    const r = await drive({ llm: makeLlm(), runDryRun: async () => ({}) });
+    assert.ok(r.ratify?.verification, 'ratify still surfaces a verification report');
+    assert.equal(r.ratify.verification.ran, false,
+      '`ran:true` here would let a promise be reported as tested when nothing executed');
+  });
+
+  test('and it does not TELL the user it ran the workflow', async () => {
+    const r = await drive({ llm: makeLlm(), runDryRun: async () => ({}) });
+    const claimed = r.beats.filter(b => b.kind === 'check' &&
+      /Running your workflow|produced the right result|on \d+ sample cases to check it actually works/i.test(b.text ?? ''));
+    assert.deepEqual(claimed, [],
+      'this product’s whole thesis is that it does not claim more than it did');
   });
 });
 
 // ═══════════════════════════════════════════════════════════════════════════════
-describe('a failing sample → the converger fixes its own work, bounded', () => {
-  test('a RUNTIME failure NARRATES and REGENERATES a corrected spec (a second whole-spec pass)', async () => {
-    // The spec is STRUCTURALLY complete throughout (it has the Slack delivery, so the
-    // gap scorer is happy and never regenerates). The failure is at RUNTIME — the kind
-    // only `verify` can catch, because it actually RUNS the workflow: the oracle fails
-    // the first sample run and passes the second (simulating the converger's fix
-    // working). So the ONLY reason a second whole-spec pass happens is verify's fix
-    // path — the gap loop would have had no reason to rebuild a complete spec.
-    let runs = 0;
-    const runDryRun = async () => {
-      runs++;
-      // A STRUCTURAL failure regenerates (a promised delivery did NOT happen). verify
-      // retries a failed sample up to 3 attempts, so a PERSISTENT structural failure is
-      // what regenerates: fail ALL THREE attempts of the first spec (runs 1,2,3), then the
-      // regenerated spec passes (run 4+). `contentError` is absent, and the delivery is
-      // missing (deliveries:[]) — this is a wiring failure, not a content flake, so it is
-      // the one class that SHOULD rebuild.
-      const ok = runs > 3;
-      return { outputs: [], deliveries: ok ? [{ delivered: true, channel: 'slack', target: '#ops' }] : [],
-               oracleResult: { contractPassed: ok, ran: true, error: null, contentError: false,
-                 contract: [{ id: 'a1', target: 'slack:#ops', kind: 'message_sent', ok,
-                   reason: ok ? undefined : 'nothing reached slack:#ops' }] } };
-    };
-
+describe('verify never buys a second whole-spec pass', () => {
+  test('a draft whose promise a run WOULD have failed is still built exactly once', async () => {
+    // The spec is structurally complete (it has the Slack delivery the contract names),
+    // so `gaps` is satisfied and nothing upstream regenerates. Under the old contract
+    // this is precisely the case that cost a rebuild: the oracle would have said the
+    // promise was broken and verify would have re-generated the whole spec.
     const llm = makeLlm();
+    const runDryRun = async () => ({
+      outputs: [], deliveries: [],
+      oracleResult: { contractPassed: false, ran: true, error: null,
+        contract: [{ id: 'a1', target: 'slack:#ops', kind: 'message_sent', ok: false }] },
+    });
     const r = await drive({ llm, runDryRun });
 
-    // The fix regenerate happens INTERNALLY now (the walkthrough moved to the end), so
-    // it is measured by counting `generate` passes, NOT walkthrough interrupts: build (1)
-    // + one verify fix (1) = 2.
-    assert.equal(llm.generateCount(), 2,
-      'a structurally-complete spec that FAILS at runtime must trigger exactly one internal fix regenerate (build + fix)');
-    // …and the user is shown the step-approval only ONCE — on the final, fixed spec.
-    assert.equal(r.seen.filter(iv => iv.type === 'generated_workflow').length, 1,
-      'the internal fix regenerate is SILENT — the walkthrough is presented exactly once');
-    assert.ok(r.beats.some(b => b.kind === 'thinking' && /rebuild|didn't keep its promise|promise/i.test(b.text ?? '')),
-      'the fix reasoning is narrated (kind:thinking)');
-    assert.ok(r.beats.some(b => b.kind === 'check' && /didn't pass|only \d+\/\d+/i.test(b.text ?? '')),
-      'the failure is narrated (kind:check)');
-    assert.ok(runs >= 2, 'the loop re-ran the draft after fixing it (at least one build + one re-verify)');
-    // It converged with a passing verification report.
-    assert.ok(r.spec, 'the run converges to a ratified spec');
-    assert.equal(r.ratify?.verification?.note, null, 'the final report is a clean pass — the fix worked');
+    assert.ok(r.spec, 'the build still completes and is presented');
+    assert.equal(llm.generateCount(), 1,
+      'a failing promise bought another whole-spec pass — that spend belongs to the user '
+      + 'pressing Run test, not to the build');
   });
 
-  test('a sample it can NEVER make pass ends at ratify with an honest note — no infinite loop', async () => {
-    // The oracle ALWAYS fails. The fix loop is bounded by MAX_VERIFY_ROUNDS, so the
-    // build must still terminate at ratify — carrying a give-up note, never claiming
-    // success, never spinning. (Mutation: drop the verifyRounds cap ⇒ this hangs.)
-    let runs = 0;
-    const runDryRun = async () => {
-      runs++;
-      // A STRUCTURAL failure (nothing reached the target) that NEVER passes — the fix loop
-      // must still terminate. contentError:false, so it regenerates (not a flake).
-      return { outputs: [], deliveries: [],
-               oracleResult: { contractPassed: false, ran: true, error: null, contentError: false,
-                 contract: [{ id: 'a1', target: 'slack:#ops', kind: 'message_sent', ok: false, reason: 'nothing reached slack:#ops' }] } };
-    };
-    const r = await drive({ llm: makeLlm(), runDryRun });
-
-    assert.ok(r.spec, 'even an unfixable sample still converges to a ratified spec — never a spin');
-    // Bounded still holds; each verify pass now retries a failed sample up to 3 attempts,
-    // so the ceiling is ~3× the round cap — still finite, no spin.
-    assert.ok(runs <= 12, `the fix loop is bounded; it re-ran ${runs} times`);
-    assert.ok(r.ratify?.verification?.gaveUp === true, 'the report honestly says it could not get a sample to pass');
-    assert.ok(r.ratify.verification.note, 'and it carries the reason, never a false success');
-    assert.ok(r.beats.some(b => b.kind === 'check' && /couldn't get a sample to (fully )?pass|review it before going live/i.test(b.text ?? '')),
-      'the give-up is narrated honestly');
-  });
-
-  test('a CONTENT FLAKE (delivery happened, summarize misjudged) does NOT regenerate or give up', async () => {
-    // The real defect the user hit: a wired-correct workflow whose dry-run summarize
-    // misjudges a wordy sample and emits the error sentinel (contentError:true) — even
-    // though the delivery STRUCTURALLY happened and the real "Run test" passes it. This
-    // must NOT rebuild (a new spec flakes the same way — the expensive loop) and must NOT
-    // give up loudly: the workflow is correct, so it is presented plainly.
-    let runs = 0;
-    const runDryRun = async () => {
-      runs++;
-      // Always a content flake: the delivery happened, but the content is the sentinel.
-      return { outputs: [], deliveries: [{ delivered: true, channel: 'slack', target: '#ops' }],
-               oracleResult: { contractPassed: false, ran: true, error: null, contentError: true,
-                 contract: [{ id: 'a1', target: 'slack:#ops', kind: 'message_sent', ok: false,
-                   reason: 'a message was delivered, but its content was an error' }] } };
-    };
-    const r = await drive({ llm: makeLlm(), runDryRun });
-
-    assert.ok(r.spec, 'converges to a ratified spec');
-    // No give-up: a flake-only failure is presented as a structurally-verified workflow.
-    assert.ok(!r.ratify?.verification?.gaveUp, 'a content flake must NOT be reported as a give-up');
-    assert.equal(r.ratify?.verification?.softFlake, true, 'it is recorded as a soft content flake, not a failure');
-    // Bounded and CHEAP: it did not spiral into whole-spec rebuilds. With 3 attempts per
-    // sample and no regenerate, the dry-run count stays small — never the give-up ceiling.
-    assert.ok(runs <= 6, `a flake must not trigger the rebuild loop; it re-ran ${runs} times`);
-    assert.ok(!r.beats.some(b => b.kind === 'check' && /couldn't get a sample|isn't settling|rebuilt this/i.test(b.text ?? '')),
-      'the alarming give-up narration must NOT appear for a content flake');
-    assert.ok(r.beats.some(b => b.kind === 'check' && /built and (every step is )?wired correctly|test run to see it/i.test(b.text ?? '')),
-      'it is narrated as built-and-wired-correctly, not a failure');
+  test('a tester that THROWS cannot block or rebuild either', async () => {
+    const llm = makeLlm();
+    const r = await drive({ llm, runDryRun: async () => { throw new Error('tester exploded'); } });
+    assert.ok(r.spec, 'the build is never blocked on the self-test');
+    assert.equal(llm.generateCount(), 1, 'and never pays for a rebuild over it');
   });
 });
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// THE AGGREGATE REGENERATE CAP — reproduces the live deploy-blocker, re-pointed.
-//
-// `verifyRounds` bounds ONLY the verify fix loop. But the whole spec is ALSO
-// re-generated by the analyze sufficiency/regen loop, a decision-table correction, and a
-// gap fix — each with its OWN counter. In a live headed build the model kept producing a
-// spec that failed verification AND the sufficiency check kept saying "not finished", so
-// the two loops COMPOUNDED. Pre-2026-07-16 the walkthrough fired at the END of `generate`,
-// so every compounded regenerate re-presented it and the user was looped through
-// re-approvals ("4 walkthroughs past a cap of 2"). `buildPresentations` +
-// MAX_BUILD_REGENERATIONS is the total cap on those regenerations.
-//
-// The walkthrough now fires ONCE, at the very end (its own node), so it can no longer
-// loop the USER — but the SILENT internal regenerate loop still compounds and must still
-// terminate. This test drives repeated verify-fail + sufficiency-not-finished cycles and
-// asserts: (a) the walkthrough is shown EXACTLY ONCE, and (b) the build STOPS after at
-// most the cap (≤ 4 generate passes = the first build + 3 capped regenerates), with a
-// gave-up note. It FAILS on the pre-cap code (the loops compound unbounded).
-describe('a rebuild that changes nothing does not buy another one', () => {
-  // THE COST THIS GUARDS. `generate` is one Opus pass over the whole workflow. Measured
-  // on a real 26-step, 4-connector build: generate ran 4× (871.6s) and verify 3×
-  // (462.7s) — 96% of a 23-minute build — and the spec that came out was the one the
-  // plan described all along. Every rebuild arrived through `verify`, which is why an
-  // earlier guard on analyze's blocking-gap route did nothing at all.
-  //
-  // The rule lives in `generate` — the choke point EVERY regenerate path routes back
-  // through — and keys on the OUTPUT: if a rebuild returns a structurally identical
-  // spec, it has proven it cannot fix the complaint. The first fix attempt is always
-  // allowed; it is the second identical one that is refused.
-  // Sufficiency ALWAYS says "not finished", so the analyze regen loop compounds on top
-  // of the verify fix loop — the shape the live build showed, and the only shape where
-  // the no-op guard can bite (verify alone is already bounded to 3 by MAX_VERIFY_ROUNDS).
-  function neverFinishedLlm() {
-    const llm = makeLlm();
-    const base = llm.invoke;
-    llm.invoke = async (msgs) => {
-      const p = String(msgs[msgs.length - 1].content);
-      if (p.includes('Is this workflow FINISHED')) return J({ complete: false, missing: 'another step' });
-      return base(msgs);
-    };
-    return llm;
-  }
-
-  test('an unfixable structural failure stops rebuilding EARLY, below the aggregate cap', async () => {
-    // The model returns the same spec every time and the oracle always fails — the
-    // shape cannot move, so no number of rebuilds can help. Without the guard this runs
-    // to the aggregate cap (4 generates). With it, the second identical rebuild is
-    // refused and it stops at 3.
-    let runs = 0;
-    const runDryRun = async () => {
-      runs++;
-      return { outputs: [], deliveries: [],
-               oracleResult: { contractPassed: false, ran: true, error: null, contentError: false,
-                 contract: [{ id: 'a1', target: 'slack:#ops', kind: 'message_sent', ok: false,
-                   reason: 'nothing reached slack:#ops' }] } };
-    };
-    const llm = neverFinishedLlm();
-    const r = await drive({ llm, runDryRun });
-
-    assert.equal(llm.generateCount(), 3,
-      `an identical rebuild must not be bought twice — generate ran ${llm.generateCount()} times ` +
-      '(4 means the guard is gone and the loop ran to the aggregate cap)');
-    // Stopping early must NOT quietly turn a failed self-test into a success.
-    assert.ok(r.spec, 'it still converges to a ratified spec');
-    assert.equal(r.ratify?.verification?.gaveUp, true,
-      'the build must still admit the self-test never passed — a cheaper failure is not an honest one');
-    assert.ok(r.beats.some(b => b.kind === 'check' && /couldn't get a sample to (fully )?pass|review it before going live/i.test(b.text ?? '')),
-      'and it must still SAY so — the give-up narration lives in verify and must not be skipped');
-  });
-});
-
-describe('the aggregate regenerate cap — compounding regenerate loops always terminate', () => {
-  // makeLlm, but the sufficiency check ALWAYS says "not finished" — so the analyze
-  // regen loop fires on top of the verify fix loop, exactly as it did live.
-  function makeLlmNeverFinished() {
-    const llm = makeLlm();
-    const base = llm.invoke;
-    llm.invoke = async (msgs) => {
-      const p = String(msgs[msgs.length - 1].content);
-      if (p.includes('Is this workflow FINISHED')) return J({ complete: false, missing: 'another step' });
-      return base(msgs);
-    };
-    return llm;
-  }
-
-  test('verify ALWAYS fails AND sufficiency ALWAYS says not-finished → ratify, bounded, no user loop', async () => {
-    // The oracle always fails (verify wants to fix forever) and the sufficiency check
-    // always says not-finished (analyze wants to regenerate forever). With no aggregate
-    // cap these compound; the user is stuck re-approving the walkthrough. The cap must
-    // force termination at ratify.
-    let runs = 0;
-    const runDryRun = async () => {
-      runs++;
-      return { outputs: [], deliveries: [],
-               oracleResult: { contractPassed: false, ran: true, error: null,
-                 contract: [{ id: 'a1', target: 'slack:#ops', kind: 'message_sent', ok: false, reason: 'nothing reached slack:#ops' }] } };
-    };
-
-    const llm = makeLlmNeverFinished();
-    const r = await drive({ llm, runDryRun });
-
-    // THE ONE-WALKTHROUGH INVARIANT UNDER COMPOUNDING LOOPS: no matter how many internal
-    // regenerates the verify-fix + sufficiency loops drive, the user is shown the
-    // step-approval EXACTLY ONCE — on the final, settled spec. (Pre-2026-07-16 this
-    // scenario presented the walkthrough 7 times; that is the regression this pins.)
-    const walkthroughs = r.seen.filter(iv => iv.type === 'generated_workflow').length;
-    assert.equal(walkthroughs, 1,
-      `the walkthrough must be presented EXACTLY ONCE regardless of internal regenerates; it was shown ${walkthroughs} times`);
-    // THE AGGREGATE CAP, RE-POINTED: it now bounds the SILENT internal regenerate loop,
-    // not walkthrough presentations. The cap is the first build (1) +
-    // MAX_BUILD_REGENERATIONS (3) = 4 generate passes. Above 4 means the aggregate cap is
-    // not holding and the model is burning unbounded Opus rebuilds.
-    assert.ok(llm.generateCount() <= 4,
-      `the internal regenerate loop must be bounded by the aggregate cap; generate ran ${llm.generateCount()} times`);
-    // And the compounding loops genuinely fired (this is not passing because nothing
-    // regenerated) — the first build plus a couple of regenerates.
-    assert.ok(llm.generateCount() >= 3,
-      `the compounding loops must actually have fired (generate ran ${llm.generateCount()} times)`);
-    // It TERMINATED at ratify — never spun to the recursion limit / hung the build.
-    assert.ok(r.spec, 'the build converges to a ratified spec — it never loops the user forever');
-    assert.ok(r.ratify, 'the build reached ratify');
-    // And it said so honestly — a give-up note, never a false success.
-    assert.equal(r.ratify?.verification?.gaveUp, true, 'ratify carries an honest give-up note, not a false pass');
-    assert.ok(r.ratify?.verification?.note, 'the give-up note carries a reason');
+describe('the test cases are still prepared here', () => {
+  // The top-up is the ONLY thing that produces one input per path. Without it a router
+  // reaches the panel with a single sample, cannot cover its own routes, and correctly
+  // refuses to certify — so the user is asked to write test cases by hand, which is the
+  // typing the zero-typing path exists to remove.
+  test('the ratified spec carries the sample examples', async () => {
+    const r = await drive({ llm: makeLlm(), runDryRun: async () => ({}) });
+    const examples = r.spec?.outcome?.examples ?? [];
+    assert.ok(examples.length >= 1, 'the panel has nothing to run without these');
+    assert.ok(examples.every(e => e && e.given != null),
+      'an example with no input cannot be run against anything');
   });
 });
 
 // ═══════════════════════════════════════════════════════════════════════════════
-describe('fail-safe pass-throughs — the build is NEVER blocked on the self-test', () => {
-  test('no tester wired ⇒ verify is inert; the build ratifies unchanged', async () => {
-    // runDryRun omitted entirely — the production default when the server wrapper is
-    // absent. verify must be a pass-through; no beats, straight to ratify.
+describe('fail-safe pass-throughs — the build is NEVER blocked', () => {
+  test('no tester wired at all still reaches ratify', async () => {
     const r = await drive({ llm: makeLlm(), runDryRun: undefined });
-    assert.ok(r.spec, 'the build still reaches a ratified spec');
-    assert.equal(r.ratify?.verification ?? null, null, 'no self-test ran, so ratify carries no verification report');
-    assert.equal(r.beats.filter(b => b.kind === 'check').length, 0, 'nothing was narrated by verify');
-  });
-
-  test('no examples ⇒ verify passes through (nothing to run it on)', async () => {
-    // The example node yields none, so outcome.examples is empty — verify cannot run.
-    const llm = makeLlm();
-    const base = llm.invoke;
-    llm.invoke = async (msgs) => {
-      const p = String(msgs[msgs.length - 1].content);
-      if (p.includes('CONCRETE example cases')) return J({ examples: [] });
-      return base(msgs);
-    };
-    let called = 0;
-    const runDryRun = async () => { called++; return { outputs: [], oracleResult: { contractPassed: true, ran: true, contract: [] } }; };
-    const r = await drive({ llm, runDryRun });
-    assert.ok(r.spec, 'the build ratifies');
-    assert.equal(called, 0, 'with no example to run, the tester is never called');
-  });
-
-  test('runDryRun THROWS ⇒ verify does not block the build (honest note, still ratifies)', async () => {
-    const runDryRun = async () => { throw new Error('engine exploded'); };
-    const r = await drive({ llm: makeLlm(), runDryRun });
-    assert.ok(r.spec, 'a tester that throws is an infra hiccup, not a build blocker — the spec still ratifies');
-    assert.equal(r.ratify?.verification?.ran, false, 'the report says the self-test could not run');
-    assert.ok(/could not run/i.test(r.ratify?.verification?.note ?? ''), 'and says so honestly');
+    assert.ok(r.spec, 'a converger with no dry-runner still finishes the build');
   });
 });

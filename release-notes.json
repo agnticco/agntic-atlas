@@ -1,5 +1,14 @@
 [
   {
+    "version": "1.6.121",
+    "date": "2026-08-01",
+    "title": "Builds stop testing themselves twice",
+    "notes": [
+      "Building a workflow is much faster — Atlas no longer runs the whole workflow during the build and then again when you press Run test. Proving it works is what the test is for.",
+      "A workflow that saves into a document named at run time is no longer told it delivered nowhere."
+    ]
+  },
+  {
     "version": "1.6.120",
     "date": "2026-08-01",
     "title": "Version 1.6.120",

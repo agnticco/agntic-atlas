@@ -900,6 +900,39 @@ export class FlowTester {
     const wouldDeliver = hasBody && bodyWellFormed && targetPresent && capabilityConnected
       && destinationReachable !== false;
 
+    // ── WHERE IT WOULD HAVE LANDED, RESOLVED ─────────────────────────────────
+    //
+    // A dry run never calls the handler, so nothing here reports the destination the
+    // way a real run does. `normalizeDelivery` reads the capability's declared locator
+    // keys off THIS receipt first and falls back to the node's raw config — which still
+    // holds `{{...}}`. So a workflow whose destination is built at run time was told it
+    // delivered to a template:
+    //
+    //   nothing reached "Daily AI Briefing" in gdrive — this run delivered to
+    //   {{write_briefing.date_title}} (Google Docs)
+    //
+    // Witnessed on prod 2026-08-01, twice: 2 of 3 promises "fell short" on a workflow
+    // that was correct, so it could not go live. `docsCreate` was taught to return the
+    // title it wrote, which fixes a REAL run — and does nothing here, because every test
+    // is dry. The test is the half that gates Go live, so it was the half that mattered.
+    //
+    // `cfg` is the INTERPOLATED config (it is what produced `body` above, which is
+    // checked for unresolved templates), so the resolved value is already in hand — it
+    // was simply being dropped. Copy the DECLARED locator keys onto the receipt under
+    // their own names, which is exactly the shape `normalizeDelivery` already looks for.
+    // Declared only: no guessing, and a capability that declares nothing is unchanged.
+    // A blank is not a destination: an unresolved `{{…}}` substitutes to EMPTY here
+    // (measured — `"Doc {{nowhere.output}}"` arrives as `"Doc "`), so `trim()` already
+    // rejects the fully-unresolved case and no value reaching this line can still
+    // contain braces. A `!UNRESOLVED_TEMPLATE.test(v)` guard was written here first and
+    // removed: nothing could reach it, and an unkillable guard is one nobody can prove
+    // still works.
+    const declaredLocators = {};
+    for (const k of (Array.isArray(realCh?.locatorKeys) ? realCh.locatorKeys : [])) {
+      const v = cfg?.[k];
+      if (typeof v === 'string' && v.trim()) declaredLocators[k] = v;
+    }
+
     return {
       dryRun: true,
       wouldDeliver,
@@ -907,6 +940,7 @@ export class FlowTester {
       target: target ?? null,
       contentPreview: body.slice(0, 200),
       checks,
+      ...declaredLocators,
       ...(unreachableReason ? { unreachableReason } : {}),
     };
   }

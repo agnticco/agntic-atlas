@@ -90,45 +90,53 @@ describe('IT IS NARROW ON PURPOSE — the dangerous direction', () => {
   });
 });
 
-describe('the verify node acts on it — SOURCE level, and weaker than the rest', () => {
+describe('THE CAUSE IS GONE, NOT JUST THE SYMPTOM — verify no longer runs anything', () => {
   /**
-   * Said plainly: the `verify` node closes over the LLM, the dry-run engine and graph
-   * state, so it cannot be lifted and executed. A behavioural harness would have to drive
-   * a whole build against a real model. These pins exist because "the rule was right and
-   * nothing consulted it" is a failure this repo has shipped before.
+   * This file was written on 2026-08-01, in the morning, about a build that spent 881
+   * seconds and THREE paid Opus passes inside the converger's self-test — two of them
+   * `verify_failed` rebuilds ordered by an LLM timeout, which no rebuild can fix.
+   *
+   * Two describes used to live here and are deliberately gone, because what they pinned
+   * cannot happen any more:
+   *
+   *   · "a run we could not complete is excluded from the rebuild decision" — pinning
+   *     `isUnrunnable` / `isContentFlake`, which sorted a failed sample into "rebuild"
+   *     or "excuse". There is no rebuild decision now: `verify` has no fix route.
+   *   · "THE SILENCE — a build that says nothing reads as a dead one" — pinning the
+   *     per-sample narration around each wait. There is no wait to narrate.
+   *
+   * That afternoon Charles cut the whole thing: *"The verify in the converger should
+   * simply be a pass that verifies there is a logically built workflow, not that it
+   * keeps its promise. That is what the test is for."* Excusing a timeout was the right
+   * fix for a node that should not have been executing the workflow at all.
+   *
+   * What replaces those pins is one guard: the execution must not come BACK. That is
+   * stronger than either of them — an excuse-the-timeout rule is only needed by code
+   * that runs the workflow, so if this stays true neither rule can be missed again. The
+   * behavioural contract is `tests/converger/verify-loop.test.js`, which drives the real
+   * graph and asserts the dry-runner goes uncalled; this is the cheap source-level
+   * backstop beside it.
    */
   const SRC = readFileSync(path.join(ROOT, 'src/converger/elicitation-graph.js'), 'utf8');
 
-  test('a run we could not complete is excluded from the rebuild decision', () => {
-    assert.match(SRC, /const isUnrunnable\s*=\s*\(o\)\s*=>\s*!!o\?\.error && isTransientFailure\(o\.error\)/);
-    assert.match(SRC, /structural = fails\.filter\(j => !isContentFlake\(j\.oracle\) && !isUnrunnable\(j\.oracle\)\)/);
+  test('the verify node does not execute the draft', () => {
+    assert.doesNotMatch(SRC, /await runDryRun\(/,
+      'verify is executing the workflow again — that is the TEST\'s job, and doing it '
+      + 'here makes every build pay for the run twice');
   });
 
-  test('and the content-flake rule it sits beside is untouched', () => {
-    // The 2026-07-23 fix. This change adds a second excuse; it must not alter the first.
-    assert.match(SRC, /const isContentFlake = \(o\) => !!o\?\.contentError && !o\?\.error && o\?\.ran !== false/);
-  });
-});
-
-describe('THE SILENCE — a build that says nothing reads as a dead one', () => {
-  const SRC = readFileSync(path.join(ROOT, 'src/converger/elicitation-graph.js'), 'utf8');
-
-  test('every sample is announced BEFORE it is waited on', () => {
-    // One line was emitted before a 385-second wait and nothing again until it ended.
-    assert.match(SRC, /Sample \$\{exIndex \+ 1\} of \$\{examples\.length\}/);
+  test('and has no route that buys a rebuild from a failed run', () => {
+    assert.doesNotMatch(SRC, /route:\s*'verify_failed'/,
+      'the largest source of futile paid rebuilds in this file\'s history');
+    assert.doesNotMatch(SRC, /MAX_VERIFY_ROUNDS/,
+      'a bound on a loop that no longer exists is a loop waiting to be restored');
   });
 
-  test('a retry says so, rather than adding two more silent minutes', () => {
-    assert.match(SRC, /trying \$\{exLabel\(ex, exIndex\)\} again/);
-  });
-
-  test('and each verdict lands as it happens, not only in the final count', () => {
-    assert.match(SRC, /came out right/);
-  });
-
-  test('a sample we could not check says so, and says it is not their fault', () => {
-    // The honest half: a timeout must not read to a customer as "your workflow is broken".
-    assert.match(SRC, /That is not a fault in your workflow/);
+  test('the transient-failure rule it needed is no longer wired to anything here', () => {
+    // `isTransientFailure` survives in error-translator.js (it still powers the
+    // user-facing error message); it is simply no longer imported by the graph, because
+    // nothing in the graph classifies run failures any more.
+    assert.doesNotMatch(SRC, /import \{ isTransientFailure \}/);
   });
 });
 

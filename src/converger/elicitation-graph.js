@@ -55,7 +55,6 @@ import { unprovedLanes, laneKeyOf, buildTestCaseRequestPrompt, readTestCaseReque
   from './test-case-request.js';
 import { sufficiencyUnactionable } from './sufficiency-actionable.js';
 import { resolveNamedContainer, headersFor } from './destination-create-or-pick.js';
-import { isTransientFailure } from '../workflows/error-translator.js';
 // Asking a person is a tool with rules — see asking.js for the four and why each exists.
 import { shouldAsk } from './asking.js';
 import { analyzeTable } from '../workflows/decision-analysis.js';
@@ -1744,19 +1743,17 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
       // Whole-spec regenerations driven by a described decision-table correction
       // (#24). A LOOP BOUND, capped at one: after it, the induced table stands.
       decisionRounds:    0,
-      // Self-verification (#23). `verifyRounds` is a LOOP BOUND: the converger runs
-      // its own draft through the engine on the sample examples and, on a failure,
-      // regenerates a fix — capped at MAX_VERIFY_ROUNDS so a spec it cannot make pass
-      // ends at ratify with an honest note, never in an endless build/fix spin.
-      // `_verifyReport` carries what the self-test found ({ran,passed,total,note}) so
-      // ratify can surface it — a failed verify is a NOTE, never a hard block.
-      verifyRounds:      0,
+      // `verify` no longer executes the draft, so there is no fix loop to bound and
+      // `verifyRounds` is gone with it (Charles, 2026-08-01: verify is a logical pass,
+      // the TEST proves the promise). `_verifyReport` remains, now carrying
+      // {ran:false, logical} — `ran:false` is load-bearing: nothing downstream may
+      // report a promise as tested on the strength of this node.
       _verifyReport:     null,
       // THE AGGREGATE HARD CAP on how many times the whole spec is RE-generated after
       // the first build. The finished-workflow walkthrough (`generated_workflow`) is now
       // presented EXACTLY ONCE, in the `walkthrough` node on the FINAL spec (moved there
       // 2026-07-16), so the user is never looped through re-approvals. But the INTERNAL
-      // regenerate loop still compounds: `verifyRounds` bounds only the verify fix loop,
+      // regenerate loop still compounds: each bound covers only its own loop,
       // while the analyze sufficiency/regen loop (`regenRounds`), a decision-table
       // correction (`decisionRounds`) and a gap fix (`gapRounds`) each drive their OWN
       // regenerate with their OWN counter and no single total. `buildPresentations`
@@ -2923,7 +2920,7 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
 
     // AGGREGATE HARD CAP (see `buildPresentations`). Every regenerate path routes back
     // HERE to rebuild the whole spec; independently each is bounded (MAX_REGEN_ROUNDS /
-    // MAX_GAP_ROUNDS / MAX_VERIFY_ROUNDS / the sufficiency cap), but together they
+    // MAX_GAP_ROUNDS / the sufficiency cap), but together they
     // compound with no total cap — which is how a spec the model cannot settle spins
     // through the (expensive) Opus rebuild far more than any single loop intends. Once
     // we've RE-generated MAX_BUILD_REGENERATIONS times (a regenerate is a build with
@@ -3201,7 +3198,6 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
         // This pass was paid for. Whatever it was meant to fix has now had its turn.
         _regenComplaints: rememberComplaint(state._regenComplaints, complaintNow),
         regenRounds:       MAX_REGEN_ROUNDS,
-        verifyRounds:      MAX_VERIFY_ROUNDS,
         // ALL of them, not just the loud ones. Saturating verify and the gap loop while
         // leaving the sufficiency check open meant it simply ordered the next rebuild
         // instead — the guard fired, logged, and changed nothing. A budget guard has to
@@ -3248,7 +3244,7 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
     // re-pointed from "walkthrough re-presentations" to "internal generate re-runs" (the
     // two were 1:1 when the walkthrough lived here, so the counter and cap are unchanged;
     // only what they COUNT is). Individual loops are separately bounded (MAX_REGEN_ROUNDS
-    // / MAX_GAP_ROUNDS / MAX_VERIFY_ROUNDS / the sufficiency cap); this is the total.
+    // / MAX_GAP_ROUNDS / the sufficiency cap); this is the total.
     return {
       draft: merged,
       // The whole-spec pass has run: `analyze` re-scores this now-complete draft and
@@ -4063,11 +4059,9 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
   // a hard block — `complete ⇒ publishable` is preserved: the user can always test and
   // publish; the converger has simply told them the truth about what it saw.
   //
-  // BOUNDED. `MAX_VERIFY_ROUNDS` hard-caps the fix loop; each round runs ≤
-  // `MAX_VERIFY_EXAMPLES` samples. A spec the converger cannot make pass ends at ratify
+  // NO LOOP TO BOUND. This node executes nothing and has no fix route, so the old
+  // round/sample caps are gone. A spec whose promise a run would fail ends at ratify
   // with an honest "I couldn't get a sample to pass" note — never in an endless rebuild.
-  const MAX_VERIFY_ROUNDS   = 2;
-  const MAX_VERIFY_EXAMPLES = 2;
 
   graph.addNode('verify', async (state, cfg) => {
     const runDryRun  = cfg?.configurable?.runDryRun;
@@ -4194,9 +4188,11 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
     // paid for are discarded and the panel is handed the same single sample as before.
     const carryDraft = draft !== state.draft ? { draft } : {};
 
+    // NOT truncated any more. The cap existed to bound how many samples this node
+    // EXECUTED; nothing is executed here now, and the number is only reported to the
+    // user — so capping it would understate how many test cases were prepared.
     const examples   = (draft?.outcome?.examples ?? [])
-      .filter(e => e && e.given != null)
-      .slice(0, MAX_VERIFY_EXAMPLES);
+      .filter(e => e && e.given != null);
 
     // ── FAIL-SAFE PASS-THROUGHS ──────────────────────────────────────────────
     // No tester wired, nothing to run, or no machine-checkable contract to judge
@@ -4210,257 +4206,82 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
     // The spec the user is about to publish — resources already resolved by the tail.
     const spec = assembleSpec(draft);
 
+    // ── A LOGICAL CHECK, NOT A PROMISE TEST (Charles, 2026-08-01) ────────────
+    //
+    // *"The verify in the converger should simply be a pass that verifies there is a
+    // logically built workflow, not that it keeps its promise. That is what the test
+    // is for."*
+    //
+    // This node used to RUN the workflow: every sample through the real engine, each
+    // failure retried up to 3 times, and a consistent failure buying a whole-spec Opus
+    // rebuild, bounded by a round cap. Then the user pressed Run test and the
+    // panel executed the very same samples all over again. The workflow was tested
+    // twice, and the first time was invisible.
+    //
+    // MEASURED on prod the day this changed, on a web-research build: `generate` took
+    // 110s, and this node then sat for SEVEN MINUTES — every sample doing a real web
+    // search — with the screen showing only a rotating curated fact. Run test afterwards
+    // took another 3.5 minutes to do the same work again.
+    //
+    // The two are not the same question, and only one of them belongs here:
+    //   · is this workflow logically built?      → cheap, structural, belongs to the BUILD
+    //   · does it keep its promise on real data? → expensive, evidential, belongs to the TEST
+    //
+    // So the execution is gone, and with it the `verify_failed` rebuild route. That route
+    // was the single largest source of futile paid rebuilds in this file's history: it
+    // ordered whole-spec regenerates for an LLM timeout ("no rebuild can make a model
+    // answer faster"), for a locator that named a template, and for a promise about a
+    // path the run never took. Every one of those is now the test panel's verdict to
+    // report, where the user can see it and say what to change.
+    //
+    // WHAT IS KEPT, DELIBERATELY:
+    //   · the per-path example top-up ABOVE — Run test needs one input per path or a
+    //     router can never be proved, and that top-up is the only thing that produces
+    //     them. It is a single cheap model call, not an execution.
+    //   · `assembleSpec`, which is itself a structural assertion: a draft that cannot be
+    //     assembled throws here rather than reaching the person.
+    //   · the logical self-agreement check, which asks whether the build contradicts
+    //     ITSELF (a promise naming somewhere no step writes, the two halves of one
+    //     promise disagreeing). It reads the spec and executes nothing.
+    //
+    // WHAT IS NOT KEPT: nothing here blocks or rebuilds any more. `gaps` already refuses
+    // a structurally broken draft upstream, and `complete ⇒ publishable` still holds, so
+    // this node's honest output is a REPORT. Findings are logged for the operator, never
+    // turned into a spend.
+    let logical = [];
+    try {
+      logical = selfContradictions(spec) ?? [];
+    } catch (e) {
+      // A checker fault is not a workflow defect. Say so and carry on — refusing to
+      // certify is available, inventing a failure is not.
+      logEvent('converger.verify_logical_failed', { ...who(cfg), error: String(e?.message ?? e) });
+    }
+    if (logical.length) {
+      logEvent('converger.verify_logical', {
+        ...who(cfg), findings: logical.length, summary: summariseContradictions(logical),
+      });
+    } else {
+      logEvent('converger.verify_logical', { ...who(cfg), findings: 0, summary: 'consistent' });
+    }
+
+    // SAY WHAT WAS ACTUALLY DONE. The old beat here said "Running your workflow on N
+    // sample cases to check it actually works…" — which would now be a lie, and this
+    // product's whole thesis is that it does not claim more than it did. It also names
+    // where the real check lives, so "it wasn't tested" is not the reading.
     emitBeat(cfg, {
       kind: 'check',
       text: examples.length > 1
-        ? `Running your workflow on ${examples.length} sample cases to check it actually works…`
-        : 'Running your workflow on a sample to check it actually works…',
+        ? `Checked the workflow hangs together and set up ${examples.length} test cases — run the test to prove it end to end.`
+        : 'Checked the workflow hangs together and set up a test case — run the test to prove it end to end.',
     });
 
-    // Run each sampled example through the engine (DRY-RUN). A run that PAUSED (a
-    // human gate) or produced no oracle verdict is UNJUDGEABLE — neither pass nor
-    // fail — so it is excluded from the tally rather than counted as a failure that
-    // would trigger a pointless fix.
-    const judged = [];
-    // ── SAY WHICH SAMPLE, AND SAY IT BEFORE THE WAIT, NOT AFTER ──────────────
-    //
-    // Charles, watching a build on prod 2026-08-01: *"there is no chain of thought
-    // movement so to a user it looks stalled."* He was right, and it was not a near
-    // miss — the self-test ran for 385 seconds, then 373 more, and this node emitted
-    // exactly ONE line before the first of them and nothing again until it was over.
-    // Twelve of that build's fourteen minutes were a still screen.
-    //
-    // This codebase has already shipped a page that was genuinely dead while a curated
-    // fact rotated underneath, looking alive (2026-07-28). Once a person has seen that,
-    // a motionless build is indistinguishable from a broken one — so the fix is not a
-    // nicer spinner, it is SAYING WHAT IS HAPPENING while it happens.
-    const exLabel = (ex, i) => {
-      const l = String(ex?.label ?? '').replace(/\s+/g, ' ').trim();
-      const short = l.length > 60 ? `${l.slice(0, 57)}…` : l;
-      return short ? `“${short}”` : `sample ${i + 1}`;
-    };
-    for (const [exIndex, ex] of examples.entries()) {
-      if (examples.length > 1) {
-        emitBeat(cfg, {
-          kind: 'check',
-          text: `Sample ${exIndex + 1} of ${examples.length} — ${exLabel(ex, exIndex)}.`,
-        });
-      }
-      // A sample that RAN but FAILED is retried (up to 3 attempts). The workflow's own
-      // llm nodes are non-deterministic: a summarize can misjudge its (present) input and
-      // fire its "missing data" guard on one run even when the SPEC is correct — a per-run
-      // flake, not a defect. A pass on ANY attempt is a pass; the retries absorb the flake
-      // cheaply (a dry run, not an Opus rebuild). Only a CONSISTENT failure survives to be
-      // classified below. (A pass on the first try never retries; an infra fault still bails.)
-      let oracle = null, passed = false;
-      for (let attempt = 0; attempt < 3; attempt++) {
-        let r;
-        try {
-          r = await runDryRun(spec, ex.given);
-        } catch (err) {
-          // The tester itself faulted. That is infra, not a workflow defect — do not
-          // block the build or claim a failure. Pass through with an honest note.
-          emitBeat(cfg, { kind: 'check', text: "I couldn't run the self-test just now — you can still run it yourself before going live." });
-          return {
-            ...carryDraft,
-            phase: 'ratifying',
-            _verifyReport: { ran: false, passed: 0, total: 0, note: `self-test could not run (${String(err?.message ?? err)})` },
-            confirmationLog: [{ step: state.step, type: 'verify', ran: false, error: String(err?.message ?? err) }],
-            step: state.step + 1,
-          };
-        }
-        if (!r || r.paused || !r.oracleResult) { oracle = null; break; }   // unjudgeable — skip
-        oracle = r.oracleResult;
-        passed = oracle.contractPassed === true;
-        if (passed) break;                                                  // passed — no retry
-        // failed — the loop retries once before believing it. SAY SO: this is where the
-        // minutes go, and a retry is the most reassuring thing a waiting person can read.
-        if (attempt < 2) {
-          const why = oracle?.error && isTransientFailure(oracle.error)
-            ? 'the AI step ran out of time'
-            : "that didn't come out right";
-          emitBeat(cfg, { kind: 'check', text: `${why} — trying ${exLabel(ex, exIndex)} again.` });
-        }
-      }
-      if (!oracle) continue;   // unjudgeable — skip
-      // The verdict, per sample, as it lands — so the count at the end confirms
-      // something the person has already watched happen rather than announcing it.
-      emitBeat(cfg, {
-        kind: 'check',
-        text: passed
-          ? `${exLabel(ex, exIndex)} came out right.`
-          : (oracle?.error && isTransientFailure(oracle.error)
-              ? `${exLabel(ex, exIndex)} couldn't be checked — the AI step kept running out of time. That is not a fault in your workflow.`
-              : `${exLabel(ex, exIndex)} didn't come out right.`),
-      });
-      judged.push({ example: ex, passed, oracle });
-    }
-
-    // Nothing could be judged (every sample paused / had no verdict). Not a failure —
-    // proceed, untested.
-    if (!judged.length) {
-      return {
-        ...carryDraft,
-        phase: 'ratifying',
-        _verifyReport: { ran: false, passed: 0, total: 0, note: null },
-        confirmationLog: [{ step: state.step, type: 'verify', ran: false, judged: 0 }],
-        step: state.step + 1,
-      };
-    }
-
-    const passedCount = judged.filter(j => j.passed).length;
-    const total       = judged.length;
-
-    // ── ALL SAMPLES PASS → verified. On to ratify. ───────────────────────────
-    if (passedCount === total) {
-      emitBeat(cfg, {
-        kind: 'check',
-        text: `It produced the right result — ${passedCount}/${total} sample${total > 1 ? 's' : ''} passed.`,
-      });
-      return {
-        ...carryDraft,
-        phase: 'ratifying',
-        _verifyReport: { ran: true, passed: passedCount, total, note: null },
-        confirmationLog: [{ step: state.step, type: 'verify', ran: true, passed: passedCount, total, ok: true }],
-        step: state.step + 1,
-      };
-    }
-
-    // ── A SAMPLE FAILED — but WHY? Separate STRUCTURAL failures from CONTENT FLAKES. ──
-    //
-    // This is the fix for the "it rebuilt a few times and still isn't settling" spiral the
-    // user was seeing on workflows that ACTUALLY WORK (proven: the real "Run test" passes
-    // them 3/3 while this dry-run gave up). A dry-run summarize is non-deterministic; on a
-    // wordy, boilerplate-heavy email it sometimes misjudges its (present) input and emits
-    // the "required data not found" sentinel, which the oracle reports as a failure. That
-    // is a per-run CONTENT FLAKE — the delivery STRUCTURALLY happened, the wiring is sound
-    // (the validator guaranteed it), the summarize just flaked. Rebuilding the whole spec
-    // to "fix" it is futile — the new spec has the same guard and flakes the same way — and
-    // it is exactly the expensive loop the user complained about.
-    //
-    // So: regenerate ONLY on a STRUCTURAL failure — a delivery that genuinely did not
-    // happen, or a run that errored. A flake-only failure means the workflow is correct;
-    // present it plainly (no rebuild, no give-up) and let the user run the real test.
-    //
-    // ── AND A TEST WE COULD NOT RUN HAS NOT SHOWN THE WORKFLOW TO BE WRONG ───
-    //
-    // The paragraph above argues exactly this for a CONTENT flake, and the code did not
-    // cover the other half: `isContentFlake` requires `!o.error`, so ANY run error was a
-    // structural wiring defect — including `LLM call timed out after 120s`, which says
-    // nothing about the spec at all.
-    //
-    // Measured on prod (`build-zz-firstrun-test-1785616455964`, watched live): a correct
-    // Gmail→Sheets workflow spent 881 seconds and THREE paid Opus passes, two of them
-    // `verify_failed` rebuilds ordered by that same timeout twice over. **No rebuild can
-    // make a model answer faster.** Both passes were unwinnable before they started.
-    //
-    // `isTransientFailure` is deliberately narrow and reads the SAME table the
-    // user-facing error message comes from. An unrecognised error is still REAL.
-    const isContentFlake = (o) => !!o?.contentError && !o?.error && o?.ran !== false;
-    const isUnrunnable   = (o) => !!o?.error && isTransientFailure(o.error);
-    const fails      = judged.filter(j => !j.passed);
-    const structural = fails.filter(j => !isContentFlake(j.oracle) && !isUnrunnable(j.oracle));
-
-    const firstFail = structural[0] ?? fails[0];
-    const runErr    = firstFail?.oracle?.error ?? null;
-    const reasons   = (firstFail?.oracle?.contract ?? [])
-      .filter(c => !c.ok)
-      .map(c => c.reason || `${c.target} not satisfied`);
-    const complaint = runErr
-      ? `it errored: ${typeof runErr === 'string' ? runErr : (runErr?.message ?? JSON.stringify(runErr))}`
-      : (reasons.length ? reasons.join('; ') : 'the outcome was not satisfied');
-    const failLabel = firstFail?.example?.label ? ` ("${firstFail.example.label}")` : '';
-
-    // ── STRUCTURAL FAILURE → regenerate (bounded), the same fix loop as before. ──
-    // A delivery the outcome promises never happened, or the run errored — a real wiring
-    // defect the model can fix. Feed the sample + complaint back and rebuild.
-    if (structural.length && (state.verifyRounds ?? 0) < MAX_VERIFY_ROUNDS) {
-      // WHY THE SELF-TEST REBUILT, ON THE RECORD. This is the most expensive decision
-      // in a build — it throws away the whole spec and pays for another Opus pass — and
-      // nothing recorded its reason. Measured on a 26-step build: verify ran 3× (462s)
-      // and drove 3 of the 4 `generate` passes (872s), i.e. 96% of a 23-minute build,
-      // and afterwards there was no way to tell whether those rebuilds were justified.
-      // The complaint lives only in a reasoning beat, which is not persisted.
-      logEvent('converger.verify_rebuild', {
-        ...who(cfg),
-        round: (state.verifyRounds ?? 0) + 1,
-        passed: passedCount, total,
-        failures: structural.length,
-        // The failing promise. `oracle.target`/`oracle.id` are both null on a
-        // contract failure, so this logged `"assertion":null` on every real rebuild
-        // it exists to attribute — the target lives on the contract entries.
-        assertion: (firstFail?.oracle?.contract ?? []).find(c => !c.ok)?.target
-                   ?? firstFail?.oracle?.target ?? firstFail?.oracle?.id ?? null,
-        complaint: String(complaint ?? '').slice(0, 300),
-      });
-      emitBeat(cfg, {
-        kind: 'check',
-        text: `That sample didn't pass — only ${passedCount}/${total} produced the right result.`,
-      });
-      emitBeat(cfg, {
-        kind: 'thinking',
-        text: `The workflow ran, but a promised delivery didn't happen on a real sample${failLabel}: ${complaint}. Let me rebuild it so every step the outcome depends on is wired correctly.`,
-      });
-      return {
-        ...carryDraft,
-        phase:          'proposing',
-        _regenReason:   {
-          route: 'verify_failed',
-          detail: String(complaint ?? '').slice(0, 300),
-          // The promises the failing samples were about — the same values the gap
-          // routes report, which is what lets the gate see one fact across three
-          // nodes instead of three unrelated complaints.
-          // Read off the failing CONTRACT entries, not `oracle.target` — which is
-          // null here (the prod event logged `"assertion":null` for exactly this
-          // reason) and would have left every verify complaint with nothing to
-          // compare, silently reducing the gate to text similarity.
-          about: (firstFail?.oracle?.contract ?? []).filter(c => !c.ok).map(c => c.target).filter(Boolean),
-        },
-        verifyRounds:   (state.verifyRounds ?? 0) + 1,
-        clarifications: [{
-          q: '(self-test failed — fix required)',
-          a: `I ran this workflow on a real sample${failLabel} and a promised delivery did NOT happen: ${complaint}. `
-           + 'Rebuild the workflow so every promised delivery/record actually happens for this kind of input — '
-           + 'do not drop or mis-wire any step the outcome depends on.',
-        }],
-        _verifyReport:  { ran: true, passed: passedCount, total, note: complaint },
-        confirmationLog: [{ step: state.step, type: 'verify', ran: true, passed: passedCount, total, ok: false, complaint, fixing: true, structural: true }],
-        step: state.step + 1,
-      };
-    }
-
-    // ── FLAKE-ONLY (or out of structural rounds) → the workflow is BUILT and WIRED
-    // CORRECTLY; a summarize just misjudged a wordy sample on this dry run. Do NOT rebuild
-    // (the guard flakes the same way) and do NOT give up loudly on a working workflow.
-    // Present it with a confident, honest note — the real "Run test" will show it live.
-    if (!structural.length) {
-      emitBeat(cfg, {
-        kind: 'check',
-        text: `Your workflow is built and every step is wired correctly. Give it a test run to see it in action.`,
-      });
-      return {
-        ...carryDraft,
-        phase: 'ratifying',
-        // Not a give-up: structurally verified. `softFlake` records that a content node
-        // flaked on a sample, for provenance, without gating the build.
-        _verifyReport: { ran: true, passed: passedCount, total, note: null, softFlake: true },
-        confirmationLog: [{ step: state.step, type: 'verify', ran: true, passed: passedCount, total, ok: true, softFlake: true }],
-        step: state.step + 1,
-      };
-    }
-
-    // ── OUT OF STRUCTURAL FIX ROUNDS — honest note (only reached by a genuine structural
-    // failure the model could not fix within MAX_VERIFY_ROUNDS). `complete ⇒ publishable`
-    // holds: the spec is valid and publishable; we simply tell the user the truth.
-    emitBeat(cfg, {
-      kind: 'check',
-      text: `I couldn't get a promised delivery to happen on a sample after ${state.verifyRounds} attempt${state.verifyRounds > 1 ? 's' : ''} — the workflow is built, but review it before going live.`,
-    });
     return {
       ...carryDraft,
       phase: 'ratifying',
-      _verifyReport: { ran: true, passed: passedCount, total, note: complaint, gaveUp: true },
-      confirmationLog: [{ step: state.step, type: 'verify', ran: true, passed: passedCount, total, ok: false, gaveUp: true, complaint }],
+      // `ran:false` is the honest value: nothing was EXECUTED here. Anything downstream
+      // that reads this must not report a promise as tested on the strength of it.
+      _verifyReport: { ran: false, passed: 0, total: 0, note: null, logical: logical.length },
+      confirmationLog: [{ step: state.step, type: 'verify', ran: false, logical: logical.length, structuralOnly: true }],
       step: state.step + 1,
     };
   });
@@ -4829,14 +4650,20 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
     return state.phase === 'proposing' ? 'generate' : 'verify';
   });
 
-  // verify → walkthrough on a pass (or a bounded give-up); verify → generate on a fix
-  // (it regenerates the whole spec with the failing sample as context, then the tail
-  // brings it back through gaps → verify to re-test — all SILENTLY, no walkthrough). The
-  // fix loop is bounded by `verifyRounds`, so this can never spin. Only once verify
-  // SETTLES does the single step-approval fire, in `walkthrough`, on the final spec.
-  graph.addConditionalEdges('verify', (state) => {
-    return state.phase === 'proposing' ? 'generate' : 'walkthrough';
-  });
+  // verify → walkthrough, ALWAYS. There is no longer a fix route out of this node.
+  //
+  // It used to regenerate the whole spec when a sample failed its promise, silently,
+  // bounded by `verifyRounds`. That is now the TEST's job (Charles, 2026-08-01: verify
+  // "should simply be a pass that verifies there is a logically built workflow, not that
+  // it keeps its promise"), and the rebuild route went with the execution — it was the
+  // largest source of futile paid rebuilds in this file's history: whole-spec passes
+  // bought for an LLM timeout, for a locator that was a template, for a promise about a
+  // path the run never took.
+  //
+  // A structurally broken draft is still refused UPSTREAM by `gaps`, which keeps its own
+  // bounded regenerate. So the only way to reach `walkthrough` is still a complete,
+  // publishable draft; what changed is that nobody pays to prove its promise twice.
+  graph.addEdge('verify', 'walkthrough');
 
   // walkthrough → ratify on accept; walkthrough → generate on a user-requested modify
   // (a fresh, budget-reset regenerate, which flows back through the tail to a single

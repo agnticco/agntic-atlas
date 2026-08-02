@@ -59,8 +59,12 @@ describe('every build-log site stamps who', () => {
   });
 
   test('all four build-log events include ...who(cfg)', () => {
+    // `converger.verify_rebuild` was retired on 2026-08-01 when `verify` stopped
+    // executing the draft and lost its fix route (it is a logical pass now — the TEST
+    // proves the promise). `converger.verify_logical` is what that node emits instead,
+    // so the invariant is unchanged and still covers the verify node.
     for (const kind of ['converger.node', 'converger.blocker_to_chat',
-                        'converger.verify_rebuild', 'converger.lane_examples']) {
+                        'converger.verify_logical', 'converger.lane_examples']) {
       // find each logEvent for this kind and assert who(cfg) is in the same call
       const re = new RegExp(`logEvent\\('${kind.replace('.', '\\.')}',\\s*\\{[\\s\\S]{0,80}?who\\(cfg\\)`);
       assert.match(GRAPH, re, `${kind} does not stamp who(cfg) — it cannot be attributed to a build`);

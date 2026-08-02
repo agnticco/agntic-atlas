@@ -2668,6 +2668,67 @@ fixed on the spot. Fold the relevant ones into whatever increment next touches t
   `Asks` and `They also see` rows and missed this one and the connector card's `Heading`;
   both now go through it, fixed together so they cannot drift.
 
+- **`verify` IS A LOGICAL PASS NOW — IT NO LONGER RUNS THE WORKFLOW (2026-08-01,
+  Charles's call).** *"The verify in the converger should simply be a pass that verifies
+  there is a logically built workflow, not that it keeps its promise. That is what the
+  test is for."* He said it while watching a build sit for seven minutes on prod with
+  nothing on screen but a rotating fact.
+  **The workflow was being executed TWICE, and the first time was invisible.** `verify`
+  ran every sample through the real engine, retried each failure up to three times, and
+  on a consistent failure bought a whole-spec Opus rebuild; then the user pressed Run
+  test and the panel executed the same samples again. Measured on one web-research
+  build: `generate` 110s, **`verify` ~7 minutes** (every sample doing a real web
+  search), then 3.5 minutes more in the panel.
+  **Two different questions, and only one belongs at build time:** *is this logically
+  built?* is cheap and structural; *does it keep its promise on real data?* is expensive
+  and evidential, and it is what the test panel exists for.
+  **The execution is gone and the `verify_failed` rebuild route went with it — that
+  route was the largest single source of futile paid rebuilds in this file's history**
+  (whole-spec passes bought for an LLM timeout, for a locator that was an unresolved
+  template, for a promise about a path the run never took). **KEPT deliberately:** the
+  per-path example top-up (Run test needs one input per path or a router can never be
+  proved — it is one cheap model call, not an execution), `assembleSpec` as a structural
+  assertion, and the logical self-agreement check. `gaps` still refuses a structurally
+  broken draft upstream, so `complete ⇒ publishable` is untouched. The report now says
+  `ran:false`, which is load-bearing: nothing downstream may call a promise tested on
+  the strength of this node, and the narration no longer claims a run it did not do.
+  Pinned by `tests/converger/verify-loop.test.js`, **rewritten to the new contract** —
+  it drives the real graph and asserts the dry-runner goes **uncalled**, and that a
+  draft whose promise a run *would* have failed is still built **exactly once** (the
+  money invariant). `a-test-we-could-not-run.test.js` lost the two describes that pinned
+  the loop's internals — the timeout excuse and the per-sample narration — and gained
+  one guard that the execution cannot come **back**, which is strictly stronger: an
+  excuse-the-timeout rule is only needed by code that runs the workflow.
+  **Dead machinery removed with it:** `MAX_VERIFY_ROUNDS`, `MAX_VERIFY_EXAMPLES`, the
+  `verifyRounds` state channel and its budget reset, and the now-unused
+  `isTransientFailure` import. *Residual: `isTransientFailure` is still exported from
+  `error-translator.js` and still powers the user-facing message, but no product code
+  imports it any more.*
+
+- **A DRY RUN NOW REPORTS THE DESTINATION IT RESOLVED — the half that actually gates
+  Go live (2026-08-01).** The morning's fix taught `docsCreate` to return the title it
+  wrote. **It changed nothing for the case that was witnessed, because every test is
+  dry**: the handler is never called, so the receipt comes from `_dryRunDeliver`, which
+  carried `target` and a content preview but none of the capability's **declared**
+  locator keys. `normalizeDelivery` fell back to the node's raw config and reported the
+  template. Witnessed on prod **after** that fix shipped: a correct web-research build
+  was told *"nothing reached "Daily AI Briefing" in gdrive — this run delivered to
+  `{{write_briefing.date_title}}`"*, 2 of 3 promises "fell short", and it could not go
+  live. **The resolved value was already in hand** — `cfg` is the interpolated config,
+  the very thing that produced the body checked for unresolved templates one line above.
+  It was simply dropped.
+  **The lesson is the one this repo already states and I broke anyway:** I verified the
+  handler fix against the oracle directly rather than through the dry runner, so I tested
+  a program nobody runs. *A check must construct its subject the way PRODUCTION does.*
+  Declared keys only — copying every config key would let an unrelated value be read as
+  a place by any capability declaring a key of that name, and that mutation survived the
+  first pass until a case was added for it. A `!UNRESOLVED_TEMPLATE` guard was written
+  here and **removed**: an unresolved reference substitutes to EMPTY (measured —
+  `"Doc {{nowhere.output}}"` arrives as `"Doc "`), so nothing could reach it, and an
+  unkillable guard is one nobody can prove still works. Pinned by
+  `tests/workflows/a-document-reports-where-it-went.test.js` (14, driving the real
+  engine), four mutations red→green.
+
 - ~~**A new user's first screen is a CHANGELOG**~~ *(open item, closed by the entry above.)* The What's-New modal
   fires once per user on the login after a release; a user whose FIRST login follows one
   gets five engineering changes — *"Give Atlas a test case without it rebuilding your
