@@ -16,7 +16,7 @@
 import { test, describe } from 'node:test';
 import assert             from 'node:assert/strict';
 
-import { checkAssertionAtRuntime, evaluateExampleRun, normalizeDelivery, isDeliveryNode } from '../../src/workflows/outcome-oracle.js';
+import { checkAssertionAtRuntime, normalizeDelivery, isDeliveryNode } from '../../src/workflows/outcome-oracle.js';
 
 const deliv = (over) => ({ delivered: true, ...over });
 
@@ -170,99 +170,16 @@ describe('normalizeDelivery — the real handler shapes reach the oracle (G)', (
   });
 });
 
-describe('evaluateExampleRun — the contract is gated, expect is shown', () => {
-  const spec = {
-    outcome: { assertions: [
-      { id: 'a1', kind: 'record_exists', target: 'airtable:Leads' },
-      { id: 'a2', kind: 'message_sent',  target: 'slack:#sales' },
-    ] },
-  };
-  const example = { id: 'e1', label: 'Big lead', given: { subject: 'Need 200 seats' }, expect: { priority: 'P1', urgent: true } };
-
-  test('BOTH promises kept ⇒ contract passes', () => {
-    const run = { completed: true, deliveries: [
-      deliv({ channel: 'airtable_create_record', target: 'Leads' }),
-      deliv({ channel: 'slack', target: '#sales' }),
-    ], steps: [] };
-    const r = evaluateExampleRun(spec, example, run);
-    assert.equal(r.contractPassed, true);
-    assert.equal(r.contract.length, 2);
-    assert.ok(r.contract.every(c => c.ok));
-  });
-
-  test('ONE promise dropped ⇒ contract FAILS, and names which one', () => {
-    // The defect-#1 case at RUN time: the record is created, the Slack post never
-    // happens. This is exactly what the test panel exists to surface before publish.
-    const run = { completed: true, deliveries: [deliv({ channel: 'airtable_create_record', target: 'Leads' })], steps: [] };
-    const r = evaluateExampleRun(spec, example, run);
-    assert.equal(r.contractPassed, false);
-    const failed = r.contract.find(c => !c.ok);
-    assert.equal(failed.target, 'slack:#sales');
-  });
-
-  test('a run that ERRORED keeps no promise', () => {
-    const r = evaluateExampleRun(spec, example, { completed: false, error: 'boom', deliveries: [] });
-    assert.equal(r.contractPassed, false);
-    assert.equal(r.ran, false);
-  });
-
-  // THE CONTENT-ERROR GUARD (live-testing finding). A content llm node that can't
-  // find its input outputs EXACTLY the converger's sentinel "ERROR: required data
-  // not found", which then flows to the delivery. `message_sent → inbox` is a floor
-  // and passed anyway — so a workflow that delivered an ERROR STRING read as
-  // "Contract kept / Go live". It must NOT: a delivery of the sentinel keeps nothing.
-  test('a delivery whose content is the error sentinel does NOT keep the contract', () => {
-    const inboxSpec = { outcome: { assertions: [{ id: 'a1', kind: 'message_sent', target: 'inbox:Digest' }] } };
-    const run = {
-      completed: true,
-      deliveries: [deliv({ channel: 'inbox_deliver', subject: 'Digest' })],
-      steps: [
-        { nodeId: 'classify', output: 'urgent' },
-        { nodeId: 'summarize_email', output: 'ERROR: required data not found' },
-        { nodeId: 'deliver', output: { inbox_message_id: 'm1', subject: 'Digest', delivered: true } },
-      ],
-    };
-    const r = evaluateExampleRun(inboxSpec, { id: 'e1', label: 'x' }, run);
-    assert.equal(r.contractPassed, false, 'a delivered error string is not a kept promise');
-    const failed = r.contract.find(c => !c.ok);
-    assert.match(failed.reason, /content was an error/);
-    assert.match(failed.reason, /summarize_email/);
-  });
-
-  test('a clean run with the same shape still passes (guard is not over-eager)', () => {
-    const inboxSpec = { outcome: { assertions: [{ id: 'a1', kind: 'message_sent', target: 'inbox:Digest' }] } };
-    const run = {
-      completed: true,
-      deliveries: [deliv({ channel: 'inbox_deliver', subject: 'Digest' })],
-      steps: [
-        { nodeId: 'classify', output: 'urgent' },
-        { nodeId: 'summarize_email', output: 'The database is down; engineering is investigating.' },
-        { nodeId: 'deliver', output: { inbox_message_id: 'm1', subject: 'Digest', delivered: true } },
-      ],
-    };
-    assert.equal(evaluateExampleRun(inboxSpec, { id: 'e1', label: 'x' }, run).contractPassed, true);
-  });
-
-  test('EXPECT IS SHOWN, NOT GATED — a wrong expect value does not fail the contract', () => {
-    // The run kept every contract promise. `expect.urgent` was the SME's word and the
-    // run produced `tier: hot` instead — a workflow-agnostic oracle CANNOT know those
-    // are the same or different, so it must not judge them. It shows both.
-    const run = { completed: true, deliveries: [
-      deliv({ channel: 'airtable_create_record', target: 'Leads' }),
-      deliv({ channel: 'slack', target: '#sales' }),
-    ], steps: [{ nodeId: 'score', output: { priority: 'P1', tier: 'hot' } }] };
-    const r = evaluateExampleRun(spec, example, run);
-    assert.equal(r.contractPassed, true, 'the CONTRACT is what gates, and it held');
-    assert.deepEqual(r.expect, { priority: 'P1', urgent: true }, 'the SME expectation is carried through for display');
-    assert.equal(r.produced.priority, 'P1', 'next to what the run actually produced');
-    assert.equal(r.produced.tier, 'hot');
-  });
-
-  test('produced does NOT include delivery receipts — only content', () => {
-    const run = { completed: true, deliveries: [deliv({ channel: 'slack', target: '#sales' })],
-      steps: [{ nodeId: 'd', output: { delivered: true, ts: '1.0' } }, { nodeId: 'x', output: { name: 'Dana' } }] };
-    const r = evaluateExampleRun(spec, example, run);
-    assert.equal('ts' in r.produced, false, 'a receipt is not content');
-    assert.equal(r.produced.name, 'Dana');
-  });
-});
+// ── THE `evaluateExampleRun` BLOCK WAS REMOVED HERE (2026-08-02) ─────────────
+//
+// It pinned "the contract is gated, expect is shown" — one run scored against
+// `outcome.assertions`. That function is gone (see the tombstone at the foot of
+// src/workflows/outcome-oracle.js); the test now asks whether every step
+// completed and every delivery landed, pinned by
+// tests/workflows/a-test-asks-whether-it-delivered.test.js.
+//
+// EVERYTHING ABOVE THIS LINE IS UNCHANGED AND STILL LIVE. `checkAssertionAtRuntime`
+// and `satisfiesAssertion` did NOT go with it — the build-time checks still use
+// them (the validator, the gap scorer, escalation, self-consistency) — and
+// `normalizeDelivery` is now more load-bearing than before, because its
+// `delivered` field IS the new verdict's input.

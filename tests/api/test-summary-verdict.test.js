@@ -20,7 +20,7 @@
  * message) was fixed at the prompt and at the boundary — the client began sending
  * the three-way verdict instead of a boolean. It came back through a different
  * door, because the boundary was still lossy in the same way: the client computed
- * `outcomeResults` — one `evaluateExampleRun()` result per example, each carrying
+ * `outcomeResults` — one `evaluateDeliveryRun()` result per example, each carrying
  * the oracle's `verdict` — and DROPPED it, sending instead `deliveries` from the
  * LAST run of the sequence. A model handed a delivery receipt and told to "be
  * specific" fills the gap it was left.
@@ -58,7 +58,8 @@ import path from 'node:path';
 import http from 'node:http';
 import express from 'express';
 
-import { evaluateExampleRun, laneCoverage } from '../../src/workflows/outcome-oracle.js';
+import {  laneCoverage } from '../../src/workflows/outcome-oracle.js';
+import { evaluateDeliveryRun } from '../../src/workflows/delivery-verdict.js';
 import { composeRunSummary, exampleVerdict } from '../../src/workflows/run-summary.js';
 import { mountBuilderRoutes } from '../../src/api/builder.js';
 
@@ -175,9 +176,30 @@ const SPEC     = spamTriage();
 const EX_SPAM  = { id: 'e_spam', label: 'Spam — a crypto blast', given: { subject: 'YOU HAVE WON' } };
 const EX_NORM  = { id: 'e_norm', label: 'A normal enquiry',      given: { subject: 'Quote please' } };
 
-const R_SPAM   = evaluateExampleRun(SPEC, EX_SPAM, spamRun());
-const R_NORM   = evaluateExampleRun(SPEC, EX_NORM, normalRun());
-const R_MISS   = evaluateExampleRun(SPEC, EX_NORM, normalRun(false));   // the promise really was missed
+const R_SPAM   = evaluateDeliveryRun(SPEC, EX_SPAM, spamRun());
+const R_NORM   = evaluateDeliveryRun(SPEC, EX_NORM, normalRun());
+// A GENUINE FAILURE under the new rule: the delivery step RAN and its receipt says
+// it would not have landed. RE-POINTED 2026-08-02 — this used to be `normalRun(false)`,
+// a run with no delivery step at all, which the old rule scored `broken` because no
+// delivery matched the promise's target. That run is now `kept` with `attempted: 0`
+// (it completed and everything it tried to send — nothing — landed), and the case it
+// stood for is caught by the set-level "no delivery was attempted anywhere" clause.
+// A workflow that TRIES to deliver and cannot is a different, sharper failure, and it
+// is the one a person actually hits.
+const FAILED_DELIVERY = {
+  dryRun: true, wouldDeliver: false, channel: 'inbox_deliver',
+  checks: { hasBody: true, bodyWellFormed: true, targetPresent: true, capabilityConnected: false, destinationReachable: null },
+};
+const missedRun = () => ({
+  completed: true, error: null,
+  steps: [
+    { nodeId: 'classify', output: 'normal' },
+    { nodeId: 'b1', output: { value: 'normal', matched: 'normal', to: 'summ' } },
+    { nodeId: 'summ', output: 'A one-line summary.' },
+    { nodeId: 'save', output: FAILED_DELIVERY },
+  ],
+});
+const R_MISS   = evaluateDeliveryRun(SPEC, EX_NORM, missedRun());
 
 /**
  * WORDS THAT ASSERT SOMETHING HAPPENED TO THE OUTSIDE WORLD.
@@ -197,9 +219,32 @@ const CLAIM_WORDS = [
   /\bheld\b/i,
 ];
 
+/**
+ * A NEGATION IS NOT A CLAIM (added 2026-08-02).
+ *
+ * `CLAIM_WORDS` is a blunt word list, on purpose — it is the guard against a
+ * narrator inventing "…delivered it to #ops as promised". But "ran with nothing
+ * to send" and "didn't send or write anything" are the OPPOSITE of a claim, and
+ * a word list cannot tell them apart.
+ *
+ * So a small, EXPLICIT list of negated phrases is removed before matching. It is
+ * a list of exact phrases and never a general "not …" pattern: a broad negation
+ * rule would let a real invented claim through by wrapping it in a "not", which
+ * is the one thing this guard exists to stop. Add to it only with a phrase you
+ * can read as unambiguously negative on its own.
+ */
+const NEGATIONS = [
+  /\bnothing to send\b/gi,
+  /\bnothing was (actually )?sent\b/gi,
+  /\bdidn't send or write anything\b/gi,
+  /\bnone of them sent or wrote anything\b/gi,
+];
+
 function assertClaimsNothing(sentence, why) {
+  let s = sentence;
+  for (const n of NEGATIONS) s = s.replace(n, '');
   for (const re of CLAIM_WORDS) {
-    assert.doesNotMatch(sentence, re, `${why} — but the sentence matched ${re}: ${sentence}`);
+    assert.doesNotMatch(s, re, `${why} — but the sentence matched ${re}: ${sentence}`);
   }
 }
 
@@ -216,11 +261,15 @@ describe('the spam case — a do-nothing lane is never narrated as a delivery', 
       laneCoverage: laneCoverage(SPEC, results),
     });
 
-    // The spam example is named, and named as unproved — not as a delivery.
+    // The spam example is named, and named as having sent nothing — not as a
+    // delivery. RE-POINTED 2026-08-02: it used to read "didn't exercise the
+    // promise"; a lane that delivers nothing is no longer described as unproved,
+    // because running cleanly IS what that lane is built to do. THE INVARIANT IS
+    // UNCHANGED — the spam example must be NAMED and must never be folded into the
+    // deliveries the other examples made.
     assert.match(s, /Spam — a crypto blast/,
-      'the example that proved nothing must be named, not silently folded into the ones that did');
-    assert.match(s, /didn't exercise the promise/);
-    assert.match(s, /proved nothing either way/);
+      'the example that sent nothing must be named, not silently folded into the ones that did');
+    assert.match(s, /nothing to send/);
 
     // And the ONE delivery claim in the sentence is attributed to the promise that
     // was actually checked, never to the spam example.
@@ -239,88 +288,115 @@ describe('the spam case — a do-nothing lane is never narrated as a delivery', 
     assert.match(s, /isn't cleared to go live/i);
   });
 
-  test('a delivery made by a "should not happen" example is never credited as proof', () => {
-    // The harness bypasses the trigger, so a "should not fire" sample runs like any
-    // other and DELIVERS like any other. That delivery proves nothing — it happened
-    // because the test skipped the filter, not because the workflow is right — and
-    // the sentence must not list it among what the run proved.
-    const spec2 = twoLaneTriage();
-    const honest  = evaluateExampleRun(spec2, { id: 'p', label: 'A normal enquiry', given: {} }, twoLaneRun('normal'));
-    const negative = evaluateExampleRun(
-      spec2,
-      { id: 'n', label: 'Weekend urgent — should not fire', given: {}, shouldTrigger: false, expect: {} },
-      twoLaneRun('urgent'),
-    );
-    assert.equal(honest.verdict, 'kept');
-    assert.equal(negative.verdict, 'not_exercised');
-    // …even though its urgent promise really was satisfied by the run.
-    assert.ok(negative.contract.find(c => c.id === 'a_urg').ok);
-
-    const results = [honest, negative];
-    const s = composeRunSummary({
-      spec: spec2, verdict: 'passed', outcomeResults: results,
-      laneCoverage: laneCoverage(spec2, results),
-    });
-
-    assert.match(s, /what came back reached "Summary" in your Atlas inbox/,
-      'the honest example proved the normal promise and must still say so');
-    assert.doesNotMatch(s, /"Urgent" in your Atlas inbox/,
-      'the should-not-fire example delivered, but nothing about that is proof');
-    assert.match(s, /Weekend urgent — should not fire/);
-    assert.match(s, /didn't exercise the promise/);
-  });
-
-  test("the oracle's own verdict for that example is 'not_exercised', and the composer reads that field", () => {
-    assert.equal(R_SPAM.verdict, 'not_exercised');
-    assert.equal(R_SPAM.enforced, 0);
-    assert.equal(exampleVerdict(R_SPAM), 'not_exercised');
-    assert.ok(R_SPAM.contract.every(c => c.applicable === false),
-      'the spam lane skips every delivery assertion — that is what the sentence must not paper over');
-  });
-});
-
-describe('the sentence and the panel cannot disagree — both read `verdict`', () => {
-  test('`contractPassed` is TRUE on the unexercised run, and certifying on it is the bug', () => {
-    // This is the trap. `contract.every(c => c.ok)` is true over a set of skips, so
-    // the boolean says "passed" for a run that proved nothing. The panel refuses to
-    // read it and so does the composer.
-    assert.equal(R_SPAM.contractPassed, true);
+  test("a run that sent nothing on any path is not cleared, however clean it was", () => {
+    // THE ANTI-VACUITY FLOOR, and the only thing left of "was anything proved".
+    // It asks whether a delivery HAPPENED — never where it landed. A caller
+    // insisting on `passed` over a set in which nothing was ever sent must still
+    // get the honest sentence: refusing to certify is always available.
     const s = composeRunSummary({
       spec: SPEC, verdict: 'passed', outcomeResults: [R_SPAM],
       laneCoverage: { applicable: true, total: 2, uncovered: [] },
     });
-    assertClaimsNothing(s, 'contractPassed being true does not make a promise kept');
-    assert.match(s, /Nothing was proved either way/);
+    assertClaimsNothing(s, 'no delivery was attempted anywhere in this run');
+    assert.match(s, /didn't send or write anything/i);
+    assert.match(s, /isn't cleared to go live/i);
+  });
+
+  // ── A DELIBERATE LOSS, RECORDED RATHER THAN PAPERED OVER (2026-08-02) ──────
+  //
+  // This block used to pin: *a delivery made by a "should not happen" example is
+  // never credited as proof*. The harness seeds the steps directly and never
+  // fires the trigger, so a "should not fire" sample runs like any other and
+  // delivers like any other — and the old rule demoted it to `not_exercised` so
+  // its delivery could not be counted.
+  //
+  // THAT DISTINCTION IS GONE. The verdict no longer reads `shouldTrigger`, so
+  // such a sample is now an ordinary run: it completed, it delivered, it counts.
+  //
+  // The cost, stated plainly: a workflow whose ONLY delivery came from a
+  // should-not-fire sample now clears the anti-vacuity floor. That is weaker than
+  // before. It was accepted because the negative case was never provable here in
+  // either direction — the trigger filter is what decides it, and this harness
+  // does not evaluate the trigger filter — so the old demotion bought a narrower
+  // guarantee than its wording implied while costing a whole verdict in the
+  // vocabulary.
+  //
+  // WHAT IS STILL PINNED, because it is the half that actually protected anyone:
+  // a run that delivered NOTHING can never have a delivery attributed to it.
+  test('a run that delivered nothing is never given another run\'s delivery', () => {
+    // Both lanes covered, so this really is a PASS — the point is what the pass
+    // sentence attributes to which run. The spam run performed no delivery, so the
+    // destination the OTHER run reached may never be attached to it.
+    assert.equal(R_NORM.verdict, 'kept');
+    assert.equal(R_SPAM.verdict, 'kept', 'a clean run that sends nothing is not a failure');
+    assert.equal(R_SPAM.attempted, 0, 'but it attempted nothing, and that is what the sentence reads');
+    assert.deepEqual(R_SPAM.landed, [], 'and it has no destination of its own to be quoted');
+
+    const results = [R_NORM, R_SPAM];
+    const s = composeRunSummary({
+      spec: SPEC, verdict: 'passed', outcomeResults: results,
+      laneCoverage: laneCoverage(SPEC, results),
+    });
+
+    assert.match(s, /reached "Summary" in your Atlas inbox/,
+      'the run that really delivered must still say where it went');
+    assert.match(s, /Spam — a crypto blast/, 'and the quiet run is NAMED, not folded into it');
+    assert.match(s, /nothing to send/);
+    // The destination is quoted ONCE, in the clause about the run that reached it.
+    assertClaimsNothing(s.slice(s.indexOf('Spam — a crypto blast')),
+      'the spam run delivered nothing, so nothing may be attributed to it');
+  });
+
+  test('the do-nothing lane attempted nothing, and the composer reads that field', () => {
+    // RE-POINTED 2026-08-02 from `verdict === 'not_exercised'` / `enforced === 0`.
+    // Both of those fields are gone with the contract oracle. The property they
+    // existed to express — *this run performed no delivery, and nothing may be
+    // narrated as though it had* — is now carried by `attempted` / `landed`.
+    assert.equal(R_SPAM.verdict, 'kept', 'the spam lane ran cleanly, which is what it is for');
+    assert.equal(R_SPAM.attempted, 0, 'and it delivered nothing');
+    assert.deepEqual(R_SPAM.landed, []);
+    assert.equal(exampleVerdict(R_SPAM), 'kept');
+  });
+});
+
+describe('the sentence and the panel cannot disagree — both read `verdict`', () => {
+  test('a caller insisting on "passed" over a BROKEN run is refused, not obeyed', () => {
+    // Fail closed, in the direction that matters most. RE-POINTED 2026-08-02 from
+    // "`contractPassed` is TRUE on the unexercised run" — that field is gone with
+    // the contract oracle, but the trap it guarded is the same one: a caller may
+    // never manufacture a certification the evidence does not support. Refusing to
+    // certify is always available; certifying without checking is not.
+    const s = composeRunSummary({
+      spec: SPEC, verdict: 'passed', outcomeResults: [R_MISS],
+      laneCoverage: { applicable: true, total: 2, uncovered: [] },
+    });
+    assert.doesNotMatch(s, /It's cleared to go live/, 'a broken run cannot be talked into a pass');
+    assert.match(s, /didn't get all the way through/);
+    assert.match(s, /Nothing goes live until that's fixed/);
   });
 
   test('changing the verdict field changes the sentence with it', () => {
     // The panel's row mark and this sentence are driven by the SAME field. Move the
     // field and the sentence must move — otherwise the agreement is a coincidence
     // between two hand-written code paths.
-    const asKept = { ...R_SPAM, verdict: 'kept' };
-    const s = composeRunSummary({
-      spec: SPEC, verdict: 'passed', outcomeResults: [asKept],
-      laneCoverage: { applicable: true, total: 2, uncovered: [] },
-    });
-    // RE-POINTED 2026-07-27, and STRENGTHENED rather than loosened. The property
-    // this test owns is "the sentence follows the field": move `verdict` and the
-    // sentence must move with it. It used to be checked by matching one literal
-    // phrase, "every promise it makes held". That phrase is now conditional — the
-    // pass sentence narrows its own claim to what the run could actually check,
-    // and names what it could not (run-summary.js `uncheckedTargets`), which is
-    // what stops the flagship approval shape from reading "every promise held"
-    // over a promise no example was able to look at.
     //
-    // So the assertion is now on the PROPERTY, not the wording: this reads as a
-    // pass, cleared to go live — and, because every assertion on this fixture is
-    // a skip, it must ALSO name the gap rather than certify over it. Both halves
-    // must hold, so this pins strictly more than the single regex it replaces.
-    assert.match(s, /\bheld\b/,
-      'a result the oracle calls kept must read as kept — the sentence follows the field, not a second rule');
-    assert.match(s, /It's cleared to go live/,
-      'and it must carry the pass stance, not merely the word "held"');
-    assert.match(s, /still unproved/,
-      'every assertion on this fixture is a skip, so the sentence must name what went unchecked instead of claiming every promise held');
+    // RE-POINTED 2026-08-02 to a fixture where the FIELD IS THE ONLY DIFFERENCE.
+    // `R_NORM` ran and delivered; the copy differs from it in `verdict` alone, so
+    // if the sentence still read as a pass, something other than the field would
+    // be deciding it.
+    const cov = { applicable: true, total: 2, uncovered: [] };
+    const asKept = composeRunSummary({ spec: SPEC, verdict: 'passed', outcomeResults: [R_NORM], laneCoverage: cov });
+    const asBroken = composeRunSummary({
+      spec: SPEC, verdict: 'passed', outcomeResults: [{ ...R_NORM, verdict: 'broken' }], laneCoverage: cov,
+    });
+
+    assert.match(asKept, /every step completed/,
+      'a result the panel marks kept must read as a pass — the sentence follows the field');
+    assert.match(asKept, /It's cleared to go live/);
+
+    assert.doesNotMatch(asBroken, /It's cleared to go live/,
+      'one field moved and nothing else did — the sentence must move with it');
+    assert.match(asBroken, /Nothing goes live until that's fixed/);
   });
 
   test('a caller claiming more than the evidence supports is refused, not obeyed', () => {
@@ -352,10 +428,16 @@ describe('an unverified run (carried over from the 2026-07-22 suite)', () => {
       'naming the untested path is what replaces speculation with a fact');
   });
 
-  test('with no examples at all it still gives a reason rather than silence', () => {
+  test('with no results at all it still gives a reason rather than silence', () => {
+    // RE-POINTED 2026-08-02. "No worked examples" is no longer the reason a run can
+    // have nothing in it — a workflow with no examples is run once on a sample
+    // event and produces a result like any other. Reaching here now means the runs
+    // themselves could not be carried out. The INVARIANT is unchanged: never
+    // silence, always a reason and a next step.
     const s = composeRunSummary({ spec: SPEC, verdict: 'unverified', outcomeResults: [], laneCoverage: null });
-    assert.match(s, /no worked examples/i);
-    assert.match(s, /nothing was proved either way/i);
+    assert.match(s, /couldn't be run/i);
+    assert.match(s, /Try the test again/i);
+    assert.match(s, /isn't cleared to go live/i);
   });
 
   test('failure-only material is NOT attached to a run that did not fail', () => {
@@ -367,29 +449,23 @@ describe('an unverified run (carried over from the 2026-07-22 suite)', () => {
       'a stale error carried into a clean run is exactly the raw material the narrator invented from');
   });
 
-  test('a blank promise is called a blank promise, not an unexercised one', () => {
-    const blank = { ...SPEC, outcome: { ...SPEC.outcome, statement: '' } };
-    const r = evaluateExampleRun(blank, EX_NORM, normalRun());
-    assert.equal(r.contractIncomplete, true);
-    const s = composeRunSummary({
-      spec: blank, verdict: 'unverified', outcomeResults: [r],
-      laneCoverage: { applicable: true, total: 2, uncovered: [] },
-    });
-    assert.match(s, /no stated outcome/i);
-  });
-
-  test('a "should not happen" example says it cannot be proved here', () => {
-    const neg = { id: 'e_neg', label: 'Weekend mail — should not fire', given: { subject: 'x' }, shouldTrigger: false, expect: {} };
-    const r = evaluateExampleRun(SPEC, neg, normalRun());
-    assert.equal(r.verdict, 'not_exercised');
-    const s = composeRunSummary({
-      spec: SPEC, verdict: 'unverified', outcomeResults: [r],
-      laneCoverage: { applicable: true, total: 2, uncovered: [] },
-    });
-    assert.match(s, /should not happen/i);
-    assert.match(s, /without checking the trigger/i);
-    assertClaimsNothing(s, 'a negative example delivered nothing that counts');
-  });
+  // ── TWO TESTS WERE REMOVED HERE (2026-08-02), AND SAYING SO IS THE POINT ────
+  //
+  // · *a blank promise is called a blank promise, not an unexercised one* — pinned
+  //   `contractIncomplete`, which flagged a spec carrying assertions but no
+  //   `statement`, so the panel could not certify a blank deal. The verdict no
+  //   longer reads the contract at all, so it cannot notice a blank one. A
+  //   workflow with an empty statement now tests exactly like any other. **If the
+  //   blank-statement case is to be caught again it belongs at BUILD time, in the
+  //   validator, not in a run's verdict — a run has nothing to do with it.**
+  //
+  // · *a "should not happen" example says it cannot be proved here* — pinned the
+  //   `negative` demotion. See the note above `a run that delivered nothing is
+  //   never given another run's delivery` for why that went and what it cost.
+  //
+  // Neither was deleted because it failed. Both were deleted because the thing
+  // they asserted no longer exists, and a test kept green over a rule nobody runs
+  // is worse than no test.
 });
 
 describe('the other two verdicts are unharmed', () => {
@@ -399,15 +475,21 @@ describe('the other two verdicts are unharmed', () => {
       spec: SPEC, verdict: 'failed', outcomeResults: [R_MISS],
       laneCoverage: laneCoverage(SPEC, [R_MISS]),
     });
-    assert.match(s, /didn't keep its promise/);
+    assert.match(s, /didn't get all the way through/);
     assert.match(s, /A normal enquiry/, 'name the example that fell short');
-    assert.match(s, /nothing reached "Summary" in your Atlas inbox/,
+    // RE-POINTED 2026-08-02: the cause is now the DELIVERY's own recorded reason
+    // (`whyNotDelivered`, from the dry-run receipt's checks) rather than "nothing
+    // reached <the promise's target>". The invariant is the one that matters and
+    // is unchanged: the run's OWN recorded cause reaches the person, never a
+    // composed one.
+    assert.match(s, /"Summary" in your Atlas inbox/, 'name where it was going');
+    assert.match(s, /that app is not connected/,
       'a genuine failure must still carry its own recorded cause');
     assert.match(s, /Nothing goes live until that's fixed/);
   });
 
   test('a failure with NO recorded cause says so rather than inventing one', () => {
-    const causeless = { ...R_MISS, verdict: 'broken', contract: [], error: null, ran: true };
+    const causeless = { ...R_MISS, verdict: 'broken', missed: [], contentErrorDetail: null, error: null, ran: true };
     const s = composeRunSummary({ spec: SPEC, verdict: 'failed', outcomeResults: [causeless] });
     assert.match(s, /recorded no reason/i);
     assert.doesNotMatch(s, /timed out|was rejected|cut off|approval/i,
@@ -417,26 +499,26 @@ describe('the other two verdicts are unharmed', () => {
   test('a run-level failure with no example evidence is not called a broken promise', () => {
     const s = composeRunSummary({ spec: SPEC, verdict: 'failed', outcomeResults: [], runError: 'Slack unreachable' });
     assert.match(s, /Slack unreachable/, 'a genuine failure must still carry its cause');
-    assert.doesNotMatch(s, /didn't keep its promise/,
-      'nothing checked a promise on this run, so nothing may say one was broken');
+    assert.doesNotMatch(s, /didn't get all the way through/,
+      'no example ran at all, so nothing may describe one as having fallen short');
   });
 
-  test('a pass says the promise was KEPT, and names what was actually checked', () => {
+  test('a pass says every step completed, and names where it actually went', () => {
     const s = composeRunSummary({
       spec: SPEC, verdict: 'passed', outcomeResults: [R_NORM],
       laneCoverage: { applicable: true, total: 2, uncovered: [] },
     });
-    assert.match(s, /every promise it makes held/);
-    assert.match(s, /what came back reached "Summary" in your Atlas inbox/,
-      'assert what was DELIVERED, not that a step ran');
+    assert.match(s, /every step completed/);
+    assert.match(s, /what it sent reached "Summary" in your Atlas inbox/,
+      'assert what was DELIVERED, not merely that a step ran');
     assert.match(s, /It's cleared to go live/);
   });
 
   test('an older client that sends no verdict still works — the evidence answers', () => {
     const kept = composeRunSummary({ spec: SPEC, outcomeResults: [R_NORM], laneCoverage: { applicable: true, total: 2, uncovered: [] } });
-    assert.match(kept, /every promise it makes held/);
+    assert.match(kept, /every step completed/);
     const broken = composeRunSummary({ spec: SPEC, outcomeResults: [R_MISS] });
-    assert.match(broken, /didn't keep its promise/);
+    assert.match(broken, /didn't get all the way through/);
     const quiet = composeRunSummary({ spec: SPEC, outcomeResults: [R_SPAM], laneCoverage: { applicable: true, total: 2, uncovered: [] } });
     assertClaimsNothing(quiet, 'no verdict from the client is not a licence to certify');
   });
@@ -474,7 +556,7 @@ describe('the client sends the evidence the panel used', () => {
       'the per-example verdicts are the whole evidence — a payload without them is the defect');
     assert.equal(p.result.outcomeResults.length, 2,
       'the per-example verdicts are computed by the panel and were being discarded at this boundary');
-    assert.equal(p.result.outcomeResults[1].verdict, 'not_exercised');
+    assert.equal(p.result.outcomeResults[1].verdict, 'kept');
     assert.deepEqual(p.result.laneCoverage, cov);
   });
 
@@ -587,8 +669,9 @@ describe('POST /api/builder/test-summary — the sentence a user reads', () => {
       result: { completed: false, verdict: 'failed', outcomeResults: [R_MISS], laneCoverage: null, error: null },
     });
     assert.equal(status, 200);
-    assert.match(data.summary, /didn't keep its promise/);
-    assert.match(data.summary, /nothing reached "Summary" in your Atlas inbox/);
+    assert.match(data.summary, /didn't get all the way through/);
+    assert.match(data.summary, /"Summary" in your Atlas inbox — that app is not connected/,
+      "the delivery's own recorded reason must survive the trip through the endpoint");
   });
 
   test('the endpoint still refuses a request with no spec or no result', async () => {

@@ -98,7 +98,8 @@ import { renderResetEmail } from '../auth/reset-email.js';
 import { ApprovalStore } from '../approvals/approval-store.js';
 import { ApprovalService } from '../approvals/approval-service.js';
 import { availableApprovalChannels, approvalChannelView } from '../workflows/approval-channels.js';
-import { evaluateExampleRun, deliveriesForStep, setCapabilityCatalog } from '../workflows/outcome-oracle.js';
+import { deliveriesForStep, setCapabilityCatalog } from '../workflows/outcome-oracle.js';
+import { evaluateDeliveryRun, judgeFailedRun } from '../workflows/delivery-verdict.js';
 import { runSpecDryRun } from '../workflows/dry-run-runner.js';
 import { oauthRedirectBase, redirectReachableFrom } from '../connectors/oauth-redirect.js';
 import { entitlementsFor, PUBLIC_PLANS, PLAN_META, isSelfServe } from '../entitlements/index.js';
@@ -2650,7 +2651,35 @@ export function createApp(spine) {
           // 200 with completed:false so the real error reaches the UI — a 5xx here
           // gets swallowed and replaced by Cloudflare's own error page through the
           // tunnel, hiding the actual cause.
-          return res.json({ runId, completed: false, error: ev.error, steps });
+          //
+          // ── WAS IT THE WORKFLOW, OR COULD WE JUST NOT RUN IT? (2026-08-02) ────
+          //
+          // A model that times out, a 429, a provider refusing us, the box not
+          // reaching a service — none of those say anything about the spec. Scored
+          // as a broken run they read as "Contract not met", lock Go live and PATCH
+          // the workflow to `error`, on a workflow that is fine. Re-running passes.
+          //
+          // The converger's `verify` node was taught this distinction on 2026-08-01
+          // ("a test we could not run is not a broken workflow") and THE TEST PANEL
+          // NEVER GOT IT — the same fix reaching one of two places, which is the
+          // shape this repo has paid for repeatedly. `isTransientFailure` is derived
+          // from the SAME pattern table the user-facing message comes from, never a
+          // second regex list, and it is deliberately NARROW: anything unrecognised
+          // stays a real failure, because excusing a genuine wiring defect ships a
+          // broken workflow while excusing nothing merely costs a re-run.
+          //
+          // The FLAG is computed here, server-side, so the browser holds no copy of
+          // the rule and the two cannot drift.
+          // Both answers come from one pure function so they can be EXECUTED by a
+          // check rather than grepped for — this branch cannot be lifted out of the
+          // handler, and a source-level pin on it stayed green when the decision
+          // was hardwired to a constant.
+          const { transient, outcomeCheck: failOutcome } = judgeFailedRun(
+            spec,
+            req.body?.example ?? { given: initialContext },
+            { error: ev.error, steps, nodeId: ev.nodeId ?? null },
+          );
+          return res.json({ runId, completed: false, error: ev.error, steps, transient, outcomeCheck: failOutcome });
         }
       }
       // Read cost from the CostTracker before it gets evicted. The flow tester
@@ -2689,17 +2718,22 @@ export function createApp(spine) {
         .map((s) => ({ nodeId: s.nodeId, message: s.text.trim().replace(/\s+/g, ' ').slice(0, 300) }));
       const clean = completed && issues.length === 0;
 
-      // ── THE OUTCOME CONTRACT, checked against what the run PRODUCED (P12 G) ──
-      // The test panel stops asking "did it complete?" and starts asking "did it do
-      // what its outcome promised?". The contract is machine-checkable and generic;
-      // the run's deliveries are right here. So return the per-assertion verdict —
-      // the client renders it, and loops examples through this same route. When the
-      // spec carries no outcome (v1, or a bare run), this is simply absent.
-      let outcomeCheck = null;
-      if (Array.isArray(spec.outcome?.assertions) && spec.outcome.assertions.length) {
-        outcomeCheck = evaluateExampleRun(spec, req.body?.example ?? { given: initialContext },
-          { completed, deliveries, steps, error: null });
-      }
+      // ── DID IT DELIVER? (2026-08-02 — this replaced the contract oracle) ─────
+      // The test asks one question of a run: did every step complete, and did every
+      // delivery it attempted actually land? See `delivery-verdict.js` for what was
+      // removed and why — in short, scoring each run against the promise's
+      // destination STRING produced repeated false failures on correct workflows and
+      // caught nothing.
+      //
+      // NO LONGER GATED ON `assertions.length`. A spec with no promises still runs
+      // and still delivers, and "did it deliver" is answerable for it — the old gate
+      // returned nothing at all for such a spec, which is what left the panel with
+      // no evidence to show.
+      const outcomeCheck = evaluateDeliveryRun(
+        spec,
+        req.body?.example ?? { given: initialContext },
+        { completed, deliveries, steps, error: null },
+      );
       res.json({ runId, completed, clean, issues, output, deliveries, steps, cost: runCost, outcomeCheck });
     } catch (err) {
       logEvent('run.error', { tenant: tenantId, ms: Date.now() - t0, ...errFields(err) });

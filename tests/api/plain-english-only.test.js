@@ -64,11 +64,18 @@ describe('no raw JSON or markdown reaches a reader', () => {
   });
 
   test('the evidence row uses it — that is where the JSON blob was seen', () => {
-    // lastIndexOf: the phrase also appears in the comment explaining WHY this is
-    // sanitised, and matching that would pass without the code being wired at all.
-    const i = src.lastIndexOf('What came back matched the deal');
-    const around = src.slice(i - 400, i + 400);
-    assert.match(around, /_plainText/, 'the kept-promise explanation must be sanitised');
+    // RE-POINTED 2026-08-02. The row used to read "What came back matched the deal
+    // — <produced>"; the contract oracle that phrase belonged to is gone
+    // (src/workflows/delivery-verdict.js) and a kept row now reads "Ran end to end
+    // and delivered". THE INVARIANT IS UNCHANGED and is the reason this test
+    // exists: whatever the run PRODUCED is a raw object, and `_stringify` on it
+    // yields a JSON blob, so it must pass through `_plainText` before a person
+    // reads it. Anchored to the code, not to the sentence, so a future rewording
+    // cannot silently un-pin it.
+    const i = src.lastIndexOf('Ran end to end and delivered');
+    assert.ok(i > 0, 'the kept-row explanation must still be findable');
+    const around = src.slice(i, i + 600);
+    assert.match(around, /_plainText\(this\._stringify\(/, 'what the run produced must be sanitised before a reader sees it');
   });
 });
 

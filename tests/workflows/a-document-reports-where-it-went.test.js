@@ -200,13 +200,24 @@ describe('a DRY run reports the destination it resolved, not the template', () =
       'a template is not a destination — this is the sentence the customer was shown');
   });
 
-  test('and the promise is therefore KEPT, where it used to fall short', async () => {
+  // RE-POINTED 2026-08-02. This used to assert `contractPassed` — the promise's
+  // `target` string matching the receipt's locator. That comparison is gone
+  // (src/workflows/delivery-verdict.js). The fix it guards is UNCHANGED and now
+  // more directly load-bearing: `docsCreate` resolving its title is what puts a
+  // real document name in `landed`, which is the destination quoted to the
+  // customer in the panel row and the chat sentence. A template there was the
+  // sentence a person actually read.
+  test('and the resolved title is what the run reports it reached', async () => {
     const reg = registry();
     const ft = new FlowTester({ nodeTypes, channelRegistry: reg,
       llm: { invoke: async () => ({ content: 'August 1, 2026' }) } });
     const r = await runSpecDryRun({ flowTester: ft, spec: docSpec(), initialContext: 'go' });
-    assert.equal(r.oracleResult?.contractPassed, true,
-      'a correct workflow could not go live: ' + JSON.stringify(r.oracleResult?.contract));
+    assert.equal(r.oracleResult?.verdict, 'kept', 'a correct workflow could not go live');
+    const doc = (r.oracleResult?.landed ?? []).find(d => d.channel === 'docs_create');
+    assert.ok(doc, 'the document delivery is reported as having landed');
+    assert.ok(String(doc.target).includes('Daily AI Briefing'),
+      'and it names the real document, resolved: ' + JSON.stringify(doc.target));
+    assert.doesNotMatch(String(doc.target), /\{\{/, 'a template is not a destination');
   });
 
   test('a reference that resolves to NOTHING is not reported as a destination', async () => {
@@ -247,19 +258,11 @@ describe('a DRY run reports the destination it resolved, not the template', () =
       + 'defect a customer actually reads: ' + JSON.stringify(receipt.locators));
   });
 
-  test('and a promise naming what is REALLY created is kept', async () => {
-    // The other half of the same run: with the promise pointed at what the workflow
-    // actually makes, it passes. Before this, no wording could pass — the comparison
-    // was against a template.
-    const reg = registry();
-    const spec = docSpec();
-    spec.outcome.assertions = [{ id: 'a1', kind: 'document_exists', target: 'gdocs:Daily AI Briefing — August 1, 2026' }];
-    const ft = new FlowTester({ nodeTypes, channelRegistry: reg,
-      llm: { invoke: async () => ({ content: 'August 1, 2026' }) } });
-    const r = await runSpecDryRun({ flowTester: ft, spec, initialContext: 'go' });
-    assert.equal(r.oracleResult?.contractPassed, true,
-      JSON.stringify(r.oracleResult?.contract));
-  });
+  // REMOVED 2026-08-02: 'and a promise naming what is REALLY created is kept'.
+  // It pinned that a correctly-worded promise matched the resolved title — a
+  // property of the promise-matching rule, which no longer exists. The half that
+  // mattered (the title IS resolved, and a template never reaches a reader) is
+  // pinned by the two tests above and by the receipt assertions.
 
   test('only DECLARED locator keys are copied — a config value is not a destination', async () => {
     // The receipt must carry what the capability SAYS is its destination, not whatever

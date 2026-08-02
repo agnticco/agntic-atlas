@@ -39,22 +39,30 @@ const HTML = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../p
  */
 function certifier() {
   const src = readFileSync(HTML, 'utf8');
-  const start = src.indexOf('const hasContract =');
+  // RE-POINTED 2026-08-02. The block used to open with `const hasContract` — it
+  // read the spec's assertions to decide whether a promise had to be exercised.
+  // It no longer reads the contract at all (src/workflows/delivery-verdict.js);
+  // it opens at `const vOf`, the per-run verdict reader, which is the first line
+  // of the certification decision.
+  const start = src.indexOf('const vOf = function(o)');
   assert.notEqual(start, -1,
-    'the Go-live certification block is GONE from public/index.html — `const hasContract` not found. ' +
+    'the Go-live certification block is GONE from public/index.html — `const vOf` not found. ' +
     'If it moved, re-point this extraction; do not delete the test.');
   const endMarker = 'const unverified =';
   const endIdx = src.indexOf(endMarker, start);
-  assert.notEqual(endIdx, -1, '`const unverified` not found after `const hasContract` — the block changed shape.');
+  assert.notEqual(endIdx, -1, '`const unverified` not found after `const vOf` — the block changed shape.');
   const block = src.slice(start, src.indexOf(';', endIdx) + 1);
 
-  // The block must still reference all four inputs, or it is judging something else.
-  for (const ident of ['spec', 'outcomeResults', 'issues', 'structural']) {
+  // The block must still reference each input, or it is judging something else.
+  // `spec` deliberately LEFT OUT: the decision no longer reads the workflow's
+  // promises, only what its runs did. Putting it back would re-pin the rule that
+  // was removed.
+  for (const ident of ['outcomeResults', 'anyBroken', 'anyAttempt', 'lanesMissing']) {
     assert.ok(block.includes(ident), `the certification block no longer reads \`${ident}\``);
   }
   // eslint-disable-next-line no-new-func
   const fn = new Function('spec', 'outcomeResults', 'r', 'd', 'issues',
-    `${block}\nreturn { passed: passed, unverified: unverified, hasContract: hasContract };`);
+    `${block}\nreturn { passed: passed, unverified: unverified };`);
   return (state) => fn(
     state.spec ?? null,
     state.outcomeResults ?? [],
@@ -71,24 +79,29 @@ const withContract = () => ({ outcome: { assertions: [{ id: 'a1', kind: 'message
 /** A v1 spec that promises nothing — the structural fallback still applies. */
 const noContract   = () => ({ nodes: [] });
 
-const kept          = { verdict: 'kept',          contractPassed: true  };
-const brokenResult  = { verdict: 'broken',        contractPassed: false };
-const notExercised  = { verdict: 'not_exercised', contractPassed: true  };
+// RE-POINTED 2026-08-02. A result no longer carries a per-promise contract; it
+// carries what the run DID. `attempted` is how many deliveries it made, and it is
+// the anti-vacuity floor — see src/workflows/delivery-verdict.js.
+const kept          = { verdict: 'kept',   attempted: 1 };
+const brokenResult  = { verdict: 'broken', attempted: 1 };
+// THE SHAPE THAT USED TO BE `not_exercised`: a run that completed cleanly and
+// delivered nothing. It is no longer a failure and no longer a third verdict — but
+// on its own it still cannot certify, because nothing was sent anywhere.
+const quiet         = { verdict: 'kept',   attempted: 0 };
 
 describe('the Go-live gate certifies on the VERDICT, not on a vacuous truth', () => {
   test('a contract with NO results is unverified — Go live stays locked (F12)', () => {
     // The live shape: an ordinary edit cleared `outcome.examples` to 0, so the
     // panel ran zero examples and rendered "every promise held".
     const c = CERTIFY({ spec: withContract(), outcomeResults: [] });
-    assert.equal(c.hasContract, true, 'fixture must actually carry a contract');
-    assert.equal(c.passed, false, 'zero examples cannot certify a promise');
+    assert.equal(c.passed, false, 'zero examples cannot certify anything');
     assert.equal(c.unverified, true, 'and it must be reported as unverified, not as a failure');
   });
 
   test('a contract whose only result is NOT EXERCISED is unverified (F16)', () => {
     // The 3-lane router whose one sample took the do-nothing lane. Note
     // `contractPassed: true` on the result — the old boolean read this as a pass.
-    const c = CERTIFY({ spec: withContract(), outcomeResults: [notExercised] });
+    const c = CERTIFY({ spec: withContract(), outcomeResults: [quiet] });
     assert.equal(c.passed, false);
     assert.equal(c.unverified, true);
   });
@@ -96,7 +109,7 @@ describe('the Go-live gate certifies on the VERDICT, not on a vacuous truth', ()
   test('unverified is NOT a failure — it is its own state', () => {
     // Marking it failed would be the opposite lie, and would flip a live
     // workflow's status on a test that broke nothing.
-    const c = CERTIFY({ spec: withContract(), outcomeResults: [notExercised] });
+    const c = CERTIFY({ spec: withContract(), outcomeResults: [quiet] });
     assert.equal(c.passed, false);
     assert.equal(c.unverified, true);
   });
@@ -112,7 +125,7 @@ describe('the Go-live gate certifies on the VERDICT, not on a vacuous truth', ()
   test('POSITIVE: kept + not_exercised together still certifies', () => {
     // A multi-lane workflow whose samples cover one lane. Something WAS proved
     // and nothing broke, so this is a real pass.
-    const c = CERTIFY({ spec: withContract(), outcomeResults: [kept, notExercised] });
+    const c = CERTIFY({ spec: withContract(), outcomeResults: [kept, quiet] });
     assert.equal(c.passed, true);
   });
 
@@ -132,32 +145,21 @@ describe('the Go-live gate certifies on the VERDICT, not on a vacuous truth', ()
   });
 });
 
-describe('the structural fallback survives ONLY for a spec that promises nothing', () => {
-  test('a v1 spec with no contract and a clean run still publishes', () => {
-    const c = CERTIFY({ spec: noContract(), outcomeResults: [], r: { ok: true }, d: { completed: true }, issues: [] });
-    assert.equal(c.hasContract, false);
-    assert.equal(c.passed, true, 'v1 workflows must publish exactly as before');
-    assert.equal(c.unverified, false);
-  });
-
-  test('a v1 spec whose run reported ISSUES does not publish', () => {
-    const c = CERTIFY({ spec: noContract(), outcomeResults: [], d: { completed: true }, issues: [{ code: 'EMPTY_BODY' }] });
-    assert.equal(c.passed, false);
-  });
-
-  test('a v1 spec whose run did not complete does not publish', () => {
-    const c = CERTIFY({ spec: noContract(), outcomeResults: [], d: { completed: false }, issues: [] });
-    assert.equal(c.passed, false);
-  });
-
-  test('an EMPTY assertions array is NOT a contract — the fallback applies', () => {
-    // `outcome: { assertions: [] }` promises nothing checkable, so there is
-    // nothing to exercise and "it ran cleanly" is the honest bar.
-    const c = CERTIFY({ spec: { outcome: { assertions: [] } }, outcomeResults: [] });
-    assert.equal(c.hasContract, false);
-    assert.equal(c.passed, true);
-  });
-
+// ── THE STRUCTURAL FALLBACK IS GONE (2026-08-02) ────────────────────────────
+//
+// This block used to pin a two-track rule: a spec carrying promises had to prove
+// one, and a v1 spec carrying none could publish on "the run completed cleanly".
+// `hasContract` chose the track, and THE ANTI-LAUNDER test below existed because
+// forcing that flag to `false` sent a v2 spec down the lenient track.
+//
+// There is one track now, and it is stricter than either: **zero results never
+// certify, whatever the spec says.** Every run produces a result, so an empty set
+// means the runs could not be carried out — which is the one thing it must never
+// read as a pass. The three v1-fallback tests are therefore gone; what they
+// protected is covered by the first test in this file, for every spec at once.
+//
+// The two tests below are the ones that outlived the rule, and both still matter.
+describe('zero evidence never certifies, and the door is gated on the pass', () => {
   test('GO LIVE is reachable ONLY from testState "passed" — "unverified" must not unlock it', () => {
     // `passed:false` above is only meaningful if the state it produces actually
     // locks the door. This reads the door itself. If someone widens `reviewDraft`
@@ -173,14 +175,16 @@ describe('the structural fallback survives ONLY for a spec that promises nothing
   });
 
   test('THE ANTI-LAUNDER: the fallback must not rescue a spec that DOES promise', () => {
-    // The mutation this kills is `hasContract = false` — which sends a v2 spec
-    // down the structural path, where a clean run with zero proved promises
-    // certifies everything again. That is F12 restored through a different door.
+    // RE-POINTED 2026-08-02. The mutation this used to kill was `hasContract =
+    // false`, which sent a promising spec down the lenient track. That flag is
+    // gone; the mutation it now kills is restoring the `: structural` fallback on
+    // the `passed` expression, which would let a clean HTTP round-trip with no
+    // runs in it certify a workflow. Same defect (F12), same door, one rule fewer.
     const c = CERTIFY({
       spec: withContract(), outcomeResults: [],
       r: { ok: true }, d: { completed: true }, issues: [],   // a perfectly clean run
     });
     assert.equal(c.passed, false,
-      'a clean run is not a kept promise — the structural fallback must not apply to a v2 spec');
+      'a clean request is not a run that delivered — an empty result set can never certify');
   });
 });

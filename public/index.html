@@ -6382,6 +6382,20 @@ class Component extends DCLogic {
         .then(function(res) {
           const d = res.data || {};
           lastData = d;   // keep the last run's steps for the pipeline animation
+          // ── A RUN WE COULD NOT CARRY OUT IS NOT A BROKEN WORKFLOW ────────────
+          // The server decides this (`isTransientFailure`, from the same pattern
+          // table the user-facing error message comes from) — a model timeout, a
+          // 429, a provider refusing us, the box unable to reach a service. None of
+          // them say anything about the spec, and scored as a broken run they read
+          // as "Contract not met", lock Go live and mark the workflow `error` on a
+          // workflow that is fine. Throwing here routes it to the SAME per-sample
+          // catch that already handles a dropped connection: recorded, said out
+          // loud, and skipped — never counted as evidence in either direction.
+          if (d.completed === false && d.transient) {
+            const e = new Error(String((d.error && d.error.message) || d.error || 'we could not run it'));
+            e.transient = true;
+            throw e;
+          }
           if (d.outcomeCheck) outcomeResults.push(d.outcomeCheck);
           if (d.paused && d.answerable && d.runId) {
             const dec = (d.awaiting && d.awaiting.ask && d.awaiting.ask.decisions && d.awaiting.ask.decisions[0]) || "approve";
@@ -6606,13 +6620,30 @@ class Component extends DCLogic {
       });
       return;
     }
-    const hasContract = !!(spec && spec.outcome && Array.isArray(spec.outcome.assertions) && spec.outcome.assertions.length);
-    // `verdict` is absent on results from an older server — fall back to the
-    // boolean rather than silently reading undefined as "not broken".
+    // ── THE RULE (2026-08-02) ─────────────────────────────────────────────
+    // A run passes when every step completed and every delivery it attempted
+    // actually landed. The SET passes when every run passed, every lane was
+    // run, and at least one delivery was attempted across the whole set.
+    //
+    // WHAT THIS REPLACED: each run used to be scored against `outcome.assertions`
+    // — find a delivery whose connector and locator STRING match the promise's
+    // `target`. That comparison never once caught a wrong workflow and
+    // repeatedly failed correct ones (see `src/workflows/delivery-verdict.js`).
+    // `anyKept` is gone with it: a run that completed and delivered IS the proof,
+    // so there is no separate "did it exercise a promise" floor to clear.
+    //
+    // `verdict` is absent on a result from an older server — fall back to the
+    // boolean rather than reading undefined as "not broken".
     const vOf = function(o) { return o.verdict || (o.contractPassed ? "kept" : "broken"); };
     const anyBroken = outcomeResults.some(function(o) { return vOf(o) === "broken"; });
-    const anyKept   = outcomeResults.some(function(o) { return vOf(o) === "kept"; });
-    const structural = (r.ok && d.completed && issues.length === 0);
+    // A DELIVERY WAS ATTEMPTED SOMEWHERE. This is the anti-vacuity floor, and it
+    // is the ONLY thing left of "was anything actually proved" — deliberately, because
+    // it asks whether a delivery HAPPENED, never where it landed. A run of a workflow
+    // that delivers nowhere at all proves nothing about automating anything.
+    // `attempted` is absent on an older result; such a set falls back to the run
+    // having completed, exactly as it did before this rule existed.
+    const anyAttempt = outcomeResults.some(function(o) { return Number(o.attempted) > 0; })
+      || (outcomeResults.length > 0 && outcomeResults.every(function(o) { return o.attempted === undefined; }));
     // ── LANE COVERAGE (F16 invariant 1) ───────────────────────────────────
     // A router's value IS the routing, and one sample proves one lane. The live
     // 3-lane router (urgent→Slack, billing→inbox, general→nothing) was certified
@@ -6635,11 +6666,15 @@ class Component extends DCLogic {
           uncovered: laneInv.filter(function(l) { return !laneHit[JSON.stringify([l.branch, l.to])]; }) }
       : { applicable: false, total: 0, uncovered: [] };
     const lanesMissing = coverage.applicable && coverage.uncovered.length > 0;
-    const passed = hasContract
-      ? (!anyBroken && anyKept && !lanesMissing)
-      : (outcomeResults.length ? (!anyBroken && !lanesMissing) : structural);
+    // ZERO RESULTS CAN NEVER CERTIFY (F12). It used to fall through to
+    // `structural` — "the request was OK and the run completed" — which is how an
+    // edit that cleared the examples produced "every promise held" over nothing.
+    // Every run now yields a result, so an empty set means the runs could not be
+    // carried out at all, and that is the one thing it must never read as a pass.
+    const passed = outcomeResults.length > 0
+      && !anyBroken && !lanesMissing && anyAttempt;
     // Nothing broke, but nothing was proved either — say so instead of certifying.
-    const unverified = !anyBroken && (lanesMissing || (hasContract && !anyKept));
+    const unverified = !anyBroken && (lanesMissing || !anyAttempt || !outcomeResults.length);
     const self = this;
 
     if (passed) {
@@ -9789,28 +9824,39 @@ class Component extends DCLogic {
       // — most often because the sample took a lane the promise doesn't cover.
       // Showing that as ✓ is what let a 3-lane router certify two deliveries it
       // never performed (F16); showing it as ✗ would be the opposite lie.
+      // A ROW REPORTS WHETHER THIS RUN DID THE THING — it ran end to end, and
+      // everything it tried to send landed. It no longer reports whether a
+      // delivery's destination matched a promise's `target` string; that
+      // comparison is gone (src/workflows/delivery-verdict.js).
+      //
+      // `not_exercised` is only reachable from a result produced by an older
+      // server and left in a persisted slice. It is kept renderable rather than
+      // being mapped onto a tick or a cross, either of which would be a claim.
       rows = results.map((o, i) => {
         const v = o.verdict || (o.contractPassed ? "kept" : "broken");
-        const brokeReason = (o.contract || []).find(c => !c.ok);
-        const skipped = (o.contract || []).filter(c => c.applicable === false);
+        const sent = Number(o.delivered) || 0;
+        const miss = (o.missed || [])[0];
         const detail = v === "kept"
-          // `_plainText` first: `_stringify` on a produced object yields a JSON blob,
-          // and a JSON blob was being offered to a person as the reason their promise
-          // was kept. See `_plainText` — no raw JSON or markdown reaches a reader.
-          ? ("What came back matched the deal — " + (this._plainText(this._stringify(o.produced && (o.produced.summary || o.produced.text || o.produced)), 140) || "delivered as promised") + ".")
+          ? (sent > 0
+             ? ("Ran end to end and delivered — " + sent + (sent === 1 ? " send" : " sends") + " landed"
+                // `_plainText` first: `_stringify` on a produced object yields a JSON
+                // blob, and a JSON blob was being offered to a person as the reason
+                // their workflow worked. No raw JSON or markdown reaches a reader.
+                + (this._plainText(this._stringify(o.produced && (o.produced.summary || o.produced.text || o.produced)), 120)
+                   ? ". " + this._plainText(this._stringify(o.produced && (o.produced.summary || o.produced.text || o.produced)), 120) : "") + ".")
+             // A path that correctly does nothing is PROVED by running cleanly —
+             // it did exactly what it was built to do. Saying "nothing was proved"
+             // about it was the old rule's most-reported false alarm.
+             : "Ran end to end with nothing to send — this path is built to stay quiet, and it did.")
           : v === "not_exercised"
-            ? (o.negative
-               // A "should not happen" case: the panel runs the steps directly and
-               // never fires the trigger, so it cannot show that this input would
-               // have been ignored. Saying so beats a tick that means the opposite.
-               ? "This is a 'should not happen' case. Testing runs the steps directly without checking the trigger, so this one can't be proved here — it was not checked."
-               : ("This example ran cleanly, but it didn't exercise anything the deal promises"
-                  + (skipped.length ? " — it took a path that doesn't cover "
-                     // Deduped: two promises to the SAME place used to print it twice,
-                     // so the row read "doesn't cover slack:#ops, slack:#ops".
-                     + Array.from(new Set(skipped.map(c => this._plainTarget(c.target)))).join(", ") : "")
-                  + ". Nothing was proved either way."))
-            : ("This one fell short — " + ((brokeReason && (brokeReason.reason || ("nothing reached " + brokeReason.target))) || (o.error || "a promise wasn't kept")) + ". Fix it and re-test.");
+            ? "This ran on an earlier version of the checker and its result can't be read. Run the test again."
+            : ("This one fell short — "
+               + (miss
+                  ? ((miss.channel ? this._plainTarget(miss.channel) + ": " : "") + miss.reason)
+                  : (o.contentErrorDetail
+                     ? ("“" + o.contentErrorDetail.step + "” couldn't find the data it needed, so what went out was an error, not real content")
+                     : (o.error || "a step didn't complete")))
+               + ". Fix it and re-test.");
         return rowFrom(i, v === "kept" ? "✓" : v === "not_exercised" ? "○" : "!",
                        v === "kept" ? SAGE : v === "not_exercised" ? DIM : CLAY,
                        // A lane-named sample arrives labelled `urgent_complaint`.
@@ -9827,7 +9873,7 @@ class Component extends DCLogic {
       // zero (an edit that cleared the examples), and "we ran 0 real examples —
       // every promise held" was being rendered over a green Go live button.
       verdictNote = failed
-        ? ("We ran " + total + " real example" + (total === 1 ? "" : "s") + " through your workflow. " + broke + " of " + total + " promise" + (broke === 1 ? "" : "s") + " fell short — nothing goes live until the contract holds.")
+        ? ("We ran " + total + " real example" + (total === 1 ? "" : "s") + " through your workflow. " + broke + " of " + total + (broke === 1 ? " didn't complete or didn't deliver" : " didn't complete or didn't deliver") + " — nothing goes live until every path works.")
         : notVerified
           ? (uncoveredLanes.length
               // NAME the lanes nothing exercised. "We couldn't verify it" invites
@@ -9838,16 +9884,17 @@ class Component extends DCLogic {
                  + uncoveredLanes.map(function(l) { return "\u201c" + l.label + "\u201d"; }).join(", ")
                  + ". A workflow that routes is only proved on the routes you test, so give me an example that takes "
                  + (uncoveredLanes.length === 1 ? "it" : "each of them") + " and I'll check the rest.")
-              : results.some(function(o) { return o.contractIncomplete; })
-              // A blank THE DEAL. Don't say "nothing was exercised" — the steps may
-              // well have run; what's missing is the promise itself.
-              ? "This workflow has no stated outcome — there's no promise recorded for it to keep, so there's nothing to check it against. Tell Atlas what it should deliver and I'll hold it to that."
               : total === 0
-                ? "We couldn't check this workflow — there are no worked examples to run it against, so none of its promises have been tested. Ask Atlas for examples, or describe a real case to try."
-                : ("We ran " + total + " real example" + (total === 1 ? "" : "s") + ", and none of them exercised what this workflow promises. Nothing broke — but nothing is proved either, so it isn't cleared to go live yet."))
-          : ("We ran " + total + " real example" + (total === 1 ? "" : "s") + " through your workflow" + (proved === total ? "" : " (" + proved + " of them exercised the deal)") + ". Every promise held — it's cleared to go live.");
+                ? "We couldn't run this workflow just now, so nothing has been checked. Try the test again."
+                // NOTHING WAS SENT ON ANY PATH. Not a failure — every run completed —
+                // but a workflow that delivers nowhere has not shown it can do
+                // anything, so it is not cleared. This is the only "nothing was
+                // proved" case left, and it asks whether a delivery HAPPENED, never
+                // where it landed.
+                : ("We ran " + total + " real example" + (total === 1 ? "" : "s") + " and nothing broke — but this workflow didn't send or write anything on any path, so there's nothing to show it works yet."))
+          : ("We ran " + total + " real example" + (total === 1 ? "" : "s") + " through your workflow — every step completed and everything it sent would have landed. It's cleared to go live.");
       evidenceLabel = "The evidence · " + total + " real example" + (total === 1 ? "" : "s");
-      evidenceNote = "Kept means what came back matched the deal above — checked automatically, shown here so you can see it yourself.";
+      evidenceNote = "Every run is a real run with the sends turned into receipts — nothing left Atlas, and each destination was checked against your actual account.";
       // A SAMPLE WE COULD NOT RUN IS SAID OUT LOUD. It is neither kept nor broken, and
       // leaving it silent would make a set of two look like a set of three — the
       // "certifying the absence of evidence" shape, one step removed. It also tells the

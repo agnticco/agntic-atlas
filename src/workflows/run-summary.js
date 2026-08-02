@@ -63,7 +63,28 @@
  * model-generated.
  */
 
-import { describeTarget } from './outcome-oracle.js';
+import { describeTarget, canonicalConnector } from './outcome-oracle.js';
+
+/**
+ * A delivery receipt names its CAPABILITY (`inbox_deliver`, `sheets_append`);
+ * `describeTarget` speaks CONNECTORS. Without the hop between them the sentence
+ * read `"Summary" in inbox deliver` — the capability id with its underscore
+ * knocked out, offered to a customer as the name of a place.
+ *
+ * CLAUDE.md warns that `canonicalConnector` is not a display-name function (it
+ * answers "do these name the same destination", and grouping BY it once sent
+ * every Google capability under a Gmail heading). That warning is about
+ * GROUPING. Here it is used to name ONE receipt's own service, and the six
+ * shipped write channels were measured through it before it was written:
+ * inbox_deliver → your Atlas inbox, gmail_send → Gmail, slack → Slack,
+ * sheets_append → Google Sheets, docs_create → Google Docs,
+ * airtable_create_record → Airtable.
+ */
+function whereItWent(channel, target) {
+  const c = canonicalConnector(String(channel ?? ''));
+  if (!c) return '';
+  return target ? describeTarget(`${c}:${target}`) : describeTarget(c);
+}
 
 /** The three things one example can have proved. Same vocabulary as the oracle. */
 const EXAMPLE_VERDICTS = new Set(['kept', 'broken', 'not_exercised']);
@@ -140,66 +161,37 @@ function tidy(text, max = 220) {
  * does not fill the gap: filling the gap is the entire defect.
  */
 function brokenReason(o) {
-  const miss = (o.contract || []).find(c => c && c.applicable !== false && !c.ok);
-  if (miss) return tidy(miss.reason || `nothing reached ${describeTarget(miss.target)}`);
+  const miss = (o.missed || [])[0];
+  if (miss) {
+    const where = whereItWent(miss.channel, miss.target);
+    return tidy(where ? `${where} — ${miss.reason}` : miss.reason);
+  }
+  if (o.contentErrorDetail?.step) {
+    return tidy(`“${o.contentErrorDetail.step}” couldn't find the data it needed, so what went out was an error, not real content`);
+  }
   if (o.error) return tidy(o.error);
   if (o.ran === false) return 'the run did not finish';
   return null;
 }
 
-/** The promises this run actually CHECKED and found satisfied. */
-function provenTargets(results, marks) {
+/**
+ * Where this run's deliveries actually went — read off the run's own receipts.
+ *
+ * DESCRIPTIVE, NOT A CHECK. It names destinations so the sentence can be
+ * specific; nothing here compares them to a promise. Comparing them is the rule
+ * that was removed (src/workflows/delivery-verdict.js).
+ */
+function deliveredTargets(results, marks) {
   const out = [];
   results.forEach((o, i) => {
     if (marks[i] !== 'kept') return;
-    (o.contract || []).forEach(c => {
-      if (c && c.applicable !== false && c.ok) out.push(describeTarget(c.target));
+    (o.landed || []).forEach(d => {
+      if (!d) return;
+      const where = whereItWent(d.channel, d.target);
+      if (where) out.push(where);
     });
   });
   return unique(out);
-}
-
-/** The promises an unexercised example's lane does not cover. */
-function skippedTargets(results, marks) {
-  const out = [];
-  results.forEach((o, i) => {
-    if (marks[i] !== 'not_exercised') return;
-    (o.contract || []).forEach(c => {
-      if (c && c.applicable === false) out.push(describeTarget(c.target));
-    });
-  });
-  return unique(out);
-}
-
-/**
- * Promises NO example in this run checked — aggregated across the whole set.
- *
- * A skipped assertion on ONE example is normally not a gap: a three-lane router's
- * spam sample skips the delivery promise, and the normal sample proves it. What
- * matters is a promise that *nothing* in the run ever enforced.
- *
- * That case became reachable on the flagship approval shape: the promise "ask
- * charles@agntic.co on Slack" is kept by the approval step's QUESTION, and a test
- * run answers that question itself rather than sending it, so no example can
- * prove it (outcome-oracle.js, `approvalAskEvidence`). Without this clause the
- * sentence read "every promise it makes held" over a promise nothing had looked
- * at — the exact vacuous certification this module exists to refuse.
- *
- * It NAMES the gap; it does not re-decide the verdict. The stance is the panel's,
- * read off the same `verdict` field, and a second opinion computed here is how
- * two surfaces start to disagree.
- */
-function uncheckedTargets(results) {
-  const proved = new Set();
-  const skipped = [];
-  results.forEach((o) => {
-    (o.contract || []).forEach(c => {
-      if (!c) return;
-      if (c.applicable === false) skipped.push(describeTarget(c.target));
-      else if (c.ok) proved.add(describeTarget(c.target));
-    });
-  });
-  return unique(skipped).filter(t => !proved.has(t));
 }
 
 /**
@@ -222,11 +214,13 @@ export function composeRunSummary(evidence = {}) {
   const uncovered = uncoveredLanesOf(evidence.laneCoverage);
   const name    = workflowName(evidence.spec);
 
-  // WHAT THE EVIDENCE ON ITS OWN SUPPORTS. An uncovered lane blocks certification
-  // exactly as an unexercised promise does — a router is only proved on the routes
-  // that were taken (F16).
+  // WHAT THE EVIDENCE ON ITS OWN SUPPORTS — the SAME three clauses the panel
+  // applies (public/index.html `_finishRun`), so the sentence and the panel
+  // cannot disagree: nothing broke, every lane was run, and at least one
+  // delivery was attempted somewhere.
+  const attempted = results.reduce((n, o) => n + (Number(o && o.attempted) || 0), 0);
   const derived = broke > 0 ? 'failed'
-    : (kept > 0 && uncovered.length === 0) ? 'passed'
+    : (kept > 0 && uncovered.length === 0 && attempted > 0) ? 'passed'
       : 'unverified';
 
   // The caller's own three-way state, if it sent a recognised one. An unrecognised
@@ -241,8 +235,8 @@ export function composeRunSummary(evidence = {}) {
   const stance = (stated === null || CLAIM_RANK[derived] <= CLAIM_RANK[stated]) ? derived : stated;
 
   if (stance === 'failed')   return failedSummary({ name, results, marks, total, broke, runError: evidence.runError });
-  if (stance === 'passed')   return passedSummary({ name, results, marks, total, kept });
-  return unverifiedSummary({ name, results, marks, total, uncovered });
+  if (stance === 'passed')   return passedSummary({ name, results, marks, total });
+  return unverifiedSummary({ name, results, marks, total, uncovered, attempted });
 }
 
 function ranClause(name, total) {
@@ -259,7 +253,7 @@ function failedSummary({ name, results, marks, total, broke, runError }) {
   const i = marks.indexOf('broken');
   let lead, why;
   if (i >= 0) {
-    lead = `${ranClause(name, total)} and it didn't keep its promise.`;
+    lead = `${ranClause(name, total)} and it didn't get all the way through.`;
     const reason = brokenReason(results[i]);
     const which  = quoted(exampleLabel(results[i], i));
     const many   = broke > 1 ? `${broke} of them fell short. ` : '';
@@ -281,38 +275,33 @@ function failedSummary({ name, results, marks, total, broke, runError }) {
   return `${lead} ${why} Nothing goes live until that's fixed.`;
 }
 
-function passedSummary({ name, results, marks, total, kept }) {
-  const proven    = provenTargets(results, marks);
-  const unchecked = uncheckedTargets(results);
-  // NEVER "every promise held" over a promise nothing in the run looked at. The
-  // claim is narrowed to what was actually enforced, and the gap is named below.
-  const every = unchecked.length ? 'every promise it was able to check' : 'every promise it makes';
-  const first = proven.length
-    ? `${ranClause(name, total)} and ${every} held — what came back reached ${listOf(proven)}.`
-    : `${ranClause(name, total)} and ${every} held.`;
+function passedSummary({ name, results, marks, total }) {
+  // WHERE IT WENT, from the run's own receipts. Named because "it worked" is
+  // worth nothing to a person who cannot see what it did — and because these are
+  // observations, not claims about a promise being matched.
+  const reached = deliveredTargets(results, marks);
+  const first = reached.length
+    ? `${ranClause(name, total)} and every step completed — what it sent reached ${listOf(reached)}.`
+    : `${ranClause(name, total)} and every step completed.`;
 
-  // A mixed run: some examples proved the promise, others took a path that does
-  // not cover it. Their silence is reported AS silence, by name — never folded
-  // into the deliveries the OTHER examples made. The old narrator was handed one
-  // example's delivery receipt and described it as the whole run's.
-  const quiet = results.filter((_, i) => marks[i] !== 'kept');
+  // A run that delivered NOTHING is reported as such rather than folded into the
+  // deliveries the other runs made. A path built to stay quiet is not a defect,
+  // and it is not evidence of a delivery either.
+  const quiet = results.filter((o, i) => marks[i] === 'kept' && !(Number(o && o.attempted) > 0));
   const middle = quiet.length
     ? ` ${quiet.length <= 3
         ? listOf(quiet.map(o => quoted(exampleLabel(o, results.indexOf(o)))))
-        : `${count(quiet.length, 'other example')}`
-      } didn't exercise the promise, so ${quiet.length === 1 ? 'it proved' : 'they proved'} nothing either way.`
+        : count(quiet.length, 'other example')
+      } ran with nothing to send, which is what ${quiet.length === 1 ? 'that path is' : 'those paths are'} built to do.`
     : '';
 
-  // The gap, named. Taken from the run's own contract entries — no example proved
-  // these, and saying so is the difference between a verification and a shrug.
-  const gap = unchecked.length
-    ? ` Nothing in this run could check ${listOf(unchecked)}, so that part is still unproved.`
-    : '';
-
-  return `${first}${middle}${gap} It's cleared to go live.`;
+  // No "nothing was really sent" boilerplate here: the panel's evidence note says
+  // it, on the same screen, every time. Repeating it lengthens every sentence and
+  // buys nothing.
+  return `${first}${middle} It's cleared to go live.`;
 }
 
-function unverifiedSummary({ name, results, marks, total, uncovered }) {
+function unverifiedSummary({ name, results, marks, total, uncovered, attempted }) {
   const first = `${ranClause(name, total)} and nothing broke.`;
 
   let why;
@@ -325,28 +314,16 @@ function unverifiedSummary({ name, results, marks, total, uncovered }) {
       + `${listOf(uncovered.map(l => quoted(laneLabel(l))))}. `
       + 'A workflow that routes is only proved on the routes you test.';
     ask = ` Give me an example that takes ${uncovered.length === 1 ? 'it' : 'each of them'} and I'll check the rest — it isn't cleared to go live yet.`;
-  } else if (results.some(o => o && o.contractIncomplete)) {
-    // A blank promise. Do not say "nothing was exercised" — the steps may well have
-    // run; what is missing is the promise itself.
-    why = "But this workflow has no stated outcome — there's no promise recorded for it to keep, so there was nothing to check it against.";
-    ask = " Tell Atlas what it should deliver and I'll hold it to that. It isn't cleared to go live yet.";
   } else if (total === 0) {
-    why = 'But there were no worked examples to run it against, so none of its promises were checked and nothing was proved either way.';
-    ask = " Describe a real case to try and I'll check it. It isn't cleared to go live yet.";
+    why = "But it couldn't be run just now, so nothing has been checked.";
+    ask = " Try the test again — it isn't cleared to go live yet.";
   } else {
-    const skipped   = skippedTargets(results, marks);
-    const negatives = results.filter((o, i) => marks[i] === 'not_exercised' && o && o.negative).length;
-    why = `But ${total === 1 ? "it didn't exercise" : 'none of them exercised'} what this workflow promises`
-      + (skipped.length ? ` — ${total === 1 ? 'it took a path' : 'they took paths'} that doesn't cover ${listOf(skipped)}` : '')
-      + '. Nothing was proved either way.';
-    if (negatives) {
-      // A "should not happen" case. The panel never fires the trigger, so whether
-      // the workflow would have stayed quiet is unknowable here — and a tick that
-      // means the opposite is worse than saying so.
-      why += ` ${negatives === 1 ? 'One example is a “should not happen” case' : `${negatives} examples are “should not happen” cases`}`
-        + ", which this test can't prove — it runs the steps directly without checking the trigger.";
-    }
-    ask = " Give me an example that exercises the promise and I'll check it — it isn't cleared to go live yet.";
+    // NOTHING WAS SENT OR WRITTEN ON ANY PATH. The only "nothing was proved" case
+    // left, and it asks whether a delivery HAPPENED — never where it landed.
+    why = total === 1
+      ? "But it didn't send or write anything, on any path, so there's nothing here that shows the workflow does its job."
+      : "But none of them sent or wrote anything, on any path, so there's nothing here that shows the workflow does its job.";
+    ask = " It isn't cleared to go live yet.";
   }
 
   return `${first} ${why}${ask}`;

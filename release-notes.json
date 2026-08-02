@@ -1,5 +1,13 @@
 [
   {
+    "version": "1.6.129",
+    "date": "2026-08-02",
+    "title": "Testing a workflow got simpler, and stopped blocking good ones",
+    "notes": [
+      "The test now asks whether your workflow actually delivered — not whether the wording of its promise matches where it delivered to. Workflows that were doing exactly the right thing were being told 'Contract not met' and refused Go live; that is gone. Every path is still run, nothing is ever really sent during a test, and each destination is still checked against your real account. And a test we could not run — a model timing out, a rate limit — is now reported as our fault and skipped, instead of failing your workflow."
+    ]
+  },
+  {
     "version": "1.6.128",
     "date": "2026-08-02",
     "title": "Run test works again",

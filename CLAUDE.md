@@ -156,6 +156,63 @@ them the decision in plain language anyway.
   bound tenant-scoping layer**; **RAG is physically isolated per tenant** (each
   tenant has its own RAG datastore/connector — cross-tenant retrieval is impossible,
   not just filtered). See [`docs/architecture/multi-tenancy.md`](docs/architecture/multi-tenancy.md).
+- **THE TEST ASKS WHETHER IT DELIVERED, NOT WHETHER THE PROMISE'S WORDING MATCHES**
+  *(2026-08-02, Charles: "we've gone too far into semantics of what the contract being
+  'met' means")*. **This reverses the run-scoring half of P12 and it is not to be
+  re-litigated.** A test run used to be scored against `outcome.assertions`: for every
+  promise, find a delivery whose connector and locator STRING match the promise's
+  `target`. That needed connector aliasing, canonicalisation, opaque-id detection,
+  template exemptions, per-lane applicability, approval-ask evidence, empty-loop
+  evidence, and a third "not exercised" verdict to describe what it could not decide.
+  **Measured over 2026-08-01/02 it produced ZERO findings about a workflow being wrong
+  and repeatedly failed workflows that were right** — nine defects of that shape are
+  recorded in this file, every one a disagreement about what a destination string means,
+  several costing paid whole-spec rebuilds and twice blocking a correct workflow from
+  going live.
+  **THE RULE NOW** — `src/workflows/delivery-verdict.js`, and its header is the long
+  version:
+  · **ONE RUN** passes when it completed without error, produced no content-error
+    sentinel, and **every delivery it attempted reported `delivered`**.
+  · **THE SET** passes, and Go live unlocks, when every run passed, **every lane was
+    run**, and **at least one delivery was attempted** across the whole set.
+  **THE CHECK WAS ALREADY BEING COMPUTED AND THEN IGNORED.** `wouldDeliver`
+  (`flow-tester.js` `_dryRunDeliver`) has always answered exactly this, and it is **not**
+  a string comparison: it is false when the body is empty, when a `{{placeholder}}`
+  survived into it, when no destination is named, when the connector is not connected,
+  or when **the destination does not exist in the customer's real account** (a live
+  probe). We gated on the assertion layer stacked on top of it instead.
+  **WHAT DID NOT CHANGE, deliberately:** the run is still **DRY** — nothing is sent, and
+  Run now remains the only thing that delivers for real. Lane coverage is untouched: a
+  workflow that routes is only proved on the routes you test, and that is the one thing
+  the old system caught that mattered (F16).
+  **WHAT WENT WITH IT, stated plainly rather than buried.** The third verdict is gone —
+  a run is `kept` or `broken`. The three shapes `not_exercised` existed for (a spec with
+  no assertions, a sample that took a do-nothing lane, a "should not fire" example) are
+  all now simply runs that completed, and **a run that completes and breaks nothing is
+  not a failure**. Two protections were genuinely lost and are recorded in the tests that
+  used to hold them: a "should not fire" sample's delivery now counts toward the
+  anti-vacuity floor (it was never provable here in either direction — the trigger filter
+  decides it and this harness does not evaluate one), and a spec with assertions but a
+  BLANK `statement` is no longer caught at test time (**if that is to be caught again it
+  belongs in the validator, at build time — a run has nothing to do with it**).
+  **THE PROMISE IS STILL THERE.** `outcome.statement` is still written, still shown as
+  THE DEAL, still what the plan card and the review screen read. It is no longer
+  machine-scored **by the test**. `satisfiesAssertion` and `checkAssertionAtRuntime`
+  REMAIN and are still live at **BUILD** time — the validator's `checkOutcome`, the gap
+  scorer, escalation, and the self-consistency reporter all use them. **Whether the
+  build-time half should also go is a separate decision and has not been made**; if a
+  build is being blocked or rebuilt over an assertion target, that is `gap-scorer.js` /
+  `workflow-validator.js`, not the test.
+  **Removed:** `evaluateExampleRun`, `assertionApplicability`, `approvalAskEvidence`,
+  `emptyLoopEvidence` (a tombstone naming all four sits at the foot of
+  `outcome-oracle.js`), the `structural` publish fallback in the browser, and nine test
+  files that pinned only the removed semantics. **Zero results now never certify, for any
+  spec** — stricter than either of the two tracks it replaced. Pinned by
+  `tests/workflows/a-test-asks-whether-it-delivered.test.js` (17) and the re-pointed
+  `test-panel-certification.test.js`, which extracts and EXECUTES the real browser
+  decision. **Six mutations, five red→green; the sixth is recorded as unkillable in both
+  the code and the test header rather than contrived into a kill.**
+
 - **All UI is built fresh.** No reuse of the dormant in-chat builder or the old
   console. Clean design language, no entanglement.
 - **Fresh private repo** (this one), migrating salvage from `agntic-prod`. The

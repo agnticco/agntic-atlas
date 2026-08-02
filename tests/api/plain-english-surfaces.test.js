@@ -615,12 +615,25 @@ describe('the workflow page draws the real graph', () => {
   });
 });
 
-describe('the evidence row names a destination once', () => {
-  test('duplicates are collapsed and the target is readable', () => {
-    const i = HTML.indexOf("it took a path that doesn't cover");
-    assert.ok(i > 0);
-    const around = HTML.slice(i, i + 400);
-    assert.match(around, /new Set\(/, 'two promises to the same place printed it twice');
-    assert.match(around, /_plainTarget/, '`slack:#ops` is how a promise is filed, not how it is read');
+describe('the evidence row names a destination readably', () => {
+  // RE-POINTED 2026-08-02, and HALF OF IT NO LONGER HAS A SUBJECT — said out loud
+  // rather than quietly dropped.
+  //
+  // This used to guard the "not exercised" row, which listed every promise the
+  // sample's lane did not cover: two promises to the same place printed it twice
+  // ("doesn't cover slack:#ops, slack:#ops"), hence the `new Set(`. That row is
+  // gone with the contract oracle (src/workflows/delivery-verdict.js) — a row now
+  // names AT MOST ONE destination, the delivery that did not land — so there is
+  // no longer a list that can contain a duplicate. **Do not re-add a dedupe
+  // assertion here unless a row starts printing a list again.**
+  //
+  // The half that survives is the half that mattered: a destination reaching a
+  // reader goes through `_plainTarget`. `slack:#ops` is how a delivery is filed,
+  // not how it is read.
+  test('a failed delivery names where it was going, in words', () => {
+    const i = HTML.indexOf('This one fell short');
+    assert.ok(i > 0, 'the broken-row explanation must be findable');
+    const around = HTML.slice(i - 500, i + 500);
+    assert.match(around, /_plainTarget/, '`slack:#ops` is how a delivery is filed, not how it is read');
   });
 });

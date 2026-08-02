@@ -50,8 +50,23 @@ const spec = () => ({
   edges: [{ from: 'sum', to: 'd' }],
 });
 
+// ── RE-POINTED 2026-08-02 ───────────────────────────────────────────────────
+// The verdict this module produces stopped being "does a delivery's destination
+// match the promise's `target` string" and became "did every step complete, and
+// did every delivery land" (src/workflows/delivery-verdict.js — read its header
+// for what was removed and why).
+//
+// THE SAFETY PROPERTY IS UNTOUCHED and is still the reason this file exists: a
+// dry run must fire ZERO real handlers, however many times the loop iterates.
+// Every test below still asserts it, and it is asserted first.
+//
+// What changed in each case is named inline. Nothing here was made more lenient
+// to accommodate the new rule: the case that used to be caught by "the promise
+// names #ops and nothing reached it" is now caught by "this run attempted no
+// deliveries at all", which is a stronger statement about the same workflow —
+// it does not depend on the promise being written correctly.
 describe('runSpecDryRun causes ZERO real side effects and judges the outcome', () => {
-  test('the real delivery handler is NEVER called, yet the outcome is judged SATISFIED', async () => {
+  test('the real delivery handler is NEVER called, yet the run is judged KEPT', async () => {
     const { registry, sent } = recordingRegistry();
     const r = await runSpecDryRun({ flowTester: tester(registry), spec: spec(), initialContext: 'raw inbound email' });
 
@@ -65,14 +80,31 @@ describe('runSpecDryRun causes ZERO real side effects and judges the outcome', (
     // The would-deliver receipt was assembled and judged as would-satisfy.
     assert.equal(r.deliveries.length, 1, 'the stubbed delivery is surfaced as a would-deliver receipt');
     assert.equal(r.deliveries[0].delivered, true, 'a would-deliver receipt reads as satisfied for the oracle');
-    assert.ok(r.oracleResult, 'a spec with an outcome gets an oracle verdict');
-    assert.equal(r.oracleResult.contractPassed, true, 'summarize→#ops keeps its promise on the sample (in dry mode)');
+    assert.ok(r.oracleResult, 'a run gets a verdict');
+    assert.equal(r.oracleResult.verdict, 'kept', 'summarize→#ops ran and would have delivered');
+    assert.equal(r.oracleResult.attempted, 1, 'one delivery was attempted');
+    assert.equal(r.oracleResult.delivered, 1, 'and it would have landed');
+    assert.deepEqual(r.oracleResult.missed, [], 'nothing fell short');
   });
 
-  test('a spec whose promise it does NOT keep is judged FAILED (the loop can tell)', async () => {
+  test('a workflow that delivers NOTHING attempts nothing — and that is what the caller gates on', async () => {
     // The outcome promises a Slack post, but the workflow only summarizes — nothing
-    // delivers. A real run would send nothing; the dry-run must report contractPassed
-    // false so the verify loop knows to fix it (never a false pass).
+    // delivers. A real run would send nothing.
+    //
+    // WHAT CHANGED, AND WHY IT IS NOT A WEAKENING. This used to assert
+    // `contractPassed === false` because the promise named `slack:#ops` and no
+    // delivery matched that string. The verdict no longer reads the promise at
+    // all, so per-run this is `kept` — it ran cleanly and everything it tried to
+    // send (nothing) landed. The defect is caught one level up, by `attempted`:
+    // the panel and the chat sentence both refuse to certify a set in which NO
+    // delivery was attempted anywhere (public/index.html `_finishRun`,
+    // run-summary.js `derived`).
+    //
+    // That is a STRONGER catch than the old one, not a looser one: it does not
+    // depend on the promise having been written correctly. The old check passed a
+    // workflow that delivered nowhere whenever the promise was ALSO wrong in a
+    // matching way, and failed workflows that delivered correctly whenever the
+    // promise's string merely differed.
     const { registry, sent } = recordingRegistry();
     const broken = spec();
     broken.nodes = [broken.nodes[0]];   // drop the delivery
@@ -80,16 +112,23 @@ describe('runSpecDryRun causes ZERO real side effects and judges the outcome', (
     const r = await runSpecDryRun({ flowTester: tester(registry), spec: broken, initialContext: 'raw' });
 
     assert.equal(sent.length, 0, 'still no real send');
-    assert.equal(r.oracleResult.contractPassed, false, 'a promise the workflow does not keep must be judged FAILED');
-    assert.ok(/nothing reached/i.test(r.oracleResult.contract.find(c => !c.ok)?.reason ?? ''),
-      'and the oracle names WHY — nothing reached the promised destination');
+    assert.equal(r.oracleResult.attempted, 0, 'a workflow with no delivery node attempts no deliveries');
+    assert.deepEqual(r.oracleResult.landed, [], 'and nothing landed, so there is nothing to certify on');
   });
 
-  test('no outcome ⇒ no verdict (the caller passes it through untested)', async () => {
-    const { registry } = recordingRegistry();
+  test('a spec with no outcome is judged too — every run answers "did it deliver?"', async () => {
+    // DELIBERATELY REVERSED 2026-08-02. This used to assert `oracleResult === null`
+    // for a spec with no contract, because there were no assertions to score. "Did
+    // every step complete and did every delivery land" is answerable for ANY spec,
+    // promises or none — and returning nothing was what left the panel with no
+    // evidence to show for such a workflow.
+    const { registry, sent } = recordingRegistry();
     const bare = spec(); delete bare.outcome;
     const r = await runSpecDryRun({ flowTester: tester(registry), spec: bare, initialContext: 'raw' });
-    assert.equal(r.oracleResult, null, 'with no contract there is nothing to judge — oracleResult is null');
+    assert.equal(sent.length, 0, 'still no real send');
+    assert.ok(r.oracleResult, 'a spec with no contract is still judged on what it did');
+    assert.equal(r.oracleResult.verdict, 'kept');
+    assert.equal(r.oracleResult.attempted, 1, 'it delivered, and that is the evidence');
     assert.equal(r.completed, true, 'the run itself still completes');
   });
 });

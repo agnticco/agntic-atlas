@@ -23,7 +23,8 @@
  * (a recording registry that must stay empty).
  */
 
-import { evaluateExampleRun, deliveriesForStep } from './outcome-oracle.js';
+import { deliveriesForStep } from './outcome-oracle.js';
+import { evaluateDeliveryRun } from './delivery-verdict.js';
 
 /**
  * @param {object} args
@@ -100,17 +101,18 @@ export async function runSpecDryRun({
   const deliveries = steps
     .flatMap((s) => deliveriesForStep(nodeById.get(s.nodeId), coerce(s.output)));
 
-  // Judge against the outcome contract — the loop's pass/fail. Absent an outcome
-  // (v1 spec, or a bare run) there is nothing to gate on, so oracleResult is null and
-  // the caller passes the build through untested.
-  let oracleResult = null;
-  if (Array.isArray(spec?.outcome?.assertions) && spec.outcome.assertions.length) {
-    oracleResult = evaluateExampleRun(
-      spec,
-      { given: initialContext },
-      { completed, deliveries, steps, error },
-    );
-  }
+  // Did it deliver? — this run's pass/fail. See `delivery-verdict.js`: the test
+  // asks whether every step completed and every delivery landed, NOT whether a
+  // delivery's destination string matches a promise's `target`.
+  //
+  // Unconditional now. It used to be gated on `outcome.assertions.length`, so a
+  // spec with no promises got no verdict at all; "did it deliver" is answerable
+  // for every spec, promises or none.
+  const oracleResult = evaluateDeliveryRun(
+    spec,
+    { given: initialContext },
+    { completed, deliveries, steps, error },
+  );
 
   return { outputs: steps, deliveries, completed, error, paused, output, oracleResult };
 }

@@ -28,7 +28,12 @@
 import { test, describe } from 'node:test';
 import assert             from 'node:assert/strict';
 
-import { evaluateExampleRun, laneCoverage, laneInventoryOf } from '../../src/workflows/outcome-oracle.js';
+import { laneCoverage, laneInventoryOf } from '../../src/workflows/outcome-oracle.js';
+// RE-POINTED 2026-08-02: lane coverage is unchanged and is still the rule that a
+// router is only proved on the routes you test. What changed is where a run's
+// `lanes` come from — the per-run judge is now `evaluateDeliveryRun`, which
+// returns the same `lanes` / `laneInventory` fields off the same oracle helpers.
+import { evaluateDeliveryRun } from '../../src/workflows/delivery-verdict.js';
 
 /** The live 3-lane router, verbatim in shape. */
 const routerSpec = () => ({
@@ -62,7 +67,7 @@ const run = (val, to, deliveries = []) => ({
   ],
 });
 
-const evalOf = (spec, r, i = 0) => evaluateExampleRun(spec, { id: `e${i}` }, r);
+const evalOf = (spec, r, i = 0) => evaluateDeliveryRun(spec, { id: `e${i}` }, r);
 
 describe('lane coverage over a sample set', () => {
   test('F16: one sample down the do-nothing lane leaves the two delivery lanes UNPROVEN', () => {
@@ -104,7 +109,7 @@ describe('lane coverage over a sample set', () => {
       outcome: { statement: 'Post the digest.', assertions: [{ id: 'a1', kind: 'message_sent', target: 'slack:#ops' }] },
       nodes: [{ id: 'd', type: 'deliver', config: { channel: 'slack', target: '#ops' } }], edges: [],
     };
-    const r = evaluateExampleRun(linear, {}, {
+    const r = evaluateDeliveryRun(linear, {}, {
       completed: true, error: null,
       steps: [{ nodeId: 'd', output: { delivered: true } }],
       deliveries: [{ delivered: true, channel: 'slack', locators: ['#ops'] }],
@@ -181,7 +186,7 @@ describe('lane coverage over a sample set', () => {
     assert.equal(laneInventoryOf(spec).length, 4);
 
     // A run that classified `other` and stopped: only routeA's catch-all is covered.
-    const r = evaluateExampleRun(spec, { id: 'e1' }, {
+    const r = evaluateDeliveryRun(spec, { id: 'e1' }, {
       completed: true, error: null, deliveries: [],
       steps: [
         { nodeId: 'classify', output: 'other' },
