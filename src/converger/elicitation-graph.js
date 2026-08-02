@@ -278,12 +278,15 @@ const COMPUTED_LOCATOR = /\{\{[^}]+\}\}/;
  *   · only the locator is dropped. `kind`, `when` and the connector are untouched, and
  *     the user's `statement` is never edited.
  */
-export function generaliseComputedTarget(draft, gap, userSaid) {
+export function generaliseComputedTarget(draft, assertionIndex, userSaid) {
   const assertions = Array.isArray(draft?.outcome?.assertions) ? draft.outcome.assertions : null;
   if (!assertions) return null;
-  const target = String(gap?.target ?? '').trim();
-  const index = assertions.findIndex(a => a && a.target === target);
-  if (index < 0) return null;
+  // NOT `Number(assertionIndex)` — `Number(null)` is 0, so a null index silently became
+  // "the first promise" and would have moved a target nobody asked about. Caught by its
+  // own test on the first run; the raw value is checked instead of coerced.
+  const index = assertionIndex;
+  if (!Number.isInteger(index) || index < 0 || index >= assertions.length) return null;
+  const target = String(assertions[index]?.target ?? '').trim();
   const { connector, locator } = splitTarget(target);
   if (!connector || !locator) return null;
 
@@ -360,21 +363,6 @@ export function autoRepairStructural(draft, gaps, opts = {}) {
         d = { ...d, outcome: { ...d.outcome, assertions: as } };
         applied.push({ gapId: g.id, code: g.code, op: 'set_assertion_target',
                        from: move.from, target: move.target, message: g.message ?? null });
-        continue;
-      }
-    }
-    // The promise names a specific destination the workflow BUILDS as it runs, so no
-    // literal can ever match it. Drop the invented name and keep the promise about the
-    // service. Deliberately AFTER the retarget above: if the person typed a destination,
-    // moving the promise onto it is the better answer and this must not pre-empt it.
-    // `userSaid` may be absent here — this repair does not need it, only respects it.
-    if (g?.code === 'UNSATISFIED_ASSERTION') {
-      const wide = generaliseComputedTarget(d, g, userSaid);
-      if (wide) {
-        const as = d.outcome.assertions.map((a, i) => (i === wide.index ? { ...a, target: wide.target } : a));
-        d = { ...d, outcome: { ...d.outcome, assertions: as } };
-        applied.push({ gapId: g.id, code: g.code, op: 'generalise_assertion_target',
-                       from: wide.from, target: wide.target, message: g.message ?? null });
         continue;
       }
     }
@@ -4267,6 +4255,38 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
           ...who(cfg), lanes: lanes.length, had: have.length,
           error: String(err?.message ?? err).slice(0, 200),
         });
+      }
+    }
+
+    // ── A PROMISE MAY NOT NAME A DESTINATION THE WORKFLOW BUILDS AS IT RUNS ──
+    //
+    // THIS USED TO HANG OFF AN `UNSATISFIED_ASSERTION` GAP, AND THAT WAS DEAD CODE.
+    // Measured 2026-08-02, the day it shipped: `satisfiesAssertion` returns TRUE for a
+    // template locator — undecidable is treated as kept — so the gap NEVER fires for a
+    // computed destination, which is the only case this repair exists for. It could not
+    // run, and did not. ("The rule was right and nothing consulted it", shipped by the
+    // person who keeps writing that sentence down.)
+    //
+    // The mismatch is real at RUN time, not build time: build excuses the template, the
+    // test panel then compares the promise against the real receipt and finds
+    // "Daily AI Briefing" ≠ "August 2, 2026". So the reconciliation belongs HERE — where
+    // the spec has settled and every destination is knowable — asked of every promise
+    // unconditionally, rather than waiting for a gap that cannot occur.
+    //
+    // The guards live in `generaliseComputedTarget` and are unchanged: a destination the
+    // person typed is left alone, a literal that merely differs is a real mismatch, no
+    // step of that kind leaves "no step does that" standing, and only the locator moves.
+    {
+      const said = userSuppliedValues(state.clarifications);
+      const as = draft?.outcome?.assertions;
+      if (Array.isArray(as)) {
+        for (let i = 0; i < as.length; i++) {
+          const wide = generaliseComputedTarget(draft, i, said);
+          if (!wide) continue;
+          const next = draft.outcome.assertions.map((a, j) => (j === wide.index ? { ...a, target: wide.target } : a));
+          draft = { ...draft, outcome: { ...draft.outcome, assertions: next } };
+          logEvent('converger.promise_generalised', { ...who(cfg), from: wide.from, to: wide.target });
+        }
       }
     }
 

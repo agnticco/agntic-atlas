@@ -141,3 +141,58 @@ describe('the run loop survives a sample it cannot run', () => {
       'and must say it was our fault, not theirs');
   });
 });
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// A RUN THAT NEVER ANSWERS MUST NOT WAIT FOREVER.
+//
+// WITNESSED 2026-08-02: a test sat "Testing…" for 2,330 seconds — 38 minutes — because
+// its sample was in flight when the server restarted mid-deploy. The request was
+// severed, the browser's fetch never settled, and NOTHING had a timeout, so the panel
+// span forever with no verdict and no way out but a reload. Charles: *"the test suite
+// ... now it seems completely unfunctional."* From the outside, that is exactly what it
+// was. The same day, twice, a milder form: a POST that transferred ZERO bytes and never
+// reached the origin at all.
+//
+// The ceiling turns "forever" into "could not run", which the per-sample catch above
+// already scores honestly — so the samples that DID complete still count.
+describe('a run that never answers is given up on', () => {
+  const src = stripComments(methodSrc('runTest'));
+
+  test('every test request carries a ceiling', () => {
+    assert.match(src, /AbortController/,
+      'without one, a severed connection spins the panel forever — measured at 38 minutes');
+    assert.match(src, /RUN_TIMEOUT_MS/);
+  });
+
+  test('the ceiling is generous enough for a real sample', () => {
+    // Real samples run 55–90s; a web-search workflow is the slow end. A ceiling that
+    // fires on a healthy run would be a new way to fail good workflows.
+    const ms = Number((src.match(/RUN_TIMEOUT_MS\s*=\s*(\d+)/) || [])[1]);
+    assert.ok(ms >= 180000, 'too tight — a slow but healthy sample would be killed: ' + ms);
+    assert.ok(ms <= 600000, 'too loose — this is the hang it exists to end: ' + ms);
+  });
+
+  test('the timer is cleared on BOTH outcomes, not just success', () => {
+    // A timer left running on the failure path fires an abort at a request that already
+    // settled — harmless here, but it is the kind of loose end that becomes a bug.
+    assert.match(src, /clearTimeout\(timer\); return res;[\s\S]{0,80}clearTimeout\(timer\); throw err;/,
+      'clear it whether the request resolved or rejected');
+  });
+
+  test('a transport failure is retried exactly once — and only a transport failure', () => {
+    // A dry run has no side effects (terminal sends become receipts), so re-issuing one
+    // cannot double-send. A run that ANSWERED is never re-issued, whatever it answered.
+    assert.match(src, /return postOnce\(body\)[\s\S]{0,400}\.catch\(function\(\) \{ return postOnce\(body\); \}\)/,
+      'the retry must wrap the request, not the verdict');
+  });
+
+  test('the RESUME leg has the same ceiling and NO retry', () => {
+    // A resume consumes a paused run, so re-issuing it is not the no-op that re-issuing
+    // a dry run is.
+    assert.match(src, /postOnce\(JSON\.stringify\(\{ resumeRunId/,
+      'a hang here spins exactly as forever as one on the first leg');
+    const resume = src.slice(src.indexOf('resumeRunId'));
+    assert.doesNotMatch(resume.slice(0, 200), /\.catch\(function\(\) \{ return postOnce/,
+      'a resume must not be retried');
+  });
+});

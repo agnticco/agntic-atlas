@@ -6301,10 +6301,45 @@ class Component extends DCLogic {
     // hang — auto-answer it with the step's first declared decision so the run
     // completes and still contributes a verdict. (With gates pre-answered this cannot
     // normally fire; it is a belt-and-braces guard, not the primary path.)
+    // ── A TEST RUN THAT NEVER ANSWERS MUST NOT WAIT FOREVER ──────────────────
+    //
+    // WITNESSED 2026-08-02: a test sat "Testing…" for 2,330 seconds — 38 minutes —
+    // because its sample was in flight when the server restarted mid-deploy. The
+    // request was severed, the browser's fetch never settled, and NOTHING anywhere had
+    // a timeout, so the panel span forever with no verdict and no way out but a reload.
+    // Charles: *"the test suite ... now it seems completely unfunctional."* That is what
+    // it looks like from the outside, and it is the honest description.
+    //
+    // The same shape had already been seen twice that day in a milder form: a request
+    // that transferred ZERO bytes and never reached the origin at all. Long POSTs
+    // through the tunnel drop, and the client had no way to notice.
+    //
+    // A ceiling per sample, and a retry, because a dry run has NO side effects — the
+    // whole point of `dryRunDeliveries` is that terminal sends become receipts — so
+    // re-issuing one cannot double-send. A run that genuinely reached the engine and is
+    // simply slow is given the full ceiling before either happens.
+    //
+    // On giving up, the rejection is caught PER SAMPLE (see the loop below) and recorded
+    // as "could not run", so the samples that DID complete are still scored. Before that
+    // catch existed this would have thrown the whole run away.
+    const RUN_TIMEOUT_MS = 240000;   // 4 min: real samples run 55-90s; a web-search
+                                     // workflow is the slow end, and this is well past it.
+    const postOnce = function(body) {
+      const ctl = typeof AbortController === 'function' ? new AbortController() : null;
+      const timer = setTimeout(function() { try { ctl && ctl.abort(); } catch (e) {} }, RUN_TIMEOUT_MS);
+      return fetch("/workflows/run", Object.assign(
+        { method: "POST", headers: self._H(), body: body },
+        ctl ? { signal: ctl.signal } : {}))
+        .then(function(res) { clearTimeout(timer); return res; },
+              function(err) { clearTimeout(timer); throw err; });
+    };
     const postRun = function(runSpec, decisions) {
-      return fetch("/workflows/run", { method: "POST", headers: self._H(),
-        body: JSON.stringify(Object.assign({ spec: S.spec, initialContext: runSpec.initialContext, example: runSpec.example, dryRunDeliveries: true },
-                                            decisions ? { decisions: decisions } : {})) })
+      const body = JSON.stringify(Object.assign({ spec: S.spec, initialContext: runSpec.initialContext, example: runSpec.example, dryRunDeliveries: true },
+                                            decisions ? { decisions: decisions } : {}));
+      return postOnce(body)
+        // ONE retry, and only for a transport fault — a run that answered is never
+        // re-issued, whatever it answered.
+        .catch(function() { return postOnce(body); })
         .then(function(res) { return self._readJson(res); })
         .then(function(res) {
           const d = res.data || {};
@@ -6312,8 +6347,11 @@ class Component extends DCLogic {
           if (d.outcomeCheck) outcomeResults.push(d.outcomeCheck);
           if (d.paused && d.answerable && d.runId) {
             const dec = (d.awaiting && d.awaiting.ask && d.awaiting.ask.decisions && d.awaiting.ask.decisions[0]) || "approve";
-            return fetch("/workflows/run", { method: "POST", headers: self._H(),
-              body: JSON.stringify({ resumeRunId: d.runId, decision: dec, dryRunDeliveries: true }) })
+            // The RESUME leg gets the same ceiling — it is the same engine doing the
+            // same work, and a hang here would spin exactly as forever. No retry: a
+            // resume consumes a paused run, so re-issuing it is not the no-op that
+            // re-issuing a dry run is.
+            return postOnce(JSON.stringify({ resumeRunId: d.runId, decision: dec, dryRunDeliveries: true }))
               .then(function(r2) { return self._readJson(r2); })
               .then(function(r2) { const d2 = r2.data || {}; lastData = d2; if (d2.outcomeCheck) outcomeResults.push(d2.outcomeCheck); return d2; });
           }

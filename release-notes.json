@@ -1,5 +1,14 @@
 [
   {
+    "version": "1.6.125",
+    "date": "2026-08-02",
+    "title": "Tests can no longer hang",
+    "notes": [
+      "If a test run stops answering — a dropped connection, or a deploy restarting the server — it now gives up after a few minutes and says so, instead of spinning forever with no verdict.",
+      "A promise that names a document or record whose name your workflow builds as it runs is now corrected when the workflow is finished, not left to fail."
+    ]
+  },
+  {
     "version": "1.6.124",
     "date": "2026-08-02",
     "title": "Faster tests, and Google destinations are checked",

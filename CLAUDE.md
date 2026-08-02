@@ -2828,6 +2828,45 @@ fixed on the spot. Fold the relevant ones into whatever increment next touches t
   still never created a Google Doc.** Only a real run can prove that, and that remains
   open.
 
+- **THE TEST PANEL COULD WAIT FOREVER, AND A FIX SHIPPED THAT MORNING WAS DEAD CODE
+  (2026-08-02).** Charles, watching a test that had been running for **2,330 seconds**:
+  *"the test suite used to work well and give us go live, but now it seems completely
+  unfunctional."*
+  **He was right, and part of it was mine.** The sample was in flight when the server
+  restarted — my own deploy, 15:00:29 — the request was severed, and **nothing anywhere
+  had a timeout**, so the browser's fetch never settled and the panel span for 38 minutes
+  with no verdict and no way out but a reload. The origin log shows **no
+  `/workflows/run` completing for nearly an hour**. The same day, twice, a milder form:
+  a POST that transferred ZERO bytes and never reached the origin at all.
+  Every test request now carries a **4-minute ceiling** (real samples run 55–90s; a
+  web-search workflow is the slow end) and **one retry, for a transport fault only** — a
+  dry run has no side effects, so re-issuing one cannot double-send, and a run that
+  ANSWERED is never re-issued whatever it answered. The RESUME leg gets the ceiling and
+  **no** retry: it consumes a paused run, so re-issuing it is not the no-op the first leg
+  is. Giving up is caught per-sample, so the samples that DID complete are still scored.
+  Four mutations red→green.
+  **AND `generaliseComputedTarget`, SHIPPED THAT AFTERNOON, HAD NEVER RUN ONCE.** It was
+  keyed off an `UNSATISFIED_ASSERTION` gap. Measured: `satisfiesAssertion` returns **true**
+  for a template locator — undecidable is read as kept — so that gap **cannot fire for a
+  computed destination, the only case the repair exists for**. "The rule was right and
+  nothing consulted it", shipped by the person who keeps writing that sentence down.
+  The mismatch is real at RUN time, not build time: build excuses the template, the panel
+  then compares the promise against the real receipt. So it now runs at `verify`, where
+  the spec has SETTLED and every destination is knowable, asked of **every promise
+  unconditionally**. Its guards are unchanged and all five still die under mutation.
+  **A CORRECTION TO THE ENTRY ABOVE: THE "40% OF PROMISES" FIGURE WAS WRONG.** That came
+  from a crude string-matching proxy of mine. Re-measured with the REAL build-time
+  checker: **1 unsatisfied promise out of 60 (2%)**, because the real checker has excuses
+  the proxy did not (opaque provider ids, locator-free connectors, alias matching, and
+  templates). The blocking users hit is at RUN time, which that audit did not measure at
+  all. Measure with the real checker, not a proxy that looks like it.
+  *Process note: the rewire was applied with a Python `str.replace`, which replaces ALL
+  occurrences — the same pick-the-assertion block exists in `retargetStaleAssertion`, so
+  it corrupted that function too and turned eight unrelated tests red. And the first
+  version of the new guard used `Number(assertionIndex)`, where `Number(null)` is 0 —
+  a null index silently became "the first promise". Its own test caught it on the first
+  run; the raw value is checked instead of coerced.*
+
 - ~~**A new user's first screen is a CHANGELOG**~~ *(open item, closed by the entry above.)* The What's-New modal
   fires once per user on the login after a release; a user whose FIRST login follows one
   gets five engineering changes — *"Give Atlas a test case without it rebuilding your
