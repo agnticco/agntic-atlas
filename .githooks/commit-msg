@@ -64,4 +64,29 @@ if printf '%s\n' "$cleaned" | grep -qE '^Gate:'; then
   [ "$has_phase" = yes ] || fail "a Gate: trailer requires a Phase: trailer too"
 fi
 
+# 7) NO CLAUDE CODE ATTRIBUTION. The operator's standing instruction, given twice —
+# once to strip a Co-Authored-By trailer, once after a PR body carried a
+# "Generated with Claude Code" line. The agent harness appends both BY DEFAULT, so
+# every session is told to add them and has to remember not to. Remembering did not
+# work: it drifted into 15 consecutive commits before anyone noticed, each one an
+# agent reasoning "the repo does it, so it must be right" from the evidence of the
+# last drift. A preference that must be re-remembered by every session is not
+# enforced by anything — this is what makes being wrong about it harmless.
+#
+# The commits already carrying it are left alone on purpose (see
+# docs/COMMIT_CONVENTION.md): they are shipped and deployed, and a force-push to
+# main is the one operation that can eat a parallel session's work. So the log
+# below this commit is NOT evidence that the trailer is wanted — reading it that
+# way is the exact mistake this rule exists to stop.
+if printf '%s\n' "$cleaned" | grep -qiE '^Co-Authored-By:.*(Claude|Anthropic|noreply@anthropic)'; then
+  fail "no Claude Code attribution — remove the 'Co-Authored-By: Claude ...' trailer"
+fi
+# ANCHORED TO THE START OF A LINE, because the attribution is always its own line and
+# a message must stay able to DESCRIBE this rule. The first version matched the phrase
+# anywhere and promptly rejected the very commit adding the rule, which quoted it in
+# prose — a guard nobody can write about is one people route around.
+if printf '%s\n' "$cleaned" | grep -qiE '^[^A-Za-z]*Generated with \[?Claude Code'; then
+  fail "no Claude Code attribution — remove the 'Generated with ...' line"
+fi
+
 exit 0

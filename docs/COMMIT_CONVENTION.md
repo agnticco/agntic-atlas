@@ -64,6 +64,23 @@ frozen canonical spec by name when relevant (see CLAUDE.md).
   when" gate. Quote the gate text from the build plan. Pair it with a passing
   Verifier check (see CLAUDE.md gating rule).
 - **`Verified-by:`** — optional. `self` or the verifying agent's name.
+- **NO CLAUDE CODE ATTRIBUTION — enforced, not remembered.** No
+  `Co-Authored-By: Claude …` trailer, and no `Generated with Claude Code` line, in
+  a commit message, a PR body or an issue. The agent harness appends both **by
+  default**, so every session is instructed to add them and has to remember not to.
+  Remembering did not work: it drifted into **15 consecutive commits** before anyone
+  noticed, each new session reasoning "the repo does it, so it must be right" from
+  the evidence of the previous drift. `.githooks/commit-msg` now refuses both forms
+  (rule 7), so being wrong about it is cheap.
+  **History was deliberately NOT rewritten.** The commits already carrying the
+  trailer are shipped and deployed, a force-push to `main` is the one operation that
+  can eat a parallel session's work, and rewriting them buys two tidy messages at
+  that price. The line is drawn here instead: everything from this commit on is
+  clean, and the hook — not anyone's memory — is what keeps it that way.
+  Both checks are **anchored to the start of a line**, so a message can still
+  *describe* the rule in prose. Keep such a mention mid-line: a body line beginning
+  `Co-Authored-By: …` is a real trailer as far as git is concerned, whatever you
+  meant by it — the same trap as `Gate:` below.
 
 > ⚠️ **NEVER BEGIN A BODY LINE WITH `Gate:` UNLESS YOU MEAN THE TRAILER.**
 > `.githooks/pre-push` greps for `^Gate:[[:space:]]*[^[:space:]]` — **anywhere in the
