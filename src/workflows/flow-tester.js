@@ -871,7 +871,24 @@ export class FlowTester {
     const body           = typeof captured?.body === 'string' ? captured.body : '';
     const hasBody        = body.trim().length > 0;
     const bodyWellFormed = hasBody && !UNRESOLVED_TEMPLATE.test(body);
-    const { present: targetPresent, target } = deliveryTarget(node);
+    // ASK THE SHARED RULE ABOUT THE **RESOLVED** CONFIG, NOT THE SPEC NODE.
+    //
+    // `deliveryTarget` reads a node's config, and the build-time oracle can only ever
+    // hand it the SPEC — where every destination is still `{{...}}`. A dry run knows
+    // better: `cfg` is interpolated. Passing the spec node here put the raw template
+    // FIRST in the receipt's locator list, and `deliveryWhere` takes the first, so the
+    // customer was told:
+    //
+    //   this run delivered to {{write_briefing.date_title}} (Google Docs)
+    //
+    // …on a run whose document really was titled "August 1, 2026". Measured after the
+    // resolved title was already being attached below: locators came out as
+    // ["{{write_briefing.date_title}}", "August 1, 2026", …] — the right answer was
+    // present and outranked by the raw one.
+    //
+    // The node is spread so type/channel are unchanged; only the config it is asked
+    // about is the resolved one. One rule, asked the best question available here.
+    const { present: targetPresent, target } = deliveryTarget({ ...node, config: cfg });
 
     // DESTINATION REACHABILITY — the gap between "would deliver" and "WILL deliver".
     // The checks above prove the content is real and a target is SPECIFIED — not that

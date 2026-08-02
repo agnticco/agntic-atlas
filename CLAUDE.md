@@ -2726,8 +2726,21 @@ fixed on the spot. Fold the relevant ones into whatever increment next touches t
   here and **removed**: an unresolved reference substitutes to EMPTY (measured —
   `"Doc {{nowhere.output}}"` arrives as `"Doc "`), so nothing could reach it, and an
   unkillable guard is one nobody can prove still works. Pinned by
-  `tests/workflows/a-document-reports-where-it-went.test.js` (14, driving the real
+  `tests/workflows/a-document-reports-where-it-went.test.js` (16, driving the real
   engine), four mutations red→green.
+  **AND ATTACHING THE RESOLVED TITLE WAS STILL NOT ENOUGH — witnessed on prod
+  immediately after deploying it.** The same build reported the same template. Measured
+  locally against the real prod spec, the receipt's locator list came out
+  `["{{write_briefing.date_title}}", "August 1, 2026", …]`: **the right answer was
+  present and outranked by the wrong one.** `deliveryTarget` reads a node's config and
+  the build-time oracle can only ever hand it the SPEC, where every destination is still
+  a template — so the raw value landed in the receipt's `target`, which is pushed FIRST
+  and is exactly what `deliveryWhere` prints. The dry run knows better: `cfg` is
+  interpolated. It now asks that one shared rule about the RESOLVED config
+  (`deliveryTarget({ ...node, config: cfg })`) rather than growing a second rule.
+  **Three deploys to close one defect** (handler → receipt → the value the sentence
+  actually reads), each fix correct and each insufficient, because each was verified one
+  layer away from the thing a person looks at.
 
 - ~~**A new user's first screen is a CHANGELOG**~~ *(open item, closed by the entry above.)* The What's-New modal
   fires once per user on the login after a release; a user whose FIRST login follows one

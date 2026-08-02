@@ -225,6 +225,42 @@ describe('a DRY run reports the destination it resolved, not the template', () =
       'an empty destination must not be claimed as one');
   });
 
+  test('THE SENTENCE names a real place — the receipt leads with the RESOLVED value', async () => {
+    // Attaching the resolved title was not enough on its own. `deliveryTarget` was being
+    // asked about the SPEC node, whose config is still `{{...}}`, so the raw template
+    // went into the receipt's `target` — and `target` is pushed FIRST into the locator
+    // list, which is what `deliveryWhere` reads. Measured on prod after the title fix
+    // shipped: locators came out
+    //   ["{{write_briefing.date_title}}", "August 1, 2026", …]
+    // and the customer was told "this run delivered to {{write_briefing.date_title}}"
+    // about a document genuinely titled "August 1, 2026". The right answer was present
+    // and outranked by the wrong one.
+    const reg = registry();
+    const spec = docSpec();
+    const ft = new FlowTester({ nodeTypes, channelRegistry: reg,
+      llm: { invoke: async () => ({ content: 'August 1, 2026' }) } });
+    const r = await runSpecDryRun({ flowTester: ft, spec, initialContext: 'go' });
+    const receipt = (r.deliveries ?? []).find(d => d.channel === 'docs_create');
+    assert.ok(Array.isArray(receipt?.locators) && receipt.locators.length, 'the receipt names somewhere');
+    assert.doesNotMatch(String(receipt.locators[0]), /\{\{/,
+      'the FIRST locator is what the failure sentence prints — a template there is the '
+      + 'defect a customer actually reads: ' + JSON.stringify(receipt.locators));
+  });
+
+  test('and a promise naming what is REALLY created is kept', async () => {
+    // The other half of the same run: with the promise pointed at what the workflow
+    // actually makes, it passes. Before this, no wording could pass — the comparison
+    // was against a template.
+    const reg = registry();
+    const spec = docSpec();
+    spec.outcome.assertions = [{ id: 'a1', kind: 'document_exists', target: 'gdocs:Daily AI Briefing — August 1, 2026' }];
+    const ft = new FlowTester({ nodeTypes, channelRegistry: reg,
+      llm: { invoke: async () => ({ content: 'August 1, 2026' }) } });
+    const r = await runSpecDryRun({ flowTester: ft, spec, initialContext: 'go' });
+    assert.equal(r.oracleResult?.contractPassed, true,
+      JSON.stringify(r.oracleResult?.contract));
+  });
+
   test('only DECLARED locator keys are copied — a config value is not a destination', async () => {
     // The receipt must carry what the capability SAYS is its destination, not whatever
     // happens to be in its config. Copying every key would let an unrelated value be

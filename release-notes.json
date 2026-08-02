@@ -1,5 +1,13 @@
 [
   {
+    "version": "1.6.122",
+    "date": "2026-08-01",
+    "title": "Version 1.6.122",
+    "notes": [
+      "A workflow that saves a document named at run time now tells you the real name it used, instead of showing the placeholder."
+    ]
+  },
+  {
     "version": "1.6.121",
     "date": "2026-08-01",
     "title": "Builds stop testing themselves twice",
