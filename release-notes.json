@@ -1,5 +1,13 @@
 [
   {
+    "version": "1.6.120",
+    "date": "2026-08-01",
+    "title": "Version 1.6.120",
+    "notes": [
+      "A workflow you published earlier no longer shows its approval screen when you come back to it — it opens on its dashboard, where it belongs."
+    ]
+  },
+  {
     "version": "1.6.119",
     "date": "2026-08-01",
     "title": "Going live, and a test you can watch",

@@ -118,6 +118,71 @@ describe('a published workflow stops calling itself a draft', () => {
   });
 });
 
+// Clearing the phase at publish time cannot reach a slice ALREADY on disk, and that
+// slice is what a returning user meets. Confirmed against prod the moment the publish
+// fix was deployed: the workflow published minutes earlier still showed the draft pane,
+// because its slice predated the fix. The list refresh is where the server's authority
+// on status meets the client's stale belief, so it is reconciled there.
+describe('a stale draft pane is corrected against the server', () => {
+  // EXECUTED, NOT MATCHED. The first version of this block asserted the source text and
+  // a mutation that neutered the whole guard (`if (false && …)`) SURVIVED it — a source
+  // pin cannot tell a live guard from a dead one. So `_loadWorkflows` is extracted and
+  // run against a stubbed fetch, and the assertions are about what it DOES.
+  function run(workflows, state) {
+    const body = bodyOf(stripComments(methodSrc('_loadWorkflows')));
+    const make = new Function('fetch', 'return function() {' + body + '};');
+    const calls = { openConsole: [], home: 0 };
+    const obj = {
+      state: Object.assign({ authToken: 't', consoleSidebarWfs: [] }, state),
+      setState(s) { Object.assign(obj.state, s); },
+      openConsole(id) { calls.openConsole.push(id); },
+      _loadHomeData() { calls.home++; },
+    };
+    obj._loadWorkflows = make(async () => ({ ok: true, json: async () => ({ workflows }) }));
+    return obj._loadWorkflows().then(() => ({ state: obj.state, calls }));
+  }
+
+  const LIVE  = [{ id: 'w1', status: 'active' }];
+  const DRAFT = [{ id: 'w1', status: 'draft' }];
+
+  test('a draft pane over a LIVE workflow leaves for the console', async () => {
+    const { calls } = await run(LIVE, { phase: 'draft', workflowId: 'w1' });
+    assert.deepEqual(calls.openConsole, ['w1'],
+      'a workflow that is already live must not keep offering "Approve & go live"');
+  });
+
+  test('and the phase moves too, or the stale slice is written straight back', async () => {
+    const { state } = await run(LIVE, { phase: 'draft', workflowId: 'w1' });
+    assert.equal(state.phase, 'chat',
+      '`_persistable` treats "draft" as persistable regardless of view — leaving the '
+      + 'phase alone means the next reload lands on the draft pane all over again');
+  });
+
+  test('a GENUINE unfinished draft keeps its review pane', async () => {
+    const { calls, state } = await run(DRAFT, { phase: 'draft', workflowId: 'w1' });
+    assert.deepEqual(calls.openConsole, [], 'this one really is a draft — leave it alone');
+    assert.equal(state.phase, 'draft');
+  });
+
+  test('it leaves ONLY on positive evidence — never on a missing or blank status', async () => {
+    // Absence of information must not be read as "it is live": a real draft losing its
+    // review pane is the worse bug of the two.
+    for (const [label, wfs] of [
+      ['absent from the list', [{ id: 'other', status: 'active' }]],
+      ['carrying no status',   [{ id: 'w1' }]],
+      ['an empty list',        []],
+    ]) {
+      const { calls } = await run(wfs, { phase: 'draft', workflowId: 'w1' });
+      assert.deepEqual(calls.openConsole, [], label);
+    }
+  });
+
+  test('and it does not fire when there is no draft pane to correct', async () => {
+    const { calls } = await run(LIVE, { phase: 'chat', workflowId: 'w1' });
+    assert.deepEqual(calls.openConsole, []);
+  });
+});
+
 // ── 2 · THE TEST PANEL SAYS HOW FAR THROUGH IT IS ─────────────────────────────
 describe('the test panel shows progress while it runs', () => {
   const runTest = stripComments(methodSrc('runTest'));

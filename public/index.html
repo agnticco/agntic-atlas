@@ -4387,6 +4387,33 @@ class Component extends DCLogic {
         if (S.view === 'console' && S.consoleWfId && !wfs.some(function(w) { return w.id === S.consoleWfId; })) {
           self.setState({ view: 'home', consoleWfId: null, consoleWf: null, homeData: null, homeReady: false, homeFading: false });
           self._loadHomeData();
+          return;
+        }
+        // A DRAFT PANE SITTING OVER A WORKFLOW THAT IS NO LONGER A DRAFT.
+        //
+        // The build slice PERSISTS `phase`, so a workflow published before the phase
+        // fix — or published in another tab, or on another device — restores here still
+        // reading "Ready for your approval" and still offering "Approve & go live" for
+        // something that is already live. Clearing the phase at publish time (see
+        // `_saveWorkflow`) stops NEW ones being written; it cannot reach a slice already
+        // on disk, and that slice is what a returning user meets. Verified against prod
+        // immediately after deploying the publish fix: the workflow published minutes
+        // earlier still showed the draft pane, because its slice predated the fix.
+        //
+        // The SERVER LIST is the authority on status — the same reasoning as the console
+        // reconciliation directly above, and the reason `phase: "published"` was deleted
+        // in the first place (client state cannot know a workflow has since been paused).
+        if (S.phase === 'draft' && S.workflowId) {
+          const mine = wfs.find(function(w) { return w.id === S.workflowId; });
+          // Only ever leave on POSITIVE evidence that it is not a draft. A workflow
+          // missing from the list, or one with no status, must stay put — a genuine
+          // unfinished draft losing its review pane would be the worse bug.
+          if (mine && mine.status && mine.status !== 'draft') {
+            // `phase` must move too, or `_persistable` keeps writing the stale slice
+            // straight back and the next reload lands here again.
+            self.setState({ phase: 'chat' });
+            self.openConsole(S.workflowId);
+          }
         }
       })
       .catch(() => {});
