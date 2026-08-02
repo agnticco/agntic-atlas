@@ -6346,16 +6346,78 @@ class Component extends DCLogic {
     // On giving up, the rejection is caught PER SAMPLE (see the loop below) and recorded
     // as "could not run", so the samples that DID complete are still scored. Before that
     // catch existed this would have thrown the whole run away.
-    const RUN_TIMEOUT_MS = 240000;   // 4 min: real samples run 55-90s; a web-search
-                                     // workflow is the slow end, and this is well past it.
-    const postOnce = function(body) {
+    // ── AND THE CEILING ABOVE WAS DEAD CODE. IT NEVER ONCE FIRED. ─────────────
+    //
+    // MEASURED ON PROD 2026-08-02, driving four workflows in a browser: a
+    // Monday-digest workflow failed with `compile_digest: LLM step failed: LLM call
+    // timed out after 120s` after 381,832 ms — 6.4 minutes. The browser never saw
+    // it. Cloudflare gives up on an origin request at ~100 seconds and returns its
+    // own 524, so this ceiling could never be reached, and the `transient` flag that
+    // was supposed to say "our fault, not your workflow" never arrived either —
+    // it rides on a response, and the response was the thing being lost.
+    //
+    // So a run is no longer one long request. `background: true` gets a job id back
+    // immediately and the answer is POLLED. Every request is now short, which is
+    // what puts it safely inside any proxy's limit — the actual fix, where a longer
+    // client-side timeout was only ever a fix to a limit nothing was hitting.
+    //
+    // The ceiling is KEPT and is now meaningful: it bounds how long we keep polling
+    // a run the engine has genuinely not finished, rather than how long we hold a
+    // socket. Raised, because it is no longer the proxy that decides — a run doing
+    // several web searches with a retrying model legitimately takes minutes.
+    const RUN_TIMEOUT_MS = 600000;   // 10 min of POLLING, not of one held socket.
+    const POLL_EVERY_MS  = 2500;
+    // A short ceiling on each INDIVIDUAL request. These are now tiny — a POST that
+    // returns a job id, and a GET that returns a verdict — so anything approaching
+    // this is a transport fault, not a slow run.
+    const REQ_TIMEOUT_MS = 30000;
+
+    const fetchWithCeiling = function(url, opts) {
       const ctl = typeof AbortController === 'function' ? new AbortController() : null;
-      const timer = setTimeout(function() { try { ctl && ctl.abort(); } catch (e) {} }, RUN_TIMEOUT_MS);
-      return fetch("/workflows/run", Object.assign(
-        { method: "POST", headers: self._H(), body: body },
-        ctl ? { signal: ctl.signal } : {}))
+      const timer = setTimeout(function() { try { ctl && ctl.abort(); } catch (e) {} }, REQ_TIMEOUT_MS);
+      return fetch(url, Object.assign({}, opts, ctl ? { signal: ctl.signal } : {}))
         .then(function(res) { clearTimeout(timer); return res; },
               function(err) { clearTimeout(timer); throw err; });
+    };
+
+    // Returns something `_readJson` can read — `{ ok, status, text() }` — so every
+    // caller below is unchanged whether the answer came back on the POST or on a
+    // poll. A second response shape here would be a second thing to keep in step.
+    const asResponse = function(code, payload) {
+      return { ok: code >= 200 && code < 300, status: code,
+               text: function() { return Promise.resolve(JSON.stringify(payload)); } };
+    };
+
+    const postOnce = function(body) {
+      const startedAt = Date.now();
+      const withFlag = JSON.stringify(Object.assign(JSON.parse(body), { background: true }));
+      return fetchWithCeiling("/workflows/run", { method: "POST", headers: self._H(), body: withFlag })
+        .then(function(res) { return self._readJson(res); })
+        .then(function(r) {
+          // An older server, or a refusal that came back at once (a 400, an invalid
+          // spec): there is no job to poll, so hand it straight on. Backgrounding is
+          // additive — a deploy where the page is newer than the API still works.
+          if (!r.ok || !r.data || !r.data.jobId) return asResponse(r.ok ? 200 : 500, r.data || {});
+          const jobId = r.data.jobId;
+          const poll = function() {
+            if (Date.now() - startedAt > RUN_TIMEOUT_MS) {
+              throw new Error('the test run did not finish in time');
+            }
+            return new Promise(function(done) { setTimeout(done, POLL_EVERY_MS); })
+              .then(function() { return fetchWithCeiling("/workflows/run/" + encodeURIComponent(jobId), { headers: self._H() }); })
+              .then(function(res) { return self._readJson(res); })
+              .then(function(p) {
+                const d = (p && p.data) || {};
+                // THE PROCESS RESTARTED, OR IT EXPIRED. Never a spinner: this is the
+                // honest "we lost track of it", and it routes to the same per-sample
+                // catch that records a sample as unrunnable and says so out loud.
+                if (d.state === 'unknown') throw new Error('we lost track of that test run — run it again');
+                if (d.state === 'running') return poll();
+                return asResponse(d.code || 200, d.result || {});
+              });
+          };
+          return poll();
+        });
     };
     const postRun = function(runSpec, decisions) {
       const body = JSON.stringify(Object.assign({ spec: S.spec, initialContext: runSpec.initialContext, example: runSpec.example, dryRunDeliveries: true },
@@ -6373,9 +6435,19 @@ class Component extends DCLogic {
         // re-issuing cannot double-send). A run that took the whole ceiling once will
         // take it again — that is a slow workflow, not a lost packet, and the honest
         // answer is to say so rather than to wait twice.
+        //
+        // UPDATED 2026-08-02 for polling. Two more answers must NOT be retried, and
+        // neither is a lost packet:
+        //  · the polling ceiling — the engine is genuinely still working, and giving
+        //    it another ten minutes is the eight-minute wait above, doubled;
+        //  · a job the server no longer knows about — it restarted. Re-issuing would
+        //    start a whole second run rather than recover the first, and the honest
+        //    thing is to say we lost it.
         .catch(function(err) {
-          const timedOut = !!err && (err.name === 'AbortError' || /abort/i.test(String(err.message || '')));
-          if (timedOut) throw err;
+          const msg = String((err && err.message) || '');
+          const noRetry = !!err && (err.name === 'AbortError' || /abort/i.test(msg)
+            || /did not finish in time/i.test(msg) || /lost track/i.test(msg));
+          if (noRetry) throw err;
           return postOnce(body);
         })
         .then(function(res) { return self._readJson(res); })

@@ -1,5 +1,13 @@
 [
   {
+    "version": "1.6.130",
+    "date": "2026-08-02",
+    "title": "A test run no longer gets cut off partway",
+    "notes": [
+      "Testing a slow workflow used to fail for a reason that had nothing to do with your workflow: the run was one long request, and the network gave up on it after about 100 seconds — so you saw 'we couldn't run this' and trying again did the same thing. The test now starts the run and checks back on it, so how long it takes no longer matters."
+    ]
+  },
+  {
     "version": "1.6.129",
     "date": "2026-08-02",
     "title": "Testing a workflow got simpler, and stopped blocking good ones",

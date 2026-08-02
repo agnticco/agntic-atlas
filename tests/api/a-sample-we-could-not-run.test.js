@@ -191,8 +191,23 @@ describe('a run that never answers is given up on', () => {
     // a run that had already taken the whole ceiling once. A run the engine could not
     // finish in 4 minutes will not finish in the next 4; that is a slow workflow, not a
     // lost packet, and the honest answer is to say so rather than wait twice.
-    assert.match(src, /const timedOut = [\s\S]{0,160}AbortError[\s\S]{0,120}if \(timedOut\) throw err;/,
-      'the ceiling must cap the total wait, not merely the first attempt');
+    // RE-POINTED 2026-08-02 when the run moved to polling. The guard was renamed
+    // `timedOut` → `noRetry` and BROADENED: a breached ceiling still refuses a
+    // retry, and so do two answers polling made possible — a run the engine has not
+    // finished, and a job the server no longer knows about (it restarted; retrying
+    // would start a second run rather than recover the first). Scoped to the gate
+    // EXPRESSION, never to the words around it.
+    // SCOPED TO THE GATE EXPRESSION, never to the words around it. The first
+    // version of these two asserted the phrases appeared anywhere in `runTest` —
+    // and they do, in the `throw` that RAISES them — so deleting them from the
+    // guard left the test green (M5 survived, 2026-08-02). The gate is the subject.
+    const gate = src.slice(src.indexOf('const noRetry ='), src.indexOf('if (noRetry) throw err;'));
+    assert.ok(gate.length > 0 && gate.length < 500, 'the noRetry gate is gone — re-point this');
+    assert.match(gate, /AbortError/, 'the ceiling must cap the total wait, not merely the first attempt');
+    assert.match(gate, /did not finish in time/,
+      'a run the engine is still working on must not be started again');
+    assert.match(gate, /lost track/,
+      'a job the server has forgotten must be reported, not silently re-run');
   });
 
   test('the RESUME leg has the same ceiling and NO retry', () => {

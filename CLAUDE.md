@@ -2924,6 +2924,56 @@ fixed on the spot. Fold the relevant ones into whatever increment next touches t
   a null index silently became "the first promise". Its own test caught it on the first
   run; the raw value is checked instead of coerced.*
 
+- **A TEST RUN HELD ONE HTTP REQUEST OPEN FOR MINUTES, AND CLOUDFLARE KILLED IT —
+  FIXED (2026-08-02, Charles's call after seeing the measurement).** Found by driving
+  four workflows in a headed browser on prod. A Monday-digest workflow failed with
+  `compile_digest: LLM step failed: LLM call timed out after 120s` after **381,832 ms
+  — 6.4 minutes**. The browser never saw it: **Cloudflare gives up on an origin
+  request at ~100 seconds and returns its own 524**, so the panel got an error page
+  instead of the run's answer, said the honest but useless *"we couldn't run this —
+  try again"*, and the retry did exactly the same thing.
+  **IT PROVED TWO FIXES FROM EARLIER THE SAME DAY WERE DEAD CODE**, and that is the
+  lesson worth more than the fix: the client's 4-minute ceiling **could never fire**
+  (the proxy cut in at ~100s), and the `transient` flag — *"our fault, not your
+  workflow"* — **could never arrive**, because it rides on a response and the response
+  was the thing being lost. **A fix that depends on a response is worth nothing when
+  the response is what is lost.** Both were verified against the code and the tests,
+  neither against a real request through the real proxy.
+  **THE 6.4 MINUTES WAS ITSELF A CONSEQUENCE OF THAT MORNING'S FIX.** Deriving
+  `requestTimeoutMs` as a fraction of the node budget made the SDK's `maxRetries: 4`
+  reachable for the first time — correct in isolation, and it turned a single 120s
+  failure into four retries totalling ~6 minutes, which is what crossed the proxy's
+  limit. A fix that lengthens a worst case must be checked against every ceiling
+  downstream of it.
+  **THE FIX:** a run is no longer one long request. `background: true` returns a job
+  id at once and the answer is POLLED (`GET /workflows/run/:jobId`). Every request is
+  now short, which is what puts it inside any proxy's limit — where a longer
+  client-side timeout was only ever a fix to a limit nothing was hitting.
+  **THERE IS ONE IMPLEMENTATION.** `runWorkflowHandler` is unchanged and shared;
+  backgrounding swaps the socket for a recorder (`captureRes`) that stores what the
+  handler would have sent, verbatim. The handler calls `res.json()` from eight
+  places and not one of them changed — a second path for "the slow case" is how two
+  halves of this system have drifted nine times. Foreground stays the default, so
+  the scheduler and every existing caller are untouched.
+  **FAIL-CLOSED, and in memory only:** the poll is scoped to the tenant AND the user
+  who started it (a job id is guessable — ownership never comes from the id); a job
+  the process no longer knows about answers **`unknown`**, which the panel reports as
+  "we lost track of it, run again" rather than spinning; a throw is RECORDED in a
+  `finally`, because the socket is already answered and a job left `running` is the
+  38-minute spinner again; and nothing is parked in the DATABASE, for the same reason
+  `PENDING_TEST_PAUSES` is not — a test run must never become a row something else can
+  later pick up and fire for real.
+  Pinned by `tests/api/a-test-run-does-not-hold-a-socket.test.js` (14), five mutations
+  red→green. **One survived the first pass and the TEST was scoped rather than the
+  mutation dropped:** the no-retry assertion matched the phrase anywhere in `runTest`
+  — where it also appears in the `throw` that RAISES it — so deleting it from the
+  guard left the suite green. A source pin must be anchored to the gate EXPRESSION,
+  never to the words around it; this is the third time that shape has been recorded.
+  **Witnessed end to end on a local server** (POST → job id → poll → the handler's own
+  payload; an unknown job answers `unknown`). **NOT yet witnessed in a browser against
+  the real proxy — that is the pending confirmation, and it is the only thing that
+  proves the 524 is actually gone.**
+
 - ~~**A new user's first screen is a CHANGELOG**~~ *(open item, closed by the entry above.)* The What's-New modal
   fires once per user on the login after a release; a user whose FIRST login follows one
   gets five engineering changes — *"Give Atlas a test case without it rebuilding your

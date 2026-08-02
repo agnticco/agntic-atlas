@@ -2401,10 +2401,88 @@ export function createApp(spine) {
     for (const [k, v] of PENDING_TEST_PAUSES) if (v.expiresAt <= now) PENDING_TEST_PAUSES.delete(k);
   };
 
+  // ── A TEST RUN NO LONGER HOLDS A SOCKET OPEN (2026-08-02) ───────────────────
+  //
+  // MEASURED ON PROD, driving four workflows in a browser. A Monday-digest workflow
+  // failed with `compile_digest: LLM step failed: LLM call timed out after 120s`
+  // after **381,832 ms — 6.4 minutes**. The browser never saw it: Cloudflare gives
+  // up on an origin request at ~100 seconds and returns its own **524**, so the
+  // panel got an error page instead of the run's answer, said the honest but useless
+  // "we couldn't run this — try again", and the retry did exactly the same thing.
+  //
+  // TWO THINGS THIS EXPOSED, both worth stating:
+  //  · The 4-minute ceiling added to the client on 2026-08-02 was DEAD CODE in
+  //    production. Cloudflare killed the connection at ~100s first, so that limit
+  //    could never fire.
+  //  · The `transient` flag added the same day could not fire either — the run's
+  //    answer never reached the browser to carry it. A fix that depends on a
+  //    response is worth nothing when the response is what is lost.
+  //
+  // So the run stops being one long HTTP request. The caller asks for
+  // `background: true`, gets a job id back immediately, and polls
+  // `GET /workflows/run/:jobId`. Every request is now short, which is what puts it
+  // safely inside any proxy's limit — and the engine is untouched: the handler
+  // below still runs exactly as it did, writing into a captured response instead of
+  // a live socket.
+  //
+  // NOT PARKED IN THE DATABASE, for the same reason `PENDING_TEST_PAUSES` is not: a
+  // test run must never become a row something else can later pick up and fire for
+  // real. It lives in memory and expires. A process restart loses it, and the poll
+  // then answers `unknown` — which the panel reports as "we lost it, run again"
+  // rather than spinning forever. That is the honest answer and it is the one the
+  // build poller already gives.
+  const TEST_RUN_JOBS = new Map();
+  const TEST_RUN_JOB_TTL_MS = 15 * 60 * 1000;
+  const sweepRunJobs = () => {
+    const now = Date.now();
+    for (const [k, v] of TEST_RUN_JOBS) if (v.expiresAt <= now) TEST_RUN_JOBS.delete(k);
+  };
+
+  /**
+   * A stand-in for `res` that records what the handler would have sent.
+   *
+   * The run handler calls `res.json()` from eight places (validator refusal,
+   * connector not connected, paused, failed, completed, …). Capturing the response
+   * means none of them had to change, and none of them can drift from the
+   * foreground path — there IS no second path.
+   */
+  const captureRes = (job) => ({
+    _code: 200,
+    status(c) { this._code = c; return this; },
+    json(payload) {
+      job.code = this._code;
+      job.payload = payload;
+      job.state = 'done';
+      job.finishedAt = Date.now();
+      job.expiresAt = Date.now() + TEST_RUN_JOB_TTL_MS;
+      return this;
+    },
+  });
+
+  // Poll a backgrounded run. Always HTTP 200 — the run's OWN status rides in the
+  // body, exactly as the foreground path returns 200 for a failed step (a 5xx here
+  // gets replaced by the proxy's error page, which is the whole defect this route
+  // exists to route around).
+  app.get('/workflows/run/:jobId', optionalAuth, tenantGuard, (req, res) => {
+    sweepRunJobs();
+    const job = TEST_RUN_JOBS.get(String(req.params.jobId));
+    // Unknown means the process restarted, or it expired. Say so plainly: the panel
+    // turns this into "we lost track of that test — run it again", never a spinner.
+    if (!job) return res.json({ state: 'unknown' });
+    // Same fail-closed scoping as a paused test: the tenant AND the user who
+    // started it. A job id is guessable; ownership never comes from the id.
+    if (job.tenantId !== (req.tenant?.id ?? null) || job.userId !== (req.user?.id ?? null)) {
+      return res.status(403).json({ error: 'that test run belongs to a different session' });
+    }
+    if (job.state === 'running') return res.json({ state: 'running', elapsedMs: Date.now() - job.startedAt });
+    return res.json({ state: 'done', code: job.code, result: job.payload });
+  });
+
   // Run a hand-authored spec through the engine — the "click run" path (no UI yet).
   // Body: { spec } where spec is the proprietary { name, nodes[], edges[], … } shape,
   // OR { resumeRunId, decision } to answer a `human` step this route stopped at.
-  app.post('/workflows/run', optionalAuth, tenantGuard, async (req, res) => {
+  // Add `background: true` to get a `{ jobId }` back at once and poll for the answer.
+  const runWorkflowHandler = async (req, res) => {
     // ── Answering a pause ───────────────────────────────────────────────────
     // Fails closed on every dimension: the pause must still exist, it must belong
     // to THIS workspace and THIS signed-in user (a session-proven answer is the
@@ -2738,6 +2816,47 @@ export function createApp(spine) {
     } catch (err) {
       logEvent('run.error', { tenant: tenantId, ms: Date.now() - t0, ...errFields(err) });
       res.status(500).json({ error: `run failed: ${err.message ?? String(err)}` });
+    }
+  };
+
+  // ── THE ROUTE: foreground by default, backgrounded on request ───────────────
+  //
+  // The handler above is UNCHANGED and is the only implementation. Backgrounding
+  // swaps the socket for a recorder; it does not fork the logic. There is no second
+  // path that can drift from the first.
+  app.post('/workflows/run', optionalAuth, tenantGuard, async (req, res) => {
+    if (req.body?.background !== true) return runWorkflowHandler(req, res);
+
+    sweepRunJobs();
+    const jobId = `run-${Date.now().toString(36)}-${randomUUID().slice(0, 8)}`;
+    const job = {
+      state: 'running', startedAt: Date.now(), expiresAt: Date.now() + TEST_RUN_JOB_TTL_MS,
+      tenantId: req.tenant?.id ?? null, userId: req.user?.id ?? null,
+      payload: null, code: 200,
+    };
+    TEST_RUN_JOBS.set(jobId, job);
+    logEvent('run.backgrounded', { tenant: job.tenantId, jobId });
+    res.json({ jobId, state: 'running' });
+
+    // Detached on purpose — the socket is already answered. A throw here can never
+    // reach Express (there is no response left to send), so it is caught and
+    // RECORDED: a job left `running` for ever is the 38-minute spinner this whole
+    // change exists to end. `runWorkflowHandler` has its own try/catch around the
+    // engine; this covers everything outside it, including a throw before that
+    // catch is reached.
+    try {
+      await runWorkflowHandler(req, captureRes(job));
+    } catch (err) {
+      logEvent('run.background_error', { tenant: job.tenantId, jobId, ...errFields(err) });
+    } finally {
+      if (job.state === 'running') {
+        job.state = 'done';
+        job.code = 200;
+        job.payload = { runId: null, completed: false, steps: [],
+          error: 'The test run stopped unexpectedly before it could report a result.' };
+        job.finishedAt = Date.now();
+        job.expiresAt = Date.now() + TEST_RUN_JOB_TTL_MS;
+      }
     }
   });
 
