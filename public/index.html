@@ -6447,6 +6447,18 @@ class Component extends DCLogic {
     // simply never reached. So a sample that cannot run is recorded and skipped — the
     // third verdict this codebase already has a word for — and the set is always scored.
     const unrunnable = [];
+    // THE CHAIN EVERY SAMPLE IS APPENDED TO. Dropped by accident on 2026-08-02 when the
+    // per-sample catch was added — the edit replaced this line and did not put it back —
+    // so `runTest` threw `ReferenceError: seq is not defined` on its FIRST iteration,
+    // before issuing a single request. The panel had already been set to "Testing…", so
+    // it span forever with no network activity at all, and every press after that did
+    // the same. That is the whole of *"the test suite ... now it seems completely
+    // unfunctional"*: not a slow engine, not the tunnel — a missing declaration.
+    //
+    // It survived because the tests around it matched SOURCE TEXT instead of executing
+    // `runTest`. A regex cannot see an undefined variable. See the executable pin in
+    // `a-sample-we-could-not-run.test.js`.
+    let seq = Promise.resolve();
     runs.forEach(function(runSpec, i) {
       seq = seq
         .then(function() { return driveExample(runSpec); })

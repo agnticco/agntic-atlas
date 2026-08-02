@@ -261,3 +261,103 @@ describe('a reloaded page can always run its test again', () => {
     }
   });
 });
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// RUN TEST MUST ACTUALLY ISSUE A REQUEST.
+//
+// THE DEFECT THIS EXISTS FOR, and it is the most embarrassing kind. Adding the
+// per-sample catch above replaced the line `let seq = Promise.resolve();` and did not
+// put it back. `runTest` then threw `ReferenceError: seq is not defined` on its FIRST
+// loop iteration — after setting the panel to "Testing…" and before issuing a single
+// request. So the panel span forever with NO network activity, and every press after
+// that did the same. For two and a half hours that read as "the test suite is
+// completely unfunctional", and it was: not a slow engine, not the tunnel, a missing
+// declaration.
+//
+// EVERY OTHER TEST IN THIS FILE MATCHED SOURCE TEXT AND ALL OF THEM STAYED GREEN. A
+// regex cannot see an undefined variable. This one EXECUTES `runTest` against a stubbed
+// fetch, which is the only kind of check that could have caught it.
+describe('pressing Run test really sends something', () => {
+  function drive({ respond } = {}) {
+    const fn = new Function('return function runTest() {' +
+      bodyOf(stripComments(methodSrc('runTest'))) + '};')();
+    const calls = [];
+    const applied = [];
+    const state = {
+      spec: {
+        name: 'w', nodes: [{ id: 'd', type: 'deliver', config: { channel: 'inbox_deliver' } }], edges: [],
+        outcome: { statement: 'x', assertions: [{ id: 'a1', kind: 'message_sent', target: 'inbox:Digest' }],
+                   examples: [{ id: 'e1', label: 'one', given: { subject: 's' } }] },
+      },
+      testState: 'idle', workflowId: 'w1',
+    };
+    const ctx = {
+      state,
+      setState: (s) => Object.assign(state, typeof s === 'function' ? s(state) : s),
+      _testUnlocked: () => true,
+      _pipeline: () => [{}],
+      _H: () => ({}),
+      _readJson: async (res) => ({ ok: true, data: await res.json() }),
+      _applyTestResult: (r, d) => applied.push(d),
+      _loadWorkflows: () => {},
+      _postRunSummary: () => {},
+      _sampleEvent: () => ({ subject: 'x' }),
+      _testInterval: null,
+      _testStartMs: 0,
+    };
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = async (url, opts) => {
+      calls.push({ url: String(url), body: opts && opts.body });
+      return (respond || (async () => ({
+        ok: true, status: 200,
+        json: async () => ({ completed: true, steps: [], deliveries: [],
+                             outcomeCheck: { verdict: 'kept', contractPassed: true, lanes: [] } }),
+      })))();
+    };
+    let threw = null;
+    try { fn.call(ctx); } catch (e) { threw = e; }
+    // `runTest` starts a 750ms animation interval. Left running it keeps the test
+    // runner alive forever — which is how the mutation that proves this test works also
+    // hangs the suite. Clear it with the fetch stub.
+    return { calls, applied, state, threw, restore: () => {
+      globalThis.fetch = realFetch;
+      if (ctx._testInterval) { clearInterval(ctx._testInterval); ctx._testInterval = null; }
+    } };
+  }
+
+  test('it does not throw before issuing anything', async () => {
+    const d = drive();
+    try {
+      assert.equal(d.threw, null,
+        'runTest threw before sending: ' + (d.threw && d.threw.message)
+        + ' — the panel says "Testing…" and nothing is ever sent');
+    } finally { d.restore(); }
+  });
+
+  test('a request is actually issued for the sample', async () => {
+    const d = drive();
+    try {
+      await new Promise(r => setTimeout(r, 40));
+      assert.ok(d.calls.length >= 1,
+        'no /workflows/run was issued at all — this is the shape that looked like a hang');
+      assert.match(d.calls[0].url, /\/workflows\/run/);
+    } finally { d.restore(); }
+  });
+
+  test('and the run is DRY — a test never really sends', async () => {
+    const d = drive();
+    try {
+      await new Promise(r => setTimeout(r, 40));
+      assert.match(String(d.calls[0].body), /"dryRunDeliveries":true/,
+        'the operator once got 5 real Slack DMs from a test; every run must stay dry');
+    } finally { d.restore(); }
+  });
+
+  test('the panel is put into the running state', async () => {
+    const d = drive();
+    try {
+      assert.equal(d.state.testState, 'running');
+      assert.equal(d.state.runProgress, 0, 'progress starts at zero, not stale');
+    } finally { d.restore(); }
+  });
+});

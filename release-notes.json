@@ -1,5 +1,13 @@
 [
   {
+    "version": "1.6.128",
+    "date": "2026-08-02",
+    "title": "Run test works again",
+    "notes": [
+      "Run test has been broken since early this afternoon — pressing it did nothing at all while the panel showed 'Testing…'. That is fixed."
+    ]
+  },
+  {
     "version": "1.6.127",
     "date": "2026-08-02",
     "title": "Run test works again after a reload",
