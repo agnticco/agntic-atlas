@@ -6337,9 +6337,23 @@ class Component extends DCLogic {
       const body = JSON.stringify(Object.assign({ spec: S.spec, initialContext: runSpec.initialContext, example: runSpec.example, dryRunDeliveries: true },
                                             decisions ? { decisions: decisions } : {}));
       return postOnce(body)
-        // ONE retry, and only for a transport fault — a run that answered is never
-        // re-issued, whatever it answered.
-        .catch(function() { return postOnce(body); })
+        // ONE retry, and only for a TRANSPORT fault — never after the ceiling fired.
+        //
+        // The first version retried everything, including a timeout, so a run the engine
+        // genuinely could not finish in 4 minutes was given another 4 to fail the same
+        // way: EIGHT minutes before the person got an answer. Charles, at 392 seconds:
+        // *"still no pass."* He was watching the retry. Behaving as designed and still a
+        // hang from where he sat.
+        //
+        // A dropped connection is worth one more go (a dry run has no side effects, so
+        // re-issuing cannot double-send). A run that took the whole ceiling once will
+        // take it again — that is a slow workflow, not a lost packet, and the honest
+        // answer is to say so rather than to wait twice.
+        .catch(function(err) {
+          const timedOut = !!err && (err.name === 'AbortError' || /abort/i.test(String(err.message || '')));
+          if (timedOut) throw err;
+          return postOnce(body);
+        })
         .then(function(res) { return self._readJson(res); })
         .then(function(res) {
           const d = res.data || {};

@@ -1,5 +1,13 @@
 [
   {
+    "version": "1.6.126",
+    "date": "2026-08-02",
+    "title": "Version 1.6.126",
+    "notes": [
+      "A slow test run now gives up after four minutes instead of eight, and a check on a Google destination can no longer stall the whole test."
+    ]
+  },
+  {
     "version": "1.6.125",
     "date": "2026-08-02",
     "title": "Tests can no longer hang",

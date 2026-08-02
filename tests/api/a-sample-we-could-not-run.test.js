@@ -182,8 +182,17 @@ describe('a run that never answers is given up on', () => {
   test('a transport failure is retried exactly once — and only a transport failure', () => {
     // A dry run has no side effects (terminal sends become receipts), so re-issuing one
     // cannot double-send. A run that ANSWERED is never re-issued, whatever it answered.
-    assert.match(src, /return postOnce\(body\)[\s\S]{0,400}\.catch\(function\(\) \{ return postOnce\(body\); \}\)/,
+    assert.match(src, /return postOnce\(body\)[\s\S]{0,600}return postOnce\(body\);/,
       'the retry must wrap the request, not the verdict');
+  });
+
+  test('a TIMEOUT is never retried — that is how 4 minutes became 8', () => {
+    // Witnessed: Charles at 392 seconds, "still no pass" — he was watching the retry of
+    // a run that had already taken the whole ceiling once. A run the engine could not
+    // finish in 4 minutes will not finish in the next 4; that is a slow workflow, not a
+    // lost packet, and the honest answer is to say so rather than wait twice.
+    assert.match(src, /const timedOut = [\s\S]{0,160}AbortError[\s\S]{0,120}if \(timedOut\) throw err;/,
+      'the ceiling must cap the total wait, not merely the first attempt');
   });
 
   test('the RESUME leg has the same ceiling and NO retry', () => {

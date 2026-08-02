@@ -28,8 +28,14 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import path from 'node:path';
+
 import { CapabilityRegistry } from '../../src/connectors/capability-registry.js';
 import { registerGoogleChannels } from '../../src/connectors/google/index.js';
+
+const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 
 function caps() {
   const reg = new CapabilityRegistry();
@@ -126,5 +132,42 @@ describe('anything else is INCONCLUSIVE — never a failed test', () => {
     const { result } = await probeWith('sheets_append', { spreadsheetId: 'sheet1', googleToken: 't' },
       () => ok({ spreadsheetId: 'sheet1' }));
     assert.deepEqual(result, { reachable: true });
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// A PROBE MAY NEVER HANG THE RUN IT IS CHECKING.
+//
+// The Google helpers added here call `fetch` with no timeout of their own — nor does
+// the Airtable one — so a provider that accepts the connection and never answers would
+// hang the dry run forever. That is the 38-minute "Testing…" the panel was taught to
+// survive on 2026-08-02, moved to the SERVER where the client's ceiling cannot reach it.
+// A probe is a courtesy: it upgrades "a target is present" to "the target exists". It is
+// not allowed to cost the run.
+describe('a probe that never answers cannot hang the run', () => {
+  const FT = readFileSync(path.join(ROOT, 'src/workflows/flow-tester.js'), 'utf8');
+
+  test('the probe call is raced against a ceiling', () => {
+    assert.match(FT, /Promise\.race\(\[\s*probe\(\{ config: cfg, node, services \}\)/,
+      'an unbounded probe hangs the dry run, and no client timeout can reach it');
+    assert.match(FT, /PROBE_TIMEOUT_MS/);
+  });
+
+  test('the ceiling is short — this is one metadata read, not a workflow', () => {
+    const ms = Number((FT.match(/PROBE_TIMEOUT_MS\s*=\s*(\d+)/) || [])[1]);
+    assert.ok(ms > 0 && ms <= 30000, 'a probe budget near a run budget is no budget: ' + ms);
+  });
+
+  test('a timed-out probe is INCONCLUSIVE, never a failed destination', () => {
+    // The existing catch sets reachability to null. That is the whole point: a probe
+    // that could not answer must not become "your destination is wrong".
+    const call = FT.slice(FT.indexOf('const PROBE_TIMEOUT_MS'));
+    assert.match(call.slice(0, 900), /catch\s*\{\s*destinationReachable = null;/,
+      'a silent provider must leave reachability unknown, not false');
+  });
+
+  test('the timer is always cleared', () => {
+    assert.match(FT, /\.finally\(\(\) => clearTimeout\(probeTimer\)\)/,
+      'a live timer after the race resolves is a dangling reject waiting to happen');
   });
 });

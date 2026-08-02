@@ -906,7 +906,28 @@ export class FlowTester {
     let unreachableReason    = null;
     if (probe && capabilityConnected && targetPresent) {
       try {
-        const r = await probe({ config: cfg, node, services });
+        // ── A PROBE MAY NEVER HANG THE RUN IT IS CHECKING ────────────────────
+        //
+        // A probe is a courtesy — it upgrades "a target is present" to "the target
+        // exists". It is NOT allowed to cost the run. The Google helpers added on
+        // 2026-08-02 call `fetch` with no timeout of their own (nor does the Airtable
+        // one), so a provider that accepts the connection and never answers would hang
+        // this dry run forever — and a dry run that never returns is the 38-minute
+        // "Testing…" the panel was just taught to survive, moved to the server where
+        // the client's ceiling cannot help.
+        //
+        // One ceiling here covers EVERY connector's probe rather than each growing its
+        // own, and the existing `catch` already does the right thing with it: a probe
+        // that does not answer leaves reachability NULL — inconclusive, never a failed
+        // test. Ten seconds is generous for a single metadata read.
+        const PROBE_TIMEOUT_MS = 10000;
+        let probeTimer;
+        const r = await Promise.race([
+          probe({ config: cfg, node, services }),
+          new Promise((_, reject) => {
+            probeTimer = setTimeout(() => reject(new Error('probe timed out')), PROBE_TIMEOUT_MS);
+          }),
+        ]).finally(() => clearTimeout(probeTimer));
         destinationReachable = r?.reachable !== false;
         if (destinationReachable === false) unreachableReason = r?.reason || 'the destination could not be reached';
       } catch { destinationReachable = null; }
