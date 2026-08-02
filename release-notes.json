@@ -1,5 +1,14 @@
 [
   {
+    "version": "1.6.124",
+    "date": "2026-08-02",
+    "title": "Faster tests, and Google destinations are checked",
+    "notes": [
+      "A workflow with one path is now tested with one sample instead of three — much faster, and it proves the same thing. A workflow that branches still gets one sample per path.",
+      "Before a test says a Google Sheet, Doc or Calendar is reachable, Atlas now actually checks — a read-only look, never a write."
+    ]
+  },
+  {
     "version": "1.6.123",
     "date": "2026-08-02",
     "title": "Fewer false 'contract not met' walls",

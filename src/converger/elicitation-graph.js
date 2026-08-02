@@ -4270,6 +4270,51 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
       }
     }
 
+    // ── ONE SAMPLE PER LANE. NOT THREE PER WORKFLOW. ─────────────────────────
+    //
+    // Charles, 2026-08-02: *"Why do we need 3 samples in the first place? … I trust the
+    // LLM to adapt in various scenarios, the wiring and results is simply what needs
+    // testing."* He is right, and the numbers were his: a LINEAR five-step briefing
+    // workflow — zero branches — was tested with three samples ("Monday with 3+ trending
+    // stories", "Wednesday with fewer than 3", "Saturday should not trigger"). Two of
+    // those are model-BEHAVIOUR variations over identical wiring. They cost ~60-90s each,
+    // sequentially, and prove the same path three times.
+    //
+    // THE ONE CARVE-OUT, and it is his own criterion applied honestly: a different LANE
+    // is different WIRING. A three-way classifier certified on one sample that took the
+    // do-nothing lane is a real defect this repo has shipped (F16), and lane coverage
+    // still blocks certification. So the rule is one per lane — a linear workflow has
+    // exactly one lane, and gets exactly one sample.
+    //
+    // WHY THE COUNT WAS THREE: `examples` runs at STEP 2, before the workflow exists, and
+    // a model is asked for "concrete example cases". Nothing ever capped what it offered
+    // against the wiring that got built. Same ordering flaw as the promise being written
+    // at step 0 — measured the same day, 40% of promises naming a destination no step
+    // matches.
+    //
+    // Trimmed AFTER the top-up above, so a lane that needed a sample still has one. An
+    // example that CLAIMS a lane is kept first (that claim is the only evidence of what
+    // it covers); the rest fill any remaining slots in order, and the floor is 1 — a
+    // workflow with no samples can prove nothing at all.
+    {
+      const all = (draft?.outcome?.examples ?? []).filter(e => e && e.given != null);
+      const want = Math.max(1, laneInventoryOf(assembleSpec(draft)).length);
+      if (all.length > want) {
+        const claimed = [], rest = [], seen = new Set();
+        for (const e of all) {
+          const lane = String(e?.lane ?? '').trim().toLowerCase();
+          if (lane && !seen.has(lane)) { seen.add(lane); claimed.push(e); } else rest.push(e);
+        }
+        const kept = [...claimed, ...rest].slice(0, Math.max(want, claimed.length));
+        if (kept.length < all.length) {
+          logEvent('converger.samples_trimmed', {
+            ...who(cfg), from: all.length, to: kept.length, lanes: want,
+          });
+          draft = { ...draft, outcome: { ...draft.outcome, examples: kept } };
+        }
+      }
+    }
+
     // Every return from this node must carry the draft, or the lane examples we just
     // paid for are discarded and the panel is handed the same single sample as before.
     const carryDraft = draft !== state.draft ? { draft } : {};

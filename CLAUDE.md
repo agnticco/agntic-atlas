@@ -2788,6 +2788,46 @@ fixed on the spot. Fold the relevant ones into whatever increment next touches t
   `tests/api/a-sample-we-could-not-run.test.js` (8), three mutations red→green.
   **Both printed the identical screen, which is exactly why it read as one stubborn wall.**
 
+- **ONE SAMPLE PER LANE, AND GOOGLE WRITES ARE FINALLY PROBED (2026-08-02, Charles's
+  call).** Two asks from one observation.
+  **"Why do we need 3 samples in the first place?… I trust the LLM to adapt in various
+  scenarios, the wiring and results is simply what needs testing."** His numbers: a
+  LINEAR five-step briefing workflow — zero branches — was tested with three samples
+  ("Monday with 3+ trending", "Wednesday with fewer than 3", "Saturday should not
+  trigger"). Two are model-BEHAVIOUR variations over identical wiring, each ~60–90s,
+  run sequentially, proving the same path three times — and each one more minute-long
+  connection to drop. **The count came from a model at STEP 2, before the workflow
+  existed**, and nothing ever capped it against the wiring that got built: the same
+  ordering flaw as the promise written at step 0.
+  The rule is now his, made precise: **one sample per lane — a different lane is
+  different WIRING, which is his own criterion; scenario variation over one path is
+  not.** A linear workflow has one lane and gets one sample; a three-way classifier
+  still gets three, because F16 (a router certified on the lane that did nothing) is a
+  defect this repo has shipped. Trimmed AFTER the per-lane top-up so a lane that needed
+  a sample still has one; a lane-CLAIMING example outranks an unclaimed one (the claim
+  is the only evidence of what it covers); the floor is 1; and the trim is LOGGED —
+  silently testing less than was prepared is the "no silent caps" shape. Pinned by
+  `tests/converger/one-sample-per-lane.test.js` (11 — mostly the floor, since trimming
+  is one step from testing nothing), two mutations red→green.
+  **"I checked my docs account and see 0 docs created from our work over the past two
+  days."** Correct — every test is dry — and that is the finding. Measured:
+  `docs_create`, `sheets_append`, `gmail_send`, `calendar_create_event` all had
+  **probe: none**. Only Slack and Airtable had one. So a Google dry run proved the
+  content resolved, a target was present and the connector was connected, and **nothing
+  about whether Google would accept the write**. The write path had never been executed
+  and no test we could run would execute it — so **"cleared to go live" meant materially
+  less for Google than for Slack, and nothing on screen said so.**
+  Probes added for Sheets (finds the actual spreadsheet — the strongest), Docs (can this
+  account reach Drive at all) and Calendar (the account's default calendar), each
+  honest about how much it proves. Same contract as Slack/Airtable: **a read, never a
+  write; a DEFINITIVE miss blocks with a reason a person can act on; anything else
+  RE-THROWS** so a flaky read is inconclusive rather than a failed test. Pinned by
+  `tests/connectors/google-writes-are-probed.test.js` (13, driving the real probes with
+  `fetch` stubbed), two mutations red→green — including a probe that WRITES.
+  **STILL TRUE AND WORTH SAYING: a probe proves reachability, not creation. Atlas has
+  still never created a Google Doc.** Only a real run can prove that, and that remains
+  open.
+
 - ~~**A new user's first screen is a CHANGELOG**~~ *(open item, closed by the entry above.)* The What's-New modal
   fires once per user on the login after a release; a user whose FIRST login follows one
   gets five engineering changes — *"Give Atlas a test case without it rebuilding your

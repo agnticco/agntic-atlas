@@ -787,6 +787,20 @@ export function registerGoogleChannels(capabilityRegistry) {
     ],
     requiredScopes: ['https://www.googleapis.com/auth/calendar'],
     isReady: ready,
+    // This capability takes no calendar id, so the destination is the account's default
+    // calendar — that is exactly what is checkable. See the Sheets probe above for why
+    // Google had no probes at all until 2026-08-02.
+    probe: async ({ config }) => {
+      const gapi = makeGoogleApiFromToken(config.googleToken);
+      try {
+        await gapi('GET', '/calendar/v3/calendars/primary', { params: { fields: 'id' } });
+        return { reachable: true };
+      } catch (e) {
+        if (/\b40[134]\b|not found|insufficient|unauthor/i.test(String(e?.message ?? e)))
+          return { reachable: false, reason: 'this Google account has no reachable calendar — reconnect it with calendar access' };
+        throw e;
+      }
+    },
     handle: makeHandle((gapi, config) => calendarCreateEvent(gapi, { title: config.title, start: config.start, end: config.end, description: config.description, attendees: config.attendees })),
   });
 
@@ -940,6 +954,32 @@ export function registerGoogleChannels(capabilityRegistry) {
     ],
     requiredScopes: ['https://www.googleapis.com/auth/spreadsheets'],
     isReady: ready,
+    // ── DOES THAT SPREADSHEET ACTUALLY EXIST? ────────────────────────────────
+    // Until 2026-08-02 NO Google capability had a probe — only Slack and Airtable did —
+    // so for every Google write a dry run proved the content resolved and the connector
+    // was connected, and nothing more. Charles, after two days of building Doc
+    // workflows: "I checked my docs account and see 0 docs created." Correct, and the
+    // point: the write path had never been exercised, and no test we could run would
+    // exercise it. "Cleared to go live" therefore meant materially less for Google than
+    // for Slack, and nothing on screen said so.
+    //
+    // Same contract as the Airtable probe: a read, never a write. A DEFINITIVE
+    // "no such spreadsheet" blocks; anything else RE-THROWS so the dry path records
+    // reachability as inconclusive rather than failing a valid workflow.
+    probe: async ({ config }) => {
+      const id = String(config.spreadsheetId ?? '').trim();
+      if (!id) return { reachable: false, reason: 'no spreadsheet was chosen' };
+      const gapi = makeGoogleApiFromToken(config.googleToken);
+      try {
+        await gapi('GET', `/sheets/v4/spreadsheets/${encodeURIComponent(id)}`,
+          { params: { fields: 'spreadsheetId' } });
+        return { reachable: true };
+      } catch (e) {
+        if (/\b404\b|not found/i.test(String(e?.message ?? e)))
+          return { reachable: false, reason: `that Google Sheet wasn't found — it may have been deleted, or this account can't open it` };
+        throw e;   // transient / auth — inconclusive, never a failed test
+      }
+    },
     handle: makeHandle((gapi, config) => sheetsAppend(gapi, { spreadsheetId: config.spreadsheetId, range: config.range, values: config.values })),
   });
 
@@ -969,6 +1009,24 @@ export function registerGoogleChannels(capabilityRegistry) {
     ],
     requiredScopes: ['https://www.googleapis.com/auth/drive'],
     isReady: ready,
+    // A NEW Doc has no destination to look up — the destination is Drive itself, so what
+    // is checkable is whether THIS account can reach Drive with the scope a create needs.
+    // Weaker than the Sheets probe (which finds a specific spreadsheet) and deliberately
+    // so: claiming more than a read can support is the failure this whole file guards.
+    // See the Sheets probe above for why Google had no probes at all until 2026-08-02.
+    probe: async ({ config }) => {
+      const gapi = makeGoogleApiFromToken(config.googleToken);
+      try {
+        await gapi('GET', '/drive/v3/about', { params: { fields: 'user' } });
+        return { reachable: true };
+      } catch (e) {
+        // 401/403 is definitive: this account cannot write to Drive, and a create WILL
+        // fail. Anything else is transient and must not fail a valid workflow.
+        if (/\b40[13]\b|insufficient|unauthor/i.test(String(e?.message ?? e)))
+          return { reachable: false, reason: 'this Google account cannot create files in Drive — reconnect it with Drive access' };
+        throw e;
+      }
+    },
     handle: makeHandle((_gapi, config, body) => docsCreate(config.googleToken, { title: config.title, content: config.content ?? body })),
   });
 
