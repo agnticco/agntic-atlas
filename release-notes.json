@@ -1,5 +1,13 @@
 [
   {
+    "version": "1.6.127",
+    "date": "2026-08-02",
+    "title": "Run test works again after a reload",
+    "notes": [
+      "If you reloaded the page while a test was running, Run test stopped doing anything at all. It now resets to ready, so you can always run the test again."
+    ]
+  },
+  {
     "version": "1.6.126",
     "date": "2026-08-02",
     "title": "Version 1.6.126",

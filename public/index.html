@@ -3822,6 +3822,30 @@ class Component extends DCLogic {
     // session ("session not found"). Applies to every restored phase, not just building.
     const overrides = Object.assign({ view: 'build', thinking: false, inputValue: "", threadId: null, mentionOpen: false, mentionQuery: "", mentionAt: -1, connectionsOpen: false, accountOpen: false, profileOpen: false, newStateExiting: false }, extra || {});
     if (slice.inputMode === 'locked') overrides.inputMode = 'chat';
+    // ── A TEST DOES NOT SURVIVE A RELOAD, AND MUST NOT CLAIM TO ──────────────
+    //
+    // `testState` is persisted, and `runTest` opens with
+    // `if (S.testState === "running") return;`. So a page reloaded while a test was in
+    // flight restored as "running" FOREVER: the panel sat on "Testing…" with no elapsed
+    // counter, and Run test became a permanent no-op — no request, no error, no way
+    // back except starting a new workflow. Witnessed 2026-08-02 while chasing a hung
+    // run; it is very likely the shape behind *"the test suite ... now it seems
+    // completely unfunctional"*, because once you reload out of one hang every later
+    // press does nothing.
+    //
+    // The run lived in a promise chain in a page that is gone — exactly like `threadId`
+    // above, which is nulled for the same reason. Anything mid-flight is reset to idle
+    // so the button works again; a FINISHED verdict (passed / failed / unverified) is
+    // kept, because that is evidence about the workflow and it survives a reload fine.
+    if (slice.testState === 'running' || slice.testState === 'paused') {
+      overrides.testState = 'idle';
+      overrides.runProgress = 0;
+      overrides.runUnrunnable = [];
+      overrides.pausedAsk = null;
+      overrides.pausedRunId = null;
+      overrides.pausedQueue = [];
+      overrides.pendingEvidence = [];
+    }
     // THE BUILD UI IS ATTACHED TO THE WORKFLOW (operator 2026-07-17). A reload must NOT
     // lose the graph the user was approving. The converger session is gone, but the graph
     // is fully derivable from the persisted spec — so if a slice was mid-build/awaiting

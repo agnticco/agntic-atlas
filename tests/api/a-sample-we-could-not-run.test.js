@@ -205,3 +205,59 @@ describe('a run that never answers is given up on', () => {
       'a resume must not be retried');
   });
 });
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// A TEST DOES NOT SURVIVE A RELOAD, AND MUST NOT CLAIM TO.
+//
+// `testState` is persisted in the build slice, and `runTest` opens with
+// `if (S.testState === "running") return;`. So a page reloaded while a test was in
+// flight restored as "running" FOREVER: the panel sat on "Testing…" with no elapsed
+// counter, and Run test became a permanent no-op — no request, no error, no way back
+// except starting a new workflow. Witnessed 2026-08-02 while chasing a hung run, and
+// very likely the shape behind "the test suite ... now it seems completely
+// unfunctional": once you reload out of one hang, every later press does nothing.
+//
+// The run lived in a promise chain in a page that no longer exists — the same reason
+// `threadId` is nulled on restore.
+describe('a reloaded page can always run its test again', () => {
+  const src = stripComments(methodSrc('_applyBuildSlice'));
+
+  /** The real restore, executed over a slice. */
+  function restore(slice) {
+    const fn = new Function('slice', 'extra', bodyOf(src));
+    const captured = {};
+    const ctx = {
+      state: {},
+      setState: (s) => Object.assign(captured, typeof s === 'function' ? s(ctx.state) : s),
+      _liveNodesFromSpec: () => [],
+      _pickUpPendingBuild: () => {},
+      _saveBuild: () => {},
+      _clearBuild: () => {},
+      _buildKeyWf: () => 'k',
+      _rememberBuild: () => {},
+    };
+    try { fn.call(ctx, slice, undefined); } catch (e) { captured._threw = String(e); }
+    return captured;
+  }
+
+  test('a test caught mid-flight comes back runnable, not stuck on "running"', () => {
+    const s = restore({ phase: 'proposed', testState: 'running', spec: { nodes: [] }, msgs: [] });
+    assert.notEqual(s.testState, 'running',
+      '`runTest` refuses to start while state says running — this is the permanent no-op');
+    assert.equal(s.testState, 'idle');
+  });
+
+  test('a test left WAITING on a person is also reset', () => {
+    const s = restore({ phase: 'proposed', testState: 'paused', spec: { nodes: [] }, msgs: [] });
+    assert.equal(s.testState, 'idle', 'the paused run id is dead too — nothing can resume it');
+    assert.equal(s.pausedRunId, null);
+  });
+
+  test('but a FINISHED verdict survives — that is evidence, not a live run', () => {
+    for (const verdict of ['passed', 'failed', 'unverified']) {
+      const s = restore({ phase: 'proposed', testState: verdict, spec: { nodes: [] }, msgs: [] });
+      assert.notEqual(s.testState, 'idle',
+        `${verdict} is a result about the workflow and must survive a reload`);
+    }
+  });
+});
