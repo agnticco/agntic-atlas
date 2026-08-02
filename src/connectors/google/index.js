@@ -610,7 +610,23 @@ export async function docsCreate(token, { title, content }) {
     throw new Error(`docs_create: Drive upload failed: ${err?.error?.message ?? `HTTP ${res.status}`}`);
   }
   const file = await res.json();
-  return { documentId: file.id, link: `https://docs.google.com/document/d/${file.id}` };
+  // RETURN THE TITLE THE DOCUMENT WAS ACTUALLY GIVEN. `docs_create` declares
+  // `locatorKeys: ['title']` — correctly, since a Doc IS the destination and its
+  // name is where the write landed (same bargain as `sheets_create`, which has
+  // always returned its `title`). But this returned only the id and the link, so
+  // `normalizeDelivery` found nothing for that key in the RUN's own output and
+  // fell through to the node's raw CONFIG — an uninterpolated `{{…}}` reference.
+  //
+  // WITNESSED 2026-08-01 on an AI-briefing build: the Doc was created and the
+  // email sent, and the panel said *"nothing reached "AI Automation Briefing" in
+  // gdocs — this run delivered to {{generate_title.output}}"*. All four examples
+  // failed, so a workflow that did exactly what was asked could never go live —
+  // and the customer was shown a template reference as the place their document
+  // went. The run's own answer comes FIRST in `normalizeDelivery`'s precedence
+  // precisely so a real run can correct a declaration; it had nothing to say.
+  //
+  // `file.name` is what Drive stored; fall back to what we asked for.
+  return { documentId: file.id, title: file.name ?? title ?? null, link: `https://docs.google.com/document/d/${file.id}` };
 }
 
 /** tasks_list. */

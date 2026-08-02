@@ -41,7 +41,15 @@ describe('publishing goes straight to the dashboard', () => {
   const src = (() => {
     const i = HTML.indexOf('approveDraft() {');
     assert.ok(i > 0, '`approveDraft` is gone — re-point this test');
-    return code(HTML.slice(i, i + 3000));
+    // ANCHORED TO THE METHODS, NOT TO A BYTE COUNT. This used to slice a fixed 3000
+    // characters, so it went red the moment `_saveWorkflow` grew a comment — failing
+    // over FORMATTING rather than behaviour. (2026-08-01: exactly that happened, and
+    // it is the third fixed window in this tree to do it.) `approveDraft` only
+    // delegates; the publish logic is all in `_saveWorkflow`, so span both and stop
+    // where that method does. Every assertion below is unchanged.
+    const end = HTML.indexOf('// ── panels', i);
+    assert.ok(end > i, "the marker closing `_saveWorkflow` moved — re-point this test");
+    return code(HTML.slice(i, end));
   })();
 
   test('it opens the console for the workflow it just published', () => {

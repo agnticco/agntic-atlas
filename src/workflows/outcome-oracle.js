@@ -1531,6 +1531,20 @@ export function checkAssertionAtRuntime(assertion, deliveries = []) {
       // undecidable; omitting it HERE is what reported a successful Airtable write
       // as "nothing reached Table 1 — this run delivered to tblbQ0PmkA2o1P17Q".
       if (isOpaqueProviderId(c)) return true;
+      // DO NOT ADD `if (isTemplate(c)) return true;` HERE. It is the obvious reading of
+      // the witnessed 2026-08-01 failure (*"nothing reached "AI Automation Briefing" in
+      // gdocs — this run delivered to {{generate_title.output}}"*) and it is WRONG: the
+      // asymmetry with the assertion-side template check a few lines above is deliberate.
+      // A template in the ASSERTION is undecidable and excused; a template in the
+      // DELIVERY's own locator, once resolved, still has to name the right destination,
+      // so excusing it lets "right connector, wrong document" pass. Tried, and caught by
+      // `both-halves-agree-on-the-connector.test.js` → "it did not become a fail-open".
+      // Twice now, by two different people — hence this note rather than a third attempt.
+      //
+      // The real defect was upstream and is fixed there: `docsCreate` returned only an id
+      // and a link, so the RUN had no title to report and `normalizeDelivery` fell back to
+      // the node's raw config. It now returns the title it actually wrote, like
+      // `sheetsCreate` always has, and the run's own answer takes precedence.
       const got = normLocator(c);
       return got && (got === wantLocator || got.includes(wantLocator) || wantLocator.includes(got));
     });

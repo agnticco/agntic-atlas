@@ -2573,6 +2573,101 @@ fixed on the spot. Fold the relevant ones into whatever increment next touches t
   red→green. The renderers are EXTRACTED FROM THE PAGE AND EXECUTED, never copied. The
   page was served on :8899 and loaded in a browser with a clean console before deploying,
   per the rule written after v1.6.65.
+- **A WORKFLOW THAT WENT LIVE WENT ON SAYING IT WAS A DRAFT — FIXED (2026-08-01).**
+  Witnessed driving prod end to end: a workflow was built, tested ("Contract kept"),
+  published — the server returned it as **`status: "active"`** — and the pane still
+  read *"DRAFT · REVIEW"*, *"Ready for your approval"*, *"Approving turns this on…
+  this pane becomes your live dashboard"*, with **Approve & go live** still on it. It
+  survived a full page reload AND reopening the workflow from the sidebar. **The user
+  has no way to tell their automation is live, and the obvious move is to press
+  Approve again.** This is the usual failure inverted — it looks like FAILURE over a
+  success — and it is squarely on the "having those automations live" path: the
+  workspace held **12 workflows, 11 of them drafts**, and while nothing proves they
+  died of this, "publishing never looks like it worked" is a plausible reason to stop.
+  **Two causes, both required.** `modeDraft` is `phase === "draft"`, the publish
+  SUCCESS path never cleared `phase` (only its two FAILURE paths ever set it), and the
+  slice **persists** `phase` — so a reload restored the draft pane. And `openConsole`
+  routes a workflow whose sidebar status is still `draft` back into the **builder**,
+  while `_loadWorkflows()` was fire-and-forget — so it was the pre-publish list when we
+  arrived, and we bounced straight back to the pane just approved.
+  **THE OBVIOUS FIX IS WRONG AND A TEST CAUGHT IT.** Setting `phase: "published"`
+  revives values the rest of the file still expects (`_persistable`, `modeBuild`,
+  `inputEnabled`, and the restore branch that opens a published workflow on its
+  dashboard — **nothing had SET it since 2026-07-29, so all of those were dead code**).
+  But that value was deleted for the mirror-image defect: it was persisted, so the live
+  card came back on every load — *"the last screen before go live keeps popping up"* —
+  and `go-live-lands-on-dashboard.test.js` guards its absence. **Both `"draft"` and
+  `"published"` are wrong: the build is simply OVER.** It now lands in `"chat"`, which
+  is not persistable once the console is open, so the existing `_saveBuild` path drops
+  the restore slice by itself and no reload can return to the draft pane; and
+  `openConsole` is chained off the refreshed list (which now returns its promise),
+  failing open to the console if that refresh fails.
+  Pinned by `tests/api/a-live-workflow-does-not-look-like-a-draft.test.js` (16), seven
+  mutations red→green. **Two existing tests were RE-POINTED, not weakened:**
+  `go-live-lands-on-dashboard.test.js` sliced a **fixed 3000-character window** from
+  `approveDraft` and went red purely because a comment grew it — the third fixed window
+  in this tree to fail over formatting rather than behaviour, now anchored to the
+  methods; and `rejected-channel-naming.test.js`'s extract-and-execute harness needed
+  `_plainPreview`/`_refPhrase` added to its manual method list — **the sixth time that
+  family has needed one.**
+
+- **A DOCUMENT WHOSE TITLE IS BUILT AT RUN TIME COULD NEVER KEEP ITS OWN PROMISE —
+  FIXED (2026-08-01).** Same session, and the more expensive half. An AI-briefing
+  workflow (search the web → synthesize → save a Google Doc *titled with that day's
+  date* → email the link) **did all of it** — the Doc was created, the email sent — and
+  reported ***"Contract not met · 4 of 4 promises fell short"***, so it could never go
+  live. The sentence shown to the customer was:
+  > nothing reached "AI Automation Briefing" in **gdocs** — this run delivered to
+  > **`{{generate_title.output}}`** (Google Docs)
+  **The cause is one line, and it is NOT title-as-destination** — I filed it as the
+  fifth instance of that family and was wrong. `docs_create` declaring
+  `locatorKeys: ['title']` is CORRECT: a Doc *is* the destination and its name is where
+  the write landed, exactly the bargain `sheets_create` documents for itself.
+  `normalizeDelivery` reads those keys off the **run's own output first**, precisely so
+  a real run can correct a wrong declaration — but `docsCreate` returned only
+  `{documentId, link}`. Nothing to read. So it fell through to the node's **raw config**
+  and produced the uninterpolated `{{…}}`. `sheetsCreate` has always returned its
+  `title`; `docsCreate` simply never did, and now does (`file.name`, falling back to the
+  title asked for — an absent echo must not put `undefined` in a receipt, which reads as
+  "went nowhere").
+  **THE FIX I NEARLY SHIPPED WAS A FAIL-OPEN, AND THE GUARD CAUGHT IT — RECORDED
+  BECAUSE IT IS THE SECOND TIME.** The obvious reading is to excuse a `{{template}}` on
+  the DELIVERY side of `checkAssertionAtRuntime`, the way one on the ASSERTION side is
+  excused. That asymmetry is **deliberate**: a template in the assertion is undecidable,
+  but a delivery's own locator still has to name the right destination once resolved, so
+  excusing it lets *"right connector, wrong document"* pass.
+  `both-halves-agree-on-the-connector.test.js` → *"it did not become a fail-open"* turned
+  red, and its own comment says the author had already made the same mistake. **Do not
+  attempt it a third time** — there is now a comment at the call site saying so.
+  Pinned by `tests/workflows/a-document-reports-where-it-went.test.js` (9), two mutations
+  red→green (the handler reporting no title → 3 red; reinstating the fail-open → 3 red
+  across both files).
+
+- **THE TEST PANEL LOOKED HUNG FOR FOUR AND A HALF MINUTES — FIXED (2026-08-01).** Each
+  example is its own **sequential** `/workflows/run` that can take a minute or more. The
+  checks list read *"4 SAMPLES, NOT YET RUN"* with four motionless ○ for the **entire**
+  run — measured at 4½ minutes, by which point **three of the four had already completed
+  and returned** (their requests are in the page's own resource timings). The progress
+  existed and nothing showed it. Same *"it looks stalled"* class Charles named on
+  2026-08-01, fixed then for the converger's verify node and never for this panel. Each
+  example now advances a counter as it **resolves**, the header counts instead of
+  claiming nothing has run, and the row in flight says so. **A finished sample gets a
+  filled dot, deliberately NOT a tick** — it has RUN; whether its promise held is scored
+  only once the whole set is in, and a ✓ there would be the certify-before-checking shape
+  this product exists to prevent (that is mutation M9).
+
+- **TWO CODE NAMES ON THE LAST SCREENS BEFORE A SEND — FIXED (2026-08-01).** The line
+  directly above **Run test** read *"each destination (**`docs_create`**,
+  firstrun@example.test) is confirmed reachable"* — a capability id shown to a customer —
+  while the step card one screen away said *"a new Google Doc"* about **the same node**.
+  Two answers to one question, and one of them wrong: `_runTestDisclosure` carried its own
+  fallback through `_deliverySentence`, which has no mapping for `docs_create`, so the id
+  survived every strip. It now reuses `_destinationOf`, the rule that already answers this
+  for the approval card. And that card's own **"Subject / title"** row printed
+  `{{generate_title.output}}` verbatim — the 2026-07-29 pass put `_plainPreview` on the
+  `Asks` and `They also see` rows and missed this one and the connector card's `Heading`;
+  both now go through it, fixed together so they cannot drift.
+
 - ~~**A new user's first screen is a CHANGELOG**~~ *(open item, closed by the entry above.)* The What's-New modal
   fires once per user on the login after a release; a user whose FIRST login follows one
   gets five engineering changes — *"Give Atlas a test case without it rebuilding your

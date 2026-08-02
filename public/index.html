@@ -4371,9 +4371,12 @@ class Component extends DCLogic {
   }
 
   // ── console (P5) ─────────────────────────────────────────────────────────
+  // Returns the in-flight promise so a caller that must act on the FRESH list can
+  // wait for it (publish does — see `_saveWorkflow`). Callers that don't care can
+  // keep ignoring it exactly as before.
   _loadWorkflows() {
     const self = this;
-    fetch("/api/console/workflows?t=" + Date.now(), { headers: { "Authorization": "Bearer " + this.state.authToken } })
+    return fetch("/api/console/workflows?t=" + Date.now(), { headers: { "Authorization": "Bearer " + this.state.authToken } })
       .then(r => r.ok ? r.json() : null)
       .then(function(d) {
         if (!d || !d.workflows) return;
@@ -6152,13 +6155,23 @@ class Component extends DCLogic {
         // is about to be sent for real. `_deliverySentence` already owns this
         // mapping for the contract chips; reuse it rather than keeping a second,
         // divergent copy.
-        const loc = c.target || c.to || c.tableId || c.spreadsheetId || '';
-        // A destination in a LIST wants a noun ("your Atlas inbox"), not the
-        // sentence the contract chips use ("Saves it to your Atlas inbox") — the
-        // sentence reads as a clause spliced into the middle of another one.
-        const where = loc || this._deliverySentence({ target: String(ch) })
-          .replace(/^(Saves it to|Posts it to|Sends it to|Emails it to|Adds a record to|Adds a row to|Creates a[n]? [a-z ]+ in|Creates a[n]? )/i, '')
-          .trim() || String(ch);
+        // ONE RULE FOR "WHERE DOES THIS GO", NOT A SECOND COPY HERE. `_destinationOf`
+        // already answers exactly this for the step-approval card — "a new Google Doc",
+        // "your Atlas inbox", "the Sheet1 tab of the Agntic CRM Google Sheet" — and it
+        // returns a NOUN, which is what a list wants (the contract chips' sentence,
+        // "Saves it to your Atlas inbox", reads as a clause spliced into another one).
+        //
+        // The old fallback went through `_deliverySentence` with the raw capability id,
+        // which has no mapping for `docs_create`, so the id survived every strip and was
+        // printed to the customer: *"each destination (docs_create, firstrun@example.test)
+        // is confirmed reachable"* — a code name in the last sentence a person reads
+        // before pressing Run test. Witnessed 2026-08-01. The step card one screen away
+        // said "a new Google Doc" for the very same node, which is how two answers to one
+        // question always end up: one of them wrong.
+        //
+        // A connector-action keeps its capability in `action` while `_destinationOf`
+        // reads `channel`, so hand it the id we already resolved.
+        const where = this._destinationOf(Object.assign({}, c, { channel: ch }));
         if (where && dests.indexOf(String(where)) < 0) dests.push(String(where));
       }
     });
@@ -6300,8 +6313,21 @@ class Component extends DCLogic {
     // Run every example in order, then score the FULL accumulated evidence (through the
     // animation). Go live stays locked until "passed" (`reviewDraft`), so an unexercised
     // promise still never certifies.
+    // SAY HOW FAR THROUGH WE ARE. Each example is its own sequential /workflows/run and
+    // can take a minute or more, so the checks list sat reading "not yet run" with four
+    // motionless ○ for the ENTIRE run — witnessed 2026-08-01 at 4½ minutes, by which
+    // point three of the four had already completed and returned. The progress existed
+    // and nothing showed it. A still screen is indistinguishable from a hung one, which
+    // is a failure this product has shipped once already.
+    self.setState({ runProgress: 0, runProgressTotal: runs.length });
     let seq = Promise.resolve();
-    runs.forEach(function(runSpec) { seq = seq.then(function() { return driveExample(runSpec); }); });
+    runs.forEach(function(runSpec, i) {
+      seq = seq
+        .then(function() { return driveExample(runSpec); })
+        // Counts an example as RUN, not as passed — the verdict is scored only once the
+        // whole set is in, so this must never imply a result.
+        .then(function() { self.setState({ runProgress: i + 1 }); });
+    });
     seq.then(function() {
       const d = Object.assign({}, lastData, { paused: false, completed: true, outcomeResults: outcomeResults });
       const r = { ok: true, data: d };
@@ -6589,10 +6615,43 @@ class Component extends DCLogic {
         // the dashboard, and which said "running automatically" from client state
         // rather than from the server. The dashboard says the same thing and can be
         // acted on: Run now, Pause, the run history.
-        self.setState({ thinking: false, workflowId: wfId, isDraftBuild: false });
-        self._loadWorkflows();
+        // PUBLISHING ENDS THE BUILD — SAY SO, AND LET THE SIDEBAR CATCH UP FIRST.
+        //
+        // `phase` stayed "draft" here (only the two FAILURE paths below ever set it), so
+        // a workflow that was already `active` on the server kept rendering the
+        // draft-review pane: "Ready for your approval", "Approve & go live", "this pane
+        // becomes your live dashboard". Witnessed 2026-08-01 immediately after
+        // publishing, again after a full reload, and again after reopening it from the
+        // sidebar. The user has no way to tell their automation is live, and the obvious
+        // move is to press Approve a second time.
+        //
+        // Two things kept it there and BOTH had to go:
+        //   · `modeDraft` is `phase === "draft"`, and the slice PERSISTS `phase` — so a
+        //     reload restored straight back into the draft pane.
+        //   · `openConsole` sends a workflow whose sidebar status is still 'draft' back
+        //     into the BUILDER, and `_loadWorkflows()` was fire-and-forget — so it was
+        //     the PRE-publish list when we got there, and we bounced right back.
+        //
+        // DO NOT "FIX" THIS BY SETTING phase: "published". That value was deleted on
+        // 2026-07-29 for the mirror-image defect — it was persisted, so the live card
+        // came back on every app load ("the last screen before go live keeps popping
+        // up") — and `go-live-lands-on-dashboard.test.js` guards its absence. Both
+        // "draft" and "published" are wrong: there is no build in progress any more.
+        // "chat" is that state (it is the initial phase), and crucially it is NOT
+        // persistable once the console is open, so the existing `_saveBuild` path drops
+        // the restore slice by itself and no reload can land back on the draft pane.
         self._loadUsage();
-        self.openConsole(wfId);
+        // Both together, after the list refresh: openConsole then sees `active`, not
+        // `draft`, and the phase change lands in the same render as the view change, so
+        // there is no frame showing a build pane for a workflow that is already live.
+        // A failed refresh must never strand them on the pane they just approved — open
+        // the console regardless.
+        Promise.resolve(self._loadWorkflows())
+          .catch(function() {})
+          .then(function() {
+            self.setState({ thinking: false, phase: "chat", workflowId: wfId, isDraftBuild: false });
+            self.openConsole(wfId);
+          });
       })
       .catch(function(e) {
         self.setState({ thinking: false, phase: "draft" });
@@ -8423,7 +8482,12 @@ class Component extends DCLogic {
     } else if (ty === 'deliver') {
       if (!what) what = 'Sends the result out of Atlas. This is a real send when the workflow is live.';
       this._fact(facts, 'Sends to', this._destinationOf(cfg));
-      this._fact(facts, 'Subject / title', cfg.title);
+      // DESCRIBE A REFERENCE, DON'T PRINT IT. The 2026-07-29 pass put `_plainPreview`
+      // on the `Asks` and `They also see` rows and missed this one, so the card that
+      // exists so a non-technical person can catch a mistake BY READING showed
+      // "Subject / title: {{generate_title.output}}" — witnessed 2026-08-01, two rows
+      // below a correctly-worded one.
+      this._fact(facts, 'Subject / title', this._plainPreview(cfg.title, nodes));
     } else if (ty === 'connector-action' || ty === 'connector_action') {
       const a = this._connectorOf(cfg.action);
       if (!what) what = 'Uses one of your connected apps to do a piece of work.';
@@ -8431,7 +8495,7 @@ class Component extends DCLogic {
       this._fact(facts, 'Does', this._plainId(cfg.action));
       ['target', 'to', 'channel', 'query', 'url', 'baseId', 'tableId', 'folder', 'path', 'spreadsheetId', 'calendarId']
         .forEach(k => { const v = cfg[k]; if (v != null && typeof v !== 'object') this._fact(facts, this._plainId(k), k === 'query' ? this._plainQuery(v) : v); });
-      this._fact(facts, 'Heading', cfg.title);
+      this._fact(facts, 'Heading', this._plainPreview(cfg.title, nodes));
     } else if (ty === 'branch') {
       if (!what) what = 'Sends the work down exactly one of the paths below. Nothing else runs.';
       const srcId = this._onRefId(cfg.on);
@@ -9647,17 +9711,34 @@ class Component extends DCLogic {
       // section empty. (Found in live redesign review.)
       const ex = (S.spec && S.spec.outcome && Array.isArray(S.spec.outcome.examples)) ? S.spec.outcome.examples
                : (S.outcome && Array.isArray(S.outcome.examples) ? S.outcome.examples : []);
+      // WHILE THE RUN IS IN FLIGHT, SHOW WHICH SAMPLE IS ON. See `runTest` for why.
+      // A finished sample gets a FILLED mark, deliberately not a tick: it has RUN,
+      // and whether its promise held is not decided until the whole set is scored.
+      // Claiming a verdict here would be the "certifying before checking" shape.
+      const running = (TS === "running");
+      const ranSoFar = running ? Math.max(0, Math.min(ex.length, Number(S.runProgress) || 0)) : 0;
       rows = ex.map((e, i) => {
         const g = e.given || {};
         const about = g.subject || g.body || (typeof e.given === "string" ? e.given : "") || "a real example";
-        return rowFrom(i, "○", DIM,
+        const finished = running && i < ranSoFar;
+        const inFlight = running && i === ranSoFar;
+        return rowFrom(i,
+          finished ? "•" : "○",
+          finished ? SLATE : DIM,
           e.label || ("Sample " + (i + 1)),
-          "We'll run this through the real engine — " + this._clip(String(about), 120) + " — and check the result matches the deal above.");
+          finished
+            ? "Ran against the real engine. Its verdict is scored once every sample has run."
+            : inFlight
+              ? ("Running against the real engine now — " + this._clip(String(about), 120) + ".")
+              : "We'll run this through the real engine — " + this._clip(String(about), 120) + " — and check the result matches the deal above.");
       });
       if (!rows.length) rows = [ rowFrom(0, "○", DIM, "Your samples will appear here", "Add or accept sample messages and we'll test the workflow against them.") ];
       state = "proposed"; accent = SLATE; verdictWord = "proposed.";
       verdictNote = "The deal below is drafted from your conversation. Nothing is promised yet — run the test to see if the workflow can keep it.";
-      evidenceLabel = "The checks · " + rows.length + " sample" + (rows.length === 1 ? "" : "s") + ", not yet run";
+      // "not yet run" is only true BEFORE the run. Once it starts, count.
+      evidenceLabel = (running && ex.length)
+        ? ("The checks · " + ranSoFar + " of " + ex.length + " sample" + (ex.length === 1 ? "" : "s") + " run")
+        : ("The checks · " + rows.length + " sample" + (rows.length === 1 ? "" : "s") + ", not yet run");
       evidenceNote = "Each check runs against a real example. Tap a row to see what will be verified.";
       secondaryCta = "Keep building";
       cta = "Run the test";

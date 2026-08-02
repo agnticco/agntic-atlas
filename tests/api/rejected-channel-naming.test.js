@@ -97,6 +97,13 @@ const METHODS = [
   // (2026-07-27). Extracting it without them yields a half-built component that throws
   // — which is the point of extracting the REAL sources rather than copying them.
   '_triggerCaption', '_triggerIsMail',
+  // The delivery card's "Subject / title" and the connector card's "Heading" render
+  // their value through `_plainPreview` (2026-08-01) so a `{{step.output}}` reference
+  // is DESCRIBED rather than printed at the customer — it was showing raw. Same
+  // reason as the two notes above: extracting a caller without its helpers yields a
+  // half-built component that throws, which is exactly what executing the REAL
+  // sources is for. `_plainPreview` delegates to `_refPhrase`.
+  '_plainPreview', '_refPhrase',
 ];
 
 function component() {

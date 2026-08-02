@@ -1,5 +1,16 @@
 [
   {
+    "version": "1.6.119",
+    "date": "2026-08-01",
+    "title": "Going live, and a test you can watch",
+    "notes": [
+      "Publishing a workflow now takes you straight to its dashboard — the approval screen no longer stays up after you've approved it.",
+      "A workflow that saves into a Google Doc titled with the date can now pass its own test instead of being told it delivered nowhere.",
+      "While a test runs, the panel shows how many of your examples have run so far.",
+      "The screens before Run test name your destination in plain words instead of showing an internal code name."
+    ]
+  },
+  {
     "version": "1.6.118",
     "date": "2026-08-01",
     "title": "The build tells you what it's doing while it tests",

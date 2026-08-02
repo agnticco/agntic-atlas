@@ -284,6 +284,15 @@ said the opposite. Spam is the path whose whole promise is to do nothing.
 Locked until the test actually passed. A published workflow appears in the sidebar
 and runs on its trigger.
 
+**Approving must LEAVE the draft screen** (2026-08-01). Pressing "Approve & go live"
+lands you on that workflow's **dashboard**, and the workflow shows live in the
+sidebar. **If the pane still reads "DRAFT · REVIEW" / "Ready for your approval" with
+an "Approve & go live" button after you approved, that is a finding** — check the
+workflow's real status before believing the screen (it was `active` server-side while
+the pane still offered to publish it, and that survived a reload and a reopen). The
+inverse of the usual defect: it looks like FAILURE over a success, and the natural
+response is to press Approve a second time.
+
 **Publishing FAILS CLOSED when the trigger cannot be armed** (2026-07-24). Some
 triggers need Atlas to set something up on the other service before they can fire —
 an Airtable "when a record changes" needs a watch registered with Airtable. If that
