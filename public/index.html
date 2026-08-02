@@ -6346,11 +6346,38 @@ class Component extends DCLogic {
     // point three of the four had already completed and returned. The progress existed
     // and nothing showed it. A still screen is indistinguishable from a hung one, which
     // is a failure this product has shipped once already.
-    self.setState({ runProgress: 0, runProgressTotal: runs.length });
-    let seq = Promise.resolve();
+    self.setState({ runProgress: 0, runProgressTotal: runs.length, runUnrunnable: [] });
+    // ── A SAMPLE WE COULD NOT RUN MUST NOT DESTROY THE ONES WE DID ───────────
+    //
+    // Each example is its own sequential POST, and a web-search workflow holds each
+    // connection for a minute or more. Witnessed on prod 2026-08-02: of three samples
+    // the first two completed (200, logged at the origin) and the third died after 20s
+    // having transferred ZERO bytes and never reaching the server at all — a dropped
+    // connection, not a workflow defect.
+    //
+    // One rejection anywhere in this chain used to jump straight to the outer `.catch`,
+    // which set `testState:"failed"`, DISCARDED both completed verdicts, and PATCHed the
+    // workflow to `error`. The panel then read:
+    //
+    //   Contract not met. We ran 0 real examples … 0 of 0 promises fell short
+    //   One step failed — review the break below.      (…and no break was rendered)
+    //
+    // A contract failure declared over ZERO checks. This product refuses to CERTIFY
+    // without evidence; it must equally refuse to CONDEMN without evidence — and it must
+    // not let someone's network mark a workflow broken.
+    //
+    // The scoring below already gets this right on its own: with no `kept` and nothing
+    // `broken` it returns `unverified` ("nothing broke, but nothing is proved"). It was
+    // simply never reached. So a sample that cannot run is recorded and skipped — the
+    // third verdict this codebase already has a word for — and the set is always scored.
+    const unrunnable = [];
     runs.forEach(function(runSpec, i) {
       seq = seq
         .then(function() { return driveExample(runSpec); })
+        .catch(function(e) {
+          unrunnable.push({ index: i, reason: String((e && e.message) || e) });
+          self.setState({ runUnrunnable: unrunnable.slice() });
+        })
         // Counts an example as RUN, not as passed — the verdict is scored only once the
         // whole set is in, so this must never imply a result.
         .then(function() { self.setState({ runProgress: i + 1 }); });
@@ -6361,12 +6388,16 @@ class Component extends DCLogic {
       if (self._testInterval) { pendingResult = { r: r, d: d }; }
       else { self._applyTestResult(r, d); }
     }).catch(function(e) {
+      // ONLY A FAULT IN THIS LOOP ITSELF REACHES HERE NOW — every per-sample failure is
+      // caught above and scored as "could not run". Reaching this means the harness
+      // broke, not the workflow, so it must not say the workflow is broken and must not
+      // mark it `error`: that is a claim about the customer's automation made on the
+      // strength of our own bug. `unverified` is the honest verdict — nothing was
+      // proved, and Go live stays locked either way because it requires "passed".
       if (self._testInterval) { clearInterval(self._testInterval); self._testInterval = null; }
-      self.setState({ testState: "failed", runStepIndex: 0, failIndex: 0, runError: String(e) });
-      if (self.state.workflowId) {
-        fetch('/api/builder/workflows/' + self.state.workflowId + '/status', { method: 'PATCH', headers: self._H(), body: JSON.stringify({ status: 'error' }) })
-          .then(function() { self._loadWorkflows(); }).catch(function() {});
-      }
+      self.setState({ testState: "unverified", runStepIndex: 0, failIndex: -1,
+                      runError: "", outcomeResults: [], laneCoverage: null,
+                      runUnrunnable: [{ index: -1, reason: String((e && e.message) || e) }] });
     });
   }
 
@@ -9729,6 +9760,17 @@ class Component extends DCLogic {
           : ("We ran " + total + " real example" + (total === 1 ? "" : "s") + " through your workflow" + (proved === total ? "" : " (" + proved + " of them exercised the deal)") + ". Every promise held — it's cleared to go live.");
       evidenceLabel = "The evidence · " + total + " real example" + (total === 1 ? "" : "s");
       evidenceNote = "Kept means what came back matched the deal above — checked automatically, shown here so you can see it yourself.";
+      // A SAMPLE WE COULD NOT RUN IS SAID OUT LOUD. It is neither kept nor broken, and
+      // leaving it silent would make a set of two look like a set of three — the
+      // "certifying the absence of evidence" shape, one step removed. It also tells the
+      // person the honest thing: this was our side, not their workflow.
+      const skipped = (S.runUnrunnable || []).length;
+      if (skipped) {
+        evidenceNote = skipped + (skipped === 1 ? " sample" : " samples")
+          + " couldn't be run just now — that's a fault on our side, not in your workflow. "
+          + "Nothing was concluded from " + (skipped === 1 ? "it" : "them") + "; run the test again to include "
+          + (skipped === 1 ? "it" : "them") + ". " + evidenceNote;
+      }
       secondaryCta = "Try again";
       cta = failed ? "Fix & re-test" : notVerified ? "Try a real example" : "Go live";
     } else {

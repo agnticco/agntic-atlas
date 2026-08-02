@@ -2742,6 +2742,52 @@ fixed on the spot. Fold the relevant ones into whatever increment next touches t
   actually reads), each fix correct and each insufficient, because each was verified one
   layer away from the thing a person looks at.
 
+- **TWO WALLS WEARING ONE FACE — "Contract not met" had two unrelated causes (2026-08-02,
+  Charles: "figure out why we keep hitting a contract not met wall").** Measured across
+  every stored workflow rather than the ones being watched: **of 58 promises on 41
+  workflows, 23 (40%) name a destination NO BUILT STEP MATCHES.**
+  **WALL A — the promise is written before the workflow exists.** `outcome` runs at
+  **step 0**, ahead of `process`, `examples`, `analyze`, `plan` and `generate`, so the
+  contract is invented from the opening sentence and `generate` then builds the steps
+  that actually decide where things go. Nothing reconciles them except
+  `retargetStaleAssertion`, which needs **a literal the person typed**. When the real
+  destination is COMPUTED AT RUN TIME there is no such literal, so no repair can fire and
+  the contract can never pass — **11 of the 23**. Witnessed three builds running: the
+  person asked for a Doc *"titled with that day's date"*, Atlas built exactly that, then
+  held itself to a document called *"Daily AI Briefing"* — a name they never said and it
+  never creates.
+  **The fix promises LESS, and only the invented part** (`generaliseComputedTarget`): the
+  KIND came from the person and stays, the specific name did not and goes. A
+  connector-only target is already first-class (the runtime check reads an empty locator
+  as "some delivery to this connector is enough"), so the promise stays checkable rather
+  than becoming unfalsifiable. **Four guards, because anything that promises less is one
+  step from a way to pass by promising nothing:** a destination the person typed is left
+  alone (then the promise is right and the WORKFLOW is wrong); one LITERAL candidate means
+  the two are comparable and merely differ, which is a real mismatch; no step of that kind
+  reaching that service leaves "no step does that" standing; and only the locator is
+  dropped — `kind`, `when` and the statement are untouched. Applied AFTER the retarget, so
+  moving a promise onto a destination the person named always wins. Pinned by
+  `tests/converger/a-promise-may-not-name-what-you-never-chose.test.js` (10 — most of it
+  the other direction), **five mutations red→green, every one a fail-open**.
+  **WALL B — one flaky sample destroyed the evidence of the others.** Each example is its
+  own sequential POST and a web-search workflow holds each for ~60s. Measured from the
+  browser's own resource timings: run 1 `56.8s/3597 bytes` ✓, run 2 `61.1s/3516 bytes` ✓,
+  run 3 `20.6s/**0 bytes**` ✗ — never reaching the server at all. A dropped connection,
+  not a workflow defect. One rejection anywhere in the chain jumped to the outer `.catch`,
+  which set `testState:"failed"`, **discarded both completed verdicts**, and PATCHed the
+  workflow to `error`. The panel read *"Contract not met. We ran **0 real examples** … **0
+  of 0 promises fell short**"* over *"review the break below"* **with no break rendered**.
+  A contract failure declared over ZERO checks, and a workflow marked broken because of
+  someone's network.
+  **The scoring was already right and was simply never reached** — `_applyTestResult`
+  returns `unverified` when nothing is kept and nothing is broken. So a sample that cannot
+  run is now recorded and skipped (the third verdict this file has argued for since
+  2026-07-29), the set is ALWAYS scored, the outer catch can no longer call the workflow
+  broken, and a skipped sample is **said out loud** — two of three presented as the whole
+  set is the "certifying the absence of evidence" shape one step removed. Pinned by
+  `tests/api/a-sample-we-could-not-run.test.js` (8), three mutations red→green.
+  **Both printed the identical screen, which is exactly why it read as one stubborn wall.**
+
 - ~~**A new user's first screen is a CHANGELOG**~~ *(open item, closed by the entry above.)* The What's-New modal
   fires once per user on the login after a release; a user whose FIRST login follows one
   gets five engineering changes — *"Give Atlas a test case without it rebuilding your

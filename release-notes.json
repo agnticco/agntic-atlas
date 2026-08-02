@@ -1,5 +1,14 @@
 [
   {
+    "version": "1.6.123",
+    "date": "2026-08-02",
+    "title": "Fewer false 'contract not met' walls",
+    "notes": [
+      "A promise no longer names a document or record whose name your workflow builds as it runs — it promises the service instead, which is what you actually asked for.",
+      "If one test sample can't be run, the others still count. A dropped connection no longer throws away everything the test proved, and no longer marks your workflow broken."
+    ]
+  },
+  {
     "version": "1.6.122",
     "date": "2026-08-01",
     "title": "Version 1.6.122",

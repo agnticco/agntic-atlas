@@ -238,6 +238,77 @@ export function retargetStaleAssertion(draft, gap, userSaid) {
   return { index, target: `${connector}:${locatorNow}`, from: target };
 }
 
+/** A destination the workflow BUILDS while it runs — no literal exists to compare. */
+const COMPUTED_LOCATOR = /\{\{[^}]+\}\}/;
+
+/**
+ * A PROMISE MAY NOT NAME SOMETHING THE PERSON NEVER CHOSE.
+ *
+ * The contract is written by the `outcome` node at STEP 0 — before `process`,
+ * `examples`, `analyze`, `plan` or `generate` — so it invents a destination out of the
+ * opening sentence, and `generate` then builds the steps that actually decide where
+ * things go. Nothing reconciles the two except `retargetStaleAssertion`, which needs a
+ * literal the person typed.
+ *
+ * When the real destination is COMPUTED AT RUN TIME there is no such literal, so no
+ * repair can ever fire and the contract can never pass. Measured across the 41 stored
+ * workflows on 2026-08-02: 23 of 58 promises (40%) named a destination no built step
+ * matches, and 11 of those were this — a step whose destination is `{{…}}`.
+ *
+ * Witnessed: the person asked for a briefing saved as a Doc *"titled with that day's
+ * date"*. Atlas built exactly that — and then held itself to a document called
+ * "Daily AI Briefing", a name they never said and it never creates. Three whole builds
+ * died on it.
+ *
+ * THE FIX IS TO PROMISE LESS, AND ONLY THE PART THAT WAS INVENTED. The KIND of promise
+ * came from the person ("a document is created in Google Docs") and is kept; the
+ * specific name did not and goes. A connector-only target is already first-class — the
+ * runtime check treats an empty locator as "some delivery to this connector is enough"
+ * — so this makes the promise true and still checkable, rather than unfalsifiable.
+ *
+ * FOUR THINGS MUST HOLD, and each is a way this could become a way to pass by promising
+ * nothing:
+ *   · the person did not type this destination — if they did, the promise is RIGHT and
+ *     the workflow is wrong (same guard, same reason, as `retargetStaleAssertion`);
+ *   · some step of this kind really does write to this connector — otherwise "no step
+ *     does that" is a REAL finding and must survive;
+ *   · every candidate destination is computed — one LITERAL means the two CAN be
+ *     compared and simply differ, which is a genuine mismatch, not something to paper
+ *     over;
+ *   · only the locator is dropped. `kind`, `when` and the connector are untouched, and
+ *     the user's `statement` is never edited.
+ */
+export function generaliseComputedTarget(draft, gap, userSaid) {
+  const assertions = Array.isArray(draft?.outcome?.assertions) ? draft.outcome.assertions : null;
+  if (!assertions) return null;
+  const target = String(gap?.target ?? '').trim();
+  const index = assertions.findIndex(a => a && a.target === target);
+  if (index < 0) return null;
+  const { connector, locator } = splitTarget(target);
+  if (!connector || !locator) return null;
+
+  // They named this place themselves — leave it alone and let the promise fail honestly.
+  if (userSaid instanceof Set) {
+    for (const said of userSaid) if (sameDestination(said, locator)) return null;
+  }
+
+  const want = canonicalConnector(connector);
+  const kind = assertions[index].kind;
+  const locs = [];
+  for (const n of (draft.nodes ?? [])) {
+    const eff = nodeEffect(n);
+    if (!eff || eff.kind !== kind) continue;
+    if (!eff.connectors.has(want) && !eff.connectors.has(connector)) continue;
+    for (const loc of eff.locators) locs.push(String(loc ?? '').trim());
+  }
+  // Nothing of this kind reaches this connector: "no step does that" is the finding.
+  if (!locs.length) return null;
+  // A literal destination means the two are comparable and differ — a real mismatch.
+  if (locs.some(l => l && !COMPUTED_LOCATOR.test(l))) return null;
+
+  return { index, target: connector, from: target };
+}
+
 /**
  * Is this message an ANSWER to "give me an example that takes that path"?
  *
@@ -289,6 +360,21 @@ export function autoRepairStructural(draft, gaps, opts = {}) {
         d = { ...d, outcome: { ...d.outcome, assertions: as } };
         applied.push({ gapId: g.id, code: g.code, op: 'set_assertion_target',
                        from: move.from, target: move.target, message: g.message ?? null });
+        continue;
+      }
+    }
+    // The promise names a specific destination the workflow BUILDS as it runs, so no
+    // literal can ever match it. Drop the invented name and keep the promise about the
+    // service. Deliberately AFTER the retarget above: if the person typed a destination,
+    // moving the promise onto it is the better answer and this must not pre-empt it.
+    // `userSaid` may be absent here — this repair does not need it, only respects it.
+    if (g?.code === 'UNSATISFIED_ASSERTION') {
+      const wide = generaliseComputedTarget(d, g, userSaid);
+      if (wide) {
+        const as = d.outcome.assertions.map((a, i) => (i === wide.index ? { ...a, target: wide.target } : a));
+        d = { ...d, outcome: { ...d.outcome, assertions: as } };
+        applied.push({ gapId: g.id, code: g.code, op: 'generalise_assertion_target',
+                       from: wide.from, target: wide.target, message: g.message ?? null });
         continue;
       }
     }
