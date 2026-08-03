@@ -75,7 +75,10 @@ describe('the prompt and the runnable set agree', () => {
   test('and the publish guard agrees with the runnable set', () => {
     // The two sources of truth this file exists to keep together.
     for (const t of RUNNABLE_TRIGGER_TYPES) {
-      const trig = t === 'event' ? { type: t, connector: 'slack' } : { type: t };
+      // An `event` trigger needs BOTH a connector and the event id — the
+      // dispatcher matches on the id, and a trigger without one publishes and
+      // never fires (witnessed 2026-08-03).
+      const trig = t === 'event' ? { type: t, connector: 'slack', event: 'slack_message' } : { type: t };
       assert.equal(isRunnableTrigger(trig), true, t);
     }
   });

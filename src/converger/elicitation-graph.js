@@ -990,6 +990,67 @@ export const DRAFT_DEFAULT = {
 // model may know something the browser does not (a workflow for a team in another
 // office) — it only fills the blank that would otherwise mean "wherever the server
 // happens to live".
+/**
+ * Give a connector-event trigger the shape its own DISPATCHER reads.
+ *
+ * WITNESSED 2026-08-03, on the first Slack-triggered workflow that ever went live.
+ * A real message arrived, verified, and matched nothing. The stored trigger was
+ *
+ *   { type:'event', connector:'slack', filter:'channel:#atlas-test-temp' }
+ *
+ * and `selectSlackFlows` (server.js) matches with
+ * `t.type==='event' && t.connector==='slack' && t.event===wantEvent`, then reads
+ * the channel from `t.filter?.channel`. So it failed TWICE over: no `event` id, so
+ * it was dropped on the first line; and `filter` a STRING where an object was
+ * expected, so even fixed it would have fired on every channel rather than the one
+ * the person named.
+ *
+ * THE `connector_event` DEFECT, ONE FIELD ALONG. CLAUDE.md records it: a trigger
+ * shape the converger emits but no consumer can honour publishes, shows as live,
+ * and never fires. The publish guard checked `type` and `connector` — both correct
+ * here — and never that the event id was present or the filter well formed.
+ *
+ * Applied at `mergeGeneratedSpec`, the one point every build passes through, for
+ * the same reason `stampScheduleTimezone` is: a prompt is a belief about model
+ * behaviour, and this is the mechanism that makes being wrong about it harmless.
+ *
+ * NEVER OVERRIDES what is already right — a declared `event` and an object filter
+ * are both left exactly as they are.
+ */
+export function normalizeConnectorTrigger(triggers) {
+  if (!Array.isArray(triggers)) return triggers;
+  return triggers.map((t) => {
+    if (!t || typeof t !== 'object') return t;
+    if (String(t.type ?? '').toLowerCase() !== 'event') return t;
+    if (String(t.connector ?? '').toLowerCase() !== 'slack') return t;
+
+    const out = { ...t };
+
+    // A filter written as an expression — `channel:#ops keywords:urgent` — becomes
+    // the object the dispatcher reads. A filter that is ALREADY an object is left
+    // untouched; an unparseable string is dropped rather than guessed at, because
+    // "no channel filter" means ANY channel and inventing one would silently narrow
+    // a workflow the person asked to be broad.
+    if (typeof out.filter === 'string') {
+      const parsed = {};
+      for (const m of out.filter.matchAll(/([a-z_]+):("[^"]+"|\S+)/gi)) {
+        parsed[m[1].toLowerCase()] = m[2].replace(/^"|"$/g, '');
+      }
+      out.filter = Object.keys(parsed).length ? parsed : undefined;
+      if (out.filter === undefined) delete out.filter;
+    }
+
+    // The event id every dispatcher matches on. A mention is its own event and
+    // reads differently in production, so it is honoured when named; anything else
+    // is an ordinary channel message, which is what "when someone posts" means.
+    if (!String(out.event ?? '').trim()) {
+      const said = `${t.event ?? ''} ${typeof t.filter === 'string' ? t.filter : ''} ${out.filter?.event ?? ''}`;
+      out.event = /mention/i.test(said) ? 'slack_mention' : 'slack_message';
+    }
+    return out;
+  });
+}
+
 export function stampScheduleTimezone(triggers, tz) {
   const zone = String(tz ?? '').trim();
   if (!zone || !Array.isArray(triggers)) return triggers;
@@ -1131,7 +1192,9 @@ export function mergeGeneratedSpec(draft, generated, opts = {}) {
     : genTriggers;
   // Fill a missing schedule zone AFTER the winner is picked, so it applies whichever
   // side won and no path can reach publish declaring nothing.
-  const triggers = stampScheduleTimezone(chosen, opts.userTimezone);
+  // Both stamps run AFTER the winner is picked, so they apply whichever side won
+  // and no path can reach publish declaring a shape nothing can read.
+  const triggers = normalizeConnectorTrigger(stampScheduleTimezone(chosen, opts.userTimezone));
 
   const merged = {
     ...base,

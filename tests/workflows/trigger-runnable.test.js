@@ -37,7 +37,14 @@ describe('isRunnableTrigger — scoped to the value, never to the producer', () 
     assert.ok(isRunnableTrigger({ type: 'schedule', cron: '0 9 * * *' }));
     assert.ok(isRunnableTrigger({ type: 'manual' }));
     assert.ok(isRunnableTrigger(REAL_AIRTABLE));
-    assert.ok(isRunnableTrigger({ type: 'event', connector: 'slack' }));
+    // RE-POINTED 2026-08-03. This asserted that naming the connector was enough —
+    // and that exact shape published, showed as live, and could never fire: a real
+    // Slack message arrived, verified, and matched nothing, because every
+    // dispatcher matches on the EVENT id (`t.event === wantEvent`). Naming the
+    // connector was necessary and never sufficient.
+    assert.ok(isRunnableTrigger({ type: 'event', connector: 'slack', event: 'slack_message' }));
+    assert.equal(isRunnableTrigger({ type: 'event', connector: 'slack' }), false,
+      'a connector event with no event id is the shape that silently never fires');
   });
 
   test('REJECTS the shape that actually shipped', () => {

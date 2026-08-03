@@ -1,5 +1,13 @@
 [
   {
+    "version": "1.6.136",
+    "date": "2026-08-02",
+    "title": "Slack-triggered workflows actually fire now",
+    "notes": [
+      "A workflow started by a Slack message could publish, show as live, and never run — the trigger Atlas saved didn't carry the piece of information the part that receives messages matches on, and its channel filter was saved in a form that would have made it fire on every channel. Both fixed, and a trigger that can't be matched is now refused at publish instead of going quiet."
+    ]
+  },
+  {
     "version": "1.6.135",
     "date": "2026-08-02",
     "title": "Fixed a false alarm on Slack-triggered workflows",

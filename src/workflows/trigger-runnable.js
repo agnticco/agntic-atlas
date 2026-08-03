@@ -69,7 +69,20 @@ export function isRunnableTrigger(t) {
   const type = typeof t.type === 'string' ? t.type.trim().toLowerCase() : '';
   if (!RUNNABLE_TRIGGER_TYPES.includes(type)) return false;
   if (type === REQUIRES_CONNECTOR) {
-    return typeof t.connector === 'string' && t.connector.trim() !== '';
+    if (typeof t.connector !== 'string' || t.connector.trim() === '') return false;
+    // ── AND IT MUST SAY WHICH EVENT ────────────────────────────────────────
+    //
+    // WITNESSED 2026-08-03: a Slack workflow published, showed as live, and could
+    // never fire. Its trigger named the connector — so it passed this check — but
+    // carried NO event id, and every dispatcher matches on one
+    // (`selectSlackFlows`: `t.event === wantEvent`). A real message arrived,
+    // verified, and matched nothing.
+    //
+    // The same defect as `connector_event`, one field along, and the entry above
+    // ends with the sentence this closes: *keep the runnable set in step with the
+    // consumers*. Naming the connector was necessary and was never sufficient —
+    // the dispatcher needs to know WHICH of that connector's events to match.
+    return typeof t.event === 'string' && t.event.trim() !== '';
   }
   return true;
 }
