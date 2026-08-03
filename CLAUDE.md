@@ -3638,8 +3638,13 @@ verifier, and the record says so plainly
 not happen. The closing commit carries **no `Gate: P12` trailer**, so
 `git log --grep "^Gate:"` does not list it — that absence is correct.
 
-**Next up is P13**, once the product's behaviour and appearance have been
-hardened (below).
+**P13 IS UNDER WAY, and two of its increments are done.** P13-0 (the groundwork)
+merged 2026-07-25. **P13-A landed 2026-08-03 and was watched working end to end:** a
+customer picks a service by name, approves on that service's own screen, and its tools
+become steps in a workflow — no account created, no app registered, no key pasted. Six
+services connect today (Notion, Linear, Sentry, Asana, Stripe, Figma), and a workflow
+built on Notion wrote a real page into the operator's own workspace. **The phase is not
+closed** — its checkpoint is progressive and correctly names P13-B as next.
 
 **What is being worked on right now: product hardening, driven by QA.**
 Since 2026-07-22 there is a dedicated QA role (the `qa-manager` agent + the
@@ -3994,8 +3999,10 @@ channel-less ask and cross-channel pooling all still fail).
     thread is full of the word "yes". Approvals go through a signed, single-use
     link.
 
-- [ ] **P13 — many more connectors.** *Planned, not started. **Rescoped 2026-07-24** — see
-      the box below; the shape of this phase changed.*
+- [~] **P13 — many more connectors.** *IN PROGRESS. P13-0 merged 2026-07-25; **P13-A
+      merged 2026-08-03 and is proven end to end against a real service** (see the
+      P13-A entries below). P13-B is next — the checkpoint says so itself. **Rescoped
+      2026-07-24** — see the box below; the shape of this phase changed.*
 
   Today each new service Atlas can talk to is hand-built, which is why there are
   only a handful. This phase makes Atlas able to connect to a service **that nobody
@@ -4118,10 +4125,127 @@ channel-less ask and cross-channel pooling all still fail).
   Pinned by `mcp-catalog-cimd.test.js` (21), `connecting-never-asks-for-a-key.test.js`
   (22) and `a-real-server-clears-the-same-bar.test.js` (11); **fourteen mutations
   hand-run red→green.**
-  **NOT proved, and do not claim it:** no workflow has yet been BUILT on a Notion step,
-  and no Notion tool has been executed in a run — connecting and cataloguing is what was
-  proved. Triggers are deliberately absent (nothing arms an MCP subscription), so every
-  P13 connector is step/delivery only.
+  *(The "not yet proved end to end" caveat that stood here was overtaken the same
+  evening — see the entry directly below. Triggers remain deliberately absent: nothing
+  arms an MCP subscription, so every P13 connector is step/delivery only.)*
+
+  **✅ A WORKFLOW BUILT ON A ONE-CLICK SERVICE NOW RUNS, AND IT WAS WATCHED DOING IT
+  (2026-08-03, v1.6.151→1.6.157).** A real page exists in the operator's own Notion —
+  *"AI Agents Briefing — August 3, 2026"*, five bullets of real AI-agent news — written
+  by a live workflow that fires every weekday at 8am. Described in one sentence,
+  interviewed, built on Notion's real tools, approved step by step, tested (three real
+  examples, "Contract kept"), published, run. **Notion was connected by pressing one
+  button: no account created, no app registered, no key pasted.**
+  **FOUR DEFECTS SAT BETWEEN "TESTED GREEN" AND "ACTUALLY WORKED", and every one of
+  them was a workflow that looked fine and was not.** They are the substance of this
+  entry.
+
+  **1 — A CONNECTED SERVICE WAS REPORTED MISSING, AND THE FIX TOOK FOUR DEPLOYS.**
+  Minutes after Notion connected, asked to build a workflow that saves to it, Atlas
+  said *"Notion isn't in your connected workspace yet"*, withdrew the Build it button,
+  and sent the customer to connect a service they had connected four minutes earlier.
+  **"What is this workspace connected to?" was written out in SIX places.** Two rounds
+  of fixing landed on surfaces nobody reads — `/capabilities` first (the interview does
+  not read it), then the builder session endpoint (the chat does not read it) — while
+  the operator watched the identical sentence appear again:
+  · `GET /capabilities` · `POST /api/builder/sessions` · the chat's `connectedSet`
+    (what withdraws the Build it button) · the edit-a-workflow set · the @-mention list
+    — all five now derive from `mcpConnectedFor` (`src/connectors/connected-services.js`).
+  · the trigger narrowing and `annotateChannelCatalog` deliberately do NOT: MCP
+    contributes no triggers, and annotate falls through for an unknown connector
+    leaving availability untouched (verified by reading its default arm).
+  **THIS IS R22 THROUGH A NEW DOOR.** P13-0 fixed exactly this shape for CREDENTIALS —
+  a capability missing from a hand-typed list gets none at run time even though the
+  customer IS connected — and nobody noticed the same sentence was written three more
+  times. **Connected-but-UNREADABLE is deliberately not connected:** a grant proves the
+  customer authorised us, not that we could read the catalog, and production hit that
+  state first. **THE TELL, worth more than the fix: two of those deploys changed
+  NOTHING the operator could see. A fix that produces no observable change means the
+  wrong copy was patched — stop patching and enumerate.**
+
+  **2 — A CORRECT WORKFLOW COULD NOT BE PUBLISHED (Charles's call: "match on the
+  service alone").** The workflow tested green and the publish was refused with
+  *"The outcome promises "notion:AI Agents Briefing" (document_exists), but no step in
+  this workflow does that"* — about a step that creates exactly that page. Two
+  independent mismatches, both from guessing about a tool we did not write: `notion` is
+  not in `DOC_CONNECTORS`, so a page was filed `record_exists` against a
+  `document_exists` promise; and the promise named *"AI Agents Briefing"* while the step
+  titles the page *"AI Agents Briefing — August 3, 2026"*, because the customer asked
+  for the date in the title.
+  **We cannot fix that by guessing harder.** A projected capability now DECLARES
+  `locatorFree: true` and a promise about it is matched on THE SERVICE: did some step
+  write to Notion? **Weaker, and TRUE — the strong version was strong and false.** Same
+  exemption the Atlas inbox has always had, for the same reason: the locator was never
+  an address. `LOCATOR_FREE_CONNECTORS`, itself a hand-typed set, is now backed by a
+  declaration so the next service needs no edit. **NOT a fail-open, and most of the test
+  is that direction:** a promise about a different service is still broken, a read still
+  satisfies nothing, and OUR OWN connectors still have their locators compared.
+
+  **3 — THE REFUSAL WAS A BLOCKING BROWSER POPUP WITH NO REASON.** Go live failed via
+  `alert("Workflow update failed validation.")` — engineer's words, no explanation, and
+  a browser modal FREEZES THE WHOLE PAGE until dismissed (it froze the agent's tooling
+  too, which is how it was noticed). **The server had sent the real reason all along in
+  `issues`; the alert threw it away, and the server log recorded only the generic
+  sentence** — reading it required intercepting the request in the browser. The refusal
+  now lands in the conversation, carries the reason, and leaves the composer open.
+
+  **4 — THE PUBLISHED WORKFLOW RAN AND DID NOTHING, AND THIS IS THE ONE THAT MATTERS.**
+  First real run: `create_page: Channel "notion_create-pages" has no handler`. The
+  catalog gave the capability a shape and the connect gave it a token; **nothing gave it
+  a way to ACT**, so it could be chosen, validated, tested and published, and did
+  nothing. **THE TEST COULD NOT HAVE CAUGHT IT — a dry run stubs the send and reported
+  `wouldDeliver: true`, which is correct behaviour** and is precisely why "it passed the
+  test" is never the same as "it works".
+  `callMcpTool` calls the tool on the server it came from. **A tool's OWN refusal is
+  reported inside the MCP result, not as a transport error** — reading only the
+  transport would call a refused write a success. **With no credential it refuses BEFORE
+  any request**, because an anonymous 401 reads as "the service is broken" rather than
+  "this workspace is not connected". Credentials come from a **per-node** injector, since
+  which one a step needs depends on which service it names — one workspace may hold
+  Notion and Linear at once — and it walks with the same deep walker the injection uses,
+  so a step inside a `foreach` is not missed.
+  **THEN IT FAILED AGAIN, DIFFERENTLY, WHICH IS WHAT MADE THE LAST PIECE FINDABLE:**
+  `Channel "notion_create-pages" is not wired in this build.` A service's tools live in
+  MEMORY and its grant lives on DISK, so every restart loses the capability until
+  something re-reads the catalog — and nothing on the run path did. **A scheduled
+  workflow is the case that matters: it fires at 8am into whatever process is running,
+  with no browser to have warmed anything.** Loaded at `injectTenantTokens`, documented
+  as the one function EVERY run path uses (REST, scheduler, Slack dispatch, Airtable
+  dispatch); fails soft, so a service that cannot be read never stops a run that does
+  not use it.
+
+  **TWO MISTAKES CAUGHT BY TESTS BEFORE SHIPPING, both from writing against an imagined
+  interface:** the handler's signature was `(config)` when the executors pass
+  `{config, body, …}`, and the first test asked `list()` for handlers — which
+  deliberately returns public shapes with none on them, so it would have reported every
+  NATIVE capability as broken too.
+  **AND ONE TEST THAT WAS THEATRE, recorded rather than quietly fixed:** the first
+  connected-services suite re-implemented the derivation instead of calling it, and
+  stayed green when the endpoint reverted to a literal — measured. The handler closes
+  over `spine` and cannot be lifted, so the regression is held by a SOURCE-level pin
+  anchored to the gate expression, which says so in its own header.
+
+  Pinned by `a-service-we-did-not-write.test.js` (10),
+  `a-projected-tool-actually-runs.test.js` (7) and
+  `a-connected-service-is-not-called-missing.test.js` (9); **twelve further mutations
+  hand-run red→green**, plus one recorded UNKILLABLE with its reason (the legacy verb
+  patterns need underscore boundaries and MCP names are hyphenated, so no projected
+  capability can reach them — which is why `projectEffect` failing closed to `write` is
+  load-bearing).
+
+  **STILL OPEN, and none of it blocks a demo:**
+  · **No MCP capability can START a workflow** — nothing arms a subscription with these
+    services. Step/delivery only, deliberately.
+  · **Raw capability ids reach customer-facing cards** — the review screen's "What your
+    team sees" showed `notion_create-pages`, and the run summary said *"reached
+    "notion_create-pages" in notion create pages"*. The plain-English layer knows
+    nothing about projected capabilities.
+  · **A test sample labelled "should not trigger" gets a green tick and proves
+    nothing.** On the briefing workflow the third sample was *"Saturday morning — should
+    not trigger"*; the harness runs the workflow BODY and never evaluates the cron, so it
+    cannot check weekend behaviour. The tick is defensible under the current rule (that
+    run did complete and deliver) but the row's NAME promises something the test cannot
+    judge — the "looks like it was checked when it wasn't" shape.
 
   **✅ P13-0 is BUILT and merged (2026-07-25).** All four seams landed, plus two
   blockers that QA found while using the product. What changed, in plain terms:
