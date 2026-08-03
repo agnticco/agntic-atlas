@@ -795,7 +795,13 @@ async function dispatchAirtableEvent(spine, body) {
   // bare form, while the converger's generic trigger template emits the capability
   // id — so a correctly-built Airtable trigger matched NOTHING here even before the
   // missing-webhook problem. Two independent silent failures on the same feature.
-  const flows = spine.engine.workflowStore.list({ tenantId, kind: 'flow', status: 'active' })
+  // A FAILED RUN MUST NOT TAKE A LIVE WORKFLOW OFF THE AIR — the same rule the
+  // Slack path was given hours earlier, and this one did not have. Found by
+  // comparing the two dispatchers rather than by anything failing: `error` is a
+  // health signal, not a pause, and asking only for `active` means one bad run
+  // silently disables a workflow for ever. Only PAUSED means stop.
+  const flows = spine.engine.workflowStore.list({ tenantId, kind: 'flow' })
+    .filter((w) => (w.status === 'active' || w.status === 'error'))
     .filter((w) => (w.triggers ?? []).some((t) =>
       isAirtableRecordChangedTrigger(t) &&
       (!t.filter?.baseId || t.filter.baseId === baseId)));

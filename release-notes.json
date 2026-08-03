@@ -1,5 +1,13 @@
 [
   {
+    "version": "1.6.146",
+    "date": "2026-08-03",
+    "title": "Version 1.6.146",
+    "notes": [
+      "Applies the same liveness rule to Airtable triggers that Slack got — one failed run no longer disables an Airtable-triggered workflow."
+    ]
+  },
+  {
     "version": "1.6.145",
     "date": "2026-08-03",
     "title": "Version 1.6.145",
