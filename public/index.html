@@ -6838,6 +6838,39 @@ class Component extends DCLogic {
       const from = (trg.filter && /ups/i.test(trg.filter)) ? "UPS Quantum View <pkginfo@ups.com>" : "Sample Sender <sender@example.com>";
       return "From: " + from + "\nSubject: Your package is out for delivery\n\nTracking 1Z999AA10123456784 — out for delivery, arriving Thursday by 7:00 PM. No signature required.";
     }
+    // ── A SAMPLE MUST LOOK LIKE WHAT THE TRIGGER REALLY DELIVERS ─────────────
+    //
+    // WITNESSED 2026-08-03, the first Slack-triggered workflow ever to reach a test
+    // run (they were refused at publish until Slack started delivering events an
+    // hour earlier, so this path had never been exercised). It failed:
+    //
+    //   "summarize_message" couldn't find the data it needed, so what went out was
+    //   an error, not real content.
+    //
+    // The workflow was correct. The sample was the string below — eight generic
+    // words — and every content step the converger writes carries the instruction
+    // "if the message content is empty or missing, output EXACTLY: ERROR: required
+    // data not found". The model read that sentence, correctly judged there was no
+    // message in it, and did what it was told. The test then correctly refused to
+    // certify a workflow that would have delivered an error.
+    //
+    // THE FORMAT BELOW IS COPIED FROM THE DISPATCHER, NOT INVENTED. A real Slack
+    // event reaches a workflow as a plain string built in `dispatchSlackEvent`
+    // (server.js): "New Slack message in <#C…> from <@U…>:\n\n<text>". A sample in
+    // any other shape tests a program nobody runs — which is exactly how this
+    // defect existed in the first place.
+    const ev = String(trg.event || trg.id || '');
+    const conn = String(trg.connector || '');
+    if (conn === 'slack' || /^slack_/.test(ev)) {
+      return /mention/i.test(ev)
+        ? "Atlas was @-mentioned in <#C0ATLASTEST> by <@U0B3CHARLES>:\n\n@Atlas can you summarise where we got to on the pricing page? Ben wants a note before standup."
+        : "New Slack message in <#C0ATLASTEST> from <@U0B3CHARLES>:\n\nHeads up — the Thursday deploy is pushed to Friday morning. Ben's still finishing the migration and we'd rather not ship it half-done.";
+    }
+    if (conn === 'airtable' || /^airtable_/.test(ev)) {
+      return "A record changed in Airtable.\n\nTable: Companies\nName: Northwind Traders\nRelationship Status: Lead\nOwner: Charles\nNotes: Asked about pricing for a 12-seat plan on the call yesterday.";
+    }
+    // A scheduled or manual workflow has no inbound event by definition — its first
+    // step fetches its own data — so a generic seed is the honest thing there.
     return "Sample trigger event for testing this workflow.";
   }
 

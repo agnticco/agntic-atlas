@@ -1,5 +1,13 @@
 [
   {
+    "version": "1.6.134",
+    "date": "2026-08-02",
+    "title": "Slack-triggered workflows can be tested properly",
+    "notes": [
+      "Testing a Slack-triggered workflow used to fail every time. The sample message Atlas ran it against was a generic placeholder rather than something that looks like a real Slack post, so the AI step correctly reported there was nothing to work with — and the test correctly refused to pass it. Samples now look like the real thing for Slack, Airtable and email."
+    ]
+  },
+  {
     "version": "1.6.133",
     "date": "2026-08-02",
     "title": "Atlas now tells you what it noticed about your workflow",
