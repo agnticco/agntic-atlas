@@ -6222,7 +6222,20 @@ class Component extends DCLogic {
         //
         // A connector-action keeps its capability in `action` while `_destinationOf`
         // reads `channel`, so hand it the id we already resolved.
-        const where = this._destinationOf(Object.assign({}, c, { channel: ch }));
+        //
+        // AND A REFERENCE IS DESCRIBED, NEVER PRINTED (2026-08-02). Witnessed on two
+        // workflows in one session: *"each destination (a new Google Calendar event,
+        // {{extract_email.sender_email}}) is confirmed reachable"* — a raw template
+        // in the last sentence a person reads before pressing Run test.
+        //
+        // The destination is genuinely unknowable until the workflow runs (it is
+        // whoever emailed), so there is no literal to print — but "the sender email
+        // from Extract email" is a thing a person can check, and braces are not.
+        // `_plainPreview` is the SAME rule the approval card already applies to its
+        // `Asks`, `They also see` and `Subject / title` rows; a second copy here is
+        // how one screen ends up saying something the next one contradicts.
+        let where = this._destinationOf(Object.assign({}, c, { channel: ch }));
+        if (where && /\{\{/.test(String(where))) where = this._plainPreview(String(where), spec.nodes);
         if (where && dests.indexOf(String(where)) < 0) dests.push(String(where));
       }
     });

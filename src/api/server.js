@@ -2568,7 +2568,29 @@ export function createApp(spine) {
     // page, which would hide the real issue from the UI. See CLAUDE.md gotchas.
     try {
       const verdict = spine.engine.workflowValidator?.validate?.(spec);
-      const errors  = (verdict?.issues ?? []).filter(i => i.severity === 'error');
+      // ── ONE RETIRED CHECK MAY NOT BLOCK A RUN (2026-08-02) ──────────────────
+      //
+      // `UNSATISFIED_ASSERTION` asks whether the promise's `target` STRING matches
+      // a step's destination. That comparison was removed from the test earlier
+      // today (src/workflows/delivery-verdict.js) after it produced no findings
+      // about a wrong workflow and repeatedly failed correct ones — and the
+      // build-time half was deliberately left alone as a separate decision.
+      //
+      // MEASURED THE SAME DAY, driving a calendar workflow in a browser: BOTH its
+      // test runs were refused here, `run.invalid codes:["UNSATISFIED_ASSERTION"]`,
+      // before executing. Its promise said `calendar:Connected Calendar`; its step
+      // wrote to the account's default calendar. The same place, described two
+      // ways. So the retired rule blocked a correct workflow through a door the
+      // removal did not cover — the test never got to look at it.
+      //
+      // SCOPED TO THE RUN PATH ONLY. This does not touch the validator, and it does
+      // not touch publishing: `workflowService.create` validates independently and
+      // still sees this code. What changes is that a disagreement about what a
+      // destination STRING means can no longer stop you finding out whether the
+      // workflow works — which is the one thing that can actually settle it.
+      const RETIRED_ON_RUN = new Set(['UNSATISFIED_ASSERTION']);
+      const errors  = (verdict?.issues ?? [])
+        .filter(i => i.severity === 'error' && !RETIRED_ON_RUN.has(i.code));
       if (errors.length) {
         logEvent('run.invalid', { tenant: tenantId, codes: errors.map(e => e.code) });
         return res.json({

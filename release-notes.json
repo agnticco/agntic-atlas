@@ -1,5 +1,13 @@
 [
   {
+    "version": "1.6.132",
+    "date": "2026-08-02",
+    "title": "Two fixes found by building eight workflows",
+    "notes": [
+      "A workflow could be refused a test run because its written promise named the same destination in different words than the step did — that check was retired from testing and is now retired here too, so you can always find out whether your workflow actually works. And the line above Run test no longer shows raw {{references}} when a destination isn't known until the workflow runs; it describes them in words instead."
+    ]
+  },
+  {
     "version": "1.6.131",
     "date": "2026-08-02",
     "title": "Reading a week of email got a lot faster",
