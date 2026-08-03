@@ -122,7 +122,37 @@ function configValues(node) {
 function triggerValues(spec) {
   const out = [];
   const walk = (v) => {
-    if (typeof v === 'string') { out.push(v); return; }
+    if (typeof v === 'string') {
+      out.push(v);
+      // ── A FILTER IS AN EXPRESSION, NOT A BARE VALUE ────────────────────────
+      //
+      // WITNESSED 2026-08-03, on the first Slack-triggered workflow the product
+      // has ever been able to build. Its trigger is stored as
+      // `{ type:'event', connector:'slack', filter:'channel:#atlas-test-temp' }`
+      // — the channel lives INSIDE a filter expression. Pushing only the whole
+      // string meant `channel:#atlas-test-temp` never matched the bare
+      // `#atlas-test-temp` the promise names, so the check reported
+      //
+      //   The promise tells the customer this workflow delivers to
+      //   "#atlas-test-temp", but no step in it does
+      //
+      // …about a correct workflow, where that channel is where it LISTENS.
+      //
+      // THIS IS THE SAME FALSE POSITIVE RECORDED ON 2026-07-30, arriving through
+      // a door that fix did not cover: `triggerValues` was added then and was
+      // right, but the trigger shape it was written against stored the channel
+      // bare. A check that fires on a good build teaches people to ignore it —
+      // and this one is now shown to every user at the walkthrough, so it can
+      // afford that least of all.
+      //
+      // Values inside `key:value` are pulled out too. Deliberately generous: this
+      // list only ever SUPPRESSES findings, and the check is precision-over-recall
+      // by design — a missed finding is quiet, a false one is corrosive. An email
+      // filter's `subject:(pricing|cost)` contributes `(pricing|cost)`, which
+      // matches no destination and costs nothing.
+      for (const m of String(v).matchAll(/(?:^|\s)[a-z_]+:(\S+)/gi)) out.push(m[1]);
+      return;
+    }
     if (Array.isArray(v)) { v.forEach(walk); return; }
     if (v && typeof v === 'object') Object.values(v).forEach(walk);
   };
@@ -216,7 +246,14 @@ export function selfContradictions(spec) {
   // Recall is deliberately sacrificed. The case it was built for — the Sheets logger
   // whose sentence said "Pricing Enquiries" and whose only promise said "Pricing
   // Emails" — is exactly this shape and still fires.
-  const saidRaw = destinationsNamedIn(outcome?.statement);
+  // A name the TRIGGER uses is not a destination the promise got wrong — the same
+  // exclusion `STATEMENT_NAMES_ELSEWHERE` applies above, and for the same reason.
+  // Witnessed 2026-08-03: a Slack-triggered workflow whose statement opens "Every
+  // time any message is posted in #atlas-test-temp…" had that channel compared
+  // against its inbox destination and reported as a contradiction. The channel is
+  // where it LISTENS. Reusing `sourceValues` rather than re-deriving it, so the two
+  // checks cannot come to different views of what the trigger is.
+  const saidRaw = destinationsNamedIn(outcome?.statement).filter(n => !sourceValues.has(norm(n)));
   if (saidRaw.length === 1 && assertions.length === 1) {
     const a = assertions[0];
     const { locator } = splitTarget(String(a?.target ?? ''));

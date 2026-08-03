@@ -35,6 +35,8 @@
  *   M2  it fires even when a foreach handles the items            → 1 red
  *   M3  the walkthrough stops carrying the findings               → 1 red
  *   M4  the walkthrough shows notes too                           → 1 red
+ *   M5  a filter expression is not unpacked (false positive back)  → 1 red
+ *   M6  the sentence check ignores trigger names (same)            → 1 red
  */
 
 import { test, describe } from 'node:test';
@@ -128,6 +130,64 @@ describe('a read too big for the AI step it feeds', () => {
     delete s.nodes[0].config.maxResults;
     s.nodes[0].config.action = 'gmail_get_message';
     assert.ok(!codes(s).includes('TOO_MUCH_FOR_ONE_STEP'));
+  });
+});
+
+describe('a name the TRIGGER uses is not a destination it got wrong', () => {
+  // WITNESSED 2026-08-03 on the first Slack-triggered workflow the product could
+  // build. Its trigger is stored as `filter: "channel:#atlas-test-temp"` — the
+  // channel lives INSIDE a filter expression — so the exclusion added on
+  // 2026-07-30 could not see it, and the check reported a correct workflow as
+  // delivering nowhere. Same false positive, through a door that fix didn't cover.
+  //
+  // It matters more than an ordinary miss: this check is now shown to every user
+  // at the walkthrough, and a check that fires on a good build teaches people to
+  // ignore it.
+  const slack = () => ({
+    name: 'Slack summary',
+    triggers: [{ type: 'event', connector: 'slack', filter: 'channel:#atlas-test-temp' }],
+    outcome: {
+      statement: 'Every time any message is posted in #atlas-test-temp, a one-line summary of that message is delivered to the Atlas inbox.',
+      assertions: [{ id: 'a1', kind: 'message_sent', target: 'inbox:Slack message summary' }],
+    },
+    nodes: [
+      { id: 'summarize_message', type: 'llm', label: 'One-line summary', config: { mode: 'summarize' } },
+      { id: 'save', type: 'deliver', label: 'Save to the Atlas inbox', config: { channel: 'inbox_deliver', subject: 'Slack message summary' } },
+    ],
+    edges: [{ from: 'summarize_message', to: 'save' }],
+  });
+
+  test('the channel it LISTENS on is not reported as a destination', () => {
+    assert.deepEqual(codes(slack()), [],
+      'a correct Slack workflow must produce no findings at all');
+  });
+
+  test('and the real mismatch this check exists for still fires', () => {
+    // The anti-regression direction, and the one that matters: the prod Sheets
+    // logger whose statement named one spreadsheet while its promise named another.
+    const s = {
+      name: 'Pricing logger', triggers: [{ type: 'email', filter: 'is:unread' }],
+      outcome: { statement: 'Each pricing enquiry is added as a row to "Pricing Emails".',
+                 assertions: [{ id: 'a1', kind: 'record_exists', target: 'sheets:Pricing Enquiries' }] },
+      nodes: [{ id: 'row', type: 'connector-action', label: 'Add row',
+                config: { action: 'sheets_append', spreadsheetId: 'Pricing Enquiries', range: 'Sheet1' } }],
+      edges: [],
+    };
+    const c = codes(s);
+    assert.ok(c.includes('STATEMENT_NAMES_ELSEWHERE'), 'the statement names a sheet no step uses');
+    assert.ok(c.includes('PROMISE_AND_SENTENCE_DIFFER'), 'and the two halves of the promise disagree');
+  });
+
+  test('a workflow whose statement and promise agree stays silent', () => {
+    const s = {
+      name: 'Pricing logger', triggers: [{ type: 'email', filter: 'is:unread' }],
+      outcome: { statement: 'Each pricing enquiry is added as a row to "Pricing Enquiries".',
+                 assertions: [{ id: 'a1', kind: 'record_exists', target: 'sheets:Pricing Enquiries' }] },
+      nodes: [{ id: 'row', type: 'connector-action', label: 'Add row',
+                config: { action: 'sheets_append', spreadsheetId: 'Pricing Enquiries', range: 'Sheet1' } }],
+      edges: [],
+    };
+    assert.deepEqual(codes(s), []);
   });
 });
 

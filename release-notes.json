@@ -1,5 +1,13 @@
 [
   {
+    "version": "1.6.135",
+    "date": "2026-08-02",
+    "title": "Fixed a false alarm on Slack-triggered workflows",
+    "notes": [
+      "The new build warning was firing on correct Slack workflows — it read the channel a workflow listens on as a place it was supposed to deliver to, and said the promise pointed nowhere. It now recognises a channel named inside a trigger filter. Real mismatches still get flagged."
+    ]
+  },
+  {
     "version": "1.6.134",
     "date": "2026-08-02",
     "title": "Slack-triggered workflows can be tested properly",
