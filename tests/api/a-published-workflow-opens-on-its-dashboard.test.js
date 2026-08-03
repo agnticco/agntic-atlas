@@ -107,6 +107,19 @@ describe('a real run says so in the log people read', () => {
       'the log call must be wrapped so a failure to write can never fail the run');
   });
 
+  test('EVERY exit is logged, including the quiet one', () => {
+    // Measured 2026-08-03: `flow.run.failed` was added to the THROW path only. A
+    // content-sentinel failure — the step ran, did not throw, and delivered "I
+    // couldn't find my data" — returns from its own branch and logged nothing. Four
+    // Slack messages produced one run and no explanation, an hour after the logging
+    // was added to make exactly that visible.
+    const sentinel = SCHED.slice(SCHED.indexOf('const contentError = runProducedContentError'));
+    assert.match(sentinel.slice(0, 1800), /noteRun\('flow\.run\.failed'/,
+      'the content-sentinel exit must say so too');
+    assert.match(sentinel.slice(0, 1800), /input:/,
+      'and carry what the first step was given — whether the trigger context arrived is the question it exists to answer');
+  });
+
   test('they carry the run id, so the log and the runs table can be joined', () => {
     for (const kind of ['flow\\.run\\.ok', 'flow\\.run\\.failed']) {
       assert.match(SCHED, new RegExp(`${kind}'[\\s\\S]{0,260}runId:`),

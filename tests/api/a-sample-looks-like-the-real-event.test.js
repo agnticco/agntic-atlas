@@ -104,6 +104,30 @@ describe('a sample carries something a step can actually read', () => {
   });
 });
 
+describe('a failed run does not take a live workflow off the air', () => {
+  // MEASURED 2026-08-03: four Slack messages, ONE run. The first failed,
+  // `_executeFlow` marked the workflow `status: 'error'`, and the event dispatcher
+  // only ever asked for `active` — so the next three matched nothing and were
+  // dropped in silence. One bad run permanently disabled a live workflow and the
+  // owner was never told.
+  test('the event dispatcher includes a workflow that failed last time', () => {
+    const i = SERVER.indexOf('async function dispatchSlackEventForTenant');
+    assert.notEqual(i, -1, 'the per-tenant dispatch moved — re-point this');
+    const fn = SERVER.slice(i, i + 2200);
+    assert.match(fn, /w\.status === 'active' \|\| w\.status === 'error'/,
+      'error is a health signal, not a pause — the customer still asked for this workflow to run');
+    assert.doesNotMatch(fn, /status: 'active' \}\),/,
+      'the old active-only filter must be gone, not merely supplemented');
+  });
+
+  test('but a PAUSED workflow is still excluded', () => {
+    // The one status that means stop, because a person chose it.
+    const i = SERVER.indexOf('async function dispatchSlackEventForTenant');
+    const fn = SERVER.slice(i, i + 2200);
+    assert.doesNotMatch(fn, /'paused'/, 'nothing here may re-admit a workflow someone paused');
+  });
+});
+
 describe('the sample matches what the DISPATCHER really builds', () => {
   // Read both sides and require agreement. The generic seed was not wrong because
   // it was short — it was wrong because it looked like nothing production sends.

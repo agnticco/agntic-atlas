@@ -1,5 +1,13 @@
 [
   {
+    "version": "1.6.139",
+    "date": "2026-08-03",
+    "title": "One failed run no longer takes a workflow off the air",
+    "notes": [
+      "If a live workflow failed once, every later message that should have triggered it was silently dropped — one bad run disabled it permanently and you were never told. A workflow that failed last time now still runs on the next event; only pausing it stops it. And a run that fails by delivering an error message instead of real content now says so in the activity log, along with what its first step was actually given."
+    ]
+  },
+  {
     "version": "1.6.138",
     "date": "2026-08-03",
     "title": "A published workflow opens on its dashboard",

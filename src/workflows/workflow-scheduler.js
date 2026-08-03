@@ -549,6 +549,21 @@ export class WorkflowScheduler {
             error: err, errorClass: this._classifyError(err),
           });
           log.error(`[workflow-scheduler] flow "${workflow.slug}" delivered the content-error sentinel from "${contentError.step}"`);
+          // THE THIRD EXIT, AND THE ONE THAT WAS SILENT. `flow.run.failed` was added
+          // to the throw path only; a content-sentinel failure returns from HERE and
+          // logged nothing. Measured 2026-08-03: four Slack messages, one run, and
+          // the log said nothing about why — the diagnostic added an hour earlier to
+          // make exactly this visible was on the wrong branch.
+          //
+          // `input` carries what the FIRST step was actually given. The whole
+          // question this failure raises is whether the trigger's context reached
+          // it, and answering that from a log line beats another round of guessing.
+          noteRun('flow.run.failed', {
+            tenant: workflow.tenant_id ?? null, workflow: workflow.slug, runId: run.id,
+            trigger: trigger ?? 'schedule', failedStep: contentError.step,
+            error: 'content-error sentinel',
+            input: String((finalRun?.steps ?? [])[0]?.output ?? '').slice(0, 200),
+          });
           return err;
         }
 

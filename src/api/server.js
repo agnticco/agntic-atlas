@@ -720,7 +720,24 @@ async function dispatchSlackEvent(spine, body) {
 /** One tenant's share of an inbound Slack event. Isolated: its own workflows, its own token. */
 async function dispatchSlackEventForTenant(spine, { tenantId, ev, wantEvent, isMention }) {
   const flows = await selectSlackFlows({
-    flows: spine.engine.workflowStore.list({ tenantId, kind: 'flow', status: 'active' }),
+    // ── A FAILED RUN MUST NOT TAKE A LIVE WORKFLOW OFF THE AIR ───────────────
+    //
+    // MEASURED 2026-08-03: four Slack messages, ONE run. The first failed, and
+    // `_executeFlow` marks the workflow `status: 'error'` so the sidebar dot turns
+    // red — which is useful. But this query only ever asked for `active`, so the
+    // next three messages matched nothing and were dropped in silence. One bad run
+    // permanently disabled a live workflow, and the owner was never told.
+    //
+    // `error` is a HEALTH signal, not a pause. A workflow that failed last time is
+    // still one the customer asked to run, and the commonest causes — a model
+    // timing out, a rate limit — are gone by the next event. Only PAUSED means
+    // stop, and that is a decision a person made.
+    //
+    // Scoped to the event path deliberately: the scheduler decides its own due-ness
+    // elsewhere, and widening both from here would be changing something that has
+    // not been measured.
+    flows: spine.engine.workflowStore.list({ tenantId, kind: 'flow' })
+      .filter((w) => w.status === 'active' || w.status === 'error'),
     ev, wantEvent,
     resolveChannelId: (target) => resolveSlackChannelId(spine, tenantId, target),
     onUnresolved: (w, target) =>
