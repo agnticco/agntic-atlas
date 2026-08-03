@@ -155,6 +155,41 @@ run_test tests/converger/moat-adversarial.test.js "P13-0 regression: moat"
 run_test tests/workflows/control-flow.test.js     "P13-0 regression: control flow"
 run_test tests/workflows/outcome-oracle.test.js   "P13-0 regression: outcome oracle"
 
+# ── EVERY CONNECTOR CLEARS THE SAME BAR ──────────────────────────────────────
+#
+# THE CHECK THIS PHASE MOST DEPENDS ON, and it belongs at P13-0 because it must
+# pass BEFORE the first new connector, not after.
+#
+# Slack took SIX defects to reach working (2026-08-03) and not one was findable by
+# reading code or running the suite — every one needed a real message through a
+# real workspace, with the suite green throughout. P13 connects to services NOBODY
+# hand-built. If a connector is only known to work after four hours of driving,
+# ten connectors means ten Slacks, each found by a customer.
+#
+# So this asks of EVERY registered trigger, from the LIVE catalog, the questions
+# that were silently untrue for Slack: is the stored trigger runnable, does the
+# connector's OWN matcher accept what the converger stores, does a realistic test
+# sample exist, does it read as English, and do all the dispatchers apply the same
+# liveness rule. It found a real defect on its first run — the Airtable dispatcher
+# still dropped a workflow whose last run failed — with nothing failing.
+#
+# It runs against the REGISTRY, so a connector added tomorrow is asked tomorrow
+# and this gate fails then, rather than months later as a customer report.
+echo "p13: [P13-0] every connector clears the same bar (live catalog, real matchers)..."
+run_test tests/connectors/every-connector-clears-the-same-bar.test.js "P13-0 connector conformance"
+
+# WHAT THIS GATE CANNOT PROVE, stated here so nobody reads a green run as more
+# than it is: that a service is CONFIGURED to send us anything. Two mismatched
+# Slack apps and a wrong signing secret were all config and all invisible from
+# inside the code — the endpoint answered correctly throughout while Slack had
+# never delivered a single event in the product's history.
+#
+# THE HUMAN STEP, per connector, before it ships: cause one real event at the
+# service and witness the workflow run. Not scriptable, not skippable, and not
+# implied by anything above.
+echo "p13:   NOTE — a green run here does NOT mean a connector is configured to reach us."
+echo "p13:   Per connector, before shipping: cause ONE real event and witness the run."
+
 echo "p13: P13-0 PASSES — the catalog is source-agnostic."
 
 # ── P13-A — capability contract + McpCatalogLoader + CIMD identity ────────────
