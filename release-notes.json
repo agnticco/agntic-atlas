@@ -1,5 +1,13 @@
 [
   {
+    "version": "1.6.148",
+    "date": "2026-08-03",
+    "title": "Connecting a new service",
+    "notes": [
+      "Atlas can now read a remote service's own list of what it can do and turn each one into a step you can use in a workflow — no setup by anyone."
+    ]
+  },
+  {
     "version": "1.6.147",
     "date": "2026-08-03",
     "title": "Version 1.6.147",
