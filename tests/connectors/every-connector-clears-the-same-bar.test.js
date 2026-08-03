@@ -33,27 +33,31 @@
  * that can be automated; the other half is a human, once, and should stay on the
  * P13 checklist.
  *
- * ── MUTATION RESULTS, run by hand (2026-08-03) — READ THE FOURTH ────────────
+ * ── MUTATION RESULTS, run by hand (2026-08-03) ──────────────────────────────
  *
  *   the Airtable cascade comes back              → 1 red
  *   the Slack cascade comes back                 → 1 red
  *   a trigger loses its realistic sample         → 2 red
- *   the converger emits an unmatchable event id  → 0 red   ** NOT KILLED **
+ *   the converger emits an unmatchable event id  → 2 red
  *
- * THE FOURTH IS NOT PROVEN AND MUST NOT BE ASSUMED. Deleting the line that maps
- * the capability id `slack_message` to Slack's raw `message` — the exact defect
- * that made a live workflow never fire — left this file green. The first version
- * of that assertion GREPPED the dispatch layer for the id and passed for the
- * wrong reason; it was rewritten to EXECUTE each connector's real matcher
- * (`selectSlackFlows`, `isAirtableRecordChangedTrigger`), which is the right
- * shape — and the mutation still survives, so something in that path is not
- * reaching the matcher as intended and I could not finish diagnosing it.
+ * ALL FOUR KILL — BUT THE FOURTH WAS REPORTED AS SURVIVING TWICE, BOTH TIMES BY A
+ * BROKEN MEASUREMENT, AND THAT IS WORTH MORE THAN THE RESULT.
  *
- * So: the round-trip assertion is UNPROVEN. Treat the three above as the coverage
- * this file actually has, fix the fourth before relying on it, and do not let its
- * presence here suggest the round trip is guarded. A check believed to work and
- * not working is worse than one known to be missing — which is the lesson the
- * whole of 2026-08-03 taught, repeatedly.
+ *   First: the assertion GREPPED the dispatch layer for the event id as a string.
+ *   It passed for the wrong reason — the id appears in that file for other
+ *   reasons. Rewritten to EXECUTE each connector's own matcher, which is what it
+ *   does now.
+ *
+ *   Second: the mutation DELETED the mapping line, leaving a dangling `else` — a
+ *   syntax error, so the module never imported and the whole file failed to load.
+ *   The harness counted INDENTED "not ok" lines and a file-level failure is not
+ *   indented, so a catastrophic failure was recorded as "survived". With a
+ *   syntactically valid mutation (the map made a no-op) it turns 2 red at once.
+ *
+ * A mutation result is only as good as the harness reporting it, and this file
+ * was one honest note away from carrying "unproven" against an assertion that
+ * works. If a mutation ever appears to survive here, check that the module still
+ * PARSES before believing it.
  *
  * FOUND ON ITS FIRST RUN: the Airtable dispatcher still filtered `status:'active'`
  * only — the cascade fixed for Slack hours earlier, where one failed run silently
