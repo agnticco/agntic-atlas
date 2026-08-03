@@ -4472,8 +4472,19 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
     // a person, so a shape nobody thought to check is checked anyway. Its whole value
     // is that the defects it names were previously found ONE AT A TIME, by eye, days
     // later — see the file header for the list.
+    let selfCheck = [];
     try {
       const contradictions = selfContradictions(finalDraft);
+      // ── AND IT IS SAID OUT LOUD (2026-08-02) ────────────────────────────────
+      // This check has run at this exact point since the day it was built, and has
+      // only ever written to the log. Every defect it names was previously found by
+      // a person reading a screen carefully, days later — which is what it exists to
+      // replace, and it could not, because nobody could see it.
+      //
+      // It still REPORTS and never repairs, and never blocks: everything reaching
+      // this node is already valid and publishable. What changes is that the person
+      // is told before they confirm every step, rather than after.
+      selfCheck = contradictions.map(c => ({ code: c.code, severity: c.severity, message: c.message }));
       if (contradictions.length) {
         logEvent('converger.self_check', {
           ...who(cfg),
@@ -4505,6 +4516,9 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
         // the client was handed `undefined`.
         destinations: finalDraft.destinations ?? [],
       },
+      // What the build noticed about itself. Rides on the SAME interrupt the steps
+      // do, so it cannot arrive on a screen the person has already left.
+      selfCheck,
       step: state.step,
     });
 

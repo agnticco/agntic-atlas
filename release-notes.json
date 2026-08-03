@@ -1,5 +1,13 @@
 [
   {
+    "version": "1.6.133",
+    "date": "2026-08-02",
+    "title": "Atlas now tells you what it noticed about your workflow",
+    "notes": [
+      "Two things Atlas could already work out but never said. If a step reads a lot of items and hands them all to one AI step, it now tells you before you confirm anything — that shape can run out of time, and you used to only find out after building the whole thing. And the consistency check that runs on every finished build (does the promise point somewhere a step actually goes?) now shows you what it found, instead of only writing it to a log nobody reads."
+    ]
+  },
+  {
     "version": "1.6.132",
     "date": "2026-08-02",
     "title": "Two fixes found by building eight workflows",

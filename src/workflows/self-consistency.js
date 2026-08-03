@@ -264,6 +264,57 @@ export function selfContradictions(spec) {
       { nodeId: node.id, kind: eff.kind, destinations: eff.locators }));
   }
 
+  // ── A READ THAT RETURNS MANY THINGS, FED TO ONE AI STEP ────────────────────
+  //
+  // MEASURED ON PROD, 2026-08-02. A weekly digest asked Gmail for `maxResults: 100`
+  // and handed every message to a single `llm` step. The search alone took ~260
+  // seconds and the AI step then blew its own 120s ceiling. The workflow was
+  // correct in shape and could not finish — in a test OR at 8am on a Monday — and
+  // NOTHING said so until the person had done the whole interview, approved a
+  // plan, and confirmed every step.
+  //
+  // That is the cost this finding exists to remove: it is knowable from the spec
+  // alone, and it is knowable BEFORE anyone spends twenty minutes on the build.
+  //
+  // A NOTE, NEVER AN ERROR. The workflow may be perfectly fine — the connector now
+  // caps its own fetch, models get faster, and a person who wants twenty items
+  // summarised together is asking for something reasonable. Blocking would be the
+  // "a check that fires on a good build teaches people to ignore it" trap this
+  // file has already been caught by twice. It tells them; it does not decide.
+  //
+  // Scoped to a read that DECLARES how many it can return and says "a lot", so a
+  // single-record read (`airtable_get_record`, `gmail_get_message`) is silent.
+  const BULK = 25;
+  const nodes = Array.isArray(spec?.nodes) ? spec.nodes : [];
+  const edges = Array.isArray(spec?.edges) ? spec.edges : [];
+  const byId = new Map(nodes.map(n => [n.id, n]));
+  const insideLoop = new Set();
+  for (const n of nodes) {
+    if (n?.type === 'foreach') for (const s of (n.config?.steps ?? [])) if (s?.id) insideLoop.add(s.id);
+  }
+  for (const n of nodes) {
+    const many = Number(n?.config?.maxResults ?? n?.config?.limit ?? 0);
+    if (!many || many < BULK) continue;
+    // Walk forward to the first AI step, stopping at a loop — a `foreach` is
+    // exactly the right answer to this shape, so a workflow that uses one is fine.
+    const seen = new Set([n.id]);
+    let queue = edges.filter(e => e.from === n.id).map(e => e.to);
+    let hit = null;
+    while (queue.length && !hit) {
+      const id = queue.shift();
+      if (!id || seen.has(id)) continue;
+      seen.add(id);
+      const step = byId.get(id);
+      if (!step || step.type === 'foreach' || insideLoop.has(id)) continue;
+      if (step.type === 'llm') { hit = step; break; }
+      queue = queue.concat(edges.filter(e => e.from === id).map(e => e.to));
+    }
+    if (!hit) continue;
+    findings.push(finding('TOO_MUCH_FOR_ONE_STEP', 'note',
+      `"${n.label || n.id}" can return up to ${many} items, and they all go to "${hit.label || hit.id}" in one go. That step may run out of time before it finishes. Reading fewer, or handling them one at a time, would make this quicker and more reliable.`,
+      { nodeId: n.id, aiStep: hit.id, items: many }));
+  }
+
   const RANK = { error: 0, warning: 1, note: 2 };
   return findings.sort((x, y) => RANK[x.severity] - RANK[y.severity]);
 }

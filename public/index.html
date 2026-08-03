@@ -5661,6 +5661,11 @@ class Component extends DCLogic {
         graphApproved: [], graphSelNode: null, graphReviseOpen: false, graphReviseText: "",
         thinking: false, inputMode: "locked", phase: "building",
         ...(specNodes.length ? { liveNodes: specNodes } : {}),
+        // What the build noticed about itself, carried on the SAME interrupt as the
+        // steps so it cannot arrive on a screen the person has already left. Read by
+        // `_animateReveal` once the last step lands. Defaults to empty, so a build
+        // from a server that does not send it behaves exactly as before.
+        selfCheck: Array.isArray(iv.selfCheck) ? iv.selfCheck : [],
         msgs: nextMsgs,
       };
       // Surface the outcome contract in the pinned card if the spec carries one
@@ -9368,9 +9373,31 @@ class Component extends DCLogic {
       const shown = (this.state.liveRevealed || 0) + 1;
       if (shown >= total) {
         clearInterval(this._liveRevealT);
+        // ── WHAT THE BUILD NOTICED ABOUT ITSELF (2026-08-02) ──────────────────
+        //
+        // `selfContradictions` has run on every finished build since the day it was
+        // written and only ever reached the LOG. Every defect it names — a promise
+        // pointing somewhere no step goes, a read too big for the AI step it feeds —
+        // was previously found by a person reading a screen carefully, days later.
+        // That is exactly what it exists to replace, and it could not, because
+        // nobody could see it.
+        //
+        // Shown HERE, before the person confirms each step, because the cost of
+        // these defects is not that they are wrong — it is that you find out after
+        // doing the whole interview.
+        //
+        // NOTES ARE NOT SHOWN. A note is a "you could do this better", and this
+        // screen is where someone is deciding whether to trust the build — filling
+        // it with advice is how a warning stops being read. Only errors and
+        // warnings surface; the rest stays in the log for whoever is debugging.
+        const flagged = (this.state.selfCheck || []).filter(f => f && f.severity !== 'note');
+        const noticed = flagged.length
+          ? [{ isNote: true, _selfCheck: true, text: "Before this can go live, one thing to look at:\n\n"
+              + flagged.slice(0, 3).map(f => "• " + f.message).join("\n\n") }]
+          : [];
         const msgs = this.state.msgs.some(m => m._confirmNote)
           ? this.state.msgs
-          : [...this.state.msgs, { isNote: true, _confirmNote: true, text: "Your workflow is built. Now confirm each step in the flow — hover a step to approve it, or reject one to tell me what to change. Nothing goes live until you've tested it." }];
+          : [...this.state.msgs, ...noticed, { isNote: true, _confirmNote: true, text: "Your workflow is built. Now confirm each step in the flow — hover a step to approve it, or reject one to tell me what to change. Nothing goes live until you've tested it." }];
         this.setState({ liveRevealed: total, awaitingGraphApproval: true, msgs });
       } else {
         this.setState({ liveRevealed: shown });
