@@ -1,5 +1,13 @@
 [
   {
+    "version": "1.6.141",
+    "date": "2026-08-03",
+    "title": "Posting a short message no longer fails your workflow",
+    "notes": [
+      "Posting something brief like 'test' in Slack marked the workflow as broken. The AI step is told to refuse when it's given nothing to work with — that guard is right, and it was firing on messages that were simply short. It now only refuses when there is genuinely nothing there; any real content, however brief, gets handled normally."
+    ]
+  },
+  {
     "version": "1.6.140",
     "date": "2026-08-03",
     "title": "Version 1.6.140",
