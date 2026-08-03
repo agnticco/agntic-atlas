@@ -1284,6 +1284,19 @@ Rules:
       // is the one authority on what this workspace has uploaded; if it cannot be
       // read the count stays unknown and the knowledge half simply does not fire —
       // silence is not evidence of an empty shelf.
+      // What the person said on THIS turn, for the capability guard. Read from the
+      // same message array the model was given, so the guard and the model cannot
+      // be looking at different requests.
+      const lastUserAsk = (() => {
+        try {
+          for (let i = (messages?.length ?? 0) - 1; i >= 0; i--) {
+            const m = messages[i];
+            if (m && m.role === 'user') return String(m.content ?? '');
+          }
+        } catch { /* fall through */ }
+        return '';
+      })();
+
       const chatCapabilities = (() => {
         try {
           const all = readSources?.(req.tenant?.id) ?? null;
@@ -1293,7 +1306,9 @@ Rules:
 
       const correctInventedCapability = () => {
         if (closed || !visibleText) return false;
-        const d = capabilityClaimDecision(visibleText, chatCapabilities);
+        // The PERSON'S ask this turn — the reliable signal. Matching the reply
+        // alone lost twice in ten minutes live (see chat-capability-claim.js).
+        const d = capabilityClaimDecision(visibleText, chatCapabilities, lastUserAsk);
         if (d.ok) return false;
         withdrawPartial();
         sendChunk(d.reply);

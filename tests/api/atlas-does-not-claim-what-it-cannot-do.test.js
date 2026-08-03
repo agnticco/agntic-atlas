@@ -46,7 +46,7 @@ const BUILDER = readFileSync(path.join(ROOT, 'src/api/builder.js'), 'utf8');
 
 const NONE = { knowledge: { documentCount: 0 } };
 const SOME = { knowledge: { documentCount: 4 } };
-const d = (reply, caps) => capabilityClaimDecision(reply, caps);
+const d = (reply, caps, ask) => capabilityClaimDecision(reply, caps, ask);
 
 describe('the two claims that were actually witnessed', () => {
   test('a webhook URL Atlas generates', () => {
@@ -89,6 +89,44 @@ describe('the two claims that were actually witnessed', () => {
     // If a webhook trigger is ever built, this guard must stop firing on its own.
     assert.ok(!RUNNABLE_TRIGGER_TYPES.includes('webhook'),
       'a webhook trigger now exists — the guard must be removed, not left lying');
+  });
+});
+
+describe('THE REQUEST IS THE SIGNAL, NOT THE REPLY', () => {
+  // Matching the reply was whack-a-mole and lost TWICE IN TEN MINUTES, live:
+  //   v1.6.143 → "a webhook trigger is exactly the right fit for this."
+  //   v1.6.144 → "a webhook intake that emails you each submission."
+  // Each time the pattern was widened to the sentence just seen and the model
+  // phrased it a third way. The space of ways to AFFIRM something is unbounded;
+  // the space of ways to ASK for it is not, because the customer names the
+  // mechanism they have in mind — and it is their vocabulary, not the model's.
+  const ASK = 'I want our website contact form to POST to Atlas and start a workflow that emails me the enquiry.';
+
+  test('all three live replies are corrected, on the same ask', () => {
+    for (const reply of [
+      'Great use case — a webhook trigger is exactly the right fit for this.',
+      "That's a clean setup — a webhook intake that emails you each contact form submission.",
+      'Sure! What fields does the form send?',   // no webhook words at all
+    ]) assert.equal(d(reply, {}, ASK).code, 'NO_WEBHOOK_TRIGGER', reply);
+  });
+
+  test('a reply that ALREADY refused is never overwritten', () => {
+    // The answer we want. Replacing it with another refusal would be the guard
+    // stepping on the behaviour it exists to produce.
+    assert.equal(d("Atlas can't receive a webhook — a workflow starts on a schedule or from email.", {}, ASK).ok, true);
+  });
+
+  test('DIRECTION discriminates: sending TO a webhook is a real capability', () => {
+    // A bare webhook match also caught "post the result to our webhook", which
+    // Atlas genuinely does. Refusing it would break something that works.
+    for (const [ask, reply] of [
+      ['post the result to our webhook when done', 'I can post the result to your webhook.'],
+      ['send a webhook to our CRM after each run', 'The last step posts to your CRM webhook.'],
+    ]) assert.equal(d(reply, {}, ask).ok, true, ask);
+  });
+
+  test('an ordinary ask is untouched', () => {
+    assert.equal(d('I will email you a summary every morning.', {}, 'summarise my email each morning').ok, true);
   });
 });
 

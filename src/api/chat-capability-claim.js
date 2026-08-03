@@ -110,9 +110,65 @@ const KNOWLEDGE_CLAIM =
  * @param {object} capabilities     the same object the interview is given
  * @returns {{ok:true} | {ok:false, code:string, reply:string}}
  */
-export function capabilityClaimDecision(reply, capabilities = {}) {
+/**
+ * ── THE REQUEST IS THE RELIABLE SIGNAL, NOT THE REPLY ────────────────────────
+ *
+ * Matching the REPLY was whack-a-mole and lost twice in ten minutes, live:
+ *
+ *   v1.6.143 → "a webhook trigger is exactly the right fit for this."
+ *   v1.6.144 → "a webhook intake that emails you each submission."
+ *
+ * Each time the pattern was widened to the sentence just seen, and the model
+ * simply phrased it a third way. The space of ways to affirm something is
+ * unbounded; the space of ways to ASK for it is not, because the customer names
+ * the mechanism they have in mind. "Our form POSTs to Atlas", "a webhook",
+ * "send an HTTP request to you" — that is the whole vocabulary, and it is theirs.
+ *
+ * So the trigger for this correction is the PERSON'S ask. Atlas cannot receive an
+ * inbound HTTP request that starts a workflow, whoever describes it and however
+ * the reply is worded. The reply patterns are KEPT as a second net for the case
+ * where the model volunteers it unprompted.
+ */
+//
+// DIRECTION IS THE DISCRIMINATOR. A bare `\bwebhook\b` also matched "post the
+// result to our webhook when done" — a real DELIVERY capability, and refusing it
+// would be the guard breaking something that works. What Atlas cannot do is
+// RECEIVE. So every clause below requires the data to be coming IN.
+const WEBHOOK_REQUEST = new RegExp([
+  String.raw`\bwebhooks?\b[^.!?]{0,40}\b(trigger|triggers|start|starts|kick off|into atlas|to atlas)\b`,
+  String.raw`\b(trigger|start|kick off|receive|accept|incoming|inbound)\b[^.!?]{0,40}\bwebhooks?\b`,
+  String.raw`\bcallback url\b`,
+  String.raw`\bpost(s|ing)? (to|into) (atlas|you|us)\b`,
+  String.raw`\bhttp (request|post)\b[^.!?]{0,40}\b(atlas|you|us)\b`,
+  String.raw`\b(form|site|website|app|system)\b[^.!?]{0,50}\b(posts?|sends?) (to|into) (atlas|you|us)\b`,
+].join('|'), 'i');
+
+/**
+ * @param {string} reply            what Atlas is about to say
+ * @param {object} capabilities     the same object the interview is given
+ * @param {string} [ask]            what the PERSON said this turn
+ * @returns {{ok:true} | {ok:false, code:string, reply:string}}
+ */
+export function capabilityClaimDecision(reply, capabilities = {}, ask = '') {
   const text = String(reply ?? '');
   if (!text.trim()) return { ok: true };
+
+  // The person asked for an inbound HTTP trigger. Correct it however Atlas
+  // replied — UNLESS Atlas already refused, which is the answer we want and must
+  // never be overwritten with another refusal.
+  const askedForWebhook = !HAS_WEBHOOK_TRIGGER && WEBHOOK_REQUEST.test(String(ask ?? ''));
+  const alreadyRefused = /\b(can'?t|cannot|don'?t|do not|no way to|not able|unable|not supported|no such)\b/i.test(text);
+
+  if (askedForWebhook && !alreadyRefused) {
+    return {
+      ok: false,
+      code: 'NO_WEBHOOK_TRIGGER',
+      reply:
+        "Before we go further — I can't do that part, and I'd rather say so now than after you've built something.\n\n" +
+        "Atlas doesn't give out a web address for another system to send data to. A workflow starts one of three ways: on a schedule, when an email arrives, or when something happens in a connected app like Slack or Airtable.\n\n" +
+        "Most contact forms can email you on submission — if yours does, point it at your connected inbox and I'll build the whole thing from there. Where does an enquiry end up today?",
+    };
+  }
 
   if (!HAS_WEBHOOK_TRIGGER && affirms(text, WEBHOOK_CLAIM)) {
     return {

@@ -1,5 +1,13 @@
 [
   {
+    "version": "1.6.145",
+    "date": "2026-08-03",
+    "title": "Version 1.6.145",
+    "notes": [
+      "Checks what you asked for, not how Atlas worded its reply — the previous two attempts each missed a different phrasing."
+    ]
+  },
+  {
     "version": "1.6.144",
     "date": "2026-08-03",
     "title": "Version 1.6.144",
