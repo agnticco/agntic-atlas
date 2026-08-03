@@ -95,7 +95,13 @@ describe('a step says what it does, in words', () => {
     assert.equal(C._nodeShape('deliver', '').shape, 'capsuleR');
     assert.equal(C._nodeShape('trigger', 'email').shape, 'capsuleL');
     assert.ok(C._nodeShape('trigger', 'email').icons.icoMail);
-    assert.ok(C._nodeShape('trigger', 'schedule').icons.icoBolt);
+    // RE-POINTED 2026-08-03 (Charles): a schedule and an event are the two trigger
+    // types the product has, and they must not be the same picture. A schedule
+    // starts ITSELF on a clock — stopwatch. An event is something out there
+    // happening — bolt.
+    assert.ok(C._nodeShape('trigger', 'schedule').icons.icoClock);
+    assert.ok(!C._nodeShape('trigger', 'schedule').icons.icoBolt);
+    assert.ok(C._nodeShape('trigger', 'slack').icons.icoBolt);
   });
 
   test('the EXPORTED document uses the same words', () => {
