@@ -1,5 +1,13 @@
 [
   {
+    "version": "1.6.131",
+    "date": "2026-08-02",
+    "title": "Reading a week of email got a lot faster",
+    "notes": [
+      "A workflow that reads a batch of emails used to fetch them one at a time — a hundred messages took about four minutes before the workflow's real work even started, and could time out before finishing. They're now fetched in parallel, and a single step reads at most 50 messages so what comes back can actually be summarised. If you ask for more than that, Atlas tells you rather than quietly returning fewer."
+    ]
+  },
+  {
     "version": "1.6.130",
     "date": "2026-08-02",
     "title": "A test run no longer gets cut off partway",

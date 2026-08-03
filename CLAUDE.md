@@ -2974,6 +2974,39 @@ fixed on the spot. Fold the relevant ones into whatever increment next touches t
   the real proxy — that is the pending confirmation, and it is the only thing that
   proves the 524 is actually gone.**
 
+- **ATLAS BUILT A WORKFLOW TOO SLOW TO RUN, AND NOTHING SAID SO UNTIL THE TEST —
+  HALF FIXED (2026-08-02).** The one workflow of four that could not be cleared for
+  go live. A weekly digest (search unread mail from the past 7 days → summarise →
+  deliver) failed three times running at **~381 seconds** with `compile_digest: LLM
+  step failed: LLM call timed out after 120s`. **The workflow was correct in shape
+  and genuinely could not finish** — in a test OR at 8am on a Monday. Go live
+  staying locked was RIGHT; this is not a false negative.
+  **TWO FAULTS, and fixing either alone leaves it broken.** Its stored config asked
+  for `maxResults: 100`, and the log said `failedStep: 1` — the search had
+  COMPLETED and the AI step threw. The llm node races a single 120s timer with no
+  retry, so the search accounted for **~260 of those seconds**: about 2.6s per
+  message, exactly what 100 SEQUENTIAL round trips costs (`gmailSearch` fetched each
+  body in a `for` loop). Then a hundred full email bodies went into ONE model call,
+  which cannot read them inside its ceiling however fast they arrive.
+  **Fixed both:** bodies are fetched in **bounded parallel batches** (8 at a time —
+  batched rather than one `Promise.all` so a large result set cannot trip Gmail's
+  rate limiter, and **order is preserved** because a digest reads newest-first); and
+  the fetch is **capped at `GMAIL_SEARCH_MAX = 50`**, which is **never silent** — the
+  return carries `truncated / requested / limit / note`, the same rule the sample
+  trim already follows. The ceiling is stated in the capability's own **description
+  and hint**, which is what the converger reads, so it stops ASKING for a hundred
+  instead of being quietly overruled.
+  Pinned by `tests/connectors/a-search-that-can-finish.test.js` (9), four mutations
+  red→green. The concurrency tests measure **peak in flight**, not call count — a
+  sequential implementation peaks at 1 and no amount of counting calls can tell the
+  difference.
+  **STILL OPEN, and it is the general form:** nothing warns at BUILD time that a
+  workflow will be too slow to run. The person does the whole interview, approves a
+  plan, confirms every step, and only then finds out. Same family as "a connector's
+  availability is only checked at BUILD time". A read step that can return N items
+  feeding a single AI call is knowable from the spec alone.
+  **NOT re-verified live yet** — the fix is code-proven; the digest workflow
+  re-running to a verdict is the pending confirmation.
 - ~~**A new user's first screen is a CHANGELOG**~~ *(open item, closed by the entry above.)* The What's-New modal
   fires once per user on the login after a release; a user whose FIRST login follows one
   gets five engineering changes — *"Give Atlas a test case without it rebuilding your

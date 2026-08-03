@@ -302,19 +302,69 @@ function parseMessage(msg) {
 
 // ── G-Suite action handlers ──────────────────────────────────────────────────
 
+/**
+ * The most messages one search will ever fetch.
+ *
+ * MEASURED ON PROD, 2026-08-02. A weekly-digest workflow asked for `maxResults:
+ * 100` and its search step alone took **~260 seconds** — roughly 2.6s per message,
+ * which is exactly what 100 sequential round trips costs. The AI step that followed
+ * then got 100 full email bodies in one prompt and blew its own 120s ceiling. The
+ * workflow was correct in shape and could not finish, in a test OR at 8am on a
+ * Monday.
+ *
+ * Two separate faults, and this is the second one. Fetching in parallel (below)
+ * fixes the minutes; it does NOT fix handing a hundred email bodies to a single
+ * model call, and nothing downstream bounds that. So the fetch itself is bounded.
+ *
+ * 50 is not arbitrary: it is above every real digest the product has built (the
+ * capability's own default is 10) and comfortably inside what one model call can
+ * read. A workflow that genuinely needs more items should loop over them — that is
+ * what `foreach` is for — rather than widen this.
+ */
+export const GMAIL_SEARCH_MAX = 50;
+
+/** How many message bodies to fetch at once. */
+const GMAIL_FETCH_CONCURRENCY = 8;
+
 /** gmail_search — list messages matching a query. */
 export async function gmailSearch(gapi, { query, maxResults = 10 }) {
+  // NEVER A SILENT CAP. A request for more than the ceiling is honoured up to it
+  // and SAID — in the return value, so a caller can surface it, and in the log.
+  // Quietly returning 50 of 100 would read as "that is all there was", which is the
+  // shape this codebase has paid for repeatedly.
+  const asked = Number(maxResults) || 10;
+  const want = Math.max(1, Math.min(asked, GMAIL_SEARCH_MAX));
   const list = await gapi('GET', '/gmail/v1/users/me/messages', {
-    params: { q: query, maxResults },
+    params: { q: query, maxResults: want },
   });
+  const ids = (list.messages ?? []).slice(0, want);
+
+  // ── FETCHED IN PARALLEL, IN BOUNDED BATCHES ────────────────────────────────
+  // Each message body is its own round trip; doing them one after another is what
+  // made a 100-message search take four minutes. Batched rather than one big
+  // `Promise.all` so a large result set cannot open fifty sockets at once and trip
+  // Gmail's rate limiter — which would turn a slow search into a failing one.
+  //
+  // ORDER IS PRESERVED. Gmail returns newest-first and a digest reads in that
+  // order; `Promise.all` per batch keeps each batch's order, and the batches are
+  // concatenated in sequence. A parallel fetch that shuffled the results would be a
+  // silent change to every workflow that reads them.
   const messages = [];
-  for (const m of (list.messages ?? []).slice(0, maxResults)) {
-    const full = await gapi('GET', `/gmail/v1/users/me/messages/${m.id}`, {
-      params: { format: 'full' },
-    });
-    messages.push(parseMessage(full));
+  for (let i = 0; i < ids.length; i += GMAIL_FETCH_CONCURRENCY) {
+    const batch = ids.slice(i, i + GMAIL_FETCH_CONCURRENCY);
+    const got = await Promise.all(batch.map((m) =>
+      gapi('GET', `/gmail/v1/users/me/messages/${m.id}`, { params: { format: 'full' } })
+        .then(parseMessage)));
+    messages.push(...got);
   }
-  return { messages };
+
+  return {
+    messages,
+    ...(asked > GMAIL_SEARCH_MAX
+      ? { truncated: true, requested: asked, limit: GMAIL_SEARCH_MAX,
+          note: `This search asked for ${asked} messages; Atlas reads at most ${GMAIL_SEARCH_MAX} in one step.` }
+      : {}),
+  };
 }
 
 /** gmail_get_message — fetch a single message by ID. */
@@ -676,10 +726,10 @@ export function registerGoogleChannels(capabilityRegistry) {
     id: 'gmail_search', connector: 'google', positions: ['step'],
     effect: 'read',
     name: 'Search Gmail', icon: 'mail',
-    description: 'Search inbox messages with a Gmail query (e.g. from:ups.com is:unread).',
+    description: `Search inbox messages with a Gmail query (e.g. from:ups.com is:unread). Reads at most ${GMAIL_SEARCH_MAX} messages in one step; to work through more than that, loop over them.`,
     configSchema: [
       { key: 'query',      label: 'Search query', type: 'string', optional: false, hint: 'Gmail search query, e.g. from:ups.com is:unread' },
-      { key: 'maxResults', label: 'Max results',  type: 'number', optional: true,  hint: 'Default 10' },
+      { key: 'maxResults', label: 'Max results',  type: 'number', optional: true,  hint: `Default 10, maximum ${GMAIL_SEARCH_MAX} — a step that reads more than that cannot be summarised in one go` },
     ],
     requiredScopes: ['https://www.googleapis.com/auth/gmail.readonly'],
     isReady: ready,
