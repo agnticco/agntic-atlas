@@ -1,5 +1,13 @@
 [
   {
+    "version": "1.6.154",
+    "date": "2026-08-03",
+    "title": "Every part of Atlas sees your connected services",
+    "notes": [
+      "Six different parts of Atlas each kept their own idea of what you'd connected. They now share one answer, so a service you connect is visible everywhere at once."
+    ]
+  },
+  {
     "version": "1.6.153",
     "date": "2026-08-03",
     "title": "The builder can see your connected services",

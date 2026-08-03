@@ -1127,6 +1127,18 @@ Rules:
         if (at.connected)  connectedSet.add('airtable');
         if (web.connected) connectedSet.add('web');
 
+        // THE FOURTH COPY of "what is this tenant connected to", and the one the
+        // CHAT reads — both for what it is told it can do, and for the guard that
+        // withdraws the Build it button. The three above it were collapsed first
+        // and the customer was STILL told, in the same words, that a service they
+        // had just connected was missing: fixing a list nobody reads changes
+        // nothing a person can see. Derived, like the others.
+        for (const id of Object.keys(mcpConnectedFor({
+          capabilityRegistry: spine.engine.capabilityRegistry,
+          oauthTokenStore: spine.auth.oauthTokenStore,
+          tenantId: req.tenant.id,
+        }))) connectedSet.add(id);
+
         connectorLines.push(...connectorLinesFromRegistry(spine.engine.capabilityRegistry, connectedSet));
 
         // Filesystem + Knowledge: not in the CapabilityRegistry, add manually.
@@ -2037,6 +2049,15 @@ Rules:
       const web = webConnectionStatus();
       if (web.connected) connectors.push({ id: 'web', name: 'Web', kind: 'connector' });
     } catch { /* non-fatal */ }
+    try {
+      // One-click services, from the same derivation. A service missing here is
+      // one a person cannot @-mention even though they connected it.
+      for (const [id, svc] of Object.entries(mcpConnectedFor({
+        capabilityRegistry: spine.engine.capabilityRegistry,
+        oauthTokenStore: spine.auth.oauthTokenStore,
+        tenantId,
+      }))) connectors.push({ id, name: svc.name, kind: 'connector' });
+    } catch { /* non-fatal */ }
 
     res.json({ connectors, users });
   });
@@ -2625,6 +2646,13 @@ Rules:
         if (go.connected)  editConnectedSet.add('google');
         if (at.connected)  editConnectedSet.add('airtable');
         if (web.connected) editConnectedSet.add('web');
+        // Same derivation as everywhere else — without it, EDITING a workflow
+        // hides the very steps that building it offered.
+        for (const id of Object.keys(mcpConnectedFor({
+          capabilityRegistry: spine.engine.capabilityRegistry,
+          oauthTokenStore: spine.auth.oauthTokenStore,
+          tenantId: req.tenant.id,
+        }))) editConnectedSet.add(id);
       } catch { /* non-fatal — fall back to isReady()-only filtering */ }
 
       const capCtx = editChangeCapabilityContext(spine.engine?.channelRegistry, spine.engine?.capabilityRegistry, editConnectedSet);

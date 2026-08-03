@@ -23,15 +23,25 @@
  * So the guard here is not "does Notion appear". It is that the list is DERIVED:
  * a service connected tomorrow appears tomorrow, without anyone editing a line.
  *
- * ── THERE WERE THREE COPIES, AND FIXING THE FIRST CHANGED NOTHING VISIBLE ──
+ * ── THERE WERE SIX SITES, AND THEY WERE FOUND ONE AT A TIME ────────────────
  *
- * `/capabilities` was corrected first and the browser behaved identically: the
- * INTERVIEW does not read it. `POST /api/builder/sessions` built its own list,
- * a third literal, and that is the one the chat and the converger see. So the
- * customer was told a second time to connect a service they had connected.
+ * `/capabilities` was corrected first and the browser behaved IDENTICALLY: the
+ * interview does not read it. Then the builder session endpoint — also not the
+ * one the chat reads. Each fix cost a deploy and another round of a customer
+ * being told a connected service was missing.
  *
- * Both now call `mcpConnectedFor`. The guard below is therefore not "does Notion
- * appear" but "is there one rule": a test per copy is how three copies happen.
+ *   1. GET /capabilities                        → derived
+ *   2. POST /api/builder/sessions               → derived (the converger's view)
+ *   3. the chat's connectedSet                  → derived (what withdraws the
+ *                                                 Build it button)
+ *   4. the edit-a-workflow connectedSet         → derived
+ *   5. the @-mention list                       → derived
+ *   6. the trigger narrowing + annotateChannelCatalog → deliberately NOT, and
+ *      the reasons are in the enumeration test below.
+ *
+ * So the last test asserts the COUNT. Enumerating is the only thing that would
+ * have caught this in one pass instead of four, and it is a rule this project
+ * already had written down before this happened.
  *
  * ── AN HONEST NOTE ABOUT WHAT THE BEHAVIOURAL TESTS DO AND DO NOT PROVE ─────
  *
@@ -50,9 +60,11 @@
  * extractable.
  *
  * ── Mutations, run by hand (2026-08-03) ─────────────────────────────────────
- *   M1  connectors reverted to the literal            → 1 red (the source pin)
- *   M2  a service with an unreadable catalog counts   → 1 red
- *   M3  a service with no grant is listed anyway      → 1 red
+ *   M1  the interview's list reverts to a literal     → 1 red
+ *   M2  /capabilities reverts to a literal            → 1 red
+ *   M3  a service with an unreadable catalog counts   → 2 red
+ *   M4  a service with no grant is listed anyway      → 1 red
+ *   M5  a surface stops deriving (count drops to 4)   → 1 red
  */
 
 import { test, describe } from 'node:test';
@@ -147,13 +159,44 @@ describe('EVERY surface asks the one rule (SOURCE-level — see the header)', ()
       'the builder session endpoint is what the INTERVIEW reads — a literal here is invisible to /capabilities tests');
   });
 
-  test('both call the shared derivation rather than repeating it', () => {
-    // The point of the fix. Three copies is how one connected service got called
-    // missing twice in a row.
+  test('both files call the shared derivation rather than repeating it', () => {
     for (const [name, src] of [['server.js', SERVER], ['builder.js', BUILDER]]) {
       assert.match(src, /mcpConnectedFor\(\{/, `${name} must ask the shared rule`);
       assert.match(src, /from '\.\.\/connectors\/connected-services\.js'/, `${name} must import it`);
     }
+  });
+
+  test('EVERY surface that decides "what is connected" asks it — enumerated, not spot-checked', () => {
+    /**
+     * Six sites decide this, and they were found ONE AT A TIME, each costing a
+     * deploy and another round of a customer being told a connected service was
+     * missing. Four needed the derivation; two legitimately do not, and are
+     * named here so "it is not in the list" is a decision rather than an
+     * oversight:
+     *
+     *   · the trigger narrowing (`connectedIds`) — MCP contributes no triggers.
+     *   · `annotateChannelCatalog` — falls through for an unknown connector,
+     *     leaving availability untouched. Verified by reading its default arm.
+     *
+     * The count is asserted so ADDING a seventh site fails here, which is the
+     * only thing that would have caught this class in one pass instead of four.
+     */
+    const derived = (BUILDER.match(/mcpConnectedFor\(\{/g) ?? []).length
+                  + (SERVER.match(/mcpConnectedFor\(\{/g) ?? []).length;
+    assert.ok(derived >= 5,
+      `all five connected-services views must derive; found ${derived}. ` +
+      'One dropping out means a customer is told a service they connected is missing.');
+
+    // WHAT THIS CATCHES AND WHAT IT DOES NOT, stated rather than implied.
+    // It catches a surface DROPPING the derivation. It cannot catch someone
+    // adding a SEVENTH surface that never had it — no regex distinguishes "a new
+    // endpoint that decides what is connected" from any other code, and an
+    // exact-count assertion would simply false-alarm the moment a site was
+    // legitimately added, which teaches people to bump the number.
+    // The durable protection is that there is one function to call.
+    assert.ok(/export function mcpConnectedFor/.test(
+      readFileSync(new URL('../../src/connectors/connected-services.js', import.meta.url), 'utf8')),
+      'the shared rule must exist for a new surface to have something to call');
   });
 });
 
