@@ -127,6 +127,12 @@ export class CapabilityRegistry {
       // times (`isWritingAction`, the trigger captions, the step-type tables).
       oneTimeSetup:   def.oneTimeSetup === true,
       assertionKind:  def.assertionKind  ?? null,
+      // WE DID NOT AUTHOR THIS TOOL, SO WE CANNOT KNOW WHERE IT WRITES.
+      // Declared by capabilities projected from a remote service: their inputs
+      // can be named anything, so no key list and no assertion kind can be
+      // inferred without guessing. The oracle matches a promise about such a
+      // capability on the SERVICE ALONE. See outcome-oracle.js `isLocatorFree`.
+      locatorFree:    def.locatorFree === true,
       locatorKeys:    Array.isArray(def.locatorKeys) ? def.locatorKeys : null,
       // ── WHERE IT WRITES WHEN NOBODY SAID ──────────────────────────────────
       // Some destinations are optional in config because the provider has a real

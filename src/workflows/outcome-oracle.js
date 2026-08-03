@@ -131,9 +131,60 @@ export function aliasesFor(connector) {
  * label as an address it never was.
  */
 const LOCATOR_FREE_CONNECTORS = new Set(['inbox']);
+
+/**
+ * ── A CAPABILITY WE DID NOT AUTHOR CAN DECLARE THAT ITS DESTINATION IS
+ *    UNKNOWABLE, AND THAT IS THE HONEST ANSWER (2026-08-03, Charles's call:
+ *    "match on the service alone") ──────────────────────────────────────────
+ *
+ * The set above is hand-typed, which is the shape this file's history is made
+ * of. It was fine while every connector was ours. It is not fine now: P13
+ * imports tools from services nobody here has taught Atlas about, and their
+ * fields can be named anything.
+ *
+ * WITNESSED the day Notion connected. A correct workflow — search the web,
+ * write a briefing, create a Notion page titled with the date — tested green
+ * ("Contract kept") and then COULD NOT BE PUBLISHED:
+ *
+ *   "The outcome promises "notion:AI Agents Briefing" (document_exists), but no
+ *    step in this workflow does that — the request would be silently dropped."
+ *
+ * The step does exactly that. Two independent mismatches, both from guessing
+ * about a tool we did not write: `notion` is not in `DOC_CONNECTORS`, so a page
+ * was filed as a `record_exists` against a `document_exists` promise; and the
+ * promise named "AI Agents Briefing" while the step titles the page
+ * "AI Agents Briefing — August 3, 2026", because the customer asked for the
+ * date in the title.
+ *
+ * We cannot fix that by guessing harder. We do not know which of an arbitrary
+ * tool's inputs names a place, and we do not know whether that service calls
+ * the result a page, a record or a message. So a projected capability DECLARES
+ * that, and the promise is matched on THE SERVICE ALONE: did some step write to
+ * Notion? That is weaker than "wrote a page called X" — and it is TRUE, where
+ * the strong version was false, which is the trade this product exists to make.
+ *
+ * IT IS NOT A FAIL-OPEN. A promise about Notion is still unsatisfied when
+ * nothing writes to Notion; only the sub-service label stops being compared.
+ * Identical in kind to the exemption the Atlas inbox has always had, and for
+ * the same reason: the locator was never an address.
+ */
+function declaresLocatorFree(connector) {
+  const key = String(connector ?? '').toLowerCase();
+  if (!key) return false;
+  for (const cap of listCatalog()) {
+    if (cap?.locatorFree !== true) continue;
+    if (String(cap.connector ?? '').toLowerCase() === key) return true;
+  }
+  return false;
+}
+
 function isLocatorFree(connector) {
-  for (const alias of aliasesFor(connector)) if (LOCATOR_FREE_CONNECTORS.has(alias)) return true;
-  return LOCATOR_FREE_CONNECTORS.has(String(connector ?? '').toLowerCase());
+  for (const alias of aliasesFor(connector)) {
+    if (LOCATOR_FREE_CONNECTORS.has(alias)) return true;
+    if (declaresLocatorFree(alias)) return true;
+  }
+  const key = String(connector ?? '').toLowerCase();
+  return LOCATOR_FREE_CONNECTORS.has(key) || declaresLocatorFree(key);
 }
 
 /**
@@ -151,6 +202,18 @@ function isLocatorFree(connector) {
 const INBOX_DUAL_KINDS = new Set(['message_sent', 'record_exists']);
 function kindSatisfies(effKind, wantKind, connectors) {
   if (effKind === wantKind) return true;
+  const list = connectors instanceof Set ? [...connectors] : [connectors];
+
+  // A service that DECLARED its shape unknowable is interchangeable across the
+  // write kinds too — the same argument as the locator. Notion calls it a page,
+  // Atlas's verb regex calls it a record, and the customer's promise says
+  // document; none of those three disagree about what happened. Kept separate
+  // from the inbox rule below so the inbox's narrower dual-kind behaviour is
+  // unchanged.
+  if (list.some(c => declaresLocatorFree(c))) {
+    return ASSERTION_KINDS.includes(effKind) && ASSERTION_KINDS.includes(wantKind);
+  }
+
   const inbox = connectors instanceof Set
     ? [...connectors].some(c => LOCATOR_FREE_CONNECTORS.has(c))
     : isLocatorFree(connectors);
@@ -269,6 +332,21 @@ let _catalog = null;
  */
 export function setCapabilityCatalog(catalog) {
   _catalog = (catalog && typeof catalog.get === 'function') ? catalog : null;
+}
+
+/**
+ * Every capability in the catalog, or [] when there is none.
+ *
+ * The injected catalog is only guaranteed to answer `get`, so `list` is probed
+ * rather than assumed — a catalog without it must yield "no declarations", not a
+ * crash, exactly as a missing catalog does. Deliberately NOT memoised: MCP
+ * services register their capabilities when a customer connects, long after boot,
+ * so a cached answer would be stale for precisely the capabilities this exists
+ * to serve.
+ */
+function listCatalog() {
+  if (!_catalog || typeof _catalog.list !== 'function') return [];
+  try { const l = _catalog.list(); return Array.isArray(l) ? l : []; } catch { return []; }
 }
 
 /** The catalog entry for a capability id, or `undefined` when unknown/uninjected. */

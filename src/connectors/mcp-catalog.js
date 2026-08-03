@@ -121,6 +121,19 @@ export function projectMcpTool(tool, { connector }) {
     icon: 'plug',
     configSchema: projectInputSchema(tool.inputSchema),
     outputFormat: 'plain',
+    // ── ITS DESTINATION IS UNKNOWABLE, AND SAYING SO IS THE POINT ──────────
+    //
+    // A native capability declares which config key names the place it writes
+    // to. We cannot: this tool's inputs are whatever its author chose, and the
+    // word that service uses for the result — page, record, message — is theirs
+    // too. Guessing produced a workflow that tested green and could not be
+    // published, because a Notion page titled "AI Agents Briefing — August 3,
+    // 2026" did not string-match a promise about "AI Agents Briefing".
+    //
+    // So the promise is matched on the SERVICE. Weaker than naming the page,
+    // and true rather than false. It is NOT a fail-open: a promise about Notion
+    // is still broken when no step writes to Notion.
+    locatorFree: true,
     // NO PROVENANCE FIELD, and that is the invariant rather than an omission.
     // `CapabilityRegistry.register` normalises to a fixed field set and drops
     // anything else — measured 2026-08-03 — so a "where did this come from" mark

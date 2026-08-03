@@ -6939,7 +6939,25 @@ class Component extends DCLogic {
         if (!r.ok || r.data.ok === false) {
           self.setState({ thinking: false, phase: "draft" });
           if (self._handlePlanLimit(r.data)) return;
-          alert((r.data && r.data.error) || "Could not save workflow — please try again.");
+          // ── WHY THIS IS NOT AN alert() ANY MORE (2026-08-03) ───────────────
+          //
+          // Go live failed on a correct workflow and the customer got a Chrome
+          // dialog reading "Workflow update failed validation." — engineer's
+          // words, no reason, and a browser modal BLOCKS THE WHOLE PAGE until
+          // it is dismissed. The server had sent the actual reason all along, in
+          // `issues`; the alert threw it away.
+          //
+          // Now it lands in the conversation, where every other refusal in this
+          // product lands, and it CARRIES THE REASON.
+          var issues = (r.data && r.data.issues) || [];
+          var why = issues.map(function(i) { return i && i.message; }).filter(Boolean);
+          self.setState({
+            msgs: [...self.state.msgs, { isAtlas: true, hasReason: false, text:
+              "I couldn't turn this on yet.\n\n" +
+              (why.length ? why.join("\n\n") : ((r.data && r.data.error) || "Saving it failed — please try again.")) +
+              "\n\nTell me what to change and I'll fix it." }],
+            inputMode: "change",
+          });
           return;
         }
         var wfId = r.data.workflowId;

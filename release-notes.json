@@ -1,5 +1,13 @@
 [
   {
+    "version": "1.6.155",
+    "date": "2026-08-03",
+    "title": "A workflow using a new service can go live",
+    "notes": [
+      "A correct workflow that saved to Notion passed its test and then couldn't be published. Atlas now matches a promise about an outside service on the service itself, rather than guessing at the exact name of the thing it wrote."
+    ]
+  },
+  {
     "version": "1.6.154",
     "date": "2026-08-03",
     "title": "Every part of Atlas sees your connected services",

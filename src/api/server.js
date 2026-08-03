@@ -106,7 +106,7 @@ import { CIMD_PATH, clientIdMetadata } from '../connectors/client-identity.js';
 import { createMcpConnectFlow } from '../connectors/mcp-connect.js';
 import { registerMcpCatalog } from '../connectors/mcp-catalog.js';
 import { MCP_DIRECTORY, mcpService } from '../connectors/mcp-directory.js';
-import { mcpConnectedFor, mcpOwnerId, mcpConnectorId } from '../connectors/connected-services.js';
+import { mcpConnectedFor, mcpOwnerId, mcpConnectorId, ensureMcpToolsLoaded } from '../connectors/connected-services.js';
 import { entitlementsFor, PUBLIC_PLANS, PLAN_META, isSelfServe } from '../entitlements/index.js';
 import { BillingEventStore } from '../billing/billing-event-store.js';
 import { handleStripeLifecycle } from '../billing/lifecycle.js';
@@ -3047,16 +3047,15 @@ export function createApp(spine) {
    * time that tenant asks what it can do. Loaded servers are remembered per
    * process, so this costs one request per service per restart, not per call.
    */
-  const mcpLoaded = new Set();
-  async function ensureMcpTools(tenantId) {
-    await Promise.all(MCP_DIRECTORY.map(async (svc) => {
-      if (mcpLoaded.has(svc.id) || !mcpGrant(tenantId, svc.id)) return;
-      mcpLoaded.add(svc.id);           // claimed BEFORE the await — two concurrent
-                                       // requests must not both fetch the catalog
-      const out = await loadMcpTools({ tenantId, serverId: svc.id });
-      if (!out.ok) mcpLoaded.delete(svc.id);   // a failed read must be retryable
-    }));
-  }
+  // Shared with the builder — see connected-services.js. Anything that asks
+  // what a workspace is connected to must first make sure it can SEE it.
+  const ensureMcpTools = (tenantId) => ensureMcpToolsLoaded({
+    capabilityRegistry: spine.engine.capabilityRegistry,
+    oauthTokenStore: spine.auth.oauthTokenStore,
+    tokenCipher: spine.auth.tokenCipher,
+    tenantId,
+    onEvent: logEvent,
+  });
 
   /** The pick-a-service list. Names only — never an address to paste. */
   app.get('/connectors/mcp/servers', requireActiveTenant, async (req, res) => {

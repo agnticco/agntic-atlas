@@ -44,7 +44,7 @@ import { notesSince } from '../release-notes.js';
 import { sendMail } from '../utils/mailer.js';
 import { renderInviteEmail } from '../auth/invite-email.js';
 import { oauthRedirectBase } from '../connectors/oauth-redirect.js';
-import { mcpConnectedFor } from '../connectors/connected-services.js';
+import { mcpConnectedFor, ensureMcpToolsLoaded } from '../connectors/connected-services.js';
 import { seatLimit, entitlement, entitlementsFor, nextPlan, PLAN_META, BUILD_RUN_COST, PUBLIC_PLANS, isSelfServe } from '../entitlements/index.js';
 import { isBillingConfigured } from '../billing/stripe.js';
 import { randomBytes } from 'node:crypto';
@@ -1127,6 +1127,15 @@ Rules:
         if (at.connected)  connectedSet.add('airtable');
         if (web.connected) connectedSet.add('web');
 
+        // Load first, then ask. Without this the answer depends on whether
+        // someone happened to open a page that loads the catalog, and the first
+        // build after every deploy is told the service is missing.
+        await ensureMcpToolsLoaded({
+          capabilityRegistry: spine.engine.capabilityRegistry,
+          oauthTokenStore: spine.auth.oauthTokenStore,
+          tokenCipher: spine.auth.tokenCipher,
+          tenantId: req.tenant.id,
+        });
         // THE FOURTH COPY of "what is this tenant connected to", and the one the
         // CHAT reads — both for what it is told it can do, and for the guard that
         // withdraws the Build it button. The three above it were collapsed first
@@ -1809,6 +1818,12 @@ Rules:
     const google   = await spine.google.resolveForTenant(req.tenant.id, req.user.id);
     const airtable = spine.airtable.resolveForTenant(req.tenant.id);
     const web      = webConnectionStatus();
+    await ensureMcpToolsLoaded({
+      capabilityRegistry: spine.engine.capabilityRegistry,
+      oauthTokenStore: spine.auth.oauthTokenStore,
+      tokenCipher: spine.auth.tokenCipher,
+      tenantId: req.tenant.id,
+    });
     // Services connected through the one-click flow are DERIVED, never typed
     // out. This line was the third copy of "what is this tenant connected to",
     // and it is the one the interview and the chat read — so fixing only
