@@ -485,6 +485,32 @@ const mapNodesDeep = (nodes, fn) => (nodes ?? []).map((n) => {
 // EVERY run path (run-test, event dispatch, scheduler). Connector-agnostic.
 async function injectTenantTokens(obj, tenantId, deps) {
   if (!tenantId || !(obj?.nodes?.length)) return obj;
+
+  // ── LOAD BEFORE RUNNING, AT THE ONE PLACE EVERY RUN PATH PASSES THROUGH ───
+  //
+  // A one-click service's tools live in memory and its grant lives on disk, so
+  // after any restart the capability is GONE until something re-reads the
+  // catalog. WITNESSED: with the handler fixed, the first real run still failed
+  // — `Channel "notion_create-pages" is not wired in this build.` — because the
+  // process had booted since the customer connected, and nothing on the run path
+  // reloads.
+  //
+  // A scheduled workflow is the case that matters: it fires at 8am into whatever
+  // process happens to be running, with no browser to have warmed anything.
+  // Putting it here rather than in each caller is deliberate — this function is
+  // documented as the one every run path uses (REST, scheduler, Slack dispatch,
+  // Airtable dispatch), and a per-caller fix is how the connected-services list
+  // ended up with six copies.
+  if (deps?.capabilityRegistry && deps?.oauthTokenStore && deps?.cipher) {
+    await ensureMcpToolsLoaded({
+      capabilityRegistry: deps.capabilityRegistry,
+      oauthTokenStore: deps.oauthTokenStore,
+      tokenCipher: deps.cipher,
+      tenantId,
+      onEvent: logEvent,
+    }).catch(() => { /* a service we cannot read must not stop a run that does not use it */ });
+  }
+
   let nodes = obj.nodes;
   let changed = false;
   for (const c of CONNECTOR_INJECTORS) {
@@ -607,7 +633,7 @@ async function unconnectedConnector(spec, tenantId, deps) {
 async function dryRunSpecForTenant(spine, spec, { tenantId = null, userId = null, initialContext = undefined } = {}) {
   let s = spec;
   if (tenantId) {
-    const deps = { oauthTokenStore: spine.auth.oauthTokenStore, cipher: spine.auth.tokenCipher, userId };
+    const deps = { oauthTokenStore: spine.auth.oauthTokenStore, cipher: spine.auth.tokenCipher, userId, capabilityRegistry: spine.engine.capabilityRegistry };
     s = await injectTenantTokens(s, tenantId, deps);
     if (userId) s = injectInboxContext(s, tenantId, userId);
     s = injectFilesystemContext(s, tenantId);
@@ -808,7 +834,7 @@ async function dispatchSlackEventForTenant(spine, { tenantId, ev, wantEvent, isM
   });
 
   if (!flows.length) return;
-  const slackDeps = { oauthTokenStore: spine.auth.oauthTokenStore, cipher: spine.auth.tokenCipher };
+  const slackDeps = { oauthTokenStore: spine.auth.oauthTokenStore, cipher: spine.auth.tokenCipher, capabilityRegistry: spine.engine.capabilityRegistry };
   const context = isMention
     ? `Atlas was @-mentioned in <#${ev.channel}> by <@${ev.user}>:\n\n${ev.text ?? ''}`
     : `New Slack message in <#${ev.channel}> from <@${ev.user}>:\n\n${ev.text ?? ''}`;
@@ -838,7 +864,7 @@ async function dispatchAirtableEvent(spine, body) {
   if (!route) { logEvent('airtable.event.no_route', { baseId, webhookId }); return; }
 
   const { tenantId } = route;
-  const airtableDeps = { oauthTokenStore: spine.auth.oauthTokenStore, cipher: spine.auth.tokenCipher };
+  const airtableDeps = { oauthTokenStore: spine.auth.oauthTokenStore, cipher: spine.auth.tokenCipher, capabilityRegistry: spine.engine.capabilityRegistry };
   const pat  = await getAirtableAccessToken({ oauthTokenStore: spine.auth.oauthTokenStore, cipher: spine.auth.tokenCipher, tenantId });
   if (!pat) { logEvent('airtable.event.no_token', { tenantId }); return; }
 
@@ -1233,6 +1259,7 @@ export async function bootSpine() {
   engine.workflowScheduler.registerTokenInjector(async (workflow) => {
     let w = await injectTenantTokens(workflow, workflow.tenant_id ?? 'default', {
       oauthTokenStore: auth.oauthTokenStore, cipher: auth.tokenCipher, userId: workflow.user_id,
+      capabilityRegistry: engine.capabilityRegistry,
     });
     w = injectInboxContext(w, w.tenant_id ?? 'default', w.user_id ?? '');
     w = injectFilesystemContext(w, w.tenant_id ?? 'default');
@@ -2720,7 +2747,7 @@ export function createApp(spine) {
       // tenant (headless) or for the designated dev tenant. Inside the try so a
       // token decrypt error returns JSON, never an HTML 500 the UI can't parse.
       if (req.tenant) {
-        const deps = { oauthTokenStore: spine.auth.oauthTokenStore, cipher: spine.auth.tokenCipher, userId: req.user?.id };
+        const deps = { oauthTokenStore: spine.auth.oauthTokenStore, cipher: spine.auth.tokenCipher, userId: req.user?.id, capabilityRegistry: spine.engine.capabilityRegistry };
         const missing = await unconnectedConnector(spec, req.tenant.id, deps);
         if (missing) {
           logEvent('run.connector_not_connected', { tenant: tenantId, connector: missing });

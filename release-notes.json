@@ -1,5 +1,13 @@
 [
   {
+    "version": "1.6.157",
+    "date": "2026-08-03",
+    "title": "A scheduled workflow can reach a connected service",
+    "notes": [
+      "After a restart, a workflow using one of the new services couldn't find it. Every run path now loads what your workspace is connected to before running."
+    ]
+  },
+  {
     "version": "1.6.156",
     "date": "2026-08-03",
     "title": "Workflows using a new service actually run",
