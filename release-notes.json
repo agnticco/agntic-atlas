@@ -1,5 +1,13 @@
 [
   {
+    "version": "1.6.137",
+    "date": "2026-08-02",
+    "title": "Version 1.6.137",
+    "notes": [
+      "Corrected the event name Atlas saves on a Slack trigger so the part that receives messages can match it."
+    ]
+  },
+  {
     "version": "1.6.136",
     "date": "2026-08-02",
     "title": "Slack-triggered workflows actually fire now",

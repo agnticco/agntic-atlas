@@ -52,6 +52,15 @@ import path from 'node:path';
 
 import { normalizeConnectorTrigger } from '../../src/converger/elicitation-graph.js';
 import { isRunnableTrigger } from '../../src/workflows/trigger-runnable.js';
+import { slackEventKind } from '../../src/api/server.js';
+
+// THE DISPATCHER'S OWN ANSWER, not a literal copied beside it. The first version
+// of the normalizer stamped `slack_message` — the capability id — where the matcher
+// wants Slack's RAW event type. It shipped and was caught only by reading the real
+// dispatcher. Deriving the expectation from `slackEventKind` means that mistake
+// cannot be made again in either direction.
+const WANT_MESSAGE = slackEventKind({ type: 'message' });
+const WANT_MENTION = slackEventKind({ type: 'app_mention' });
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const SERVER = readFileSync(path.join(ROOT, 'src/api/server.js'), 'utf8');
@@ -69,8 +78,16 @@ describe('the shape the dispatcher actually matches on', () => {
     assert.match(SERVER, /t\.filter\?\.channel/, 'the channel is read off the filter OBJECT');
   });
 
-  test('the event id is stamped, so the matcher can find it', () => {
-    assert.equal(fix(broken()).event, 'slack_message');
+  test('the event id is stamped in the vocabulary the matcher uses', () => {
+    assert.equal(fix(broken()).event, WANT_MESSAGE);
+  });
+
+  test('a capability id is corrected to the raw event type', () => {
+    // `slack_message` is what the catalog calls it; `message` is what Slack sends
+    // and what the matcher compares against. A model writing the former has
+    // declared something no dispatch can match — malformed, not a preference.
+    assert.equal(fix([{ type: 'event', connector: 'slack', event: 'slack_message' }]).event, WANT_MESSAGE);
+    assert.equal(fix([{ type: 'event', connector: 'slack', event: 'slack_mention' }]).event, WANT_MENTION);
   });
 
   test('a filter expression becomes the object the matcher reads', () => {
@@ -85,13 +102,13 @@ describe('the shape the dispatcher actually matches on', () => {
 
   test('a mention is honoured, because it arrives differently', () => {
     assert.equal(fix([{ type: 'event', connector: 'slack', filter: 'channel:#ops event:slack_mention' }]).event,
-      'slack_mention');
+      WANT_MENTION);
   });
 });
 
 describe('it never overrides what is already right', () => {
   test('a declared event id and object filter are untouched', () => {
-    const t = { type: 'event', connector: 'slack', event: 'slack_mention', filter: { channel: '#x' } };
+    const t = { type: 'event', connector: 'slack', event: WANT_MENTION, filter: { channel: '#x' } };
     assert.deepEqual(fix([t]), t);
   });
 
@@ -102,8 +119,8 @@ describe('it never overrides what is already right', () => {
     // (measured 2026-08-03). Here the two disagree: the person declared an
     // ordinary message trigger on a channel whose name contains "mentions", and
     // the declaration must win.
-    const t = { type: 'event', connector: 'slack', event: 'slack_message', filter: 'channel:#mentions' };
-    assert.equal(fix([t]).event, 'slack_message',
+    const t = { type: 'event', connector: 'slack', event: WANT_MESSAGE, filter: 'channel:#mentions' };
+    assert.equal(fix([t]).event, WANT_MESSAGE,
       'a declared event id is never recomputed — the model may know something the text does not');
   });
 
@@ -125,7 +142,7 @@ describe('it never overrides what is already right', () => {
     // workflow the person asked to be broad — the opposite mistake, and a quieter one.
     const t = fix([{ type: 'event', connector: 'slack', filter: 'every message please' }]);
     assert.equal(t.filter, undefined);
-    assert.equal(t.event, 'slack_message');
+    assert.equal(t.event, WANT_MESSAGE);
   });
 });
 
@@ -138,7 +155,7 @@ describe('the guard refuses what nothing can match', () => {
   test('but every well-formed trigger still can', () => {
     // The anti-overreach direction: this guard blocks publishing, so a false
     // refusal stops someone shipping a workflow that would have worked.
-    assert.ok(isRunnableTrigger({ type: 'event', connector: 'slack', event: 'slack_message' }));
+    assert.ok(isRunnableTrigger({ type: 'event', connector: 'slack', event: WANT_MESSAGE }));
     assert.ok(isRunnableTrigger({ type: 'event', connector: 'airtable', event: 'airtable_record_changed' }));
     for (const type of ['email', 'schedule', 'manual']) assert.ok(isRunnableTrigger({ type }));
   });

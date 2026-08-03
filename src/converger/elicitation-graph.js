@@ -1045,8 +1045,25 @@ export function normalizeConnectorTrigger(triggers) {
     // is an ordinary channel message, which is what "when someone posts" means.
     if (!String(out.event ?? '').trim()) {
       const said = `${t.event ?? ''} ${typeof t.filter === 'string' ? t.filter : ''} ${out.filter?.event ?? ''}`;
-      out.event = /mention/i.test(said) ? 'slack_mention' : 'slack_message';
+      out.event = /mention/i.test(said) ? 'app_mention' : 'message';
     }
+    // A DECLARED ID STILL HAS TO BE ONE THE DISPATCHER MATCHES.
+    //
+    // `slackEventKind` (server.js) yields Slack's RAW event type — `message` or
+    // `app_mention` — and the matcher compares `t.event === wantEvent`. A model
+    // that writes the capability id `slack_message` instead has declared something
+    // no dispatch can ever match, which is not a declaration to respect but the
+    // same malformed shape one spelling along. (I shipped exactly that mistake in
+    // this function's first version, 2026-08-03, and caught it against the real
+    // dispatcher — which is why the test now reads `slackEventKind` itself.)
+    //
+    // Only the two known spellings are mapped. Anything else is left alone: the
+    // guard refuses an unmatchable trigger at publish, and guessing at a value
+    // nobody recognises is how a wrong id becomes a silent one.
+    const ev = String(out.event ?? '').trim().toLowerCase();
+    if (ev === 'slack_message') out.event = 'message';
+    else if (ev === 'slack_mention' || ev === 'mention') out.event = 'app_mention';
+
     return out;
   });
 }
