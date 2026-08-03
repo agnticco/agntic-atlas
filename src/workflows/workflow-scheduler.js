@@ -410,6 +410,29 @@ export class WorkflowScheduler {
         workflowId: workflow.id,
       };
       if (emailContext) runOpts.initialContext = emailContext;
+      // ── WHAT THE FIRST STEP IS ACTUALLY SEEDED WITH ──────────────────────────
+      //
+      // The one value that settles why a Slack-triggered workflow's first AI step
+      // reports "could not find the data it needed". The EMAIL trigger uses this
+      // same parameter and works, so the two values can be compared directly and
+      // the question answered in one message rather than another round of guessing.
+      //
+      // The previous attempt at this logged `steps[0].output` under the name
+      // `input` — an OUTPUT, mislabelled — and so could not answer the question it
+      // was added for. This reads the seed itself, at the moment it is applied.
+      //
+      // Type and length are carried as well as a preview: "the context is a string
+      // of 84 characters" and "the context is an object" are different diagnoses,
+      // and the preview alone would not distinguish them.
+      noteRun('flow.run.seeded', {
+        tenant: workflow.tenant_id ?? null, workflow: workflow.slug, runId: run.id,
+        trigger, seeded: emailContext != null,
+        type: emailContext === null ? 'null' : Array.isArray(emailContext) ? 'array' : typeof emailContext,
+        length: typeof emailContext === 'string' ? emailContext.length : null,
+        preview: typeof emailContext === 'string'
+          ? emailContext.slice(0, 220)
+          : JSON.stringify(emailContext ?? null).slice(0, 220),
+      });
       // RESUME (§7.4). The checkpoint — not the steps. The steps are display-shrunk.
       if (checkpoint) runOpts.checkpoint = checkpoint;
       if (decisions)  runOpts.decisions  = decisions;

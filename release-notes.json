@@ -1,5 +1,13 @@
 [
   {
+    "version": "1.6.140",
+    "date": "2026-08-03",
+    "title": "Version 1.6.140",
+    "notes": [
+      "Records what a triggered workflow's first step is actually given, so a step reporting missing data can be diagnosed from the log."
+    ]
+  },
+  {
     "version": "1.6.139",
     "date": "2026-08-03",
     "title": "One failed run no longer takes a workflow off the air",

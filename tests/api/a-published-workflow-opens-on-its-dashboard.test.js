@@ -120,6 +120,28 @@ describe('a real run says so in the log people read', () => {
       'and carry what the first step was given — whether the trigger context arrived is the question it exists to answer');
   });
 
+  test('and what the first step was SEEDED with is recorded', () => {
+    // The value that settles why a Slack-triggered workflow's first AI step reports
+    // "could not find the data it needed". The email trigger uses the SAME
+    // parameter and works, so the two are directly comparable.
+    //
+    // The previous attempt logged `steps[0].output` under the name `input` — an
+    // OUTPUT, mislabelled — and so could not answer the question it was added for.
+    // This reads the seed itself, at the point it is applied to the run.
+    const i = SCHED.indexOf('if (emailContext) runOpts.initialContext = emailContext;');
+    assert.notEqual(i, -1, 'the seed site moved — re-point this');
+    // Scoped to the log call ITSELF, not a byte window after it — a wide window
+    // picks up unrelated code and fails for the wrong reason (it did).
+    const j = SCHED.indexOf("noteRun('flow.run.seeded'", i);
+    assert.notEqual(j, -1, 'the seed is not recorded at the point it is applied');
+    const at = SCHED.slice(j, SCHED.indexOf('});', j) + 3);
+    assert.match(at, /type:/, 'a string of 84 chars and an object are different diagnoses');
+    assert.match(at, /length:/);
+    assert.match(at, /preview:/);
+    assert.match(at, /emailContext/, 'it must read the SEED, never a step output — that is the mistake this replaces');
+    assert.doesNotMatch(at, /steps\[0\]/);
+  });
+
   test('they carry the run id, so the log and the runs table can be joined', () => {
     for (const kind of ['flow\\.run\\.ok', 'flow\\.run\\.failed']) {
       assert.match(SCHED, new RegExp(`${kind}'[\\s\\S]{0,260}runId:`),
