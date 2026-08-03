@@ -2077,10 +2077,41 @@ export function createApp(spine) {
       const triggers = spine.engine.capabilityRegistry
         .list({ position: 'trigger' })
         .map(t => ({ ...t, available: t.available && (!t.connector || connected.has(t.connector)) }));
+
+      // ── THE SECOND HAND-TYPED CONNECTOR LIST, and it had the SAME defect ────
+      //
+      // P13-0 fixed credential resolution to read the connector a capability
+      // DECLARES, because a hand-typed list means a connector nobody remembered
+      // to add gets nothing at run time even though the customer IS connected
+      // (R22). This object was the other one, and it was still a literal.
+      //
+      // WITNESSED 2026-08-03, minutes after Notion connected: its 20 tools were
+      // in the catalog above and Notion was absent from this list, so the
+      // interview was told Notion was not connected, refused to build, and told
+      // the customer to go and connect a service they had JUST connected. That
+      // is the "Atlas told a user their CONNECTED connector wasn't connected"
+      // defect, arriving through the door P13-A opened.
+      //
+      // Derived from the tenant's actual grants now, so a service added tomorrow
+      // appears here tomorrow rather than when someone remembers this line.
+      const mcpConnectors = {};
+      for (const svc of MCP_DIRECTORY) {
+        if (!mcpGrant(req.tenant.id, svc.id)) continue;
+        const actions = spine.engine.capabilityRegistry.list()
+          .filter((c) => c.connector === svc.id)
+          .map((c) => ({ id: c.id, name: c.name, available: c.available !== false }));
+        // Connected but UNREADABLE is not connected for building purposes: a
+        // workflow cannot be built on tools we could not list, and claiming the
+        // service is available would put us right back at promising what we
+        // cannot do.
+        if (!actions.length) continue;
+        mcpConnectors[svc.id] = { connected: true, name: svc.name, actions };
+      }
+
       res.json({
         channels: spine.engine.channelRegistry.getAll(),
         triggers,
-        connectors: { slack, google, airtable },
+        connectors: { slack, google, airtable, ...mcpConnectors },
       });
     } catch (err) {
       res.status(500).json({ error: `capabilities failed: ${err.message ?? String(err)}` });

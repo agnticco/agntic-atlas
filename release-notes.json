@@ -1,5 +1,13 @@
 [
   {
+    "version": "1.6.152",
+    "date": "2026-08-03",
+    "title": "A connected service is no longer called missing",
+    "notes": [
+      "Notion was connected and Atlas still said it wasn't, refusing to build. The list of what a workspace is connected to is now worked out from real connections instead of a fixed list of three."
+    ]
+  },
+  {
     "version": "1.6.151",
     "date": "2026-08-03",
     "title": "Notion connects, end to end",
