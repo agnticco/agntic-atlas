@@ -1,5 +1,13 @@
 [
   {
+    "version": "1.6.151",
+    "date": "2026-08-03",
+    "title": "Notion connects, end to end",
+    "notes": [
+      "Six services now connect with one click — Notion, Linear, Sentry, Asana, Stripe and Figma. Notion's 20 tools are live and usable as workflow steps."
+    ]
+  },
+  {
     "version": "1.6.150",
     "date": "2026-08-03",
     "title": "Notion's tools now arrive",

@@ -4068,6 +4068,61 @@ channel-less ask and cross-channel pooling all still fail).
   reproduce it forty times. Credential resolution must come from the connector the
   capability already declares.
 
+  **✅ P13-A IS BUILT, AND IT WAS WITNESSED IN A BROWSER (2026-08-03).** A customer
+  picks a service by name, approves on that service's own screen, and its tools become
+  workflow steps. Proved live on prod, not by tests: Notion's consent screen read
+  **"Grant atlas.agntic.co access to Notion"** — Notion resolved an application it had
+  never been told about by fetching the document Atlas publishes — and after approving,
+  **20 real Notion tools sat in `/capabilities` beside the 70 native ones**, 10 read and
+  10 write, none claiming to be a trigger. Six services connect today: Notion, Linear
+  and Sentry by the identity document; **Asana, Stripe and Figma by Atlas registering
+  ITSELF over HTTP (DCR)** — step 3 of the chain, also invisible to the customer.
+  **THE HARD STOP IS AN ABSENCE, NOT A FLAG.** There is no fourth branch and no shape of
+  return value carrying a field for a customer to type a credential into. A service that
+  exhausts the chain returns a refusal in plain words. Removing the end of the chain is
+  mutation M1 and turns 3 red.
+  **THE DEFECT THAT REACHED PRODUCTION, and it is this file's oldest rule broken by the
+  person who keeps writing it down.** The sign-in worked end to end and the catalog read
+  threw `Unexpected token 'e', "event: mes"...`, so the workspace showed **CONNECTED WITH
+  ZERO TOOLS** — a service that looks like it can do nothing. "Streamable HTTP" lets a
+  server answer EITHER as plain JSON or as a Server-Sent Event stream, and **the server
+  chooses; Notion chooses the stream.** My fixture answered in JSON, because that is the
+  shape I imagined — *a check must construct its subject the way PRODUCTION does*. The
+  fixture now DEFAULTS to SSE, and `tests/fixtures/notion-tools-list.sse.txt` holds
+  **90,605 bytes captured verbatim from the live server** so the gate runs against what
+  Notion actually sent. Reinstating the bug turns **nine** tests red.
+  **THREE MORE FOUND BY MEASURING RATHER THAN READING THE RECORD:**
+  · **The record said all six services support CIMD. Only three do** (see the corrected
+    entry in the P13 route-1 section). Shipping CIMD-only would have connected three
+    services and refused three that work.
+  · **Authorization-server metadata was fetched as `issuer + /.well-known/…`.** RFC 8414
+    §3.1 inserts the segment BETWEEN HOST AND PATH; **Stripe's issuer carries a path**, so
+    the naive form 404s — and finding nothing there read as *"this service cannot be
+    connected"*. The absence-vs-unrecognised shape again.
+  · **The registration cache was keyed by issuer alone**, so a registration made on the
+    dev box — carrying dev's callback — would have been reused in production, sending
+    customers to a machine that does not exist. Silent, browser-only, and it looks like
+    the service's fault. Keyed by issuer AND redirect now. Caught on the local box.
+  **NO PROVENANCE FIELD, and that is structural rather than a convention.**
+  `CapabilityRegistry.register` normalises to a fixed field set and drops anything else
+  (measured), so a "where did this come from" mark would be discarded at the boundary —
+  a consumer *could not* branch on origin even if someone tried to add one. An
+  MCP-sourced capability is asserted to carry **exactly** a native one's field set.
+  **Capability ids strip a redundant service prefix** (`notion_search`, not
+  `notion_notion-search`) — done now because an id is written into saved workflows, so
+  this was free while nothing referenced one and a migration afterwards.
+  **The gate's P13-A step is wired and BOTH halves were watched failing:** advertising
+  `plain` PKCE and un-serving the document each fail it. The document check boots the
+  real app and asks it, because the document's URL *is* the client id — a file-exists
+  test would prove nothing and a 404 breaks every connection at once.
+  Pinned by `mcp-catalog-cimd.test.js` (21), `connecting-never-asks-for-a-key.test.js`
+  (22) and `a-real-server-clears-the-same-bar.test.js` (11); **fourteen mutations
+  hand-run red→green.**
+  **NOT proved, and do not claim it:** no workflow has yet been BUILT on a Notion step,
+  and no Notion tool has been executed in a run — connecting and cataloguing is what was
+  proved. Triggers are deliberately absent (nothing arms an MCP subscription), so every
+  P13 connector is step/delivery only.
+
   **✅ P13-0 is BUILT and merged (2026-07-25).** All four seams landed, plus two
   blockers that QA found while using the product. What changed, in plain terms:
   - Atlas no longer guesses whether a step **changes something in the outside world**

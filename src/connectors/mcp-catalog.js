@@ -104,8 +104,15 @@ export function projectMcpTool(tool, { connector }) {
   if (!connector) throw new Error(`projectMcpTool "${tool.name}": a connector id is required`);
 
   const effect = projectEffect(tool.annotations);
+  // Notion's tools are already called `notion-search`, `notion-fetch`, … so the
+  // naive prefix yields `notion_notion-search` — which is not wrong, only silly,
+  // and it is the id that appears in a stored spec and in every log line.
+  // Stripped HERE and not later because a capability id is written into saved
+  // workflows: this is cheap while nothing references one, and a migration
+  // afterwards.
+  const bare = String(tool.name).replace(new RegExp(`^${connector}[_-]`, 'i'), '') || String(tool.name);
   return {
-    id: `${connector}_${tool.name}`,
+    id: `${connector}_${bare}`,
     connector,
     positions: projectPositions(effect),
     effect,
@@ -114,11 +121,14 @@ export function projectMcpTool(tool, { connector }) {
     icon: 'plug',
     configSchema: projectInputSchema(tool.inputSchema),
     outputFormat: 'plain',
-    // WHAT IT CAME FROM, recorded but never consulted for a DECISION. Kept for
-    // diagnosis — "which server gave us this" is the first question when a
-    // capability misbehaves — and deliberately not read by any guard, because a
-    // consumer that branches on provenance is the fragmentation this ends.
-    source: { kind: 'mcp', tool: tool.name },
+    // NO PROVENANCE FIELD, and that is the invariant rather than an omission.
+    // `CapabilityRegistry.register` normalises to a fixed field set and drops
+    // anything else — measured 2026-08-03 — so a "where did this come from" mark
+    // would be silently discarded at the boundary anyway. Carrying one here would
+    // be code claiming to do something it cannot, and a consumer that could read
+    // it is the fragmentation this whole projection exists to end. Which server
+    // supplied a capability is answered by its `connector`, which every consumer
+    // already reads.
   };
 }
 

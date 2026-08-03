@@ -197,20 +197,56 @@ P13A_TEST="tests/connectors/mcp-catalog-cimd.test.js"
 [ -f "$P13A_TEST" ] || next "P13-A" \
   "the MCP catalog + CIMD identity suite ($P13A_TEST) does not exist — no capability can yet be sourced from a remote Streamable-HTTP server, and Atlas publishes no Client ID Metadata Document"
 
-# When P13-A lands, wire its run here. It must assert, behaviourally:
-#   · a real tool from a CIMD-supporting server (Notion or Linear) appears in
-#     /capabilities and CapabilityRegistry.list() beside native capabilities, with
-#     correct effect/positions/configSchema, and passes P13-0's four synthetic checks
-#     FOR REAL rather than against a stub;
-#   · the CIMD document is SERVED at its stable URL — a 404 breaks every connection
-#     using it, all at once, so this is a live check and not a file-exists test;
-#   · a forced walk of the identity chain proves step 4 — PROMPT THE USER FOR
-#     CREDENTIALS — is UNREACHABLE. That step IS the banned developer-settings screen,
-#     and a naive implementation of the spec falls through to it by default. A server
-#     that exhausts pre-registered -> CIMD -> DCR must surface as "not supported yet";
-#   · effect FAILS CLOSED to 'write' when readOnlyHint is unset;
-#   · no MCP-sourced capability is ever offered in a `trigger` position.
-next "P13-A" \
-  "$P13A_TEST exists but the gate's real checks are not wired in — run the suite, then add P13-B"
+# The suites. Behavioural, and the third runs against 90KB captured VERBATIM from
+# the real Notion server (SSE framing and all) rather than a stub — because a
+# fixture shaped the way the author imagined is exactly what let production ship
+# "connected with zero tools" behind a fully green suite.
+echo "p13: [P13-A] a remote server's tools become capabilities (both wire formats)..."
+run_test tests/connectors/mcp-catalog-cimd.test.js "P13-A catalog loader"
+
+echo "p13: [P13-A] connecting never asks a customer for a key (the chain stops)..."
+run_test tests/connectors/connecting-never-asks-for-a-key.test.js "P13-A identity chain"
+
+echo "p13: [P13-A] a REAL server's catalog clears the same bar as a native one..."
+run_test tests/connectors/a-real-server-clears-the-same-bar.test.js "P13-A real catalog"
+
+# THE IDENTITY DOCUMENT IS SERVED, LIVE. A file-exists test is worthless here: the
+# document's URL *is* the client id, so a 404 breaks every connection using it, all
+# at once and silently. So this boots the real app and asks it.
+echo "p13: [P13-A] the identity document is actually served (a 404 breaks every connection)..."
+CIMD_PORT="${CIMD_PORT:-8913}"
+PORT="$CIMD_PORT" node --env-file-if-exists=.env src/api/server.js >/tmp/p13a-cimd.log 2>&1 &
+CIMD_PID=$!
+for _ in $(seq 1 45); do
+  curl -fsS "http://localhost:$CIMD_PORT/health" >/dev/null 2>&1 && break
+  sleep 1
+done
+CIMD_BODY="$(curl -fsS "http://localhost:$CIMD_PORT/.well-known/oauth-client" 2>/dev/null || true)"
+kill "$CIMD_PID" 2>/dev/null || true
+wait "$CIMD_PID" 2>/dev/null || true
+
+CIMD_BODY="$CIMD_BODY" node -e '
+  const b = process.env.CIMD_BODY;
+  const bad = (m) => { console.error("  " + m); process.exit(1); };
+  if (!b) bad("the identity document was not served at all");
+  let d; try { d = JSON.parse(b); } catch { bad("it is not JSON: " + b.slice(0, 120)); }
+  // The one non-obvious rule: client_id IS this document own URL. If those ever
+  // disagree the identity is unresolvable and no service can connect.
+  if (!d.client_id || !d.client_id.endsWith("/.well-known/oauth-client"))
+    bad("client_id is not this document own URL: " + d.client_id);
+  if (!Array.isArray(d.redirect_uris) || !d.redirect_uris.length) bad("no redirect_uris");
+  // S256 only. `plain` sends the verifier as its own challenge and protects
+  // nothing; advertising it invites a server to choose it.
+  if (JSON.stringify(d.code_challenge_methods_supported) !== JSON.stringify(["S256"]))
+    bad("PKCE must be S256 only, got " + JSON.stringify(d.code_challenge_methods_supported));
+  if (d.token_endpoint_auth_method !== "none") bad("a public client presents no secret");
+  if (d.client_secret) bad("a client secret inside a PUBLIC document");
+' || fail "P13-A — the identity document is missing, malformed, or weaker than S256 (see above)"
+
+echo "p13: P13-A PASSES — a real service's tools are capabilities, and connecting asks for no key."
+echo ""
 
 # ── P13-B / P13-C — added as each increment lands (see the brief) ──
+
+next "P13-B" \
+  "P13-A is built (a real MCP service connects and its tools are capabilities). P13-B is the next increment — see the brief."

@@ -149,6 +149,22 @@ describe('indistinguishable from a native capability', () => {
   test('the id names its connector, which is what credential resolution reads', () => {
     assert.equal(projectMcpTool({ name: 'search' }, { connector: 'linear' }).id, 'linear_search');
   });
+
+  test('a tool that already names its own service is not made to say it twice', () => {
+    // Notion's real tools are `notion-search`, `notion-fetch`, … so the naive
+    // prefix gives `notion_notion-search`. Not wrong, only silly — and it is the
+    // id that lands in a saved workflow and in every log line.
+    assert.equal(projectMcpTool({ name: 'notion-search' }, { connector: 'notion' }).id, 'notion_search');
+    assert.equal(projectMcpTool({ name: 'notion_fetch' }, { connector: 'notion' }).id, 'notion_fetch');
+    // The connector must still lead the id — credential resolution and assertion
+    // targets both read it.
+    assert.ok(projectMcpTool({ name: 'notion-create-pages' }, { connector: 'notion' }).id.startsWith('notion_'));
+  });
+
+  test('a tool named ONLY for its service keeps a usable id', () => {
+    // Stripping everything would leave `notion_`, which names no action at all.
+    assert.equal(projectMcpTool({ name: 'notion' }, { connector: 'notion' }).id, 'notion_notion');
+  });
 });
 
 describe('the reply may arrive in either wire format', () => {
