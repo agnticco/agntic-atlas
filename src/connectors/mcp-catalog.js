@@ -122,6 +122,47 @@ export function projectMcpTool(tool, { connector }) {
   };
 }
 
+/**
+ * ONE REPLY, TWO WIRE FORMATS — AND THE REAL SERVER USES THE SECOND.
+ *
+ * "Streamable HTTP" lets a server answer a JSON-RPC call EITHER as a plain JSON
+ * body or as a Server-Sent Event stream, and it picks. Notion picks the stream:
+ *
+ *     event: message
+ *     data: {"jsonrpc":"2.0","id":1,"result":{"tools":[…]}}
+ *
+ * Calling `res.json()` on that throws `Unexpected token 'e'`, which is what
+ * production did on the very first real connect — the sign-in succeeded, the
+ * catalog read failed, and the workspace showed CONNECTED WITH ZERO TOOLS.
+ *
+ * WHY NO TEST CAUGHT IT: the fixture answered in JSON, because that is the shape
+ * the author imagined. This codebase's own rule — a check must construct its
+ * subject the way PRODUCTION does — and it was broken here by the person who
+ * keeps writing it down. The pinning test now serves BOTH framings, and the SSE
+ * one is modelled on the bytes Notion actually sent.
+ *
+ * The LAST data frame wins: a server may send progress notifications before the
+ * result, and taking the first would return a notification as the answer.
+ */
+export function parseRpcBody(text, method = 'request') {
+  const raw = String(text ?? '').trim();
+  if (!raw) throw new Error(`${method} failed: the server sent an empty reply`);
+
+  if (!/^(event|data|id|retry):/m.test(raw)) return JSON.parse(raw);
+
+  let last = null;
+  for (const line of raw.split(/\r?\n/)) {
+    if (!line.startsWith('data:')) continue;
+    const payload = line.slice(5).trim();
+    if (!payload || payload === '[DONE]') continue;
+    // A frame that is not JSON is a keep-alive or a comment, not the answer —
+    // skipping it must not lose a real result that came earlier.
+    try { const p = JSON.parse(payload); if (p && (p.result !== undefined || p.error)) last = p; } catch { /* not the answer */ }
+  }
+  if (!last) throw new Error(`${method} failed: the server streamed no result`);
+  return last;
+}
+
 /** JSON-RPC over Streamable HTTP. One request, one response. */
 async function rpc(url, method, params, { fetchImpl = fetch, headers = {}, timeoutMs = 15000 } = {}) {
   const ctl = typeof AbortController === 'function' ? new AbortController() : null;
@@ -134,7 +175,7 @@ async function rpc(url, method, params, { fetchImpl = fetch, headers = {}, timeo
       ...(ctl ? { signal: ctl.signal } : {}),
     });
     if (!res.ok) throw new Error(`${method} failed: HTTP ${res.status}`);
-    const body = await res.json();
+    const body = parseRpcBody(await res.text(), method);
     if (body?.error) throw new Error(`${method} failed: ${body.error.message ?? JSON.stringify(body.error)}`);
     return body?.result ?? {};
   } finally { clearTimeout(timer); }

@@ -1,5 +1,13 @@
 [
   {
+    "version": "1.6.150",
+    "date": "2026-08-03",
+    "title": "Notion's tools now arrive",
+    "notes": [
+      "Connecting Notion signed in correctly but its list of tools came back unreadable, so the service showed as connected with nothing it could do. Atlas now reads the streamed reply the real service sends."
+    ]
+  },
+  {
     "version": "1.6.149",
     "date": "2026-08-03",
     "title": "Connect a service in one click",

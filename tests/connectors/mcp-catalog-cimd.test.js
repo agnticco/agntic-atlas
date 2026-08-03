@@ -34,7 +34,7 @@ import assert from 'node:assert/strict';
 
 import { CapabilityRegistry } from '../../src/connectors/capability-registry.js';
 import {
-  projectMcpTool, projectInputSchema, projectEffect, loadMcpCatalog, registerMcpCatalog,
+  projectMcpTool, projectInputSchema, projectEffect, loadMcpCatalog, registerMcpCatalog, parseRpcBody,
 } from '../../src/connectors/mcp-catalog.js';
 import { declaresWrite, nodeEffect, setCapabilityCatalog } from '../../src/workflows/outcome-oracle.js';
 
@@ -48,7 +48,17 @@ const TOOLS = [
   { name: 'delete_block', description: 'Delete a block.', annotations: { destructiveHint: true },
     inputSchema: { type: 'object', properties: { block_id: { type: 'string' } }, required: ['block_id'] } },
 ];
-const serve = (tools) => async () => ({ ok: true, json: async () => ({ jsonrpc: '2.0', id: 1, result: { tools } }) });
+/**
+ * The real server answers as a Server-Sent Event stream, not plain JSON. The
+ * first version of this fixture returned JSON — the shape the author imagined —
+ * and production failed on the very first real connect. SSE is now the DEFAULT
+ * here for exactly that reason; the JSON framing is exercised separately.
+ */
+const sse = (obj) => `event: message\ndata: ${JSON.stringify(obj)}\n\n`;
+const serve = (tools, { framing = 'sse' } = {}) => async () => {
+  const body = { jsonrpc: '2.0', id: 1, result: { tools } };
+  return { ok: true, status: 200, text: async () => (framing === 'sse' ? sse(body) : JSON.stringify(body)) };
+};
 
 const load = (tools = TOOLS) => registerMcpCatalog(new CapabilityRegistry(),
   { url: 'https://mcp.notion.com/mcp', connector: 'notion', fetchImpl: serve(tools) });
@@ -141,6 +151,41 @@ describe('indistinguishable from a native capability', () => {
   });
 });
 
+describe('the reply may arrive in either wire format', () => {
+  /**
+   * WITNESSED IN PRODUCTION, 2026-08-03, on the first real connect: the sign-in
+   * succeeded and the catalog read threw `Unexpected token 'e'`, so the workspace
+   * read CONNECTED WITH ZERO TOOLS — a service that looks like it can do nothing.
+   */
+  test('a streamed reply is read (this is what Notion actually sends)', async () => {
+    const out = await loadMcpCatalog({ url: 'https://mcp.notion.com/mcp', connector: 'notion', fetchImpl: serve(TOOLS, { framing: 'sse' }) });
+    assert.equal(out.count, 3);
+  });
+
+  test('a plain JSON reply is read too — the server chooses, not us', async () => {
+    const out = await loadMcpCatalog({ url: 'https://mcp.notion.com/mcp', connector: 'notion', fetchImpl: serve(TOOLS, { framing: 'json' }) });
+    assert.equal(out.count, 3);
+  });
+
+  test('the LAST result frame wins, so a progress notification is not the answer', () => {
+    const body = 'event: message\ndata: {"jsonrpc":"2.0","method":"notifications/progress"}\n\n'
+      + 'event: message\ndata: {"jsonrpc":"2.0","id":1,"result":{"tools":[{"name":"real"}]}}\n\n';
+    assert.equal(parseRpcBody(body).result.tools[0].name, 'real');
+  });
+
+  test('keep-alives and comments are skipped, not mistaken for the answer', () => {
+    const body = ': keep-alive\ndata: \nevent: message\ndata: {"jsonrpc":"2.0","id":1,"result":{"ok":true}}\n\n';
+    assert.deepEqual(parseRpcBody(body).result, { ok: true });
+  });
+
+  test('a stream carrying no result FAILS rather than reading as an empty catalog', () => {
+    // "No tools" and "we could not read the tools" are different answers, and
+    // reporting the second as the first is how a working service looks broken.
+    assert.throws(() => parseRpcBody('event: ping\ndata: {"jsonrpc":"2.0"}\n\n'), /streamed no result/);
+    assert.throws(() => parseRpcBody('   '), /empty reply/);
+  });
+});
+
 describe('what it refuses', () => {
   test('an unprojectable tool is dropped AND reported, never guessed at', async () => {
     const out = await loadMcpCatalog({
@@ -163,7 +208,7 @@ describe('what it refuses', () => {
     // is the certifying-the-absence-of-evidence shape.
     await assert.rejects(
       () => loadMcpCatalog({ url: 'https://x.test/mcp', connector: 'x',
-        fetchImpl: async () => ({ ok: false, status: 503, json: async () => ({}) }) }),
+        fetchImpl: async () => ({ ok: false, status: 503, text: async () => '' }) }),
       /HTTP 503/);
   });
 });
