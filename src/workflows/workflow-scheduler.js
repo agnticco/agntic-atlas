@@ -14,6 +14,22 @@
  */
 
 import { log } from '../utils/logger.js';
+import { logEvent } from '../utils/event-log.js';
+
+/**
+ * Record a run outcome where people actually look — and NEVER break the run doing it.
+ *
+ * The first version called `logEvent` bare, inside the run's own try block. Where
+ * the event log cannot be written (a test harness, a read-only path) it throws,
+ * the catch treats that as the RUN failing, and a workflow that succeeded is
+ * recorded `error`. Four scheduler tests and eight approval tests went red — a
+ * diagnostic turning working runs into failures, which is strictly worse than the
+ * blindness it was added to cure.
+ *
+ * The same rule this codebase already applies to its self-check: a thing that can
+ * break a run is worse than no thing at all.
+ */
+const noteRun = (kind, fields) => { try { logEvent(kind, fields); } catch { /* never break a run to log it */ } };
 import { translateError } from './error-translator.js';
 import { validateRunOutput } from './output-validator.js';
 // The SAME sentinel detector the test panel gates on — see the note at the
@@ -483,6 +499,21 @@ export class WorkflowScheduler {
           error: failed, errorClass: this._classifyError(failed),
         });
         log.error(`[workflow-scheduler] flow "${workflow.slug}" failed: ${explanation.title}`);
+        // ── A REAL RUN LEAVES A TRACE WHERE PEOPLE LOOK FOR IT ─────────────────
+        // The `run.ok` / `run.failed` lines in the event log are written by the
+        // HTTP route, so every one of them carries a `test-…` id. A run started by
+        // a SCHEDULE or a CONNECTOR EVENT — the only kind that matters in
+        // production — wrote nothing here at all.
+        //
+        // Measured cost, 2026-08-03: a Slack message fired a workflow, it ran and
+        // delivered in 67ms, and three rounds were spent diagnosing a failure that
+        // had not happened, because the log said nothing and the runs table was not
+        // where anyone was looking. Two wrong hypotheses were floated on the way.
+        // The run row was always right; it simply was not visible.
+        noteRun('flow.run.failed', {
+          tenant: workflow.tenant_id ?? null, workflow: workflow.slug, runId: run.id,
+          trigger: trigger ?? 'schedule', error: String(failed?.message ?? failed ?? '').slice(0, 300),
+        });
         return failed;
       } else {
         const finalRun = this.workflowStore.getRun(run.id);
@@ -525,6 +556,13 @@ export class WorkflowScheduler {
         const baselineS = workflow.baseline_duration_s ?? 0;
         const timeSavedMinutes = baselineS > 0 ? Math.max(0, (baselineS - actualDurationS) / 60) : null;
         this.workflowStore.completeRun(run.id, lastOutput, runCost, warnings, timeSavedMinutes);
+        // The other half of the pair above: a real run that WORKED is the thing
+        // whose absence was read as a failure. `trigger` is carried so schedule and
+        // connector-event runs can be told apart at a glance.
+        noteRun('flow.run.ok', {
+          tenant: workflow.tenant_id ?? null, workflow: workflow.slug, runId: run.id,
+          trigger: trigger ?? 'schedule',
+        });
         this.emitWorkflowRun({
           workflow, run, trigger, sessionId, startedAt, runCost,
           status: 'success', stepCount,

@@ -1,5 +1,13 @@
 [
   {
+    "version": "1.6.138",
+    "date": "2026-08-03",
+    "title": "A published workflow opens on its dashboard",
+    "notes": [
+      "Publishing a workflow, clicking away and clicking back used to return you to the go-live screen, as though publishing hadn't taken. It now checks the workflow's real status instead of a stale cached copy. And a workflow started by a schedule or an incoming message now records what happened in the activity log — previously only test runs did, which made a working automation look like a broken one."
+    ]
+  },
+  {
     "version": "1.6.137",
     "date": "2026-08-02",
     "title": "Version 1.6.137",

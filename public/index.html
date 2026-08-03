@@ -4489,6 +4489,35 @@ class Component extends DCLogic {
     // browser); if absent but the spec was autosaved server-side, hydrate that
     // (cross-device); otherwise a fresh chat for an empty draft.
     var wf = (this.state.consoleSidebarWfs || []).find(function(w) { return w.id === wfId; });
+    // ── A CACHED `draft` IS CONFIRMED BEFORE IT ROUTES ANYWHERE ───────────────
+    //
+    // WITNESSED 2026-08-03, by Charles: publish a workflow, click away to another,
+    // click back — and it opens on the go-live screen again instead of its
+    // dashboard. It reads as though publishing did not take, and the obvious next
+    // move is to press Approve a second time.
+    //
+    // `consoleSidebarWfs` is the browser's CACHED list. Publishing flips the
+    // workflow to `active` on the server; if that list has not been refetched
+    // since, the entry still says `draft` and the branch below sends you back into
+    // the builder. The 2026-08-01 fix chained the post-publish `openConsole` off a
+    // refreshed list — right, and it only covers the instant of publishing. Every
+    // later reopen reads whatever the cache happens to hold.
+    //
+    // Refetch once, then re-enter. `_confirmingDraft` makes it exactly once: the
+    // second pass sees the fresh list and either falls through to the builder
+    // (genuinely a draft) or opens the dashboard.
+    //
+    // ONE DIRECTION ONLY. A cached `active` is never re-checked — being wrong that
+    // way opens a dashboard for a draft, which the console already handles, and a
+    // request on every open would be a real cost for a problem that only occurs
+    // when a workflow has just gone live.
+    if (wf && wf.status === 'draft' && !this._confirmingDraft) {
+      var self0 = this;
+      this._confirmingDraft = true;
+      return Promise.resolve(this._loadWorkflows())
+        .catch(function() {})
+        .then(function() { self0._confirmingDraft = false; return self0.openConsole(wfId); });
+    }
     if (wf && wf.status === 'draft') {
       var slice = null;
       try { var raw = localStorage.getItem(this._buildKeyWf(wf.id)); if (raw) slice = JSON.parse(raw); } catch (e) { slice = null; }
