@@ -1,5 +1,13 @@
 [
   {
+    "version": "1.6.153",
+    "date": "2026-08-03",
+    "title": "The builder can see your connected services",
+    "notes": [
+      "Fixing this in one place wasn't enough — the part of Atlas that interviews you kept its own separate list. Now there's one answer to what your workspace is connected to."
+    ]
+  },
+  {
     "version": "1.6.152",
     "date": "2026-08-03",
     "title": "A connected service is no longer called missing",

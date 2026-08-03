@@ -23,7 +23,17 @@
  * So the guard here is not "does Notion appear". It is that the list is DERIVED:
  * a service connected tomorrow appears tomorrow, without anyone editing a line.
  *
- * ── AN HONEST NOTE ABOUT WHAT THE FIRST SIX TESTS DO AND DO NOT PROVE ───────
+ * ── THERE WERE THREE COPIES, AND FIXING THE FIRST CHANGED NOTHING VISIBLE ──
+ *
+ * `/capabilities` was corrected first and the browser behaved identically: the
+ * INTERVIEW does not read it. `POST /api/builder/sessions` built its own list,
+ * a third literal, and that is the one the chat and the converger see. So the
+ * customer was told a second time to connect a service they had connected.
+ *
+ * Both now call `mcpConnectedFor`. The guard below is therefore not "does Notion
+ * appear" but "is there one rule": a test per copy is how three copies happen.
+ *
+ * ── AN HONEST NOTE ABOUT WHAT THE BEHAVIOURAL TESTS DO AND DO NOT PROVE ─────
  *
  * They construct the derivation the way the endpoint does — real catalog, real
  * recorded Notion response, only the grant lookup stubbed — and prove the RULE
@@ -53,6 +63,7 @@ import { readFileSync } from 'node:fs';
 import { CapabilityRegistry } from '../../src/connectors/capability-registry.js';
 import { registerMcpCatalog } from '../../src/connectors/mcp-catalog.js';
 import { MCP_DIRECTORY } from '../../src/connectors/mcp-directory.js';
+import { mcpConnectedFor } from '../../src/connectors/connected-services.js';
 
 const RECORDED = readFileSync(new URL('../fixtures/notion-tools-list.sse.txt', import.meta.url), 'utf8');
 
@@ -69,16 +80,14 @@ async function connectorsFor({ grants, loadNotion = true }) {
       fetchImpl: async () => ({ ok: true, text: async () => RECORDED }),
     });
   }
-  const mcpGrant = (_t, id) => (grants.includes(id) ? { access_token_enc: 'x' } : null);
-
-  const out = {};
-  for (const svc of MCP_DIRECTORY) {
-    if (!mcpGrant('t1', svc.id)) continue;
-    const actions = registry.list().filter((c) => c.connector === svc.id)
-      .map((c) => ({ id: c.id, name: c.name, available: c.available !== false }));
-    if (!actions.length) continue;
-    out[svc.id] = { connected: true, name: svc.name, actions };
-  }
+  // THE REAL RULE, not a copy of it. An earlier version of this file
+  // re-implemented the derivation and stayed green when the endpoint reverted to
+  // a literal — measured. A test that re-implements its subject proves only that
+  // the test can call a function.
+  const oauthTokenStore = {
+    get: ({ connectorId }) => (grants.some((g) => connectorId === `mcp:${g}`) ? { access_token_enc: 'x' } : null),
+  };
+  const out = mcpConnectedFor({ capabilityRegistry: registry, oauthTokenStore, tenantId: 't1' });
   return { slack: true, google: true, airtable: true, ...out };
 }
 
@@ -121,25 +130,30 @@ describe('the connected list is DERIVED, not typed out', () => {
   });
 });
 
-describe('the endpoint actually uses it (SOURCE-level — see the header)', () => {
-  const SERVER = readFileSync(new URL('../../src/api/server.js', import.meta.url), 'utf8');
+describe('EVERY surface asks the one rule (SOURCE-level — see the header)', () => {
+  const SERVER  = readFileSync(new URL('../../src/api/server.js', import.meta.url), 'utf8');
+  const BUILDER = readFileSync(new URL('../../src/api/builder.js', import.meta.url), 'utf8');
 
-  test('/capabilities does not answer with a hand-typed connector list', () => {
-    // Anchored to the expression that decides, not to any comment near it.
-    const literal = /connectors:\s*\{\s*slack\s*,\s*google\s*,\s*airtable\s*\}/;
-    assert.equal(literal.test(SERVER), false,
-      'a literal here is the R22 shape: a service the customer connected is invisible');
-    assert.match(SERVER, /connectors:\s*\{\s*slack\s*,\s*google\s*,\s*airtable\s*,\s*\.\.\.mcpConnectors\s*\}/,
-      'the derived services must be spread into the answer');
+  test('neither surface answers with a hand-typed connector list', () => {
+    // Anchored to the expression that decides, never to a comment near it — a
+    // source pin that matched a comment has already failed twice in this tree.
+    const literal = /connectors\s*[:=]\s*\{\s*slack\s*,\s*google\s*,\s*airtable\s*\}/;
+    assert.equal(literal.test(SERVER), false, '/capabilities went back to a literal');
+    // The assignment carries a NESTED object (`web: { connected }`), so this is
+    // matched to end-of-line rather than to the first closing brace.
+    const builderAssign = /^.*capabilities\.connectors\s*=.*$/m.exec(BUILDER)?.[0] ?? '';
+    assert.ok(builderAssign, 'the assignment must still exist');
+    assert.ok(builderAssign.includes('...mcpConnectors'),
+      'the builder session endpoint is what the INTERVIEW reads — a literal here is invisible to /capabilities tests');
   });
 
-  test('and it derives them from the tenant\'s grants, not from the directory alone', () => {
-    // Listing every directory service regardless of grant would tell a customer
-    // they are connected to six things they have never authorised.
-    const block = SERVER.slice(SERVER.indexOf('const mcpConnectors'), SERVER.indexOf('...mcpConnectors'));
-    assert.match(block, /if\s*\(!mcpGrant\(req\.tenant\.id,\s*svc\.id\)\)\s*continue;/);
-    assert.match(block, /if\s*\(!actions\.length\)\s*continue;/,
-      'connected-but-unreadable must not be offered as connected');
+  test('both call the shared derivation rather than repeating it', () => {
+    // The point of the fix. Three copies is how one connected service got called
+    // missing twice in a row.
+    for (const [name, src] of [['server.js', SERVER], ['builder.js', BUILDER]]) {
+      assert.match(src, /mcpConnectedFor\(\{/, `${name} must ask the shared rule`);
+      assert.match(src, /from '\.\.\/connectors\/connected-services\.js'/, `${name} must import it`);
+    }
   });
 });
 

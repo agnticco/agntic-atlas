@@ -106,6 +106,7 @@ import { CIMD_PATH, clientIdMetadata } from '../connectors/client-identity.js';
 import { createMcpConnectFlow } from '../connectors/mcp-connect.js';
 import { registerMcpCatalog } from '../connectors/mcp-catalog.js';
 import { MCP_DIRECTORY, mcpService } from '../connectors/mcp-directory.js';
+import { mcpConnectedFor, mcpOwnerId, mcpConnectorId } from '../connectors/connected-services.js';
 import { entitlementsFor, PUBLIC_PLANS, PLAN_META, isSelfServe } from '../entitlements/index.js';
 import { BillingEventStore } from '../billing/billing-event-store.js';
 import { handleStripeLifecycle } from '../billing/lifecycle.js';
@@ -2078,35 +2079,13 @@ export function createApp(spine) {
         .list({ position: 'trigger' })
         .map(t => ({ ...t, available: t.available && (!t.connector || connected.has(t.connector)) }));
 
-      // ── THE SECOND HAND-TYPED CONNECTOR LIST, and it had the SAME defect ────
-      //
-      // P13-0 fixed credential resolution to read the connector a capability
-      // DECLARES, because a hand-typed list means a connector nobody remembered
-      // to add gets nothing at run time even though the customer IS connected
-      // (R22). This object was the other one, and it was still a literal.
-      //
-      // WITNESSED 2026-08-03, minutes after Notion connected: its 20 tools were
-      // in the catalog above and Notion was absent from this list, so the
-      // interview was told Notion was not connected, refused to build, and told
-      // the customer to go and connect a service they had JUST connected. That
-      // is the "Atlas told a user their CONNECTED connector wasn't connected"
-      // defect, arriving through the door P13-A opened.
-      //
-      // Derived from the tenant's actual grants now, so a service added tomorrow
-      // appears here tomorrow rather than when someone remembers this line.
-      const mcpConnectors = {};
-      for (const svc of MCP_DIRECTORY) {
-        if (!mcpGrant(req.tenant.id, svc.id)) continue;
-        const actions = spine.engine.capabilityRegistry.list()
-          .filter((c) => c.connector === svc.id)
-          .map((c) => ({ id: c.id, name: c.name, available: c.available !== false }));
-        // Connected but UNREADABLE is not connected for building purposes: a
-        // workflow cannot be built on tools we could not list, and claiming the
-        // service is available would put us right back at promising what we
-        // cannot do.
-        if (!actions.length) continue;
-        mcpConnectors[svc.id] = { connected: true, name: svc.name, actions };
-      }
+      // ONE derivation, shared with the builder session endpoint — see
+      // connected-services.js for why this is not written out here.
+      const mcpConnectors = mcpConnectedFor({
+        capabilityRegistry: spine.engine.capabilityRegistry,
+        oauthTokenStore: spine.auth.oauthTokenStore,
+        tenantId: req.tenant.id,
+      });
 
       res.json({
         channels: spine.engine.channelRegistry.getAll(),
@@ -3018,8 +2997,7 @@ export function createApp(spine) {
   // service it discovers at connect time. Neither side was configured by a person.
 
   const mcpFlow = createMcpConnectFlow();
-  const mcpOwner = (tenantId) => `wsinstall:${tenantId}`;
-  const mcpConnectorId = (serverId) => `mcp:${serverId}`;
+  const mcpOwner = mcpOwnerId;
 
   /** Is this workspace connected to this service? */
   function mcpGrant(tenantId, serverId) {

@@ -44,6 +44,7 @@ import { notesSince } from '../release-notes.js';
 import { sendMail } from '../utils/mailer.js';
 import { renderInviteEmail } from '../auth/invite-email.js';
 import { oauthRedirectBase } from '../connectors/oauth-redirect.js';
+import { mcpConnectedFor } from '../connectors/connected-services.js';
 import { seatLimit, entitlement, entitlementsFor, nextPlan, PLAN_META, BUILD_RUN_COST, PUBLIC_PLANS, isSelfServe } from '../entitlements/index.js';
 import { isBillingConfigured } from '../billing/stripe.js';
 import { randomBytes } from 'node:crypto';
@@ -1796,7 +1797,17 @@ Rules:
     const google   = await spine.google.resolveForTenant(req.tenant.id, req.user.id);
     const airtable = spine.airtable.resolveForTenant(req.tenant.id);
     const web      = webConnectionStatus();
-    capabilities.connectors = { slack, google, airtable, web: { connected: web.connected } };
+    // Services connected through the one-click flow are DERIVED, never typed
+    // out. This line was the third copy of "what is this tenant connected to",
+    // and it is the one the interview and the chat read — so fixing only
+    // /capabilities changed nothing a person could see, and Atlas went on
+    // telling customers a service they had just connected was missing.
+    const mcpConnectors = mcpConnectedFor({
+      capabilityRegistry: spine.engine.capabilityRegistry,
+      oauthTokenStore: spine.auth.oauthTokenStore,
+      tenantId: req.tenant.id,
+    });
+    capabilities.connectors = { slack, google, airtable, web: { connected: web.connected }, ...mcpConnectors };
 
     // Fetch Airtable base + table schema so the converger can propose real
     // baseId / tableId values instead of placeholder strings.
