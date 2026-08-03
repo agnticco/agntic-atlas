@@ -66,6 +66,25 @@ describe('the two claims that were actually witnessed', () => {
     assert.match(r.reply, /carry on|still build/i, 'an empty shelf is not a dead end');
   });
 
+  test('THE SENTENCE THAT SLIPPED THROUGH THE FIRST VERSION', () => {
+    // Witnessed in a browser MINUTES AFTER SHIPPING THIS GUARD. The first pattern
+    // demanded the word "URL" near "webhook" — it was tuned to the exact sentence
+    // recorded on 2026-07-30, and the commoner form is simply affirming that the
+    // trigger exists. A rule scoped to the FORM the words took rather than what
+    // they MEAN, made inside the guard written to stop exactly that.
+    assert.equal(d('Great use case — a webhook trigger is exactly the right fit for this.').code,
+      'NO_WEBHOOK_TRIGGER');
+  });
+
+  test('any wording of "a webhook can start it" is caught', () => {
+    for (const s of [
+      'The workflow is triggered by a webhook.',
+      'I can set up a webhook to start this.',
+      'A callback fires the workflow.',
+      'Your form POSTs to a webhook URL that Atlas generates.',
+    ]) assert.equal(d(s).ok, false, s);
+  });
+
   test('the webhook rule is derived from the runnable set, not asserted beside it', () => {
     // If a webhook trigger is ever built, this guard must stop firing on its own.
     assert.ok(!RUNNABLE_TRIGGER_TYPES.includes('webhook'),

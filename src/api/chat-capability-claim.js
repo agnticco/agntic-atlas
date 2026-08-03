@@ -82,8 +82,24 @@ const HAS_WEBHOOK_TRIGGER = RUNNABLE_TRIGGER_TYPES.includes('webhook');
  * on purpose: "post it to a webhook" is a real delivery channel and must not
  * match — what does not exist is Atlas HANDING OUT an address.
  */
-const WEBHOOK_CLAIM =
-  /\b(webhook|callback|endpoint)\b[^.!?]{0,80}\b(url|address|link)\b|\b(url|address|endpoint)\b[^.!?]{0,60}\b(atlas|we|i)\b[^.!?]{0,30}\b(generate|create|provide|give|mint|issue)/i;
+const WEBHOOK_CLAIM = new RegExp([
+  // (a) an address Atlas is said to hand out — the 2026-07-30 wording
+  String.raw`\b(webhook|callback|endpoint)\b[^.!?]{0,80}\b(url|address|link)\b`,
+  String.raw`\b(url|address|endpoint)\b[^.!?]{0,60}\b(atlas|we|i)\b[^.!?]{0,30}\b(generate|create|provide|give|mint|issue)\b`,
+  // (b) A WEBHOOK AS A WAY TO START A WORKFLOW, in any wording.
+  //
+  // WITNESSED 2026-08-03, in a browser, MINUTES AFTER SHIPPING THIS GUARD:
+  //   "Great use case — a webhook trigger is exactly the right fit for this."
+  // Clause (a) alone missed it, because it demanded the word "URL" near
+  // "webhook" — it was tuned to the exact sentence recorded on 2026-07-30.
+  //
+  // That is this codebase's oldest recorded mistake — a rule scoped to the FORM
+  // the words took rather than what they MEAN — made inside the guard written to
+  // stop it. The thing that does not exist is a webhook STARTING a workflow, so
+  // that is what is matched, however it is phrased.
+  String.raw`\b(webhook|callback)\b[^.!?]{0,40}\b(trigger|triggers|start|starts|starting|fire|fires|kick off|kicks off)\b`,
+  String.raw`\b(trigger|triggered|start|started|fire|fired)\b[^.!?]{0,40}\bby a? ?(webhook|callback)\b`,
+].join('|'), 'i');
 
 /** Using the customer's own uploaded documents. */
 const KNOWLEDGE_CLAIM =

@@ -1,5 +1,13 @@
 [
   {
+    "version": "1.6.144",
+    "date": "2026-08-03",
+    "title": "Version 1.6.144",
+    "notes": [
+      "Catches more ways of claiming a webhook can start a workflow — the first version only recognised one phrasing."
+    ]
+  },
+  {
     "version": "1.6.143",
     "date": "2026-08-03",
     "title": "Atlas stops agreeing to things it can't do",
