@@ -1,5 +1,13 @@
 [
   {
+    "version": "1.6.149",
+    "date": "2026-08-03",
+    "title": "Connect a service in one click",
+    "notes": [
+      "Atlas can now connect to Notion, Linear, Sentry, Asana, Stripe and Figma — you pick the name, approve on their own screen, and their tools become steps you can use. No account to create, no key to paste."
+    ]
+  },
+  {
     "version": "1.6.148",
     "date": "2026-08-03",
     "title": "Connecting a new service",

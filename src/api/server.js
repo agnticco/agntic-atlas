@@ -103,6 +103,9 @@ import { evaluateDeliveryRun, judgeFailedRun } from '../workflows/delivery-verdi
 import { runSpecDryRun } from '../workflows/dry-run-runner.js';
 import { oauthRedirectBase, redirectReachableFrom } from '../connectors/oauth-redirect.js';
 import { CIMD_PATH, clientIdMetadata } from '../connectors/client-identity.js';
+import { createMcpConnectFlow } from '../connectors/mcp-connect.js';
+import { registerMcpCatalog } from '../connectors/mcp-catalog.js';
+import { MCP_DIRECTORY, mcpService } from '../connectors/mcp-directory.js';
 import { entitlementsFor, PUBLIC_PLANS, PLAN_META, isSelfServe } from '../entitlements/index.js';
 import { BillingEventStore } from '../billing/billing-event-store.js';
 import { handleStripeLifecycle } from '../billing/lifecycle.js';
@@ -2060,6 +2063,9 @@ export function createApp(spine) {
   // "Connector/action NOT available is not usable — don't propose it."
   app.get('/capabilities', requireActiveTenant, async (req, res) => {
     try {
+      // A connected service's tools are re-read here after a restart, so the
+      // builder is never told a workspace can do less than it can.
+      await ensureMcpTools(req.tenant.id).catch(() => {});
       const slack     = await spine.slack.resolveForTenant(req.tenant.id);
       const google    = await spine.google.resolveForTenant(req.tenant.id, req.user.id);
       const airtable  = spine.airtable.resolveForTenant(req.tenant.id);
@@ -2968,6 +2974,152 @@ export function createApp(spine) {
       spine.airtable.refresh(result.tenantId);
       // Redirect back to the settings/connectors page.
       res.redirect('/?connected=airtable');
+    } catch (err) {
+      res.status(400).json({ error: err.message });
+    }
+  });
+
+  // ── Connecting a service nobody hand-built (P13-A) ─────────────────────────
+  //
+  // ONE customer action: pick a name, approve on the service's own screen, come
+  // back connected. Everything the service needs to know about Atlas it reads
+  // from the identity document above; everything Atlas needs to know about the
+  // service it discovers at connect time. Neither side was configured by a person.
+
+  const mcpFlow = createMcpConnectFlow();
+  const mcpOwner = (tenantId) => `wsinstall:${tenantId}`;
+  const mcpConnectorId = (serverId) => `mcp:${serverId}`;
+
+  /** Is this workspace connected to this service? */
+  function mcpGrant(tenantId, serverId) {
+    return spine.auth.oauthTokenStore.get({
+      tenantId, userId: mcpOwner(tenantId), connectorId: mcpConnectorId(serverId),
+    });
+  }
+
+  /**
+   * Read a connected service's catalog and put its tools in the one registry.
+   *
+   * BEST-EFFORT AND LOUD. A service that cannot be read right now must not take
+   * the process down or block a connect that genuinely succeeded — but it must
+   * also never look like a service with no tools, so the failure is logged and
+   * returned rather than swallowed.
+   */
+  async function loadMcpTools({ tenantId, serverId }) {
+    const svc = mcpService(serverId);
+    const grant = mcpGrant(tenantId, serverId);
+    if (!svc || !grant) return { ok: false, reason: 'not_connected' };
+    let token;
+    try { token = spine.auth.tokenCipher.decrypt(grant.access_token_enc); } catch { return { ok: false, reason: 'unreadable_token' }; }
+
+    try {
+      const out = await registerMcpCatalog(spine.engine.capabilityRegistry, {
+        url: svc.url, connector: serverId, headers: { authorization: `Bearer ${token}` },
+      });
+      logEvent('mcp.catalog.loaded', { tenant: tenantId, server: serverId, tools: out.count, skipped: out.skipped.length });
+      return { ok: true, ...out };
+    } catch (err) {
+      logEvent('mcp.catalog.failed', { tenant: tenantId, server: serverId, error: String(err.message).slice(0, 200) });
+      return { ok: false, reason: 'unreadable_catalog', error: String(err.message) };
+    }
+  }
+
+  /**
+   * A RESTART MUST NOT SILENTLY LOSE A CONNECTED SERVICE'S TOOLS.
+   *
+   * The catalog lives in memory; the grant lives on disk. So after a deploy the
+   * token is still there and the tools are gone — and a workflow already built on
+   * one of them would fail with the capability simply absent. That is the shape
+   * this codebase records more than any other: the state survives, the thing that
+   * could act on it does not, and nothing says so.
+   *
+   * Rather than a boot-time sweep over every tenant (which would make startup wait
+   * on six third-party services), each tenant's services are re-read the first
+   * time that tenant asks what it can do. Loaded servers are remembered per
+   * process, so this costs one request per service per restart, not per call.
+   */
+  const mcpLoaded = new Set();
+  async function ensureMcpTools(tenantId) {
+    await Promise.all(MCP_DIRECTORY.map(async (svc) => {
+      if (mcpLoaded.has(svc.id) || !mcpGrant(tenantId, svc.id)) return;
+      mcpLoaded.add(svc.id);           // claimed BEFORE the await — two concurrent
+                                       // requests must not both fetch the catalog
+      const out = await loadMcpTools({ tenantId, serverId: svc.id });
+      if (!out.ok) mcpLoaded.delete(svc.id);   // a failed read must be retryable
+    }));
+  }
+
+  /** The pick-a-service list. Names only — never an address to paste. */
+  app.get('/connectors/mcp/servers', requireActiveTenant, async (req, res) => {
+    await ensureMcpTools(req.tenant.id).catch(() => {});
+    res.json({
+      servers: MCP_DIRECTORY.map((s) => ({
+        id: s.id, name: s.name,
+        connected: !!mcpGrant(req.tenant.id, s.id),
+        tools: spine.engine.capabilityRegistry.list().filter((c) => c.connector === s.id).length,
+      })),
+    });
+  });
+
+  app.get('/connectors/mcp/:server/status', requireActiveTenant, (req, res) => {
+    const svc = mcpService(req.params.server);
+    if (!svc) return res.status(404).json({ error: 'unknown service' });
+    const grant = mcpGrant(req.tenant.id, svc.id);
+    res.json({
+      connected: !!grant, id: svc.id, name: svc.name,
+      tools: spine.engine.capabilityRegistry.list().filter((c) => c.connector === svc.id).length,
+    });
+  });
+
+  app.get('/connectors/mcp/:server/oauth/start', requireActiveTenant, async (req, res) => {
+    const svc = mcpService(req.params.server);
+    if (!svc) return res.status(404).json({ error: 'unknown service' });
+    try {
+      const begun = await mcpFlow.beginConnect({
+        tenantId: req.tenant.id, userId: req.user.id,
+        connector: svc.id, mcpUrl: svc.url, serviceName: svc.name,
+      });
+      // A service we cannot identify ourselves to is REFUSED IN WORDS, never
+      // degraded into asking this person for a credential. This is the end of
+      // the identity chain and there is deliberately nothing after it.
+      if (!begun.ok) {
+        logEvent('mcp.connect.unsupported', { tenant: req.tenant.id, server: svc.id, reason: begun.reason });
+        return res.status(501).json({ error: begun.message, code: begun.reason });
+      }
+      if (!begun.needsAuth) {
+        await loadMcpTools({ tenantId: req.tenant.id, serverId: svc.id });
+        return res.redirect(`/?connected=${svc.id}`);
+      }
+      res.redirect(begun.authorizeUrl);
+    } catch (err) {
+      logEvent('mcp.connect.failed', { tenant: req.tenant.id, server: svc.id, error: String(err.message).slice(0, 200) });
+      res.status(502).json({ error: `Could not start connecting ${svc.name}: ${err.message}` });
+    }
+  });
+
+  // ONE callback for every service — the identity document's redirect must be
+  // stable, so `state` says which service came back, not the URL.
+  app.get('/connectors/mcp/callback', requireActiveTenant, async (req, res) => {
+    if (req.query.error) return res.status(400).json({ error: String(req.query.error) });
+    try {
+      const done = await mcpFlow.completeConnect({
+        state: req.query.state, code: req.query.code, sessionUserId: req.user.id,
+      });
+      spine.auth.oauthTokenStore.upsert({
+        tenantId: done.tenantId,
+        userId: mcpOwner(done.tenantId),
+        connectorId: mcpConnectorId(done.connector),
+        accessTokenEnc: spine.auth.tokenCipher.encrypt(done.accessToken),
+        refreshTokenEnc: done.refreshToken ? spine.auth.tokenCipher.encrypt(done.refreshToken) : null,
+        scope: done.scope,
+        expiry: Date.now() + done.expiresIn * 1000,
+        account: done.mcpUrl,
+      });
+      const loaded = await loadMcpTools({ tenantId: done.tenantId, serverId: done.connector });
+      // Connected but unreadable is its OWN state, and the person is told which
+      // one they are in. "Connected, no tools" would read as a service that can
+      // do nothing.
+      res.redirect(`/?connected=${done.connector}${loaded.ok ? '' : '&catalog=unread'}`);
     } catch (err) {
       res.status(400).json({ error: err.message });
     }

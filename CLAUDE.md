@@ -4012,8 +4012,27 @@ channel-less ask and cross-channel pooling all still fail).
      with every service that supports the standard. *(Client ID Metadata Documents —
      CIMD / SEP-991, MCP authorization spec 2025-11-25. It supersedes the older
      register-us mechanism, DCR/RFC 7591, which was downgraded `SHOULD`→`MAY` **because
-     CIMD replaced it**.)* **Verified 2026-07-24:** Notion, Linear, Stripe, Asana,
-     Sentry, Figma. **Blocked:** Atlassian (approved clients only) and Google (rejects it).
+     CIMD replaced it**.)*
+     **RE-MEASURED 2026-08-03 AGAINST THE LIVE SERVICES, AND THE 2026-07-24 RECORD WAS
+     WRONG FOR HALF OF THEM.** It listed all six as CIMD-supporting. In fact only
+     **Notion, Linear and Sentry** advertise `client_id_metadata_document_supported`;
+     **Asana, Stripe and Figma do not** and identify us by the older register-us
+     mechanism (DCR) instead. **All six connect, and the customer does nothing either
+     way** — DCR is Atlas registering *itself* over HTTP, not a person in a settings
+     screen — so the correction changes no promise to anyone. It is recorded because a
+     doc that disagrees with what the services actually say is confidently wrong.
+     **Two of the three were invisible for reasons that were OUR bugs, not theirs:**
+     Stripe's issuer carries a path (`https://access.stripe.com/mcp`) and its metadata
+     lives only at the RFC 8414 path-insertion location — naive `issuer + /.well-known/…`
+     404s and reads as "cannot be connected" — and the Figma address on file was the
+     DESKTOP APP's `127.0.0.1` port, which a server can never reach
+     (`https://mcp.figma.com/mcp` works). **Blocked:** Atlassian (approved clients only)
+     and Google (rejects it).
+     **CONSEQUENCE FOR THE PHASE, stated plainly: route 1 as originally scoped —
+     CIMD only — would have shipped connecting THREE services and refusing three that
+     work.** The identity chain's step 3 is in scope by the phase's own rule ("implement
+     the first three and STOP") and is now built; the hard stop is unchanged and still
+     pinned.
   2. **Agntic registers once** — a developer account, an app, permissions, a callback and
      two secrets on the box, once per service forever.
 
