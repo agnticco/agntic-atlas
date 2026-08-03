@@ -386,6 +386,37 @@ const isGoogleNode   = ownsConnector('google');
 // now or in future — is ONE entry here; no run-path changes, nothing per-workflow.
 const CONNECTOR_INJECTORS = [
   {
+    // ── A ONE-CLICK SERVICE'S CREDENTIAL ──────────────────────────────────
+    //
+    // Not a hand-typed action list — the P13-0 R22 defect — but the connector a
+    // capability DECLARES, resolved through the same catalog everything else
+    // reads. A service connected tomorrow is injected tomorrow.
+    //
+    // Without this the handler runs with no token and correctly refuses, which
+    // reads to a customer as "the service is broken" rather than "not connected".
+    id: 'mcp',
+    name: 'Connected service',
+    ownsNode: (n) => {
+      const id = n?.config?.action ?? n?.config?.channel;
+      if (!id || typeof id !== 'string') return false;
+      const svc = mcpService(String(id).split('_')[0]);
+      return !!svc;
+    },
+    resolveToken: (tenantId, { oauthTokenStore, cipher }, node) => {
+      const id = node?.config?.action ?? node?.config?.channel;
+      const svc = mcpService(String(id ?? '').split('_')[0]);
+      if (!svc) return null;
+      const row = oauthTokenStore.get({
+        tenantId, userId: mcpOwnerId(tenantId), connectorId: mcpConnectorId(svc.id),
+      });
+      if (!row) return null;
+      try { return cipher.decrypt(row.access_token_enc); } catch { return null; }
+    },
+    field: 'mcpToken',
+    perNode: true,          // the token differs per SERVICE, not per tenant
+    devEscape: () => false,
+  },
+  {
     id: 'slack',
     name: 'Slack',
     ownsNode: isSlackNode,
@@ -458,6 +489,33 @@ async function injectTenantTokens(obj, tenantId, deps) {
   let changed = false;
   for (const c of CONNECTOR_INJECTORS) {
     if (!someNodeDeep(nodes, c.ownsNode)) continue;
+
+    // A PER-NODE injector resolves per step, because which credential a step
+    // needs depends on WHICH SERVICE it names — one workspace may hold Notion and
+    // Linear at once, and a single tenant-wide token would hand a Linear step
+    // Notion's credential.
+    if (c.perNode) {
+      // Collected with the SAME deep walker the injection uses, so a step inside
+      // a `foreach` is not missed — "added to the top-level executor, not the
+      // sub-loop" is a defect shape this repo has recorded three times.
+      const owned = [];
+      mapNodesDeep(nodes, (n) => { if (c.ownsNode(n)) owned.push(n); return n; });
+
+      const resolved = new Map();
+      for (const n of owned) {
+        const key = String(n?.config?.action ?? n?.config?.channel ?? '');
+        if (resolved.has(key)) continue;
+        resolved.set(key, await c.resolveToken(tenantId, deps, n));
+      }
+      nodes = mapNodesDeep(nodes, (n) => {
+        if (!c.ownsNode(n) || n?.config?.[c.field] != null) return n;
+        const tok = resolved.get(String(n?.config?.action ?? n?.config?.channel ?? ''));
+        return tok ? { ...n, config: { ...n.config, [c.field]: tok } } : n;
+      });
+      changed = true;
+      continue;
+    }
+
     const tok = await c.resolveToken(tenantId, deps);
     if (!tok) continue;
     nodes = mapNodesDeep(nodes, (n) => (c.ownsNode(n) && n?.config?.[c.field] == null)

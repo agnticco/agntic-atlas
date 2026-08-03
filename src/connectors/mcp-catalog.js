@@ -99,7 +99,7 @@ export function projectPositions(effect) {
  * name cannot collide — and so the id still answers "who does this belong to",
  * which is what credential resolution reads (seam #4).
  */
-export function projectMcpTool(tool, { connector }) {
+export function projectMcpTool(tool, { connector, url, fetchImpl = fetch }) {
   if (!tool?.name) throw new Error('projectMcpTool: the tool has no name');
   if (!connector) throw new Error(`projectMcpTool "${tool.name}": a connector id is required`);
 
@@ -134,6 +134,28 @@ export function projectMcpTool(tool, { connector }) {
     // and true rather than false. It is NOT a fail-open: a promise about Notion
     // is still broken when no step writes to Notion.
     locatorFree: true,
+    /**
+     * WHAT ACTUALLY RUNS. Its absence is what let a published workflow fail on
+     * its first real run with "has no handler" — see `callMcpTool`.
+     *
+     * Everything except the injected credential and Atlas's own bookkeeping is
+     * forwarded to the service verbatim: the tool's inputs are its author's, and
+     * filtering them to a list we maintain is the hand-typed-list shape this
+     * whole projection exists to remove.
+     */
+    handle: async ({ config = {}, body } = {}) => {
+      const { mcpToken, channel, action, _tenantId, ...args } = config;
+      // A DELIVERY carries its content in `body`, not in config — that is the
+      // executor's contract and it is how every native delivery works. Only used
+      // when the tool declares somewhere to put it and the step did not set it,
+      // so a step that configures its own inputs is never overridden.
+      if (body != null && body !== '') {
+        for (const k of ['content', 'text', 'body', 'message']) {
+          if (k in (tool.inputSchema?.properties ?? {}) && args[k] == null) { args[k] = body; break; }
+        }
+      }
+      return callMcpTool({ url, tool: tool.name, args, token: mcpToken, fetchImpl });
+    },
     // NO PROVENANCE FIELD, and that is the invariant rather than an omission.
     // `CapabilityRegistry.register` normalises to a fixed field set and drops
     // anything else — measured 2026-08-03 — so a "where did this come from" mark
@@ -186,6 +208,47 @@ export function parseRpcBody(text, method = 'request') {
   return last;
 }
 
+/**
+ * CALL A TOOL ON THE REMOTE SERVER — the half that makes a capability RUN.
+ *
+ * ── Why this exists as its own entry ───────────────────────────────────────
+ *
+ * WITNESSED ON PROD: a workflow using a projected capability built, tested green
+ * ("Contract kept · cleared to go live"), published, and then the first real run
+ * failed with `Channel "notion_create-pages" has no handler`. The catalog gave
+ * the capability a shape and the connect gave it a token, and nothing gave it a
+ * way to act — so it could be chosen, validated, tested and published, and did
+ * nothing.
+ *
+ * THE TEST COULD NOT HAVE CAUGHT IT: a dry run stubs the send and reported
+ * `wouldDeliver: true`. That is correct behaviour for a dry run — nothing is
+ * sent by design — and it is exactly why "it passed the test" is never the same
+ * as "it works".
+ *
+ * ── The token is per TENANT, and arrives on the config ─────────────────────
+ *
+ * The same seam every native connector uses: the run-time injector stamps the
+ * tenant's credential onto the node before execution, and the handler reads it
+ * there. A handler that runs WITHOUT one must refuse rather than call the
+ * service unauthenticated — an anonymous call would 401 and read as "the service
+ * is broken" instead of "this workspace is not connected".
+ */
+export async function callMcpTool({ url, tool, args, token, fetchImpl = fetch, timeoutMs = 60000 }) {
+  if (!token) throw new Error(`${tool}: this workspace is not connected to that service.`);
+  const result = await rpc(url, 'tools/call', { name: tool, arguments: args ?? {} },
+    { fetchImpl, timeoutMs, headers: { authorization: `Bearer ${token}` } });
+
+  // MCP reports a tool's OWN failure in the result, not as a transport error.
+  // Reading only the transport would call a refused write a success — the silent
+  // failure this product exists to prevent.
+  if (result?.isError) {
+    const said = (result.content ?? []).map((c) => c?.text).filter(Boolean).join(' ').trim();
+    throw new Error(said || `${tool} was refused by the service.`);
+  }
+  const text = (result?.content ?? []).map((c) => (c?.type === 'text' ? c.text : '')).filter(Boolean).join('\n');
+  return { ok: true, output: result?.structuredContent ?? text, raw: result };
+}
+
 /** JSON-RPC over Streamable HTTP. One request, one response. */
 async function rpc(url, method, params, { fetchImpl = fetch, headers = {}, timeoutMs = 15000 } = {}) {
   const ctl = typeof AbortController === 'function' ? new AbortController() : null;
@@ -225,7 +288,7 @@ export async function loadMcpCatalog({ url, connector, fetchImpl = fetch, header
   const capabilities = [];
   const skipped = [];
   for (const t of tools) {
-    try { capabilities.push(projectMcpTool(t, { connector })); }
+    try { capabilities.push(projectMcpTool(t, { connector, url, fetchImpl })); }
     catch (e) { skipped.push({ tool: t?.name ?? '(unnamed)', reason: String(e.message) }); }
   }
   return { capabilities, skipped, count: capabilities.length };
