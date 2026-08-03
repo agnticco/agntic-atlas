@@ -55,6 +55,7 @@ import { keepAlive } from './keep-alive.js';
 // is not enough.
 import { scrubInventedNavigation } from './chat-navigation-guard.js';
 import { connectorGapDecision } from './chat-connector-gap.js';
+import { capabilityClaimDecision } from './chat-capability-claim.js';
 import { checkSlackTriggersArmable, isSlackEventTrigger, slackDeliveryRecord }
   from '../connectors/slack/delivery-record.js';
 // Stops Atlas offering an output the workflow has no instruction to produce.
@@ -1265,6 +1266,41 @@ Rules:
       // text. The prompt rule (ATLAS'S OWN SCREENS) is the mechanism; this is what
       // makes it enforceable. Uses the SAME withdraw-and-replace path the mid-stream
       // tool case already relies on, so the user ends up with one clean bubble.
+      /**
+       * ATLAS MAY NOT AFFIRM A CAPABILITY IT DOES NOT HAVE.
+       *
+       * Sits beside the navigation backstop for the same reason it exists: a claim
+       * made on the FIRST turn is upstream of the plan, the promise, the self-check
+       * and the publish guard — every mechanism that could otherwise catch it. See
+       * chat-capability-claim.js for the two witnessed cases and why the closed
+       * list is deliberately short.
+       *
+       * WITHDRAW AND REPLACE, never append: the connector-gap fix learned that a
+       * correction printed under a confident design leaves the reader believing the
+       * confident part.
+       */
+      // The SAME ground truth the interview is given, read at the moment the reply
+      // is checked rather than remembered from earlier in the turn. `readSources`
+      // is the one authority on what this workspace has uploaded; if it cannot be
+      // read the count stays unknown and the knowledge half simply does not fire —
+      // silence is not evidence of an empty shelf.
+      const chatCapabilities = (() => {
+        try {
+          const all = readSources?.(req.tenant?.id) ?? null;
+          return Array.isArray(all) ? { knowledge: { documentCount: all.length } } : {};
+        } catch { return {}; }
+      })();
+
+      const correctInventedCapability = () => {
+        if (closed || !visibleText) return false;
+        const d = capabilityClaimDecision(visibleText, chatCapabilities);
+        if (d.ok) return false;
+        withdrawPartial();
+        sendChunk(d.reply);
+        logEvent('chat.capability_claim', { tenant: req.tenant?.id ?? null, code: d.code });
+        return true;
+      };
+
       const correctInventedNavigation = () => {
         if (closed || !visibleText) return false;
         const scrubbed = scrubInventedNavigation(visibleText);
@@ -1475,7 +1511,7 @@ Rules:
           }
         }
 
-        correctInventedNavigation();
+        if (!correctInventedCapability()) correctInventedNavigation();
 
         const readyToBuild = parsedMeta ? !!parsedMeta.ready_to_build : false;
         const buildIntent  = (parsedMeta && typeof parsedMeta.build_intent === 'string' && parsedMeta.build_intent.trim()) ? parsedMeta.build_intent.trim() : null;
@@ -1505,7 +1541,7 @@ Rules:
           const CHUNK = 40;
           for (let i = 0; i < streamedText.length; i += CHUNK) sendChunk(streamedText.slice(i, i + CHUNK));
         }
-        correctInventedNavigation();
+        if (!correctInventedCapability()) correctInventedNavigation();
         let parsedMeta = null;
         try { parsedMeta = JSON.parse(extractJsonLoose(streamedText)); } catch {}
         const readyToBuild = parsedMeta ? !!parsedMeta.ready_to_build : false;
