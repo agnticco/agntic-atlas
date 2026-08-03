@@ -102,6 +102,7 @@ import { deliveriesForStep, setCapabilityCatalog } from '../workflows/outcome-or
 import { evaluateDeliveryRun, judgeFailedRun } from '../workflows/delivery-verdict.js';
 import { runSpecDryRun } from '../workflows/dry-run-runner.js';
 import { oauthRedirectBase, redirectReachableFrom } from '../connectors/oauth-redirect.js';
+import { CIMD_PATH, clientIdMetadata } from '../connectors/client-identity.js';
 import { entitlementsFor, PUBLIC_PLANS, PLAN_META, isSelfServe } from '../entitlements/index.js';
 import { BillingEventStore } from '../billing/billing-event-store.js';
 import { handleStripeLifecycle } from '../billing/lifecycle.js';
@@ -1541,6 +1542,19 @@ export function createApp(spine) {
   // and every RAG call is scoped to that tenant's own physically-isolated store.
   const requireAuth = spine.auth?.middleware?.requireAuth
     ?? ((_req, res) => res.status(401).json({ error: 'Unauthorized' }));
+
+  // ── WHO ATLAS IS, TO A SERVICE IT HAS NEVER MET (P13-A) ────────────────────
+  //
+  // PUBLIC AND UNAUTHENTICATED BY NECESSITY: a remote server fetches this while
+  // deciding whether to talk to us, long before any customer is involved. It
+  // carries no secret and no tenant data — see client-identity.js.
+  //
+  // The URL of this document IS the client id. Requiring auth here would make
+  // Atlas unidentifiable to every service in the phase.
+  app.get(CIMD_PATH, (_req, res) => {
+    res.set('Cache-Control', 'public, max-age=3600');
+    res.json(clientIdMetadata());
+  });
 
   app.get('/health', (_req, res) => {
     res.json({

@@ -1,5 +1,13 @@
 [
   {
+    "version": "1.6.147",
+    "date": "2026-08-03",
+    "title": "Version 1.6.147",
+    "notes": [
+      "Atlas now publishes its own identity document, so it can connect to services without anyone creating an app or pasting a key."
+    ]
+  },
+  {
     "version": "1.6.146",
     "date": "2026-08-03",
     "title": "Version 1.6.146",
