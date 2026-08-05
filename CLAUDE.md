@@ -4247,6 +4247,67 @@ channel-less ask and cross-channel pooling all still fail).
     run did complete and deliver) but the row's NAME promises something the test cannot
     judge — the "looks like it was checked when it wasn't" shape.
 
+  **✅ THE SIX SERVICES CAN NOW BE CONNECTED FROM THE PRODUCT — they could not, and
+  nobody had noticed (2026-08-03, the operator, looking at the app: "right now it
+  doesn't look like those connectors are capable of being connected").** He was right.
+  P13-A shipped a complete, working set of routes and **nothing in the browser ever
+  called them**: `public/index.html` contained the string `connectors/mcp` **zero
+  times**. The Connections panel built its list from a hardcoded four (Slack, Google,
+  Airtable, Web) and `connectProvider` refused everything else with a **silent early
+  return**, so even a rendered card would have done nothing and said nothing. The only
+  way to connect Notion was to type `/connectors/mcp/notion/oauth/start` into the
+  address bar — which is **further into developer territory than pasting a key**, and is
+  the exact errand this phase exists to remove. P13's own sign-off names the connect step
+  as HALF the proof: *"one button, the service's own consent screen, back to Atlas
+  connected"*.
+  **The server half was complete and correct the whole time.** Every defect here was a
+  SURFACE that had to be told about something the system already knew — the same shape as
+  the six-copies connected-services defect the day before, which is why the fix is
+  **derived**: the panel asks `/connectors/mcp/servers` and renders what comes back, so a
+  service added to the directory tomorrow appears tomorrow with no edit here.
+  **The six sit in the SAME two lists as the four hand-built connectors, deliberately.**
+  To a customer there is no difference between a service we wrote a connector for and one
+  whose tools we read from the service itself; inventing a section boundary would be the
+  product describing its own internals.
+  **What each card SAYS is held to what we actually know**, because this area has already
+  produced two truthfulness defects: a NOT-connected service **claims nothing about what
+  it can do** (the directory is a list of NAMES — the tools are read from the service
+  after connecting, and that is the point); a connected one shows the real count; and
+  **connected-but-unreadable says so and names the remedy**, and is reported as a problem
+  rather than a green tick in the dashboard health panel — the interview refuses to build
+  on a service in that state, so a bare "Connected" would contradict it one screen away.
+  **Two routes were genuinely missing, not just unwired.** `GET /connectors/mcp/:server/
+  authorize` returns `{authorizeUrl}` as JSON, mirroring Airtable's, because the panel
+  must **ask** rather than navigate: a service at the end of the identity chain is refused
+  with a sentence a person can act on, and a navigation renders that sentence as
+  `{"error":…}` on a blank page. And `DELETE /connectors/mcp/:server` — **there was no way
+  to disconnect these at all.** It deletes the grant and ONLY the grant: the tools stay in
+  the registry because a catalog is a property of the SERVICE, not of a tenant, and
+  tearing it down would disconnect Notion for one customer by removing it from everyone.
+  The grant IS the revocation, fail-closed at both layers (`mcpConnectedFor` requires one;
+  the run path refuses before making any request when it cannot resolve a credential).
+  **The two doors into connecting share ONE decision** (`beginMcpConnect`) — the browser
+  can navigate to `oauth/start` or the panel can ask `authorize`, and they render the same
+  answer rather than each re-deriving it. Writing that rule twice is the shape this file
+  records paying for more than any other, and M9 pins it.
+  **Logos: the real brand marks, white, matching the hand-made ones beside them** (Simple
+  Icons, CC0, recoloured). The first attempt shipped monogram letter tiles and the
+  operator rejected them on sight — *"the new connections need to look like the other
+  connections we already have established with white logos."* Each is its own file, so any
+  one can be replaced without touching code.
+  Pinned by `tests/api/a-service-you-can-actually-connect.test.js` (23), which drives the
+  **real app** with a real tenant and real token store for the routes and lifts the page's
+  own methods out and EXECUTES them for the panel. **Ten mutations hand-run red→green**,
+  including the two that matter most: one workspace disconnecting another's service (a
+  cross-tenant write), and a service that cannot be used being reported healthy.
+  **One mutation first broke the page instead of mutating it** — 14 tests never ran, which
+  reads as a kill and is not one; it was split in two and each re-run against a page that
+  still parses. **Witnessed in a browser on a local build**: the six render in one list
+  with their marks, and the Notion card shows "About / Connect to use its tools / Connect
+  Notion" with a clean console. **NOT witnessed: pressing Connect from this UI** — the
+  consent flow itself is unchanged and was proved live the day before, but the button
+  being pressed *from the panel* is the pending confirmation.
+
   **✅ P13-0 is BUILT and merged (2026-07-25).** All four seams landed, plus two
   blockers that QA found while using the product. What changed, in plain terms:
   - Atlas no longer guesses whether a step **changes something in the outside world**

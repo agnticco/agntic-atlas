@@ -1,5 +1,13 @@
 [
   {
+    "version": "1.6.158",
+    "date": "2026-08-04",
+    "title": "Connect Notion, Linear, Sentry, Asana, Stripe and Figma from Connections",
+    "notes": [
+      "Six more services now appear in the Connections panel alongside Slack, Google and Airtable. Pick one, approve on that service's own screen, and its tools become steps you can use in a workflow — no account to create, no key to paste. You can disconnect them from the same place."
+    ]
+  },
+  {
     "version": "1.6.157",
     "date": "2026-08-03",
     "title": "A scheduled workflow can reach a connected service",

@@ -3164,26 +3164,67 @@ export function createApp(spine) {
     });
   });
 
+  /**
+   * START CONNECTING A SERVICE — ONE DECISION, TWO RENDERINGS.
+   *
+   * There are two doors into this flow and they must never drift: the browser
+   * can NAVIGATE here (a redirect all the way out to the service), or the app
+   * can ASK (JSON, so a refusal lands as a sentence in the Connections panel
+   * instead of a raw JSON page in the customer's face). This function decides;
+   * the two routes below only render. Writing the decision twice is the shape
+   * this codebase has paid for more than any other.
+   *
+   * @returns {{kind:'refused'|'already'|'authorize', ...}}
+   */
+  async function beginMcpConnect({ tenantId, userId, svc }) {
+    const begun = await mcpFlow.beginConnect({
+      tenantId, userId, connector: svc.id, mcpUrl: svc.url, serviceName: svc.name,
+    });
+    // A service we cannot identify ourselves to is REFUSED IN WORDS, never
+    // degraded into asking this person for a credential. This is the end of
+    // the identity chain and there is deliberately nothing after it.
+    if (!begun.ok) {
+      logEvent('mcp.connect.unsupported', { tenant: tenantId, server: svc.id, reason: begun.reason });
+      return { kind: 'refused', message: begun.message, code: begun.reason };
+    }
+    // Nothing to approve — the service took our identity as-is.
+    if (!begun.needsAuth) {
+      await loadMcpTools({ tenantId, serverId: svc.id });
+      return { kind: 'already' };
+    }
+    return { kind: 'authorize', authorizeUrl: begun.authorizeUrl };
+  }
+
   app.get('/connectors/mcp/:server/oauth/start', requireActiveTenant, async (req, res) => {
     const svc = mcpService(req.params.server);
     if (!svc) return res.status(404).json({ error: 'unknown service' });
     try {
-      const begun = await mcpFlow.beginConnect({
-        tenantId: req.tenant.id, userId: req.user.id,
-        connector: svc.id, mcpUrl: svc.url, serviceName: svc.name,
-      });
-      // A service we cannot identify ourselves to is REFUSED IN WORDS, never
-      // degraded into asking this person for a credential. This is the end of
-      // the identity chain and there is deliberately nothing after it.
-      if (!begun.ok) {
-        logEvent('mcp.connect.unsupported', { tenant: req.tenant.id, server: svc.id, reason: begun.reason });
-        return res.status(501).json({ error: begun.message, code: begun.reason });
-      }
-      if (!begun.needsAuth) {
-        await loadMcpTools({ tenantId: req.tenant.id, serverId: svc.id });
-        return res.redirect(`/?connected=${svc.id}`);
-      }
-      res.redirect(begun.authorizeUrl);
+      const out = await beginMcpConnect({ tenantId: req.tenant.id, userId: req.user.id, svc });
+      if (out.kind === 'refused') return res.status(501).json({ error: out.message, code: out.code });
+      if (out.kind === 'already') return res.redirect(`/?connected=${svc.id}`);
+      res.redirect(out.authorizeUrl);
+    } catch (err) {
+      logEvent('mcp.connect.failed', { tenant: req.tenant.id, server: svc.id, error: String(err.message).slice(0, 200) });
+      res.status(502).json({ error: `Could not start connecting ${svc.name}: ${err.message}` });
+    }
+  });
+
+  /**
+   * The same start, as JSON — what the Connections panel calls.
+   *
+   * The panel asks rather than navigates for one reason: a service at the end of
+   * the identity chain is refused with a sentence a person can act on, and a
+   * navigation would render that sentence as `{"error":…}` on a blank page.
+   * Mirrors `/connectors/airtable/authorize`, which exists for the same reason.
+   */
+  app.get('/connectors/mcp/:server/authorize', requireActiveTenant, async (req, res) => {
+    const svc = mcpService(req.params.server);
+    if (!svc) return res.status(404).json({ error: 'unknown service' });
+    try {
+      const out = await beginMcpConnect({ tenantId: req.tenant.id, userId: req.user.id, svc });
+      if (out.kind === 'refused') return res.status(501).json({ error: out.message, code: out.code });
+      if (out.kind === 'already') return res.json({ connected: true });
+      res.json({ authorizeUrl: out.authorizeUrl });
     } catch (err) {
       logEvent('mcp.connect.failed', { tenant: req.tenant.id, server: svc.id, error: String(err.message).slice(0, 200) });
       res.status(502).json({ error: `Could not start connecting ${svc.name}: ${err.message}` });
@@ -3216,6 +3257,30 @@ export function createApp(spine) {
     } catch (err) {
       res.status(400).json({ error: err.message });
     }
+  });
+
+  /**
+   * DISCONNECT — delete this workspace's grant, and ONLY that.
+   *
+   * The tools deliberately stay in the registry. A capability catalog is a
+   * property of the SERVICE, not of a tenant (see connected-services.js), so it
+   * is shared by every workspace in this process — tearing it down here would
+   * disconnect Notion for one customer by removing it from all of them.
+   *
+   * Deleting the grant IS the revocation, and it is fail-closed at both layers
+   * that matter: `mcpConnectedFor` requires a grant, so the service leaves this
+   * tenant's view and the interview stops offering it; and the run path refuses
+   * before making any request when it cannot resolve a credential, rather than
+   * calling the service anonymously.
+   */
+  app.delete('/connectors/mcp/:server', requireActiveTenant, (req, res) => {
+    const svc = mcpService(req.params.server);
+    if (!svc) return res.status(404).json({ error: 'unknown service' });
+    const removed = spine.auth.oauthTokenStore.delete({
+      tenantId: req.tenant.id, userId: mcpOwner(req.tenant.id), connectorId: mcpConnectorId(svc.id),
+    });
+    logEvent('mcp.disconnected', { tenant: req.tenant.id, server: svc.id });
+    res.json({ ok: true, removed: !!removed });
   });
 
   // Connection status.

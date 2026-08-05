@@ -4229,7 +4229,7 @@ class Component extends DCLogic {
   _loadConnections() {
     const self = this, H = { "Authorization": "Bearer " + this.state.authToken };
     const get = (u) => fetch(u, { headers: H }).then(r => r.ok ? r.json() : null).catch(() => null);
-    Promise.all([get("/connectors/slack/status"), get("/connectors/google/status"), get("/connectors/airtable/status"), get("/connectors/web/status")]).then(([s, g, a, w]) => {
+    Promise.all([get("/connectors/slack/status"), get("/connectors/google/status"), get("/connectors/airtable/status"), get("/connectors/web/status"), get("/connectors/mcp/servers")]).then(([s, g, a, w, mcp]) => {
       const isC = (d) => !!(d && (d.connected || d.authorized || d.ok || d.team || d.email || d.workspace || d.account));
       const connected = [], available = [];
       (isC(s) ? connected : available).push({ name: "Slack", logo: "assets/slack-white.svg", provider: "slack", meta: isC(s) ? (((s && (s.team || s.workspace || s.account)) || "Workspace connected")) : "Post messages to channels" });
@@ -4242,6 +4242,36 @@ class Component extends DCLogic {
       const webLogo = 'assets/atlas-web-search-white.svg?v=4';
       (webC ? connected : available).push({ name: "Web", logo: webLogo, provider: "web", meta: webC ? "Search & fetch" : "Web access", isApiKey: !webApiKey });
 
+      // ── Services connected by one button, with nothing hand-built ────────────
+      //
+      // These sit in the SAME two lists as the four above, deliberately. To a
+      // customer there is no difference between a service we wrote a connector
+      // for and one whose tools we read from the service itself — inventing a
+      // section boundary here would be the product describing its own internals.
+      //
+      // What each card SAYS is held to what we actually know:
+      //   · not connected  → no claim about what it can do. The directory is a
+      //     list of names, not capabilities (see mcp-directory.js) — the tools
+      //     are read from the service AFTER connecting, and that is the point.
+      //   · connected      → the real count from the registry.
+      //   · connected, 0   → said plainly, WITH the remedy. A grant proves the
+      //     customer authorised us, not that we could read the catalog; the
+      //     interview refuses to build on a service in this state, so a green
+      //     "Connected" here with nothing else would contradict it one screen
+      //     away.
+      const mcpServers = (mcp && mcp.servers) || [];
+      for (const svc of mcpServers) {
+        const unread = svc.connected && !svc.tools;
+        (svc.connected ? connected : available).push({
+          name: svc.name,
+          logo: "assets/" + svc.id + "-white.svg",
+          provider: "mcp:" + svc.id,
+          meta: !svc.connected ? "Connect to use its tools"
+              : unread ? "Connected — couldn't read its tools yet. Reconnect to retry."
+              : svc.tools + (svc.tools === 1 ? " tool available" : " tools available"),
+        });
+      }
+
       // Dashboard "Connector status" panel — real connect/health per connector.
       // NB: Airtable's status `expiry` is the short-lived (1h) ACCESS-token expiry,
       // auto-refreshed on demand via the rotating refresh token — a past value does
@@ -4253,6 +4283,14 @@ class Component extends DCLogic {
         { name: 'Google Workspace', connected: isC(g), warn: null },
         { name: 'Airtable', connected: isC(a), warn: null },
         { name: 'Web', connected: webC, warn: null },
+        // Only the CONNECTED one-click services. This is a health panel, and the
+        // directory is a growing list of names — listing every service nobody has
+        // connected would turn it into a catalog. A connected service that could
+        // not be read is reported as the problem it is, not as healthy.
+        ...mcpServers.filter(x => x.connected).map(x => ({
+          name: x.name, connected: !!x.tools,
+          warn: x.tools ? null : 'Connected, but its tools could not be read',
+        })),
       ];
       self.setState({ connected, available, dashConnectors });
     });
@@ -5024,7 +5062,29 @@ class Component extends DCLogic {
 
   // Kick off an OAuth connect: fetch the provider authorize URL (Bearer), then
   // navigate the browser to it. The callback redirects back to /?connected=…
-  connectProvider(provider) {
+  connectProvider(provider, name) {
+    // A one-click service (Notion, Linear, …). Same two steps as the hand-built
+    // connectors — ask for the URL with our token, then send the browser there —
+    // and it is an ASK rather than a navigation for one reason: a service Atlas
+    // cannot identify itself to is refused with a sentence a person can act on,
+    // and navigating would render that sentence as raw JSON on a blank page.
+    if (String(provider || "").startsWith("mcp:")) {
+      const id = provider.slice(4), label = name || id;
+      fetch("/connectors/mcp/" + encodeURIComponent(id) + "/authorize", { headers: { "Authorization": "Bearer " + this.state.authToken } })
+        .then(r => this._readJson(r))
+        .then(r => {
+          if (r.ok && r.data.authorizeUrl) { window.location = r.data.authorizeUrl; return; }
+          // Nothing to approve — the service took our identity as it stands.
+          if (r.ok && r.data.connected) {
+            this.setState({ connectFlash: { ok: true, text: label + " connected." } });
+            this._loadConnections(); this._loadMentions();
+            return;
+          }
+          this.setState({ connectFlash: { ok: false, text: (r.data && r.data.error) || ("Couldn't connect " + label + " right now.") } });
+        })
+        .catch(e => this.setState({ connectFlash: { ok: false, text: String(e) } }));
+      return;
+    }
     if (provider === "web") {
       fetch("/connectors/web/enable", { method: "POST", headers: { "Authorization": "Bearer " + this.state.authToken } })
         .then(r => this._readJson(r))
@@ -5049,9 +5109,11 @@ class Component extends DCLogic {
   // Disconnect a connector (deletes the tenant's grant) so it can be reconnected
   // — e.g. to re-authorize with new scopes. DELETE /connectors/<provider>.
   disconnectProvider(provider, name) {
-    if (provider !== "slack" && provider !== "google" && provider !== "airtable" && provider !== "web") return;
+    const isMcp = String(provider || "").startsWith("mcp:");
+    if (!isMcp && provider !== "slack" && provider !== "google" && provider !== "airtable" && provider !== "web") return;
     const self = this;
-    fetch("/connectors/" + provider, { method: "DELETE", headers: { "Authorization": "Bearer " + this.state.authToken } })
+    const path = isMcp ? "/connectors/mcp/" + encodeURIComponent(provider.slice(4)) : "/connectors/" + provider;
+    fetch(path, { method: "DELETE", headers: { "Authorization": "Bearer " + this.state.authToken } })
       .then(r => this._readJson(r))
       .then(r => {
         if (!r.ok) return self.setState({ connectFlash: { ok: false, text: (r.data && r.data.error) || ("Couldn't disconnect " + (name || provider)) } });
@@ -11301,12 +11363,14 @@ class Component extends DCLogic {
           statusDot:   m.connected ? "#7fc28a" : "rgba(255,255,255,.18)",
           statusGlow:  m.connected ? "rgba(127,194,138,.6)" : "none",
           detail: m.meta || "",
-          detailLabel: m.connected && !m.isApiKey && m.provider !== "web" ? "Account" : "About",
+          // A one-click service's detail line is its tool count, not an account —
+          // calling it "Account" would label a number as somebody's identity.
+          detailLabel: m.connected && !m.isApiKey && m.provider !== "web" && !String(m.provider || "").startsWith("mcp:") ? "Account" : "About",
           isComingSoon,
           isApiKey,
           disconnectArmed: armed,
           disconnectLabel: armed ? ("Yes, disconnect " + m.name) : "Disconnect",
-          onConnect:    () => { closeAnim(); setTimeout(() => this.connectProvider(m.provider), 290); },
+          onConnect:    () => { closeAnim(); setTimeout(() => this.connectProvider(m.provider, m.name), 290); },
           // Two-step confirm: first click arms + shows the dependency warning; second click disconnects.
           onDisconnect: () => {
             if (this.state._disconnectArm === m.provider) { this.setState({ _disconnectArm: null }); closeAnim(); setTimeout(() => this.disconnectProvider(m.provider, m.name), 290); }
