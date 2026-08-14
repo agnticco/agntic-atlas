@@ -1,0 +1,41 @@
+# GitGuardian configuration.
+#
+# WHY THIS FILE EXISTS. Atlas's adversarial checks prove that one workspace cannot
+# read another's data. To do that they have to create several accounts and sign in
+# as each — so they contain lines of the literal form
+#
+#     { email: 'a@acme.test', password: 'fixture-not-a-secret-acme' }
+#
+# which is exactly the shape a generic-password detector matches. Every one of them
+# is fabricated: the addresses are on `.test` and `.example` (reserved,
+# non-routable — RFC 2606 / RFC 6761), and the accounts exist only inside a
+# throwaway SQLite database created in a temp directory for the duration of one
+# test run.
+#
+# This is not a suppression of real findings. A repository that cries wolf trains
+# people to click "ignore" on the alert that matters, so the noise is worth
+# removing at source — and the values were also renamed to say what they are.
+#
+# REAL secrets are handled elsewhere and are not silenced here: `.env` is
+# gitignored and has never been committed, GitHub secret scanning and push
+# protection are enabled on this repository, and `docs/../SECURITY.md` explains
+# private disclosure.
+
+version: 2
+
+secret:
+  ignored-paths:
+    # Adversarial cross-tenant / OAuth checks. They sign in as several fabricated
+    # users to prove isolation holds; the logins are the point of the test.
+    - "scripts/checks/**"
+    # End-to-end suites that walk the real signup → invite → sign-in flow.
+    - "tests/**"
+
+  ignored-matches:
+    - name: "Fabricated fixture logins — throwaway accounts on reserved test domains"
+      match: "fixture-not-a-secret"
+
+  # Show every other finding, including low-confidence ones. The point of the
+  # ignores above is to make what remains worth reading.
+  minimum-severity: LOW
+  show-secrets: false

@@ -73,10 +73,10 @@ before(async () => {
   base = `http://127.0.0.1:${server.address().port}`;
 
   // Platform admin → tenant 'acme' + admin → login.
-  const setup = await api('POST', '/setup', { body: { token: spine.auth.bootstrap.token, email: 'ops@atlas.dev', password: 'ops-pw-12345' } });
-  const tA = await api('POST', '/tenants', { token: setup.data.token, body: { name: 'Acme', slug: tenantId, admin: { email: 'a@acme.test', password: 'acme-pw-12345' } } });
+  const setup = await api('POST', '/setup', { body: { token: spine.auth.bootstrap.token, email: 'ops@atlas.dev', password: 'fixture-not-a-secret-ops' } });
+  const tA = await api('POST', '/tenants', { token: setup.data.token, body: { name: 'Acme', slug: tenantId, admin: { email: 'a@acme.test', password: 'fixture-not-a-secret-acme' } } });
   userId = tA.data.admin.id;
-  const login = await api('POST', '/auth/login', { body: { email: 'a@acme.test', password: 'acme-pw-12345' } });
+  const login = await api('POST', '/auth/login', { body: { email: 'a@acme.test', password: 'fixture-not-a-secret-acme' } });
   tokenA = login.data.token;
   assert.ok(tokenA, 'tenant admin obtained a session token');
 });

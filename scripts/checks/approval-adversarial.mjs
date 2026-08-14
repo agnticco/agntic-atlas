@@ -118,14 +118,14 @@ const approvalFlow = (name) => ({
 
 try {
   // ── Setup: two tenants, each with a run parked on a `human` step ───────────
-  const setup = await api('POST', '/setup', { body: { token: spine.auth.bootstrap.token, email: 'ops@atlas.dev', password: 'ops-pw-12345' } });
+  const setup = await api('POST', '/setup', { body: { token: spine.auth.bootstrap.token, email: 'ops@atlas.dev', password: 'fixture-not-a-secret-ops' } });
   const platformToken = setup.json?.token;
 
-  const tA = await api('POST', '/tenants', { token: platformToken, body: { name: 'Acme', slug: 'acme', admin: { email: 'a@acme.test', password: 'acme-pw-12345' } } });
-  const tB = await api('POST', '/tenants', { token: platformToken, body: { name: 'Globex', slug: 'globex', admin: { email: 'b@globex.test', password: 'globex-pw-12345' } } });
+  const tA = await api('POST', '/tenants', { token: platformToken, body: { name: 'Acme', slug: 'acme', admin: { email: 'a@acme.test', password: 'fixture-not-a-secret-acme' } } });
+  const tB = await api('POST', '/tenants', { token: platformToken, body: { name: 'Globex', slug: 'globex', admin: { email: 'b@globex.test', password: 'fixture-not-a-secret-globex' } } });
   const userA = tA.json?.admin, userB = tB.json?.admin;
-  const tokenA = (await api('POST', '/auth/login', { body: { email: 'a@acme.test', password: 'acme-pw-12345' } })).json?.token;
-  const tokenB = (await api('POST', '/auth/login', { body: { email: 'b@globex.test', password: 'globex-pw-12345' } })).json?.token;
+  const tokenA = (await api('POST', '/auth/login', { body: { email: 'a@acme.test', password: 'fixture-not-a-secret-acme' } })).json?.token;
+  const tokenB = (await api('POST', '/auth/login', { body: { email: 'b@globex.test', password: 'fixture-not-a-secret-globex' } })).json?.token;
   ok('two tenants, both logged in', !!tokenA && !!tokenB);
 
   // The LLM is not called in this check — stub the draft so no key is needed and

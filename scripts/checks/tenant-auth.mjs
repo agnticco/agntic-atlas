@@ -17,7 +17,7 @@ const auth = await createAuthSubsystem({
 let pass = true;
 const ok = (n, c) => { console.log(`${c ? 'ok  ' : 'FAIL'} ${n}`); if (!c) pass = false; };
 
-const platformAdmin = await auth.completeBootstrap({ token: auth.bootstrap.token, email: 'ops@atlas.dev', password: 'platform-pw-123' });
+const platformAdmin = await auth.completeBootstrap({ token: auth.bootstrap.token, email: 'ops@atlas.dev', password: 'fixture-not-a-secret-platform-b' });
 ok('platform admin in platform tenant', platformAdmin.tenant_id === 'platform' && platformAdmin.role === 'admin');
 
 const { token } = auth.issueSession({ user: platformAdmin });
@@ -25,8 +25,8 @@ ok('token carries tid=platform', auth.tokenService.verify(token)?.tid === 'platf
 
 const t1 = auth.tenantStore.create({ name: 'Acme', slug: 'acme' });
 const t2 = auth.tenantStore.create({ name: 'Globex', slug: 'globex' });
-const u1 = await auth.authProvider.register({ tenantId: t1.id, email: 'a@acme.test', password: 'acme-pw-123' });
-await auth.authProvider.register({ tenantId: t2.id, email: 'b@globex.test', password: 'globex-pw-1' });
+const u1 = await auth.authProvider.register({ tenantId: t1.id, email: 'a@acme.test', password: 'fixture-not-a-secret-acme-c' });
+await auth.authProvider.register({ tenantId: t2.id, email: 'b@globex.test', password: 'fixture-not-a-secret-globex-b' });
 ok('user created under tenant', u1.tenant_id === 'acme');
 
 const acmeUsers = auth.userStore.list('acme');

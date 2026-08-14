@@ -53,6 +53,28 @@ workspace, one user, or one workflow can reach that it should not:
   exploit. Report those upstream. If Atlas's particular use makes it exploitable,
   that is in scope — say so.
 
+## About the "credentials" in this repository
+
+Automated scanners sometimes flag Atlas's test fixtures. They are not credentials,
+and you can verify that yourself in a few seconds:
+
+- Every fixture password is named `fixture-not-a-secret-*`.
+- They are paired with addresses on `.test`, `.example` and `example.com` —
+  **reserved, non-routable domains** (RFC 2606, RFC 6761) that cannot receive mail.
+- The accounts they create exist only inside a throwaway SQLite database in a temp
+  directory, for the duration of one test run, and are deleted afterwards.
+
+They exist because the adversarial checks prove one workspace cannot read another's
+data, and doing that honestly means creating several accounts and signing in as
+each. `.gitguardian.yaml` records this so the noise does not drown real findings.
+
+**No real credential has ever been committed to this repository.** `.env` is
+gitignored and has never existed in any commit; GitHub secret scanning and push
+protection are enabled. If you believe you have found a genuine one, please report
+it privately using the link at the top of this file rather than opening an issue —
+and assume it needs rotating, not just deleting, because anything that reaches a
+public repository should be treated as already harvested.
+
 ## Supported versions
 
 Atlas is developed on `main`. Fixes land there first, and there is no long-term

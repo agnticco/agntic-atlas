@@ -45,17 +45,17 @@ const api = async (method, path, { token, body } = {}) => {
 
 try {
   // ── Setup: platform admin + two tenants (A=acme, B=globex) ────────────────
-  const setup = await api('POST', '/setup', { body: { token: spine.auth.bootstrap.token, email: 'ops@atlas.dev', password: 'ops-pw-12345' } });
+  const setup = await api('POST', '/setup', { body: { token: spine.auth.bootstrap.token, email: 'ops@atlas.dev', password: 'fixture-not-a-secret-ops' } });
   const platformToken = setup.json?.token;
   ok('platform admin bootstrapped', setup.status === 200 && !!platformToken);
 
-  const tA = await api('POST', '/tenants', { token: platformToken, body: { name: 'Acme', slug: 'acme', admin: { email: 'a@acme.test', password: 'acme-pw-12345' } } });
-  const tB = await api('POST', '/tenants', { token: platformToken, body: { name: 'Globex', slug: 'globex', admin: { email: 'b@globex.test', password: 'globex-pw-12345' } } });
+  const tA = await api('POST', '/tenants', { token: platformToken, body: { name: 'Acme', slug: 'acme', admin: { email: 'a@acme.test', password: 'fixture-not-a-secret-acme' } } });
+  const tB = await api('POST', '/tenants', { token: platformToken, body: { name: 'Globex', slug: 'globex', admin: { email: 'b@globex.test', password: 'fixture-not-a-secret-globex' } } });
   ok('two tenants created', tA.status === 200 && tB.status === 200);
   const userA = tA.json?.admin, userB = tB.json?.admin;
 
-  const loginA = await api('POST', '/auth/login', { body: { email: 'a@acme.test', password: 'acme-pw-12345' } });
-  const loginB = await api('POST', '/auth/login', { body: { email: 'b@globex.test', password: 'globex-pw-12345' } });
+  const loginA = await api('POST', '/auth/login', { body: { email: 'a@acme.test', password: 'fixture-not-a-secret-acme' } });
+  const loginB = await api('POST', '/auth/login', { body: { email: 'b@globex.test', password: 'fixture-not-a-secret-globex' } });
   const tokenA = loginA.json?.token, tokenB = loginB.json?.token;
   ok('both tenant admins logged in', !!tokenA && !!tokenB);
 

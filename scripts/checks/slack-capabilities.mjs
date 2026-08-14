@@ -88,7 +88,7 @@ const check = (name, cond) => { console.log(`${cond ? 'ok  ' : 'FAIL'} ${name}`)
   // /capabilities is per-tenant + auth-gated. Bootstrap a platform admin and call
   // it with that token; the platform tenant has no Slack grant, so scopes fall
   // back to the dev env token's scopes (auth.test stub) — proving the env path.
-  const setup = await (await fetch(`http://127.0.0.1:${port}/setup`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ token: spine.auth.bootstrap.token, email: 'ops@atlas.dev', password: 'platform-pw-1' }) })).json();
+  const setup = await (await fetch(`http://127.0.0.1:${port}/setup`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ token: spine.auth.bootstrap.token, email: 'ops@atlas.dev', password: 'fixture-not-a-secret-platform' }) })).json();
   const caps = await (await fetch(`http://127.0.0.1:${port}/capabilities`, { headers: { authorization: `Bearer ${setup.token}` } })).json();
   server.close(); stub.close(); spine.close();
 

@@ -48,7 +48,7 @@ before(async () => {
   server = await new Promise((r) => { const s = app.listen(0, () => r(s)); });
   base = `http://127.0.0.1:${server.address().port}`;
 
-  const setup = await api('POST', '/setup', { body: { token: spine.auth.bootstrap.token, email: 'ops@atlas.dev', password: 'ops-pw-12345' } });
+  const setup = await api('POST', '/setup', { body: { token: spine.auth.bootstrap.token, email: 'ops@atlas.dev', password: 'fixture-not-a-secret-ops' } });
   platformToken = setup.data.token;
   assert.ok(platformToken, 'platform admin token');
 });
@@ -138,9 +138,9 @@ test('pending status: true until the admin actually signs in', async () => {
   assert.equal(roster.find((t) => t.id === id).pending, true, 'new workspace is pending');
 
   // Admin sets their password via the invite link, then signs in.
-  const setPw = await api('POST', '/auth/reset', { body: { token, password: 'set-Pass-word-12345' } });
+  const setPw = await api('POST', '/auth/reset', { body: { token, password: 'fixture-not-a-secret-reset' } });
   assert.equal(setPw.status, 200, 'password set via invite token');
-  const login = await api('POST', '/auth/login', { body: { email: 'newadmin@pending.test', password: 'set-Pass-word-12345' } });
+  const login = await api('POST', '/auth/login', { body: { email: 'newadmin@pending.test', password: 'fixture-not-a-secret-reset' } });
   assert.ok(login.data.token, 'admin signs in');
 
   // No longer pending.
@@ -152,8 +152,8 @@ test('pending status: true until the admin actually signs in', async () => {
 async function makeAdmin(name, plan, email) {
   const c = await api('POST', '/admin/tenants', { token: platformToken, body: { name, plan, admin: { email } } });
   const token = new URL(c.data.inviteLink).searchParams.get('reset');
-  await api('POST', '/auth/reset', { body: { token, password: 'a-Strong-Pass-12345' } });
-  return (await api('POST', '/auth/login', { body: { email, password: 'a-Strong-Pass-12345' } })).data.token;
+  await api('POST', '/auth/reset', { body: { token, password: 'fixture-not-a-secret-strong' } });
+  return (await api('POST', '/auth/login', { body: { email, password: 'fixture-not-a-secret-strong' } })).data.token;
 }
 
 test('team: admin invites a teammate (same invite flow), within the team seat allowance', async () => {

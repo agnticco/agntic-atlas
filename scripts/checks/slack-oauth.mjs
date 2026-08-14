@@ -68,11 +68,11 @@ const connect = async (token, code) => {
 const slackSpec = { name: 'post', nodes: [{ id: 'p', type: 'deliver', label: 'post', config: { channel: 'slack', target: '#general', body: 'hello from the tenant install' } }], edges: [] };
 
 try {
-  const platform = (await api('POST', '/setup', { body: { token: spine.auth.bootstrap.token, email: 'ops@atlas.dev', password: 'platform-pw-1' } })).json.token;
-  await api('POST', '/tenants', { token: platform, body: { name: 'Acme', slug: 'acme', admin: { email: 'a@acme.test', password: 'acme-pw-12' } } });
-  await api('POST', '/tenants', { token: platform, body: { name: 'Globex', slug: 'globex', admin: { email: 'b@globex.test', password: 'globex-pw-1' } } });
-  const tokenA = (await api('POST', '/auth/login', { body: { email: 'a@acme.test', password: 'acme-pw-12' } })).json.token;
-  const tokenB = (await api('POST', '/auth/login', { body: { email: 'b@globex.test', password: 'globex-pw-1' } })).json.token;
+  const platform = (await api('POST', '/setup', { body: { token: spine.auth.bootstrap.token, email: 'ops@atlas.dev', password: 'fixture-not-a-secret-platform' } })).json.token;
+  await api('POST', '/tenants', { token: platform, body: { name: 'Acme', slug: 'acme', admin: { email: 'a@acme.test', password: 'fixture-not-a-secret-acme-b' } } });
+  await api('POST', '/tenants', { token: platform, body: { name: 'Globex', slug: 'globex', admin: { email: 'b@globex.test', password: 'fixture-not-a-secret-globex-b' } } });
+  const tokenA = (await api('POST', '/auth/login', { body: { email: 'a@acme.test', password: 'fixture-not-a-secret-acme-b' } })).json.token;
+  const tokenB = (await api('POST', '/auth/login', { body: { email: 'b@globex.test', password: 'fixture-not-a-secret-globex-b' } })).json.token;
 
   // Before connecting: not connected.
   ok('acme starts disconnected', (await api('GET', '/connectors/slack/status', { token: tokenA })).json?.connected === false);

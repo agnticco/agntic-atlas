@@ -112,12 +112,12 @@ before(async () => {
   server = await new Promise((r) => { const s = createApp(spine).listen(0, () => r(s)); });
   base = `http://127.0.0.1:${server.address().port}`;
 
-  const setup = await api('POST', '/setup', { body: { token: spine.auth.bootstrap.token, email: 'ops@atlas.dev', password: 'ops-pw-12345' } });
+  const setup = await api('POST', '/setup', { body: { token: spine.auth.bootstrap.token, email: 'ops@atlas.dev', password: 'fixture-not-a-secret-ops' } });
   const admin = setup.data.token;
-  await api('POST', '/tenants', { token: admin, body: { name: 'Acme', slug: 'acme', admin: { email: 'a@acme.test', password: 'acme-pw-12345' } } });
-  await api('POST', '/tenants', { token: admin, body: { name: 'Beta', slug: 'beta', admin: { email: 'b@beta.test', password: 'beta-pw-12345' } } });
-  tokenA = (await api('POST', '/auth/login', { body: { email: 'a@acme.test', password: 'acme-pw-12345' } })).data.token;
-  tokenB = (await api('POST', '/auth/login', { body: { email: 'b@beta.test', password: 'beta-pw-12345' } })).data.token;
+  await api('POST', '/tenants', { token: admin, body: { name: 'Acme', slug: 'acme', admin: { email: 'a@acme.test', password: 'fixture-not-a-secret-acme' } } });
+  await api('POST', '/tenants', { token: admin, body: { name: 'Beta', slug: 'beta', admin: { email: 'b@beta.test', password: 'fixture-not-a-secret-beta' } } });
+  tokenA = (await api('POST', '/auth/login', { body: { email: 'a@acme.test', password: 'fixture-not-a-secret-acme' } })).data.token;
+  tokenB = (await api('POST', '/auth/login', { body: { email: 'b@beta.test', password: 'fixture-not-a-secret-beta' } })).data.token;
   assert.ok(tokenA && tokenB, 'both tenant tokens');
 });
 
