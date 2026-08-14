@@ -85,11 +85,19 @@ jobs:
 
       # Starting it is the half that catches a missing runtime file, which a
       # successful build will not.
+      # A PLACEHOLDER KEY IS REQUIRED HERE, and its absence is not a bug in the
+      # image — it is the image behaving correctly. The Dockerfile sets
+      # NODE_ENV=production, and `validateBootConfig()` deliberately REFUSES to
+      # start in production without a model key rather than silently falling back
+      # to the local one. The first CI run failed on exactly that, which is the
+      # safety rule working. Nothing is ever sent, so a placeholder is enough to
+      # prove the image boots and serves /health.
       - name: Start the container and wait for /health
         run: |
           docker run -d --name atlas-ci -p 3000:3000 \
             -e NODE_ENV=production \
             -e ATLAS_SELF_HOSTED=true \
+            -e ANTHROPIC_API_KEY=ci-smoke-test-placeholder-not-a-secret \
             atlas:ci
           for i in $(seq 1 30); do
             if curl -sf http://localhost:3000/health > /dev/null; then

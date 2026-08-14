@@ -10,11 +10,9 @@
  */
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { isolateSpineStorage } from '../helpers/isolated-spine-env.js';
 
-let spine, server, base, tmp, platformToken;
+let spine, server, base, storage, platformToken;
 
 const api = async (method, path, { token, body } = {}) => {
   const res = await fetch(base + path, {
@@ -28,14 +26,9 @@ const api = async (method, path, { token, body } = {}) => {
 };
 
 before(async () => {
-  tmp = mkdtempSync(join(tmpdir(), 'atlas-onb-'));
-  for (const [k, v] of Object.entries({
-    WORKFLOWS_DB: 'w.sqlite', SOURCES_DB: 's.sqlite', VECTOR_DIR: 'vectors',
-    AUTH_DB: 'a.sqlite', AUTH_SECRET: '.jwt', OAUTH_DB: 'o.sqlite', OAUTH_KEY: '.okey',
-    INTERACTIONS_DB: 'i.sqlite', INBOX_DB: 'inbox.sqlite',
-  })) process.env[k] = join(tmp, v);
-  process.env.DB_BACKUP_KEEP = '0';
-  process.env.SCHEDULER_ENABLED = 'false';
+  // Every durable path, so concurrent spine-booting suites cannot share SQLite
+  // files. This suite overrode only nine of the sixteen for months.
+  storage = isolateSpineStorage('onboarding');
   // This suite is ABOUT the hosted product's plan machinery — seat caps, PLAN_LIMIT
   // refusals, per-plan entitlements. Atlas defaults to SELF-HOSTED, where every one
   // of those limits is off by design, so without this line the seat-limit tests
@@ -57,7 +50,7 @@ after(async () => {
   try { server?.close(); } catch { /* ignore */ }
   try { spine?.close(); } catch { /* ignore */ }
   try { await spine?.disposeModels?.(); } catch { /* ignore */ }
-  try { rmSync(tmp, { recursive: true, force: true }); } catch { /* ignore */ }
+  storage?.cleanup();
 });
 
 test('create workspace: requires platform admin', async () => {

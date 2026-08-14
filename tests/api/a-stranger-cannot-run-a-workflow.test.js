@@ -42,11 +42,9 @@
  */
 import { test, describe, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { isolateSpineStorage } from '../helpers/isolated-spine-env.js';
 
-let spine, server, base, tmp;
+let spine, server, base, storage;
 
 /** A spec that genuinely does work, so a pass cannot be an accident of validation. */
 const WORKING_SPEC = {
@@ -60,14 +58,12 @@ const WORKING_SPEC = {
 };
 
 before(async () => {
-  tmp = mkdtempSync(join(tmpdir(), 'atlas-anon-'));
-  for (const [k, v] of Object.entries({
-    WORKFLOWS_DB: 'w.sqlite', SOURCES_DB: 's.sqlite', VECTOR_DIR: 'vectors',
-    AUTH_DB: 'a.sqlite', AUTH_SECRET: '.jwt', OAUTH_DB: 'o.sqlite', OAUTH_KEY: '.okey',
-    INTERACTIONS_DB: 'i.sqlite', INBOX_DB: 'inbox.sqlite',
-  })) process.env[k] = join(tmp, v);
-  process.env.DB_BACKUP_KEEP = '0';
-  process.env.SCHEDULER_ENABLED = 'false';
+  // EVERY durable path, not the obvious subset. Overriding only some of them left
+  // this suite sharing SQLite files with the other spine-booting suites running
+  // concurrently, and the symptom was the whole FILE being cancelled on CI before
+  // any test in it ran — which reads as a failing security test when nothing had
+  // actually been tested. See the helper's header.
+  storage = isolateSpineStorage('anon-run');
 
   const { bootSpine, createApp } = await import('../../src/api/server.js');
   spine = await bootSpine();
@@ -80,7 +76,7 @@ after(async () => {
   try { server?.close(); } catch { /* ignore */ }
   try { spine?.close(); } catch { /* ignore */ }
   try { await spine?.disposeModels?.(); } catch { /* ignore */ }
-  try { rmSync(tmp, { recursive: true, force: true }); } catch { /* ignore */ }
+  storage?.cleanup();
 });
 
 const anon = (method, path, body) => fetch(base + path, {
