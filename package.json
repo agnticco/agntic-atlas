@@ -28,7 +28,7 @@
   "scripts": {
     "start": "node --env-file-if-exists=.env src/api/server.js",
     "prod": "NODE_ENV=production node --env-file-if-exists=.env src/api/server.js",
-    "test": "node --test --test-concurrency=4 --test-timeout=120000 \"tests/**/*.test.js\""
+    "test": "node --test --test-concurrency=${TEST_CONCURRENCY:-4} --test-timeout=120000 \"tests/**/*.test.js\""
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.78.0",

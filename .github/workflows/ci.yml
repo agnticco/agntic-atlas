@@ -55,7 +55,15 @@ jobs:
       # with nothing configured, because that is the state a first-time contributor
       # runs it in. A test that silently needs a secret would pass for maintainers
       # and fail for everyone else.
+      # CONCURRENCY 2, NOT THE LOCAL DEFAULT OF 4. Several suites boot the whole
+      # spine, and creating an account runs argon2id — which is memory-hard and
+      # slow BY DESIGN. Four of those at once starves a CI runner badly enough
+      # that a file needing 0.07s locally hit the 120s per-test timeout on Ubuntu
+      # while passing in 40s on macOS. The suite is ~10s; there is nothing to win
+      # from more parallelism here and a whole class of phantom failure to lose.
       - name: Run tests
+        env:
+          TEST_CONCURRENCY: 2
         run: npm test
 
   lockfile:
