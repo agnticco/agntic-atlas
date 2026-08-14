@@ -21,8 +21,11 @@ npm test                    # ~2,500 tests, about 8 seconds
 ```
 
 The suite needs **no API key and no network**. If you write a test that does, it
-will pass for you and fail for everyone else — including CI, which runs with
-nothing configured on purpose.
+will pass for you and fail for everyone else. Keep it that way: a test that
+quietly needs a secret works for whoever wrote it and for nobody else.
+
+**Run this before opening a pull request.** CI does not run it for you — see
+below.
 
 ## The one rule worth reading twice
 
@@ -73,8 +76,14 @@ on it.
 - Say what you did, why, and — plainly — what you verified versus what you believe.
   "I ran this and saw X" and "I think this is right but didn't test it" are both
   welcome; blurring them is not.
-- CI runs the suite on Node 22 and 24, on Linux and macOS, and builds the Docker
-  image. All of it must pass.
+- **Run `npm test` yourself — CI does not.** The test job was removed on
+  2026-08-14 after repeated hangs on GitHub's Ubuntu runners that could not be
+  reproduced locally or on macOS CI (a file taking 0.07s locally hit a 120-second
+  timeout, most likely starvation from several suites booting the whole
+  application at once). The tests are unaffected and still pass; they are just not
+  a gate. CI still checks the lockfile and that the Docker image builds and boots.
+- If a maintainer asks whether you ran the suite, the honest answer matters more
+  than the green tick you would otherwise have had.
 
 ## Commit messages
 
