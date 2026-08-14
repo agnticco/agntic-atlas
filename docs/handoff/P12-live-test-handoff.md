@@ -27,14 +27,14 @@ you find and precisely report defects (with evidence), and may propose fixes.
 
 ## 1. Setup
 
-- Repo: `/Users/crepps/Desktop/atlas`. **Test against `main`** — P12 converger v2 (A–G) plus
+- Repo: your local Atlas checkout. **Test against `main`** — P12 converger v2 (A–G) plus
   the two fixes below are merged there and **live in prod at v1.5.0** (2026-07-14). Open a
   **new branch** for any test-only artifacts.
 - **⚠️ P12 is NOT gate-closed** — there is no `Gate: P12` ledger entry, by design: it shipped
   ahead of a passing gate at the operator's direction. `scripts/gates/p12.sh` currently fails
   on the mutation sweep (76.2% < 78% floor) — a **test-coverage gap** (G's `example-oracle`
   suite was never wired into `mutation-sweep.mjs`'s SUITES), **not a functional defect**. See
-  CLAUDE.md's P12 status block for the fix-to-close. So don't expect a green gate, and don't
+  ENGINEERING-LOG.md's P12 status block for the fix-to-close. So don't expect a green gate, and don't
   read "no Gate trailer" as "not built".
 - Start the local server via `npm start` (loads `.env`; `buildLLM` needs `ANTHROPIC_API_KEY`
   or it silently falls back to a local model). Confirm `curl -s localhost:3000/health` shows
@@ -165,7 +165,7 @@ open "See the draft" → confirm the derived nodes. Save screenshots throughout.
   reject; a spec that scores "complete" in chat but fails to save (`complete ⇒ publishable`
   violation); a derived delivery node whose channel/locator doesn't match the outcome statement.
 
-## 7. Known residuals — do NOT re-report as new (from CLAUDE.md's P12 ledger)
+## 7. Known residuals — do NOT re-report as new (from ENGINEERING-LOG.md's P12 ledger)
 
 - `nodeEffect`'s write-verb regex matches `..._message` (so `gmail_get_message` reads as a
   write) — pre-existing looseness, affects build-time too.
@@ -180,7 +180,7 @@ open "See the draft" → confirm the derived nodes. Save screenshots throughout.
 - **Do NOT run `mutation-sweep.mjs` / any mutation loop** while editing — it rewrites `src/`
   in place. If you must, run it FOREGROUND and `grep -rn "if (true)\|if (false)\|void 0 && " src/`
   after. Never `git checkout -- <file>` to restore (reverts to HEAD, eats uncommitted work).
-- CLAUDE.md is the shared memory; if code and a doc disagree, fix the doc in the same commit.
+- ENGINEERING-LOG.md is the shared memory; if code and a doc disagree, fix the doc in the same commit.
 
 ## 9. How to report
 

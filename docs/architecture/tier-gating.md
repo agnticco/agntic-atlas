@@ -1,10 +1,17 @@
-# Atlas — Tier Entitlement Gating (pilot/alpha pricing)
+# Atlas — usage metering (for running Atlas as a service)
 
-**Status:** built & wired (2026-07-09). This supersedes the earlier 4-tier
-feature-matrix design (starter/team/enterprise/founding). The pilot price was a flat
-$149/mo — too high to get people in the door. This replaces it with a **volume-based
-adoption ladder**: a cheap "get-in-the-door" tier whose constraint is loud and obvious
-through use, with a frictionless (Stripe) upgrade.
+> **This is off by default and most readers can ignore it.** Atlas runs
+> **self-hosted** unless told otherwise, and in that mode there are no limits at
+> all — unlimited workflows, runs and seats, and no spend ceiling. Everything below
+> describes machinery that only wakes up when someone sets
+> `ATLAS_SELF_HOSTED=false` because they are running Atlas *for other people* and
+> wants to meter them. See `isSelfHosted` in `src/entitlements/index.js`.
+
+**Status:** built & wired. Metering is **purely quantitative** — `seats`,
+`activeWorkflows`, `monthlyRuns`. There is deliberately **no feature-matrix
+gating**: every feature (sub-daily schedules, event triggers, retry/notify, ROI
+export, every connector) works on every plan. Differentiate on volume, never by
+locking features.
 
 **Re-grounding rule:** file:line references below are non-authoritative provenance. The
 invariant + the named function/behavior is the contract — re-ground against current code
@@ -12,32 +19,33 @@ before editing.
 
 ---
 
-## 1. The pricing model
+## 1. The model
 
-Four **volume-based** tiers. Tiering is purely quantitative — `seats`, `activeWorkflows`,
-`monthlyRuns`. There is **no feature-matrix gating**: every feature (sub-daily schedules,
-event triggers, retry/notify, ROI export, all connectors) is available on every plan. You
-differentiate on volume, not locked features.
+**The numbers live in `src/entitlements/index.js` (`PLANS`, `PUBLIC_PLANS`,
+`PLAN_META`) and are not repeated here** — a table in a document is a second copy
+that goes stale, and this one already had: it claimed a tier allowed ten workflows
+when the code allowed three. Read the code.
 
-| Plan | Price/mo | Users (`seats`) | **Active workflows** | Runs/mo (`monthlyRuns`) |
-|---|---|---|---|---|
-| **Solo** (adoption) | $20 | 1 | **1** ← the loud wall | 30 |
-| **Professional** | $50 | 1 | 10 | 200 |
-| **Team** | $200 | 5 | 50 | 1,000 |
-| **Business** | $600 | ∞ | ∞ | 5,000 |
-| **Founding** *(internal)* | — | ∞ | ∞ | ∞ | 
+What matters is the *shape*, which the numbers should preserve if you set your own:
 
-- **The loud constraint is `activeWorkflows`.** Owner's call: users feel "I can only run one
-  automation at a time" far more than a run cap — a Solo user's single workflow is *editable*
-  (real utility), but editing it replaces the previous one, so **multiplicity** is the pain and
-  the natural upgrade trigger. The workflow meter is always visible; hitting the wall opens the
-  Upgrade modal immediately.
-- **`monthlyRuns` is a hard monthly cap** — margin/cost protection ("blocked out for the rest of
-  the month"), not the conversion story. Resets on the 1st.
-- **`founding`** is an internal, grandfathered unlimited plan — not sellable, not listed in the
-  Upgrade modal. Every tenant that existed when this shipped was moved to it (see §5).
-- Values live in **`src/entitlements/index.js`** (`PLANS`, `PUBLIC_PLANS`, `PLAN_META`) — the
-  single source of truth. Never hardcode per-plan `if`s at call sites.
+- **Make ONE constraint the loud one, and make it `activeWorkflows`.** People feel
+  "I can only run one automation at a time" far more than they feel a run cap. The
+  entry tier's single workflow is fully editable — real utility — but editing it
+  replaces the previous one, so **multiplicity** is the felt limit and the natural
+  upgrade trigger. The workflow meter is always visible; hitting the wall opens the
+  upgrade modal immediately.
+- **`monthlyRuns` is a hard monthly cap** — cost protection ("blocked for the rest
+  of the month"), not the conversion story. Resets on the 1st.
+- **An unlimited plan must never be self-servable.** An uncapped tier anyone can buy
+  with a card is unbounded cost exposure. Unlimited is allowed only on a
+  consultative plan priced against real usage. Enforced by
+  `scripts/checks/tier-caps.mjs`.
+- **`founding`** was a grandfathered unlimited plan and is **retired** — kept in the
+  table mapped to the entry tier's limits purely so a stale row can never resolve to
+  "unlimited".
+- **Never hardcode per-plan `if`s at call sites.** Read from `entitlements`, which
+  is also where the self-hosted override lives — a call site that checks the plan
+  itself will silently ignore it.
 
 ---
 

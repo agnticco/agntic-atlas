@@ -10,7 +10,7 @@ build plan that closes those gaps for the Innovation Depot pilot.
   dormant in-chat builder. This is a deliberate call — see the note under Part 2.
 - **Multi-tenant from the foundation** *(added 2026-06-09, reverses the earlier
   "no tenancy in pilot" decision).* Each onboarding client gets a `tenant_id`.
-  See CLAUDE.md and `docs/architecture/multi-tenancy.md`.
+  See ENGINEERING-LOG.md and `docs/architecture/multi-tenancy.md`.
 - **No BPMN/DMN port.** The engine's existing JSON spec format is kept.
 
 ---

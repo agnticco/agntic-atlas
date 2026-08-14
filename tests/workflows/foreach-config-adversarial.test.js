@@ -20,7 +20,7 @@
  * *"create a record for every row"* — i.e. an `airtable_create_record` inside the loop,
  * which is precisely the node type whose params F just started checking.
  *
- * CLAUDE.md names this shape three times ("THREE OF THE FOUR WERE A LAUNDERING HOP ONE
+ * ENGINEERING-LOG.md names this shape three times ("THREE OF THE FOUR WERE A LAUNDERING HOP ONE
  * STEP TO THE LEFT OF A REAL CHECK"). This is the fourth.
  */
 
@@ -73,7 +73,7 @@ const WRITE = {
 describe('POSITIVE — a well-formed loop still validates', () => {
   test('a correct airtable_create_record inside a foreach is accepted', () => {
     // Without this, every assertion below would pass if the validator rejected ALL
-    // loops. (CLAUDE.md: "Every validator rule needs a POSITIVE case.")
+    // loops. (ENGINEERING-LOG.md: "Every validator rule needs a POSITIVE case.")
     assert.deepEqual(validator.validate(looping(WRITE)).errors.map(e => `${e.code}@${e.nodeId}`), []);
     assert.equal(scoreGap(looping(WRITE), { capabilities: CAPS }).complete, true);
   });

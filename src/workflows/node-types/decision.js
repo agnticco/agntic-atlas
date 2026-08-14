@@ -53,6 +53,7 @@
 import { SystemMessage, HumanMessage } from '../../core/message.js';
 import { resolveTransformInput }       from './_node-input.js';
 import { matchesCondition, IRRELEVANT } from '../decision-analysis.js';
+import { NO_MODEL_MESSAGE }            from '../../llm/no-model.js';
 
 /**
  * The three the UI offers, in plain language (converger-v2 §6.4):
@@ -561,7 +562,7 @@ async function classifyInput(input, ctx, services) {
       'Refusing to run: a free-text input has an unbounded domain, so the table cannot cover it.',
     );
   }
-  if (!services?.llm) throw new Error(`decision input "${input.key}" needs the AI to judge it, but no LLM is available.`);
+  if (!services?.llm) throw new Error(`The rule for "${input.key}" needs the AI to judge it. ${NO_MODEL_MESSAGE}`);
 
   const text = String(input.from ? readInput(input, ctx) : resolveTransformInput({}, ctx) ?? '');
   if (!text.trim()) throw new Error(`decision input "${input.key}" has nothing to judge — no upstream step produced any content.`);

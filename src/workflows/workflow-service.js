@@ -57,6 +57,21 @@ export class WorkflowService {
 
   // ── Reads ───────────────────────────────────────────────────────────────
 
+  // SCOPED BY USER, WHICH IS SUFFICIENT — checked 2026-08-14 during the pre-release
+  // security review, because at first glance it looks like a cross-tenant hole:
+  // the store treats `tenantId` as the dominant scope and omits the clause entirely
+  // when it is undefined, and these pass only `userId`.
+  //
+  // It is not a hole. In `users`, `id` is the PRIMARY KEY and `email` is UNIQUE —
+  // both global, not per-tenant — so a user id belongs to exactly one workspace and
+  // `WHERE user_id = ?` cannot reach another one's rows.
+  //
+  // Adding `tenantId` here anyway was TRIED and REVERTED: `update()` reaches these
+  // through `this.get(...)` and never receives a tenant itself, so requiring one
+  // broke the publish path in ten tests. Threading it through `update` / `delete` /
+  // `setStatus` and their callers is a real change to the most load-bearing path in
+  // the product, and it belongs in its own commit with its own testing — not as a
+  // drive-by on a property that already holds.
   list({ userId, status = null, kind = null } = {}) {
     if (!userId) return [];
     return this.workflowStore.list({ userId, status, kind });

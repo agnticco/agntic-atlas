@@ -309,7 +309,7 @@ describe('POST /api/builder/chat — the turn that offers to build carries the B
  *   `build_intent` and writes its own `done` event — a SECOND, independent copy of
  *   the mechanism.
  *
- * This is the shape CLAUDE.md warns about in as many words: "a new control type is
+ * This is the shape ENGINEERING-LOG.md warns about in as many words: "a new control type is
  * not done until it is in both sets — this exact line has been the defect three
  * times." A fix applied to one copy and not the other is invisible until a user
  * lands on the quiet one.

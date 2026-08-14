@@ -3,7 +3,7 @@
 #   usage: bash scripts/gate.sh <phase 0-13>
 # Exit 0 = the phase's check passed; non-zero = gate is not met.
 # This is the deterministic backbone of the hard gate: the pre-push hook and the
-# Verifier subagent both call it. It is intentionally fail-closed — a phase whose
+# review process both call it. It is intentionally fail-closed — a phase whose
 # check is unimplemented does NOT pass.
 set -eu
 

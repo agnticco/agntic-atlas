@@ -10,7 +10,7 @@
  * objection in new words, so every one produced a different key and the guard never
  * fired once. The four are the fixtures below, verbatim.
  *
- * This is the failure shape CLAUDE.md records over and over: a check scoped to the
+ * This is the failure shape ENGINEERING-LOG.md records over and over: a check scoped to the
  * FORM a value takes rather than to what it MEANS, defeated by one rephrasing —
  * the same thing as branching on who produced a value instead of what the value can
  * be. I wrote the exact-match version, so this is the second half of my own fix.

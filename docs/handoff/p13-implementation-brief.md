@@ -56,13 +56,13 @@ asking a customer for a token.
 3. ~~**Mutation-testing hazard:** `mutation-sweep.mjs` …~~ — **VOID (2026-07-24).**
    `mutation-sweep.mjs` and `mutation-guard.mjs` were **deleted on 2026-07-19** by operator
    decision, along with the `test-adversary` agent. Do not look for them and **do not
-   re-introduce them unasked** (CLAUDE.md, "Mutation testing was removed").
+   re-introduce them unasked** (ENGINEERING-LOG.md, "Mutation testing was removed").
 4. ~~**Spawn `test-adversary` after each increment**~~ — **VOID (2026-07-24).** That agent no
    longer exists. **Its replacement is the QA Manager handoff:** agents are treated as real
    positions, and the QA work order is written **at the start of the increment, from the
    stated guarantees, before the code exists** — then executed against the built increment in
    a headed browser, in parallel with the `verifier`. The Builder does not sign off their own
-   work. See CLAUDE.md, "Agents & gate enforcement".
+   work. See ENGINEERING-LOG.md, "Agents & gate enforcement".
 5. **The discipline that survived the tooling removal:** when you add a guard, re-introduce
    the bug **by hand** and watch the test go red. A green suite is evidence of nothing until
    you have watched it fail.
@@ -98,7 +98,7 @@ converger/engine/oracle from a native one:
 afterthought — it decides what the connector can promise a user, what "how often does
 this check?" even means for it, and whether it can be tested anywhere but a public
 host. Getting it wrong has already produced a trigger that published, showed as live,
-and could never fire (see the Airtable entry in `CLAUDE.md`'s recorded edits).
+and could never fire (see the Airtable entry in `ENGINEERING-LOG.md`'s recorded edits).
 
 Today: **Slack and Airtable push to us. Gmail does not — Atlas polls it every 60s**,
 even though Google offers push via Pub/Sub; it was never built. Web and filesystem have
@@ -121,7 +121,7 @@ Four questions, recorded in the connector's own header comment:
    do not let a green local suite stand in for it.
 
 **Publishing must fail closed** if a trigger needs something set up on the other side
-and it could not be set up. Not a warning — a refusal. See `CLAUDE.md`.
+and it could not be set up. Not a warning — a refusal. See `ENGINEERING-LOG.md`.
 
 ---
 
@@ -384,10 +384,10 @@ phase — see the rescope note.)*
   Builder hand-mutates each new guard (revert the bug, watch the test go red) and the
   **verifier independently hand-mutates the increment's NEW guards** — the one thing a log
   cannot fake. Do not re-introduce the tooling unasked.
-- **`scripts/` diffs:** any change to a check or gate is recorded here and in CLAUDE.md.
+- **`scripts/` diffs:** any change to a check or gate is recorded here and in ENGINEERING-LOG.md.
   Checks are ADDED, never weakened — a silent `scripts/` diff is how a verifier detects a
   builder weakening their own gate.
-- **CLAUDE.md:** on close, add the P13 block (the seams generalized, the contract, the
+- **ENGINEERING-LOG.md:** on close, add the P13 block (the seams generalized, the contract, the
   adapters) in the same commit as the code, per the doc-is-the-memory rule.
 
 ## What the gate proves (calibration — operator, 2026-07-15)
@@ -402,7 +402,7 @@ the phase *close* over a non-functional gap. **P13 does not repeat that.** The g
 2. **The UI/UX works for the phase's expected outcome** — a **live, headed** browser run
    the operator can watch: **connect a service Atlas never hand-built — with no developer
    console work by anyone — build a workflow with it by talking, run it, and see the real
-   read/write happen.** Narrate each step, save screenshots to disk (CLAUDE.md → Working
+   read/write happen.** Narrate each step, save screenshots to disk (ENGINEERING-LOG.md → Working
    rules: visible UI verification). The verifier attests this in `docs/gates/p13.md`.
    **The connect step is half the proof**: one button, the service's own consent screen,
    back to Atlas connected — and at no point is the customer asked for a credential.
@@ -412,7 +412,7 @@ an **internal technique** — each new guard must fail when its bug is reverted,
 acceptance tests actually bite — but the survivor **percentage is an informational report,
 never a pass/fail number to chase.** That chase is the specific thing that stalled P12.
 
-**Apply the INCREMENT-loop review calibration** (CLAUDE.md, already approved): the verifier
+**Apply the INCREMENT-loop review calibration** (ENGINEERING-LOG.md, already approved): the verifier
 **blocks only on user-reachable, silent (or destructive) defects** — everything else is a
 **residual**, recorded and carried forward, not a merge-blocker. The gate is run **once, by
 the builder** (the verifier confirms the SHA/log, doesn't re-run a 20-min deterministic

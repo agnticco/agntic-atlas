@@ -11,7 +11,7 @@
  * FOUR paths produced a workflow with THREE — from a classifier that could still
  * emit the fourth value — and the screen reported "13 / 13 APPROVED · every step
  * approved" with no hint anything was missing. The branch's mandatory catch-all
- * silently absorbed the fourth kind of work. CLAUDE.md: "The mandatory catch-all
+ * silently absorbed the fourth kind of work. ENGINEERING-LOG.md: "The mandatory catch-all
  * is a silent-misroute DETECTOR — never let it become a masker."
  *
  * WHAT IS PINNED HERE
@@ -351,7 +351,7 @@ describe('it does not cry wolf', () => {
 });
 
 describe('the client and the engine agree on what a step can answer', () => {
-  // CLAUDE.md records a rule grammar living in two functions diverging TWICE. The
+  // ENGINEERING-LOG.md records a rule grammar living in two functions diverging TWICE. The
   // page cannot import the engine, so the mirror is checked against the real
   // `closedDomainOf` here rather than trusted.
   const fixtures = [

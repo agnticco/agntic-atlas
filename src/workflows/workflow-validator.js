@@ -412,7 +412,7 @@ export class WorkflowValidator {
    * gap scorer only. That left the proof on one side of the door: a table with a
    * hole could be assembled by any other path — the builder, the API, an edited
    * spec — and publish would never look at it. Now BOTH consult the same oracle,
-   * for exactly the reason outcome-oracle.js exists (CLAUDE.md, Increment C): two
+   * for exactly the reason outcome-oracle.js exists (ENGINEERING-LOG.md, Increment C): two
    * implementations of "is this table complete?" would drift, and the day they
    * drift is the day the converger ratifies a spec that publish rejects — a dead
    * end the user cannot argue their way out of. The gap scorer now CLASSIFIES
@@ -774,7 +774,7 @@ export class WorkflowValidator {
     // literal NUL separator — invisible in an editor, invisible in a diff, and it
     // silently did not match the one site that used a space, so ON_ERROR_ROUTE_NO_EDGE
     // fired on every route_to even when the edge was there. Never use an
-    // unprintable character as a separator (CLAUDE.md, `server.js` encoding).
+    // unprintable character as a separator (ENGINEERING-LOG.md, `server.js` encoding).
     const edgeKey = (from, to) => `${from}->${to}`;
     const edgeSet = new Set(edges.filter(e => e?.from && e?.to).map(e => edgeKey(e.from, e.to)));
 
@@ -962,7 +962,7 @@ export class WorkflowValidator {
         // the dead `model` key — and validated clean, scored complete. The identical
         // node one level up is rejected on all five.
         //
-        // This is the laundering hop CLAUDE.md names four times now (BRANCH_IN_FOREACH,
+        // This is the laundering hop ENGINEERING-LOG.md names four times now (BRANCH_IN_FOREACH,
         // the sub-loop's own CONTROL_SUBSTEP_TYPES, `isWriteNode`'s recursion in D4,
         // and this). It is NEWLY reachable because Increment F's own prompt teaches
         // `foreach` for the first time — with the example "create a record for every
@@ -1714,7 +1714,7 @@ export class WorkflowValidator {
  * REFERENCE, with its own grammar (branch.js ON_REF), its own resolver, and its
  * own error code (BRANCH_BAD_ON). The engine never substitutes it: doing so would
  * replace the reference with the VALUE, which is indistinguishable from a step id
- * (CLAUDE.md — the `"urgent"` crash).
+ * (ENGINEERING-LOG.md — the `"urgent"` crash).
  *
  * Scanning it as a template made the one shape converger-v2 §7.1 documents —
  * `on: "{{approve_send.decision}}"`, the natural way to route on an approval —
@@ -1818,7 +1818,7 @@ export function isWriteNode(node) {
   if (node.type === 'connector-action') return isWritingAction(node.config?.action);
   // A `foreach` is a write iff any of its per-item steps is (P12 Increment D —
   // found by the verifier + the test-adversary, F4). This is the load-bearing
-  // case, not an edge case: a loop is N writes per fire — CLAUDE.md's own "highest
+  // case, not an edge case: a loop is N writes per fire — ENGINEERING-LOG.md's own "highest
   // -risk write shape the engine has, and the whole reason `foreach` exists" — so
   // it is the LAST place WEAK_APPROVAL_FOR_WRITE may be blind. `descendantsOf`
   // walks top-level edges only and never enters `config.steps`, so without this a

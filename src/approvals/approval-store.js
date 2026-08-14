@@ -27,7 +27,7 @@
  *
  * Every token carries the tenant it was issued in, and `consume()` will not
  * return a token whose tenant does not match the caller's. A `?? 'default'`
- * anywhere in this file would be a cross-tenant forgery primitive (CLAUDE.md —
+ * anywhere in this file would be a cross-tenant forgery primitive (ENGINEERING-LOG.md —
  * the `?? 'unscoped'` idempotency scope that handed one tenant another tenant's
  * output). Issuing without a tenant THROWS.
  *

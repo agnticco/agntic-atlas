@@ -1,0 +1,41 @@
+# Atlas — one command to run it:
+#
+#     cp .env.example .env      # then put your ANTHROPIC_API_KEY in it
+#     docker compose up
+#
+# Then open http://localhost:3000. On first start Atlas prints a one-time setup
+# code in this terminal — you will need it to create your admin account, so keep
+# the window visible. If you miss it, restart: a fresh code is printed each time
+# until an account exists.
+
+services:
+  atlas:
+    build:
+      context: .
+      # Set to 1 if you want to run local GGUF models instead of a hosted one.
+      # It makes the build considerably longer and larger.
+      args:
+        INSTALL_LOCAL_MODELS: "0"
+    image: atlas:local
+    ports:
+      - "${PORT:-3000}:3000"
+    env_file:
+      - .env
+    environment:
+      # Inside the container Atlas always listens on 3000; the host port above is
+      # what you change if 3000 is taken.
+      PORT: "3000"
+      NODE_ENV: production
+      # OAuth redirects and password-reset links are built from this, so it must be
+      # the address YOU reach Atlas on, not the container's own.
+      OAUTH_REDIRECT_BASE: "${OAUTH_REDIRECT_BASE:-http://localhost:3000}"
+    volumes:
+      # EVERYTHING durable lives here: the SQLite databases (accounts, workflows,
+      # runs), the key that decrypts stored OAuth tokens, and uploaded Knowledge
+      # documents. Named volume rather than an anonymous one so `docker compose
+      # down` cannot quietly take your workspace with it.
+      - atlas-data:/app/memory
+    restart: unless-stopped
+
+volumes:
+  atlas-data:

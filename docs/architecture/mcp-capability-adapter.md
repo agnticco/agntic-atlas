@@ -374,7 +374,7 @@ explicitly no triggers. Fed credentials from the existing vault.
 
 ## Correction: the "salvaged MCP runtime" is NOT in this repo
 
-CLAUDE.md's *Don't touch (salvage)* list describes an "MCP connector runtime —
+ENGINEERING-LOG.md's *Don't touch (salvage)* list describes an "MCP connector runtime —
 per-user subprocess isolation, isolation-tested, manifest-driven." **That runtime
 exists only in the read-only `agntic-prod` archive and was never migrated to Atlas.**
 What is actually here: `src/connectors/connector-manifest.js` (an inert `mcp` data
@@ -386,7 +386,7 @@ deleted in P12-A (`REMOVED_NODE_TYPE`).
 So this adapter is **new construction**, not a flip-on. It deliberately does **not**
 resurrect the archived stdio/subprocess pool — that was the wrong transport for
 multi-tenant hosting. It builds a fresh Streamable-HTTP client that registers into the
-existing catalog. (CLAUDE.md corrected in the same commit as this doc, per the
+existing catalog. (ENGINEERING-LOG.md corrected in the same commit as this doc, per the
 doc-is-the-memory rule.)
 
 ---

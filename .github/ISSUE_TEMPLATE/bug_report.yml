@@ -1,0 +1,80 @@
+name: Bug report
+description: Something in Atlas behaved differently from how it should
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting this.
+
+        **If it is a security problem, please do not file it here** — use
+        [private reporting](https://github.com/agnticco/agntic-atlas/security/advisories/new)
+        instead.
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What did you see? If a screen said something wrong or misleading, quote it exactly — the precise wording is usually the clue.
+      placeholder: |
+        I built a workflow that posts to Slack. The test panel said "Contract kept"
+        and Go live unlocked, but when it ran for real nothing was posted.
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected instead
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: How to reproduce it
+      description: Numbered steps. If it involves building a workflow, the sentence you typed to describe it is the most useful thing you can give us.
+      placeholder: |
+        1. Said: "every morning summarise my unread email and post it to #ops"
+        2. Approved the plan, confirmed each step
+        3. Pressed Run test — passed
+        4. Pressed Go live, waited for the schedule
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Atlas version
+      description: The `version` field from `curl localhost:3000/health`, or the commit you are on.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: install
+    attributes:
+      label: How are you running it?
+      options:
+        - npm start (Node directly)
+        - Docker / docker compose
+        - Something else
+    validations:
+      required: true
+
+  - type: input
+    id: model
+    attributes:
+      label: Which model provider?
+      placeholder: Anthropic / OpenAI / local
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Anything from the logs
+      description: |
+        `./memory/logs/atlas-events.log` records one line per request plus run and
+        build lifecycle events, and is usually where the answer is.
+        **Check for API keys, tokens and email addresses before pasting.**
+      render: shell

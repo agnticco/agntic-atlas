@@ -8,13 +8,13 @@
 
   <p><strong>Build automations by talking.</strong></p>
 
-  <p>A conversational workflow builder. Describe what you want in plain language — Atlas asks the right questions, builds a runnable automation, and runs it for you on a schedule or a trigger.</p>
+  <p>Describe what you want in plain language. Atlas asks the questions it actually needs answered, builds a runnable automation, tests it, and runs it on a schedule or a trigger. Self-hosted, on your own API key.</p>
 
   <p>
-    <img alt="status: pilot" src="https://img.shields.io/badge/status-pilot-6b7bff">
+    <img alt="license: AGPL-3.0" src="https://img.shields.io/badge/license-AGPL--3.0-8b90a3">
     <img alt="node >= 22" src="https://img.shields.io/badge/node-%3E%3D22-3c873a">
-    <img alt="license: proprietary" src="https://img.shields.io/badge/license-proprietary-8b90a3">
-    <img alt="by Agntic" src="https://img.shields.io/badge/by-Agntic-111">
+    <img alt="tests" src="https://img.shields.io/badge/tests-2%2C500%2B-6b7bff">
+    <img alt="self-hosted" src="https://img.shields.io/badge/self--hosted-yes-111">
   </p>
 </div>
 
@@ -22,111 +22,131 @@
 
 ## What is Atlas?
 
-Most automation tools make you draw flowcharts. Atlas doesn't.
+Most automation tools make you draw a flowchart. Atlas doesn't.
 
-A non-technical operator describes a goal — *"every morning, summarize my unread shipping emails and post them to #ops"* — and an AI **converger** elicits the missing details one step at a time, confirms each, and emits a runnable automation. No drag-and-drop, no code.
+You say *"every morning, summarise my unread shipping emails and post them to #ops"*. Atlas works out what it still needs to know, asks you one thing at a time, shows you a plan, and walks you through every step before anything is built. Then it writes down — in your own words — **what the finished automation promises to deliver**, and holds itself to that promise before it will let you turn it on.
 
-Finished workflows run on a durable execution engine and are fully observable: run history, per-step detail, retries, failure alerts, time-saved metrics, and an exportable SOP. Every customer is a hard-isolated tenant.
+That last part is the point. The failure that matters in this category isn't a workflow that crashes; it's a workflow that quietly does nothing and reports success. Atlas is built around refusing to say something worked when it can't tell.
 
-> Atlas is currently in **private pilot**.
+## Run it
 
-## Features
+**You need:** Node.js 22+ and an [Anthropic API key](https://console.anthropic.com/settings/keys) (or an OpenAI one).
 
-- 🗣️ **Build by talking** — the converger turns a vague intent into a runnable spec, and never proposes a step your connected tools can't actually do.
-- 🔌 **Connectors** — Slack, Google Workspace (Gmail, Calendar, Drive, Sheets, Docs, Tasks), Airtable, Web (search + read), your own files/Knowledge, and an in-app Inbox — one unified, position-agnostic capability catalog.
-- ⏰ **Triggers & scheduling** — run on a schedule (down to minutes), on inbound email, or on connector events.
-- 📊 **Monitoring console** — inventory, live run monitoring, per-step detail, retries, failure alerts, and SOP export (PDF / Markdown).
-- 📈 **Proof of value** — time-saved per run, an all-up ROI summary, and a customer-facing report.
-- 🏢 **Multi-tenant & secure** — hard, fail-closed per-tenant isolation; argon2id auth, revocable JWT sessions, AES-256-GCM-encrypted OAuth tokens; RAG physically isolated per tenant.
-- 🛠️ **Admin & team** — an operator console for per-tenant usage + cost, workspace provisioning with email invites, seat-gated teammate invites, and tenant lifecycle (suspend / archive).
+```bash
+git clone https://github.com/agnticco/agntic-atlas.git
+cd agntic-atlas
+npm install
+
+cp .env.example .env          # add ANTHROPIC_API_KEY=sk-ant-...
+npm start                     # http://localhost:3000
+```
+
+Or with Docker, if you'd rather not install Node:
+
+```bash
+cp .env.example .env          # add your key
+docker compose up
+```
+
+**On first start, Atlas prints a one-time setup code in your terminal.** You need it to create your admin account, so keep that window visible. Miss it and a fresh one is printed on the next restart.
+
+That's the whole install. There are no usage limits, no account to create with us, and nothing phones home.
+
+> **Costs.** Atlas spends real money on your API key every time it builds or runs something. It is metered per workspace and visible in the admin console. If anyone but you can sign in, set `TENANT_DAILY_USD_LIMIT` in `.env` — there is no ceiling by default.
+
+## What works immediately, and what doesn't
+
+Being straight about this, because it's the thing that wastes people's evenings.
+
+**Works the moment you start it — nothing to register:**
+
+| | |
+|---|---|
+| **Notion, Linear, Sentry, Asana, Stripe, Figma** | Click connect, approve on their site, done. Atlas identifies itself to these services automatically, so there is no app to create and no key to paste. Their tools become steps in your workflows. |
+| **Web search and page reading** | Uses the Anthropic key you already set. |
+| **Knowledge** | Upload documents, and workflows can read them. Indexed per workspace. |
+| **Atlas Inbox** | Have a workflow deliver to you inside Atlas — useful before you've connected anything. |
+| **Schedules** | Hourly, daily, weekly, or every N minutes. |
+
+**Needs about ten minutes of setup each — you create a developer app and paste two values into `.env`:**
+
+| | |
+|---|---|
+| **Slack** | Post messages, read channels, approval buttons. Also the only way to get Slack *triggers*, which additionally need Atlas reachable from the internet. |
+| **Google Workspace** | Gmail, Calendar, Drive, Sheets, Docs, Tasks. One consent covers all of them. |
+| **Airtable** | Read and write records; real webhook triggers. |
+
+`.env.example` says exactly what each one needs and where to get it.
+
+**Doesn't exist yet, so you know:** the one-click services above are step-and-delivery only — none of them can *start* a workflow. Triggers today are schedules, Gmail, Slack messages, and Airtable record changes.
 
 ## How it works
 
 ```
   intent  ──▶  converger  ──▶  JSON spec  ──▶  execution engine  ──▶  connectors
- (plain       (elicits +      (proprietary    (topological DAG,      (Slack, Google,
-  language)    confirms)       format)          data threading)        Airtable, Web…)
+ (plain       (elicits +      (the saved      (topological DAG,      (Slack, Google,
+  language)    confirms)       workflow)        data threading)        Notion, Web…)
                                                       │
                                                       ▼
                                              observable runs
-                                      (console · SOP · ROI · alerts)
+                                      (console · SOP export · alerts)
 ```
 
-- The **converger** (`src/converger/`) is the hard IP — a conversational elicitation engine built on a custom agent-graph runtime (a compiled state graph + a ReAct tool loop with a human-in-the-loop pause).
-- The **execution engine** (`src/workflows/`) is a topological DAG executor with real inter-step data threading (`{{prev}}`, `{{nodeId.output}}`, transitive fan-in) and durable, cost-tracked run logs.
-- Connectors expose a single **capability catalog** (`src/connectors/`) — each capability declares which positions it can occupy (trigger / step / delivery) and its required scopes, resolved live from a tenant's granted permissions.
+- The **converger** (`src/converger/`) is the hard part — a conversational elicitation engine on a custom agent-graph runtime (a compiled state graph plus a ReAct tool loop with a human-in-the-loop pause).
+- The **execution engine** (`src/workflows/`) is a topological DAG executor with real data threading between steps (`{{prev}}`, `{{nodeId.output}}`, transitive fan-in) and durable, cost-tracked run logs.
+- **Connectors** (`src/connectors/`) expose one capability catalog. Each capability declares which positions it can occupy (trigger / step / delivery), what it changes in the world, and where it writes — so the rest of the system never has to guess from a name.
 
-## Tech stack
+## What else is in here
 
-- **Runtime** — Node.js ≥ 22, [Express](https://expressjs.com)
-- **Data** — SQLite via [better-sqlite3](https://github.com/WiseLibs/better-sqlite3) (workflows, auth, cost logs); per-tenant vector stores for RAG
-- **AI** — Anthropic Claude / OpenAI in the cloud, or local GGUF models via [node-llama-cpp](https://github.com/withcatai/node-llama-cpp); [Voyage AI](https://voyageai.com) or local embeddings
-- **Frontend** — a custom lightweight reactive framework, no build step (`public/index.html`)
-- **Deploy** — a single Node process + systemd, fronted by a Cloudflare Tunnel
+- **Approval steps.** A workflow can stop and wait for a person before it does something serious. Approvals go through signed single-use links, never an email reply — a `From:` header is forgeable and a forwarded thread is full of the word "yes".
+- **Branching with proof.** A workflow that routes is only cleared to go live once every path has actually been tested.
+- **A monitoring console.** Run history, per-step detail, retries, failure alerts, and an exportable written procedure (PDF or Markdown).
+- **Multi-workspace isolation.** Hard and fail-closed — the stores throw on a missing tenant rather than quietly returning everything. RAG is physically separated per workspace, not filtered.
+- **Local models.** Run against GGUF weights instead of a cloud API if you want to (`npm install node-llama-cpp`; it's optional precisely because most people don't).
 
-## Getting started (local dev)
-
-**Prerequisites:** Node.js ≥ 22.
-
-```bash
-git clone https://github.com/agnticco/agntic-atlas.git
-cd agntic-atlas
-npm ci
-
-# Configure — the only required value for cloud inference is an Anthropic key.
-cp .env.example .env
-#   ANTHROPIC_API_KEY=sk-ant-...      # without it, Atlas falls back to a local model
-
-npm start          # boots on http://localhost:3000
-```
-
-On first run Atlas prints a **one-time setup token** — open the URL and paste it to create the first platform admin. From the admin dashboard you can provision a workspace and start building.
-
-> `npm start` is development mode. Use `npm run prod` for production (`NODE_ENV=production`, which fails fast without a cloud LLM key). Config is read from `.env`, which is never committed.
-
-## Project structure
+## Project layout
 
 ```
 src/
-  api/           HTTP spine — grows deliberately, mounts only what's wired
-  converger/     the elicitation engine (the IP)
+  converger/     the elicitation engine — turns a conversation into a workflow
   workflows/     execution engine — DAG executor, scheduler, node types
-  connectors/    Slack · Google · Airtable · Web · Filesystem — one capability catalog
-  auth/          argon2id auth, JWT sessions, tenant + OAuth-token stores
-  rag/           per-tenant company-context RAG
-  llm/           model pool (cloud + local GGUF) and cost tracker
-  entitlements/  plan-based gating (seats today; see the tier-gating spec)
-  admin/         platform operator console (usage + cost per tenant)
+  connectors/    Slack · Google · Airtable · Notion · Web · Files — one catalog
+  api/           HTTP spine (server.js) and the build/chat API (builder.js)
+  auth/          argon2id auth, JWT sessions, tenants, encrypted token vault
+  rag/           per-workspace document knowledge
+  llm/           model pool (cloud + local) and cost tracking
+  admin/         operator console — usage and cost per workspace
   graph/ core/   the agent-graph runtime the converger is built on
-public/          the frontend (single page, no build step)
-docs/            architecture, deployment, and design docs
+public/          the entire frontend, one file, no build step
+tests/           ~2,500 tests, ~8 seconds, no API key needed
 ```
 
-## Deployment
+## Contributing
 
-Atlas runs as a single Node process behind a Cloudflare Tunnel.
+Yes please — start with [CONTRIBUTING.md](CONTRIBUTING.md). It's short, and it contains the one habit this codebase genuinely depends on: **when you add a guard, put the bug back by hand and watch the test fail.**
 
-- **[VPS runbook](docs/deployment/vps-runbook.md)** — provision a production host from scratch
-- **[Update / deploy protocol](docs/deployment/update-protocol.md)** — the develop → commit → push → deploy → verify loop
-- **[Operator cheat sheet](docs/deployment/operator-cheatsheet.md)** — plain-language terminal commands for running the server
+[`docs/ENGINEERING-LOG.md`](docs/ENGINEERING-LOG.md) is worth a look even if you never write a line. It's an unusually honest engineering diary — every significant defect this project shipped, why it happened, what it cost, and the rule that came out of it. Most of them are the same few mistakes wearing different clothes.
+
+Found a security problem? Please [report it privately](SECURITY.md) rather than opening an issue.
 
 ## Documentation
 
 | Topic | Doc |
 |---|---|
-| Multi-tenancy (isolation model) | [architecture/multi-tenancy.md](docs/architecture/multi-tenancy.md) |
+| Multi-workspace isolation model | [architecture/multi-tenancy.md](docs/architecture/multi-tenancy.md) |
 | Connector capability catalog | [architecture/connector-capabilities.md](docs/architecture/connector-capabilities.md) |
-| Plan / tier gating | [architecture/tier-gating.md](docs/architecture/tier-gating.md) |
-| Scaling path | [architecture/scaling.md](docs/architecture/scaling.md) |
-| Local models + RAG | [capabilities/local-models-rag.md](docs/capabilities/local-models-rag.md) |
-| Commit convention | [COMMIT_CONVENTION.md](docs/COMMIT_CONVENTION.md) |
+| Connecting services with no setup (MCP) | [architecture/mcp-capability-adapter.md](docs/architecture/mcp-capability-adapter.md) |
+| Local models + document knowledge | [capabilities/local-models-rag.md](docs/capabilities/local-models-rag.md) |
+| Running Atlas as a metered service | [architecture/tier-gating.md](docs/architecture/tier-gating.md) |
+| Deploying to a server | [deployment/vps-runbook.md](docs/deployment/vps-runbook.md) |
+| Scaling beyond one process | [architecture/scaling.md](docs/architecture/scaling.md) |
 
-The build constitution — closed decisions, off-limits code, and working rules — lives in [`CLAUDE.md`](CLAUDE.md).
+## Licence
 
-## License
+[GNU AGPL v3](LICENSE). Use it, run it, change it, freely.
 
-© 2026 Agntic LLC. All rights reserved. Proprietary and confidential — not for redistribution.
+The one obligation: if you run a modified Atlas as a network service for other people, you have to make your changes available to them. Running it for yourself or your own company, modified however you like, carries no such requirement.
 
 ---
 
-<div align="center"><sub>Atlas · by <strong>Agntic</strong> · Birmingham, AL</sub></div>
+<div align="center"><sub>Atlas · originally built by <strong>Agntic</strong> · Birmingham, AL</sub></div>

@@ -44,7 +44,7 @@ export const connectorActionNodeType = {
   // meant the node's schema lied in both directions at once: it named a key
   // nothing in this file consumes, and omitted `title`, which it does. A schema
   // that lists keys nothing reads turns the check into theatre — that is the state
-  // that let `"model": "claude-opus-4-5"` ship (CLAUDE.md, Increment A).
+  // that let `"model": "claude-opus-4-5"` ship (ENGINEERING-LOG.md, Increment A).
   configPolicy: 'closed',
   configSchema: [
     { key: 'action', label: 'Action', type: 'string', optional: false,

@@ -114,7 +114,7 @@ describe('the server decides it, and says so on the failure response', () => {
   // made extractable.
   // Anchored to the branch's OWN ends, never a fixed byte window. A fixed window
   // has failed over nothing but comment growth three times in this tree
-  // (CLAUDE.md records each), which fails a test for formatting and teaches
+  // (ENGINEERING-LOG.md records each), which fails a test for formatting and teaches
   // whoever hits it that the pin is noise.
   const branch = (() => {
     const i = SERVER.indexOf("else if (ev.type === 'run_failed')");

@@ -9,7 +9,7 @@
  *
  * Each mutation was applied, CONFIRMED APPLIED (git diff), watched go red, and
  * restored with a file copy — never `git checkout`, which reverts to HEAD and
- * silently eats uncommitted work (CLAUDE.md, operational hazard).
+ * silently eats uncommitted work (ENGINEERING-LOG.md, operational hazard).
  *
  *   B1  decision.js:184           NULLISH     a keyless output publishes
  *   B2  decision.js:207           COND_FALSE  a bad rule CRASHES the validator

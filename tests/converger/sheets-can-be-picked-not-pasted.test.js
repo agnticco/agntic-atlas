@@ -12,7 +12,7 @@
  *
  * The discovery seam has existed since P13-0 and **only Airtable ever declared it**, so
  * every other connector fell back to asking. `sheets_describe` was built for exactly this
- * job and had been sitting unwired — the residual has been carried in CLAUDE.md since.
+ * job and had been sitting unwired — the residual has been carried in ENGINEERING-LOG.md since.
  *
  * TWO THINGS HAD TO GENERALISE, and both were Airtable's shape being ASSUMED rather than
  * declared — the same mistake as the hardcoded connector strings the seam was built to

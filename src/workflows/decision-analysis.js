@@ -268,7 +268,7 @@ function coveredAtoms(cond, input, atoms) {
  * describes a program nobody is running: the analyser certifies that every case
  * is covered, and the engine — reading the same table by different rules — falls
  * through to no rule at all. The proof is only worth what the executor's
- * agreement with it is worth. (converger-v2 §11.7; CLAUDE.md — one oracle,
+ * agreement with it is worth. (converger-v2 §11.7; ENGINEERING-LOG.md — one oracle,
  * consulted by both.)
  *
  * @returns {{ ok: boolean, matched: boolean }} — `ok:false` means the condition is

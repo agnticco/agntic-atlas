@@ -7,7 +7,7 @@
  * find a delivery whose connector and locator STRING match the promise's
  * `target`. Over 2026-08-01/02 that machinery produced no findings about a
  * workflow being wrong and repeatedly failed workflows that were right — nine
- * defects of that shape are recorded in CLAUDE.md, each one a disagreement about
+ * defects of that shape are recorded in ENGINEERING-LOG.md, each one a disagreement about
  * what a destination string means, several costing paid rebuilds and twice
  * blocking a correct workflow from going live.
  *

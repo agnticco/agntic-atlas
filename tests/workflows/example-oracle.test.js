@@ -70,7 +70,7 @@ describe('checkAssertionAtRuntime — did the effect actually happen', () => {
 // gmail_send / airtable_create omit BOTH `channel` and `delivered`. So the checks
 // above were green while the runtime oracle confirmed ONLY Slack — every inbox,
 // gmail, or airtable delivery read back as "nothing reached …" on a SUCCESSFUL run.
-// (P12 G defect; CLAUDE.md flaw #2 — "a test that exercises a configuration
+// (P12 G defect; ENGINEERING-LOG.md flaw #2 — "a test that exercises a configuration
 // production never uses cannot see the bug production has".)
 //
 // These feed `normalizeDelivery` the EXACT object each handler returns (source line

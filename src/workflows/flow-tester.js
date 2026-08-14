@@ -763,7 +763,7 @@ export class FlowTester {
       // the reference with the VALUE before run() ever saw it, so
       // `from: "{{think.output}}"` arrived as the prose itself and the engine went
       // looking for a step called "This is EXTREMELY urgent…". Verbatim the
-      // branch-`on` crash (CLAUDE.md, Increment B), one increment later, in the
+      // branch-`on` crash (ENGINEERING-LOG.md, Increment B), one increment later, in the
       // one other place a reference lives. A reference names a step; a template
       // names a value. readInput() dereferences `from` against ctx.outputs itself.
       const { inputs, ...rest } = rawCfg;

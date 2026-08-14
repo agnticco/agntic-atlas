@@ -50,7 +50,7 @@ describe('FINDING 1 — the moat is bypassed by ONE laundering hop', () => {
    * The branch then routes on free LLM prose. `when: "yes"` matches nothing (the
    * value is a markdown document), so the MANDATORY catch-all takes 100% of
    * traffic, forever, silently, with `run_completed`. That is verbatim the failure
-   * BRANCH_BAD_ON was written to prevent — CLAUDE.md: "the catch-all that exists
+   * BRANCH_BAD_ON was written to prevent — ENGINEERING-LOG.md: "the catch-all that exists
    * to prevent a silent misroute was MASKING one."
    *
    * The property §11.7 claims is not "the branch's parent is not an llm node". It

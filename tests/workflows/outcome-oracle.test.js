@@ -97,7 +97,7 @@ describe('nodeEffect: what a node actually does to the world', () => {
   });
 
   test('an UNREGISTERED write capability still gets an effect from its VERB', () => {
-    // New capabilities must work without an edit here (CLAUDE.md: workflow-agnostic).
+    // New capabilities must work without an edit here (ENGINEERING-LOG.md: workflow-agnostic).
     const node = { id: 'w', type: 'connector-action', config: { action: 'notion_create_record', table: 'Leads' } };
     const eff = nodeEffect(node);
     assert.equal(eff.kind, 'record_exists');

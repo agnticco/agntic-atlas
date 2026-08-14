@@ -8,6 +8,7 @@
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
+import { supportLineText, supportLineHtml } from '../utils/support-contact.js';
 
 const TEMPLATE_PATH = join(dirname(fileURLToPath(import.meta.url)), 'templates', 'reset-email.template.html');
 
@@ -30,7 +31,8 @@ export function renderResetEmail({ resetLink, userEmail, base }) {
   const html = template()
     .split('{{assets_base}}').join(esc(assetsBase))
     .split('{{reset_link}}').join(esc(resetLink))
-    .split('{{user_email}}').join(esc(userEmail));
+    .split('{{user_email}}').join(esc(userEmail))
+    .split('{{support_line}}').join(supportLineHtml('Getting reset emails you did not ask for?'));
 
   const text = [
     'Reset your Atlas password',
@@ -43,7 +45,8 @@ export function renderResetEmail({ resetLink, userEmail, base }) {
     'request a new reset from the sign-in screen.',
     '',
     "Didn't request this? You can safely ignore this email — your password",
-    'stays exactly as it is. Questions: hello@agntic.co',
+    'stays exactly as it is.',
+    ...(supportLineText() ? [supportLineText()] : []),
     '',
     'Atlas · by Agntic',
   ].join('\n');

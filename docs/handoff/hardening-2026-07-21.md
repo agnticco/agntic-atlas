@@ -109,7 +109,7 @@ have found none of them.
 
 ## 3. Fixed today (all deployed, tested, hand-mutation-checked)
 
-Full reasoning for each is in `CLAUDE.md`; this is the index.
+Full reasoning for each is in `ENGINEERING-LOG.md`; this is the index.
 
 | v | Fix | Class |
 |---|-----|-------|
@@ -187,7 +187,7 @@ proves nothing.
   it named was filtered out before the code under test ran. Always `diff` to confirm
   the mutation applied, then confirm it fails.
 - **A mutation run left a live mutant in the tree** when it timed out. Restore from a
-  `cp` backup, never `git checkout` (see the CLAUDE.md hazard note).
+  `cp` backup, never `git checkout` (see the ENGINEERING-LOG.md hazard note).
 - **A log line that contradicts your model of the failure is the finding.** The 227-
   second request in the event log is what proved the 524 was a silence limit — it had
   been read past twice.

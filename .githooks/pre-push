@@ -4,9 +4,8 @@
 # unless that phase's objective check (scripts/gates/p<phase>.sh) passes.
 # Portable POSIX-ish shell — works on macOS's default bash 3.2.
 #
-# A push can still be forced with `git push --no-verify`; the Claude Code
-# PreToolUse hook (.claude/settings.json) blocks agents from doing that, and
-# humans are trusted to only bypass deliberately.
+# A push can still be forced with `git push --no-verify`. That is deliberate —
+# the check exists to stop an accident, not to stop someone who has decided.
 set -eu
 
 cd "$(git rev-parse --show-toplevel)"

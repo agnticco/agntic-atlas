@@ -3,7 +3,7 @@
  *
  * WHY THIS EXISTS. Several suites constructed `new WorkflowValidator({ nodeTypes })`
  * with **no channel registry** — and then asserted things about config keys. That
- * is architectural flaw #2 (CLAUDE.md): *a check that exercises a configuration
+ * is architectural flaw #2 (ENGINEERING-LOG.md): *a check that exercises a configuration
  * production never uses cannot see the bug production has*, and it cuts both ways.
  *
  * With no registry, a capability's params are UNKNOWABLE, so the validator does not

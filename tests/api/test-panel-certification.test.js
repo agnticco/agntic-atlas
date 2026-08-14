@@ -11,7 +11,7 @@
  * The rule lives in a 7000-line browser file with no module boundary, so there is
  * nothing to import — and that is exactly why it went unpinned through two live
  * defects. A grep for the identifiers would satisfy the letter of a check while
- * proving nothing about its POWER (CLAUDE.md, architectural flaw #1: the gate
+ * proving nothing about its POWER (ENGINEERING-LOG.md, architectural flaw #1: the gate
  * measured the EXISTENCE of tests, not their power).
  *
  * So this EXTRACTS the real source of the decision — verbatim, from `const

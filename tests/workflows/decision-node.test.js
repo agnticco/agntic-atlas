@@ -584,7 +584,7 @@ describe('a `from` says WHICH way it failed — the two paths are not interchang
 //
 // Both SURVIVED the curated mutation-guard when the fix first landed — i.e. each
 // could be deleted with the whole suite still green. Mutation-test the guards you
-// add in the FIX, not just the ones you started with (CLAUDE.md, Increment B).
+// add in the FIX, not just the ones you started with (ENGINEERING-LOG.md, Increment B).
 
 describe('a comma list must name only DECLARED values', () => {
   test('"urgent, bogus" is an unreadable condition, not a rule that quietly covers half of what it says', () => {

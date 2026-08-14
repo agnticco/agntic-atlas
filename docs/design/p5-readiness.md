@@ -70,7 +70,7 @@ dependencies; and she can **export a workflow's SOP as PDF + Markdown**.
 - **No mock data.** The Live Dashboard must render real runs or honest empty states —
   the fixture-data anti-pattern removed from the P4 Draft page (2026-06-18).
 - **Don't refactor salvage** (the engine/store) without recording the decision in
-  CLAUDE.md; adding a `tenantId` param to `getRuns` is a tenancy-scoping edit in the
+  ENGINEERING-LOG.md; adding a `tenantId` param to `getRuns` is a tenancy-scoping edit in the
   spirit of the approved multi-tenancy salvage edits.
 
 ## Suggested real check to fill `scripts/gates/p5.sh` (during P5, not now)

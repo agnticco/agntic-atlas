@@ -7,7 +7,7 @@ been driven so far.
 
 ## How to read this document
 
-Per `CLAUDE.md`'s standing rules on remediation briefs:
+Per `ENGINEERING-LOG.md`'s standing rules on remediation briefs:
 
 - **Line numbers and file paths in this document are non-authoritative provenance.**
   They were true at the SHA below. Re-ground every finding against current code before
@@ -35,7 +35,7 @@ Per `CLAUDE.md`'s standing rules on remediation briefs:
 **v1.5.5, booted 2026-07-17 11:50:10** — *before* five commits including
 `34b2a43 fix(converger): stop the sufficiency check looping on valid specs`, which is
 in-process backend code. It was **killed and restarted on the current tree** before any
-testing. Per `CLAUDE.md`: a result from a stale process is not a result, it is noise
+testing. Per `ENGINEERING-LOG.md`: a result from a stale process is not a result, it is noise
 that looks like a finding.
 
 **Purge performed.** All 140 `agntic` workflows (100 draft / 19 active / 11 paused /
@@ -68,7 +68,7 @@ in ordinary use, not a synthetic stress case.
 Both writes are `try/catch`-guarded and swallow the quota error. So the app does not
 crash; instead **persistence silently stops working**. The user's in-progress build
 stops surviving a reload, with no error, no warning, and no degraded-mode indicator.
-This is the "silently degrades" class `CLAUDE.md` names repeatedly.
+This is the "silently degrades" class `ENGINEERING-LOG.md` names repeatedly.
 
 **What is NOT a defect (grounded, so the next agent doesn't chase it).** The in-app
 delete path *does* clean up its key — `softDeleteWorkflow` calls
@@ -107,7 +107,7 @@ be treated as a cache, not the record.
 > looking at a *build view restored from `localStorage`*, not the home view. The
 > retraction is kept visible rather than silently edited out, because a handoff brief
 > that quietly rewrites its own claims is exactly the stale-brief failure mode
-> `CLAUDE.md` warns about.
+> `ENGINEERING-LOG.md` warns about.
 
 **What is true.** When `localStorage` holds a build session whose `workflowId` no longer
 exists server-side, the app restores that session and renders the **build view** rather
@@ -251,7 +251,7 @@ on every test.
   the harness run it anyway — the test must go red. (`shouldTrigger` is currently read by
   nothing, so today this test cannot fail — which is the point.)
 
-**Note on scope.** `CLAUDE.md` already records a G-era residual that *"a trigger-fed llm
+**Note on scope.** `ENGINEERING-LOG.md` already records a G-era residual that *"a trigger-fed llm
 node's `given` must be a realistic sample event, not a label"*, treating it as
 example-generation quality. F3 is **broader**: it is not merely thin fixtures, it is that
 for connector-read workflows the fixture cannot matter at all, plus a declared negative
@@ -513,7 +513,7 @@ Zero rows of evidence, and a green **Go live**. Screenshot:
 `tmp-g-verify/T15-zero-examples-passed.png`.
 
 **Why it matters.** The empty set satisfies "every promise held" vacuously. This is
-precisely the failure class `CLAUDE.md` names — *"a default that makes a check vacuous is
+precisely the failure class `ENGINEERING-LOG.md` names — *"a default that makes a check vacuous is
 not a safety net; it is the bug"* — sitting in the flagship verification surface. It is
 reachable by the most ordinary action a user can take on a live workflow: editing it.
 Combined with **F3**, the test panel can be made to certify a workflow either on
@@ -773,7 +773,7 @@ can report the gap but example generation still cannot close it.
 > 16-node workflow (*"Support Email Auto-Reply with Approval"*) awaiting node approval.
 > I called the failure before the build had finished. The corrected picture is below.
 > The retraction is left visible because a handoff brief that silently rewrites its own
-> claims is the stale-brief failure mode `CLAUDE.md` warns about — and because
+> claims is the stale-brief failure mode `ENGINEERING-LOG.md` warns about — and because
 > "unbuildable" would have sent the next agent hunting a defect that does not exist.
 
 **Severity: BLOCKS.** Not silent in the "looks like success" sense — it visibly fails —
@@ -1768,7 +1768,7 @@ cannot run at all.
 working. They will disconnect and reconnect, the symptom will persist, and nothing in the
 message points at the loop.
 
-**Fifth occurrence of one lesson.** `CLAUDE.md` already records this exact hop four times:
+**Fifth occurrence of one lesson.** `ENGINEERING-LOG.md` already records this exact hop four times:
 the validator learned to recurse into `foreach` steps (F #3), the outcome oracle learned it
 (F #4), `isWriteNode` learned it (D #4), and `CONTROL_SUBSTEP_TYPES` needed the same for
 `decision` (E #1). Its own words: *"A check on a node's config is a check on EVERY node's
@@ -2145,7 +2145,7 @@ doors**, and fixing them individually will leave the system in the same state.
 | F11 | no contract persisted anywhere | publish succeeds silently, SOP omits it |
 
 In every case the honest verdict was **"not verified"**, and in every case the system
-rendered **green + cleared to go live**. This is the exact failure `CLAUDE.md` names
+rendered **green + cleared to go live**. This is the exact failure `ENGINEERING-LOG.md` names
 repeatedly and in these words — *"a default that makes a check vacuous is not a safety
 net; it is the bug"*, *"a check that silently degrades is not a safety net; it is the
 bug"*, *"an uncheckable promise reported as met is the same failure as a missing
@@ -2215,7 +2215,7 @@ It is the cheapest fix on this list and it unblocks the most testing.
    counting), leaving the narrower question of fixture generation for connector-read
    workflows.
 
-**A warning about testing these.** Per `CLAUDE.md`'s mutation discipline: several of
+**A warning about testing these.** Per `ENGINEERING-LOG.md`'s mutation discipline: several of
 these cannot currently fail. `shouldTrigger` is read by no code; a test asserting it is
 honoured passes today only because nothing contradicts it. When you add each guard,
 **re-introduce the defect and confirm the test goes red** — F3, F12 and F16 all reached
@@ -2231,7 +2231,7 @@ written and never verified.
 2. **What should a router's minimum sample set be?** (F16.) One-per-lane is the obvious
    floor, but for a decision table the lane count can be large. There may be an existing
    answer in the DMN coverage work (`decision-analysis.js` already subtracts boxes) worth
-   reusing rather than inventing a second notion of coverage — `CLAUDE.md` is emphatic
+   reusing rather than inventing a second notion of coverage — `ENGINEERING-LOG.md` is emphatic
    that two implementations of one rule drift.
 3. ~~**Should test runs count toward console health metrics?** (F14.)~~ **ANSWERED
    2026-07-20 — no, and the question was a false binary.** Counting them makes the health

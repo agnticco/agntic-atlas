@@ -12,6 +12,7 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { PLAN_META } from '../entitlements/index.js';
+import { supportLineText, supportLineHtml } from '../utils/support-contact.js';
 
 const TEMPLATE_PATH = join(dirname(fileURLToPath(import.meta.url)), 'templates', 'invite-email.template.html');
 
@@ -84,7 +85,8 @@ export function renderInviteEmail({ inviteLink, userEmail, workspaceName, base, 
     .split('{{invite_link}}').join(esc(inviteLink))
     .split('{{user_email}}').join(esc(userEmail))
     .split('{{workspace_name}}').join(esc(ws))
-    .split('{{plan_block}}').join(planBlockHtml(plan, nextChargeIso));
+    .split('{{plan_block}}').join(planBlockHtml(plan, nextChargeIso))
+    .split('{{support_line}}').join(supportLineHtml());
 
   const text = [
     `You're invited to ${ws} on Atlas`,
@@ -98,7 +100,11 @@ export function renderInviteEmail({ inviteLink, userEmail, workspaceName, base, 
     inviteLink,
     '',
     "Not expecting this? You can safely ignore this email — no account is active",
-    'until you set a password. Questions: hello@agntic.co',
+    'until you set a password.',
+    // Conditional SPREAD, not a filter over the whole array: filtering empty
+    // strings would also strip the deliberate blank lines that paragraph this
+    // email, so an unconfigured support address would silently reformat it.
+    ...(supportLineText() ? [supportLineText()] : []),
     '',
     'Atlas · by Agntic',
   ].join('\n');

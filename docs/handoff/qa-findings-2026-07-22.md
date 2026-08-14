@@ -28,8 +28,8 @@ closed all four, confirmed by re-measuring the identical build.
 >   which is quieter than the original bug but no less wrong.
 >
 > "0 re-asks, 1 build pass" measured that Atlas stopped repeating itself. It never
-> measured whether the answer changed what got built. Recorded in CLAUDE.md's open list
-> as item 1. Source: `~/Desktop/agent-org/runs/2026-07-26/run-1224-qa/COMPILED.md`,
+> measured whether the answer changed what got built. Recorded in ENGINEERING-LOG.md's open list
+> as item 1. Source: the QA records for that run,
 > finding 6.
 
 The re-measurement also reached **Run test** and **Go live** for the first time: the

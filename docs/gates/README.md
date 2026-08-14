@@ -1,6 +1,6 @@
 # Gate ledger
 
-One file per closed phase gate, written **only** by the `verifier` subagent when
+One file per closed phase gate, written **only** by the independent reviewer when
 a phase's "Done when" is genuinely met (`p<phase>.md`). Each record states PASS,
 the phase, the gate-closing commit sha, the Done-when text, and the concrete
 evidence checked.

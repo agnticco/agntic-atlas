@@ -27,6 +27,7 @@
 import { SystemMessage, HumanMessage } from '../../core/message.js';
 import { resolveTransformInput } from './_node-input.js';
 import { pickCategory } from './decision.js';
+import { NO_MODEL_MESSAGE } from '../../llm/no-model.js';
 
 export const LLM_MODES = ['summarize', 'extract', 'rewrite', 'classify', 'freeform'];
 
@@ -46,7 +47,7 @@ const STYLE_GUIDE = {
 /**
  * `format` is the OUTPUT SHAPE the destination requires. Delivery channels are
  * unforgiving here: Slack renders mrkdwn, Gmail renders HTML, Airtable renders
- * nothing — so raw <p> tags land in the message verbatim (CLAUDE.md, Known
+ * nothing — so raw <p> tags land in the message verbatim (ENGINEERING-LOG.md, Known
  * gotchas). A format not in this table is passed through as a literal
  * instruction, so a free-text format ("a haiku") still works.
  */
@@ -169,7 +170,7 @@ export const llmNodeType = {
   },
 
   run: async (cfg, ctx, services) => {
-    if (!services?.llm) throw new Error('LLM unavailable for llm nodes');
+    if (!services?.llm) throw new Error(`This step needs the AI to write something. ${NO_MODEL_MESSAGE}`);
     const mode = cfg.mode ?? 'freeform';
 
     const { system, prompt } = buildMessages(mode, cfg, ctx);

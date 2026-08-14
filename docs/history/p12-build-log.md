@@ -1,11 +1,11 @@
 # P12 build log — the promise system (increments A–G) + 2026-07 hardening
 
-> **Archived from CLAUDE.md on 2026-07-23.** This is the verbatim per-increment
+> **Archived from ENGINEERING-LOG.md on 2026-07-23.** This is the verbatim per-increment
 > build diary of P12 (the outcome-contract / promise system) and the July 2026
 > product-hardening findings. It was moved out of the Build Constitution because
 > P12 has been closed and running in production for weeks — the granular defect
 > narratives are history, not guidance a new session needs to load every time.
-> The recurring engineering doctrine distilled from this diary lives in CLAUDE.md
+> The recurring engineering doctrine distilled from this diary lives in ENGINEERING-LOG.md
 > under **"Hard-won lessons"**. Nothing here was deleted; it was relocated.
 > Read this when you need the full story behind a specific defect or invariant.
 
@@ -49,7 +49,7 @@
     own regression step hit the self-skip trap: `tests/e2e/full-journey.test.js` skips its converger
     test without `ANTHROPIC_API_KEY` and still reports a cheerful "6 pass / 1 skip" — the skipped
     one being the thing under test. The gate was passing itself on a suite that had quietly not
-    tested the converger. *(Making a check stricter, not weaker — CLAUDE.md, Gates.)*
+    tested the converger. *(Making a check stricter, not weaker — ENGINEERING-LOG.md, Gates.)*
   - `src/converger/prompts.js` — **the actual root cause of the `model` hallucination**: the prompt
     advertised `llm: (config: prompt, model)`, i.e. it *told* the model to emit a key no schema
     had. Now it teaches `llm` + `mode` with the closed key set, and states that `model` does not
@@ -57,7 +57,7 @@
   - `scripts/checks/p3-converger-run.mjs` — asked `n.type === 'summarize'`. That asks about an
     *encoding*, and the encoding changed; P3 actually asserts a *role*. Now checks
     `llm` + `mode:'summarize'` **via the same lift**, so both spellings satisfy it. Not weaker: a
-    spec with no summarizing step still fails. *(Fixing the check, not weakening it — CLAUDE.md,
+    spec with no summarizing step still fails. *(Fixing the check, not weakening it — ENGINEERING-LOG.md,
     Gates.)*
   - Also updated for the re-cut: `sop-generator.js` (mode-aware labels — an SOP is customer-facing,
     so a step that read "Summarize (LLM)" must not start reading "AI step"), `run-enricher.js`,
@@ -502,7 +502,7 @@
   the increment (*"a `human` node alone is not a gate; the step after it does not run on reject"*) was
   **false**, and it took an independent pair of eyes to see it. All four are now fixed and pinned by
   `tests/approvals/gate-adversarial.test.js` (in the gate + the sweep). **Three of the four were a
-  LAUNDERING HOP one step to the left of a real check** — the exact shape CLAUDE.md names three times.
+  LAUNDERING HOP one step to the left of a real check** — the exact shape ENGINEERING-LOG.md names three times.
   1. **A `human` node ALONE IS NOT A GATE.** `draft → ask → send` (no branch reading the decision)
      validated clean, and on **reject the customer got the draft anyway**. `human` only REPORTS its
      answer (like `branch` reports a route); nothing stopped the next step. `escalation.js` and
@@ -652,7 +652,7 @@
      so the decision's `{value,text,rule}` became the iteration's `last` and `stringifyOutput` picked
      its `.text`: the channel received a plausible-looking `"P1"` instead of the lead, with
      `run_completed` and no error. **This is the THIRD time this exact line has been the defect** —
-     CLAUDE.md's own increment-B block says "the sub-loop was missed at first" about `branch`, and it
+     ENGINEERING-LOG.md's own increment-B block says "the sub-loop was missed at first" about `branch`, and it
      was missed again. **A new control type is not done until it is in BOTH sets.** Fixed on both
      sides (`CONTROL_SUBSTEP_TYPES` + a new `DECISION_IN_FOREACH`, mirroring `BRANCH_IN_FOREACH` — a
      decision in a loop is a structural no-op there anyway, because nothing inside a loop can route on
@@ -748,7 +748,7 @@
   - **Reconciling beat believing, in both directions.** The brief's evidence (148/148 NULL)
     was sound and its mechanism was false. Trusting the mechanism would have "fixed" a
     correct handler and shipped the bug; trusting the fresh grounding alone would have
-    closed a real, universal defect as a non-bug. CLAUDE.md's rule 4 ("believe the
+    closed a real, universal defect as a non-bug. ENGINEERING-LOG.md's rule 4 ("believe the
     executing agent's fresh grounding") is about a brief's *conclusions* — it never
     licenses discarding a brief's *measurements*.
 
@@ -903,7 +903,7 @@
     never been exercised, because an approval workflow always carries worked examples. The loop
     defect it named was real but **secondary** (only the LAST example's data was carried forward,
     so a pause on an earlier example was silently dropped; first pause now wins). Fixing only what
-    the brief described would have left the blocker exactly where it was. *(CLAUDE.md, rule 1:
+    the brief described would have left the blocker exactly where it was. *(ENGINEERING-LOG.md, rule 1:
     re-ground every brief against current code at the moment it is executed.)*
   - **A `grep` would have passed against the broken code.** The `d.paused` branch was present, the
     copy was written, the label existed — every symbol a check could look for was there, and the
@@ -1163,7 +1163,7 @@
     (`src/inbox/index.js:63`), and **gmail_send / airtable_create omit BOTH `channel` and `delivered`**
     (so `server.js`'s `.filter(o=>o.delivered)` dropped them before the oracle ever saw them). So every
     delivery target EXCEPT Slack — inbox is the *default* — showed a false PROMISE BROKEN on a correct
-    run. **This is CLAUDE.md flaw #2 verbatim:** the 14 unit tests hand-built synthetic deliveries that
+    run. **This is ENGINEERING-LOG.md flaw #2 verbatim:** the 14 unit tests hand-built synthetic deliveries that
     all carried `{delivered, channel, target}`; NO handler but Slack returns that shape, so the suite
     was green while the feature confirmed only Slack.
   - **The fix assembles deliveries from the delivering NODE, not the handler's return.** New

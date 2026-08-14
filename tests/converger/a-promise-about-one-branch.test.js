@@ -24,7 +24,7 @@
  *   · `CONDITIONAL_MISSTATED` (2026-07-28) restates a `when` naming the WRONG route. The
  *     loop it lives in opened `if (!a?.when) continue`, so an ABSENT one was never looked
  *     at. **Absent and wrong were different things, and the missing case was unguarded** —
- *     the malformed-trigger shape inverted, and its fourth appearance in CLAUDE.md.
+ *     the malformed-trigger shape inverted, and its fourth appearance in ENGINEERING-LOG.md.
  *
  * The anti-false-positive cases matter more than the catch. Filling a condition onto a
  * genuinely unconditional promise would EXCUSE a real miss on every other lane — a promise

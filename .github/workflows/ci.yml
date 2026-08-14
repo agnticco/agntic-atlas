@@ -1,0 +1,108 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# A second push to the same branch cancels the first — a queue of stale runs on a
+# busy branch tells you nothing and costs minutes.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Tests (Node ${{ matrix.node }}, ${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # Node 22 is the floor declared in package.json's engines field. 24 is here
+        # to catch a break on the next LTS before a contributor hits it.
+        node: ['22', '24']
+        os: [ubuntu-latest]
+        include:
+          # One macOS run, because the native modules (better-sqlite3, argon2)
+          # build differently there and most contributors are on a laptop.
+          - node: '22'
+            os: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+
+      # --omit=optional skips node-llama-cpp, exactly as a normal install does.
+      # That is deliberate: it proves the whole product works WITHOUT the heavy
+      # local-model dependency, which is the state nearly every install is in.
+      - name: Install dependencies
+        run: npm ci --omit=optional
+
+      # NO API KEYS ARE SET HERE, ON PURPOSE. The suite must pass on a clean clone
+      # with nothing configured, because that is the state a first-time contributor
+      # runs it in. A test that silently needs a secret would pass for maintainers
+      # and fail for everyone else.
+      - name: Run tests
+        run: npm test
+
+  lockfile:
+    name: Lockfile matches package.json
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      # `npm ci` fails outright when the lockfile disagrees with the manifest.
+      # Worth its own job: the two drifted by six versions once before anyone
+      # noticed, because nothing was asking.
+      - run: npm ci --omit=optional --ignore-scripts
+
+  docker:
+    name: Docker image builds
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      # Build only — not pushed anywhere. This exists so "docker compose up" in the
+      # README is a checked claim rather than a hopeful one.
+      - name: Build image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: false
+          load: true
+          tags: atlas:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # Starting it is the half that catches a missing runtime file, which a
+      # successful build will not.
+      - name: Start the container and wait for /health
+        run: |
+          docker run -d --name atlas-ci -p 3000:3000 \
+            -e NODE_ENV=production \
+            -e ATLAS_SELF_HOSTED=true \
+            atlas:ci
+          for i in $(seq 1 30); do
+            if curl -sf http://localhost:3000/health > /dev/null; then
+              echo "healthy after ${i}s"
+              curl -s http://localhost:3000/health
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "::error::container never became healthy"
+          docker logs atlas-ci
+          exit 1
+
+      - name: Container logs
+        if: always()
+        run: docker logs atlas-ci || true

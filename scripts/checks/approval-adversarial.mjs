@@ -16,7 +16,7 @@
  *
  * ── Why it boots the real server ────────────────────────────────────────────
  *
- * CLAUDE.md, architectural flaw #2: *a check that exercises a configuration
+ * ENGINEERING-LOG.md, architectural flaw #2: *a check that exercises a configuration
  * production never uses cannot see the bug production has.* A forgery check that
  * constructed its own validator with no signing secret, or hand-passed a tenantId
  * no real caller passes, would prove the signature check works in a program nobody

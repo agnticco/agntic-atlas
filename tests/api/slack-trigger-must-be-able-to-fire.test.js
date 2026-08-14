@@ -15,7 +15,7 @@
  * The fail-closed publishing rule of 2026-07-24 — *"a workflow that saves, shows as live,
  * and can never fire is the lie the product exists to prevent"* — covered Airtable and had
  * no equivalent for Slack. This is that equivalent, and it is the THIRD instance in
- * CLAUDE.md of that rule being reached through a door it did not cover.
+ * ENGINEERING-LOG.md of that rule being reached through a door it did not cover.
  *
  * THE ANTI-FALSE-POSITIVE CASES ARE THE HARD PART, and they are most of this file. The
  * obvious rule — "refuse unless we have seen an event for THIS tenant" — traps every
@@ -115,7 +115,7 @@ describe('IT MUST NOT TRAP A WORKSPACE THAT IS WIRED CORRECTLY', () => {
     /**
      * Added after mutation: dropping the `type === 'event'` test survived the suite,
      * because every case above that could have caught it also lacked a `connector`.
-     * `connector_event` is the unrunnable legacy type CLAUDE.md records — EIGHT stored
+     * `connector_event` is the unrunnable legacy type ENGINEERING-LOG.md records — EIGHT stored
      * workflows carry it — and it is refused earlier and more accurately by
      * `TRIGGER_NOT_RUNNABLE` ("it does not say which base to watch, so it could never
      * start"). Claiming it here would answer a question this check cannot answer, with a
@@ -186,7 +186,7 @@ describe('it is wired into the paths that matter', () => {
   const SERVER  = read(path.join(ROOT, 'src/api/server.js'), 'utf8');
 
   test('BOTH publish paths gate on it — POST and the PUT that is the real publish', () => {
-    // CLAUDE.md: the PUT "IS the publish path for most workflows". Guarding only the POST
+    // ENGINEERING-LOG.md: the PUT "IS the publish path for most workflows". Guarding only the POST
     // would leave the commonest door open, which is how the Airtable rule was bypassed.
     assert.equal((BUILDER.match(/checkSlackTriggersArmable\(spec, slack, slackDeliveryRecord\(\)\)/g) ?? []).length, 2);
   });

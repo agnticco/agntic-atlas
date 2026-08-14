@@ -58,7 +58,7 @@ cap PASS
 4. **Honesty of the record.**
    - Salvage edit real: embedding-model.js:70 `this.gpu = options.gpu ?? (... 'auto')`
      and :176 `getLlama({ ..., gpu: this.gpu, build: 'never' })`. Recorded in
-     CLAUDE.md:48-50 and docs/capabilities/local-models-rag.md:31-35.
+     ENGINEERING-LOG.md:48-50 and docs/capabilities/local-models-rag.md:31-35.
    - Deferred-list reversal recorded in docs/salvage-map.md (commit diff lines 44, 51-56:
      rag/llm removed from "Defer to later phases", "Pulled forward (decision 2026-06-08)" note added).
    - Commit body claims match reality: `duckdb` absent from package.json (no match);

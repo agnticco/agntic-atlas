@@ -14,7 +14,7 @@
  *
  * "Exact" means structurally equivalent AND provably runnable. Byte-for-byte
  * identity is not required; the converger is non-deterministic by design.
- * (Decision recorded in CLAUDE.md § "The frozen canonical spec".)
+ * (Decision recorded in ENGINEERING-LOG.md § "The frozen canonical spec".)
  *
  * Prints P3-CONVERGER-PASS or P3-CONVERGER-FAIL:<reason>.
  */
@@ -54,7 +54,7 @@ try {
       // production never uses: without a catalog the converger cannot check that a
       // delivery channel exists, and P12-C makes that refusal explicit
       // (CHANNELS_UNVERIFIED). A check that drives the code in a shape the app
-      // never runs cannot see the bugs the app has (CLAUDE.md, architectural
+      // never runs cannot see the bugs the app has (ENGINEERING-LOG.md, architectural
       // flaw #2). Strengthening the harness, not weakening the check.
       channels: spine.engine.channelRegistry.getAll(),
     },

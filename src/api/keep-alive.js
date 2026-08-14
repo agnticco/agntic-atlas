@@ -31,7 +31,7 @@
  * `public/index.html` treat a body-level `error` as an error regardless of status.
  * **Never a silent success.** (Same reasoning as `/workflows/run`, which has
  * returned application errors as 2xx since 2026-06-18 for this exact Cloudflare
- * behaviour — see CLAUDE.md, Known gotchas.)
+ * behaviour — see ENGINEERING-LOG.md, Known gotchas.)
  *
  * This lives in its own module so the route and its tests share ONE definition.
  * A copy in the test file would be a test of a program nobody runs.

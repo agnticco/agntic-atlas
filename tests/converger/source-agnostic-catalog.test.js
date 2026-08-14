@@ -13,7 +13,7 @@
  *
  * Each test names the mutation that must turn it red. If you change the seam, revert
  * the fix by hand and watch these fail — a guard whose mutation survives is pinned by
- * nothing (CLAUDE.md, "A green suite is evidence of nothing until you have watched it
+ * nothing (ENGINEERING-LOG.md, "A green suite is evidence of nothing until you have watched it
  * go red"). There is no mutation tooling; this is done by hand, deliberately.
  */
 

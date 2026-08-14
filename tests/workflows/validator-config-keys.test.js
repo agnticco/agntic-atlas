@@ -31,7 +31,7 @@ const nodeTypes = registerBuiltInNodeTypes(new NodeTypeRegistry());
 // this suite's own `deliver.message` pin (defect #3) was passing for that reason
 // rather than because `message` is not one of Slack's declared params. A check
 // that exercises a configuration production never uses cannot see what production
-// sees (CLAUDE.md, architectural flaw #2).
+// sees (ENGINEERING-LOG.md, architectural flaw #2).
 const validator = new WorkflowValidator({ nodeTypes, channelRegistry: realCatalog() });
 
 /** Wrap nodes in the minimum shape validate() accepts (trigger + deliver present). */

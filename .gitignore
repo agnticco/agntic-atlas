@@ -37,22 +37,29 @@ Thumbs.db
 .idea/
 *.swp
 
-# Local Claude session artifacts (keep .claude/ config, ignore local state)
-.claude/local/
-.claude/*.local.*
+# Local editor/assistant tooling. Not part of the product and not published —
+# it is configuration for whoever happens to be working on Atlas, and it means
+# nothing to anyone cloning the repo.
+.claude/
+.cursor/
+.aider*
 
-# Local agent tooling — NOT product config.
-# .mcp.json enables MCP servers (e.g. chrome-devtools, which grants an agent
+# Local MCP server config — NOT product config.
+# .mcp.json enables MCP servers (e.g. chrome-devtools, which grants automated
 # browser control). Kept local and opt-in rather than committed, so cloning the
-# repo never silently grants an agent capabilities the operator didn't choose.
+# repo never silently grants those capabilities to anyone who did not choose them.
 .mcp.json
 
 # Design/brand asset drops — large binaries, not source.
 *.zip
-tmp-uitest/
-tmp-g-verify/
 
-# Agent-org positions are installed to ~/.claude/agents (outside any repo).
-# A copy here would shadow the real one and can be deleted by a branch operation.
-.claude/agents/qa-*.md
-.claude/agents/coding-*.md
+# Scratch output from QA runs, live-verification screenshots and one-off
+# investigations. Named individually until 2026-08-14, by which point 137MB of it
+# was sitting in the working tree and one 0-byte file created by a mistyped shell
+# command had been COMMITTED. Globbed instead, so the next one is ignored by
+# default rather than after someone notices.
+tmp-*/
+.qa-shots/
+.preview-shots/
+*-shots/
+

@@ -8,7 +8,7 @@
  * Sheet should this write to?"* and listed ten existing spreadsheets, **none of them
  * Buyer Inquiries**. A question with no correct answer, sitting in the middle of a build.
  *
- * Slack has had create-or-pick since 2026-07-24 — CLAUDE.md records it as *"a genuinely
+ * Slack has had create-or-pick since 2026-07-24 — ENGINEERING-LOG.md records it as *"a genuinely
  * un-defaultable choice (a destination that doesn't exist) is still asked conversationally
  * and applied DIRECTLY — create-or-pick, no rebuild"*. Sheets got the pick half and never
  * got the create half.

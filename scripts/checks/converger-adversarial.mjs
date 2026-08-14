@@ -23,7 +23,7 @@
  *
  * Part 2 needs ANTHROPIC_API_KEY. It does NOT self-skip quietly — a skipped
  * check reporting PASS is exactly the trap that nearly closed P11 on a false
- * green (CLAUDE.md, P11 note). Without a key it fails closed and says why.
+ * green (ENGINEERING-LOG.md, P11 note). Without a key it fails closed and says why.
  *
  * Usage:  node scripts/checks/converger-adversarial.mjs
  * Output: CONVERGER-ADVERSARIAL-PASS, or a non-zero exit naming the leak.
@@ -176,7 +176,7 @@ console.log('PART 1 — hostile SPECS: every assertion must land in a bucket.\n'
 //    with NO capabilities and validated it with NO channelRegistry — so both
 //    sides were equally blind, and the divergence was invisible BY CONSTRUCTION.
 //    Meanwhile production validates WITH a registry (server.js:542). That is
-//    CLAUDE.md architectural flaw #2 exactly: a check that exercises a
+//    ENGINEERING-LOG.md architectural flaw #2 exactly: a check that exercises a
 //    configuration production never uses cannot see the bug production has. The
 //    independent verifier found a real divergence hiding behind it: a `deliver`
 //    to a hallucinated `channel: 'discord'` scored COMPLETE and then failed
@@ -242,7 +242,7 @@ if (!process.env.ANTHROPIC_API_KEY) {
   console.error('    This check FAILS CLOSED rather than skipping: the half that proves the');
   console.error('    converger does not drop a destination BEFORE anything can check it is the');
   console.error('    half that matters, and a skipped check reporting PASS is how P11 was nearly');
-  console.error('    closed on a false green (CLAUDE.md, P11 note).');
+  console.error('    closed on a false green (ENGINEERING-LOG.md, P11 note).');
   process.exit(1);
 }
 

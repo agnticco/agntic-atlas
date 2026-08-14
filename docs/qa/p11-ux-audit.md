@@ -200,7 +200,7 @@ running/verifying them. New findings appended here with `UX-R#` ids as they surf
 
 | ID | Sev | Surface | Summary | Evidence | Status |
 |----|-----|---------|---------|----------|--------|
-| UX-R1 | **HIGH** | builder chat | **"Build it" produces nothing + hallucinated actions.** Building workflow #1 (EV news → email), after 2 clarifying Qs I said "go ahead and build it." Atlas replied *"On it! I'll run a test now… here's your first EV briefing while I get the daily schedule set up"* — but no "Build it →" CTA rendered, no build started, Test panel stayed "Not started." The chat promised actions it can't take from chat and stranded the user (said build → nothing built). Tool-mode flakiness: model returns prose instead of `ready_to_build:true`. Recurring; blocks the primary flow. | Live workflow #1; reply had no CTA; `src/api/builder.js` chat tool-mode (connected tools → prose, see CLAUDE.md "parsed:false when tools active"). | OPEN |
+| UX-R1 | **HIGH** | builder chat | **"Build it" produces nothing + hallucinated actions.** Building workflow #1 (EV news → email), after 2 clarifying Qs I said "go ahead and build it." Atlas replied *"On it! I'll run a test now… here's your first EV briefing while I get the daily schedule set up"* — but no "Build it →" CTA rendered, no build started, Test panel stayed "Not started." The chat promised actions it can't take from chat and stranded the user (said build → nothing built). Tool-mode flakiness: model returns prose instead of `ready_to_build:true`. Recurring; blocks the primary flow. | Live workflow #1; reply had no CTA; `src/api/builder.js` chat tool-mode (connected tools → prose, see ENGINEERING-LOG.md "parsed:false when tools active"). | OPEN |
 
 | UX-R2 | **HIGH** | builder chat | **Atlas denies its own core function + invents a human team.** When pushed ("nothing happened, actually build it"), Atlas replied: *"I can't actually schedule a recurring daily workflow on my own. That requires building a Flow, which **a human on the Agntic team would set up for you**… I'll **flag this conversation so the team knows to build** the daily 7am schedule."* Categorically false — Atlas IS the builder; there is no human team and nothing gets "flagged." The chat model (connector tools active) adopts an escalate-to-humans assistant persona and tells the customer the product can't do its core job. Trust-destroying. (The "Build it →" CTA did render on this turn — inconsistent with UX-R1's prior turn.) | Live workflow #1 turn 4; system prompt / tool-mode in `src/api/builder.js buildChatSystem`/`buildChatTools`. | OPEN |
 
@@ -291,7 +291,7 @@ what stands between "impressive" and "dependable."**
   promised value.
 - **Delivered emails render correctly.** `gmailSend` (`src/connectors/google/index.js:311`) strips
   ` ```html ` fences, sets `Content-Type: text/html`, and wraps content in a styled shell — so the
-  recipient gets a clean formatted email, not tag-soup. (Updates the CLAUDE.md "raw tags" gotcha:
+  recipient gets a clean formatted email, not tag-soup. (Updates the ENGINEERING-LOG.md "raw tags" gotcha:
   fixed for the gmail_send path.)
 
 **Value is UNDERMINED by (ranked):**

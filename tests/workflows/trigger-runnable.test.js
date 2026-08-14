@@ -9,7 +9,7 @@
  * The 2026-07-24 fail-closed rule was bypassed rather than weakened, and the
  * result was the silent failure it exists to prevent: saves, shows live, never
  * fires. Eight such workflows are in the QA databases preserved at
- * `agent-org/runs/2026-07-27/evidence-workflow-dbs/`.
+ * records kept outside this repository.
  *
  * Every guard here was hand-mutated red→green — see the run report. The cases
  * that matter most are the NEGATIVE ones: this check must not refuse the

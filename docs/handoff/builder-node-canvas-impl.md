@@ -159,7 +159,7 @@ stroke="currentColor" stroke-width="1.7"`:
 - **loop** (foreach): `<path d="M17 2l4 4-4 4"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/><path d="M7 22l-4-4 4-4"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/>`
 - **grid** (decision): `<rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M3 15h18M12 3v18"/>`
 
-## DC-framework gotchas (CLAUDE.md)
+## DC-framework gotchas (ENGINEERING-LOG.md)
 
 `sc-if`/`sc-for` with `{{ }}`; global `sc-if,sc-for{display:none}` guard (no `{{ }}` in `<img src>`
 or `background:url()`); match existing event-attr casing; NO NUL bytes; keep both light/dark

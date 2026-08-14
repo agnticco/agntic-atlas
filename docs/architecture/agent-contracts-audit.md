@@ -152,7 +152,7 @@ plan card renders plain text. Anything in this file that reads as a live descrip
 marks is history. What survives in code, and must: the plan **states** a missing Slack
 destination truthfully and does **not** pre-announce that Atlas will create it — that is the
 create-or-pick step's decision (pinned by `tests/converger/plan-grounding-prompt.test.js` and
-`tests/converger/plan-gate.test.js`). See CLAUDE.md for the lessons that were kept.
+`tests/converger/plan-gate.test.js`). See ENGINEERING-LOG.md for the lessons that were kept.
 
 *(Historical, as built 2026-07-26.)* **Confidence vocabulary** (extended the two-value chip):
 `you said` (stated cold) · `I found` (resolved live from a tool — connector or knowledge,

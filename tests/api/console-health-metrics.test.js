@@ -21,7 +21,7 @@
  *
  * The aggregation lives inline in the route. A unit test of `isLiveRun` would stay
  * green if `console.js` reverted to counting every row — it would verify a
- * predicate nobody applied (CLAUDE.md, architectural flaw #2). So this constructs
+ * predicate nobody applied (ENGINEERING-LOG.md, architectural flaw #2). So this constructs
  * the subject the way production does — express + `mountConsoleRoutes` + a REAL
  * SQLite `WorkflowStore` — and drives the real endpoint over real HTTP, with runs
  * recorded through the same `startRun`/`finishRun` calls the engine makes.

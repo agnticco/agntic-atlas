@@ -1,6 +1,6 @@
 # Atlas — Frontend ↔ Backend Integration Guide
 
-Handoff for Claude Code. Three dark-themed Design Components make up the product UI.
+Implementation handoff. Three dark-themed Design Components make up the product UI.
 Every screen is **real, production-ready layout**; all data is **neutral placeholder**
 clearly marked `INTEGRATION:` in the source. Replace the placeholder constants with
 backend responses and wire the `on*` callbacks to the endpoints below.

@@ -22,7 +22,7 @@
  *
  * These are written against the shapes PRODUCTION builds — the scheduler's own
  * resume path, the store's own SQL — not against hand-passed arguments no real
- * caller passes. That is CLAUDE.md architectural flaw #2, and it is how Increment
+ * caller passes. That is ENGINEERING-LOG.md architectural flaw #2, and it is how Increment
  * B leaked one tenant's output into another tenant's run.
  */
 

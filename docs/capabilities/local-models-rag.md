@@ -34,7 +34,7 @@ embedding context. The shipped node-llama-cpp prebuilt on Apple Silicon is
 `NoBinaryFoundError`. Changed to a configurable `this.gpu` defaulting to `'auto'`
 (uses Metal when present; `LLAMA_GPU=false` forces CPU, which then needs a CPU build).
 This is the only modification to salvage code in this capability; it is also noted in
-`CLAUDE.md` → "Don't touch (salvage)".
+`ENGINEERING-LOG.md` → "Don't touch (salvage)".
 
 ## Model weights (gitignored)
 

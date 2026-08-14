@@ -115,7 +115,7 @@ What that list does **not** contain, and it matters:
 Good news, and a stale doc to fix: `gmail_send` **does** handle HTML properly now —
 it auto-detects HTML, wraps it in a responsive shell, sets `text/html`, strips stray
 ```` ```html ```` fences and RFC-2047-encodes the subject (`google/index.js:328–356`).
-`CLAUDE.md`'s "Known gotchas" still says email delivery sends raw `<p>` tags verbatim.
+`ENGINEERING-LOG.md`'s "Known gotchas" still says email delivery sends raw `<p>` tags verbatim.
 **That gotcha is stale for `gmail_send` and should be corrected in the same commit as
 whatever next touches that surface.**
 
@@ -187,7 +187,7 @@ this and are flagged. It is not a reason to exclude them — it is a reason to s
 the card, and to expect their first live build to end in "not exercised" rather than a
 green tick.
 
-**G4 — Sub-fields written to columns can silently publish blank. (From `CLAUDE.md`
+**G4 — Sub-fields written to columns can silently publish blank. (From `ENGINEERING-LOG.md`
 "Open residuals".)** `{{item.field}}` inside a loop and `{{connectorRead.field}}` off a
 connector read pass validation, write the column blank, and say nothing, because the
 source declares no output schema. *Consequence: any entry that maps extracted fields
@@ -198,7 +198,7 @@ is P13's output-schema groundwork.
 enforced by nothing. (Read today, `server.js:559–565`.)** See Part 1.
 
 **G6 — Test runs may inflate the live health score. (Contested in the written
-history.)** `CLAUDE.md` carries it as open (F14); `hardening-2026-07-21.md:133` says it
+history.)** `ENGINEERING-LOG.md` carries it as open (F14); `hardening-2026-07-21.md:133` says it
 did not reproduce and the dashboard tagged the test run separately. **I have not
 checked this myself.** It matters for the library only in that a template's advertised
 reliability should not be read off that number until someone settles it.
@@ -275,7 +275,7 @@ and table existing.
 was built around.
 **Caution:** this is the exact shape that produced the "a promise was enforced against a
 branch that never ran, so the builder rewrote the classifier to forward spam" defect —
-fixed `d3902a8`, and per `CLAUDE.md` still **code-proven rather than live-witnessed**.
+fixed `d3902a8`, and per `ENGINEERING-LOG.md` still **code-proven rather than live-witnessed**.
 Build this one first and watch it, because it re-tests that fix.
 
 ---
@@ -334,7 +334,7 @@ prose (`workflow-validator.js:587–640`).
 **Status: buildable today.** It is the only entry that exercises the **decision table**,
 which the written QA history says is the least-driven surface in the product — the
 review UI for it "renders as prose with raw field names, not the specified editable
-table" (F31, `ui-test-findings-2026-07-19.md:1850`), and per `CLAUDE.md` the table's
+table" (F31, `ui-test-findings-2026-07-19.md:1850`), and per `ENGINEERING-LOG.md` the table's
 rule grammar still lives in two functions that have disagreed twice.
 **Recommendation: build this one, but expect it to surface defects, and treat that as
 the entry earning its keep rather than as a reason to drop it.**
@@ -613,7 +613,7 @@ scopes. **P13 is precisely the plan to stop hand-authoring that catalog**
 
 Therefore: **anything whose fix is "add another capability to the catalog" is deferred to
 P13** — building it by hand now is work P13 is designed to delete. **Triggers are
-hand-built under P13 either way** (stated in `CLAUDE.md`'s P13 section), so trigger defects
+hand-built under P13 either way** (stated in `ENGINEERING-LOG.md`'s P13 section), so trigger defects
 are safe to fix now and are the only committed items.
 
 | # | To-do | Size | Why it survives the P13 filter | Status |
@@ -697,7 +697,7 @@ Stated plainly, because an untested area passed over in silence reads as "checke
 - **I could not verify whether the Slack-message trigger's event payload lets test
   examples vary** (entry 2.2's G3 exposure). The code suggests it does; nobody has run it.
 - **G6 (test runs inflating the health score) is unresolved in the written record** —
-  `CLAUDE.md` says open, `hardening-2026-07-21.md` says it did not reproduce. I did not
+  `ENGINEERING-LOG.md` says open, `hardening-2026-07-21.md` says it did not reproduce. I did not
   settle it.
 - **I did not verify any capability against its live API.** "Airtable can update a
   record" means the capability is registered with a handler, not that I watched a record

@@ -1,7 +1,7 @@
 /**
  * ATLAS MAY NOT AFFIRM A CAPABILITY IT DOES NOT HAVE.
  *
- * CLAUDE.md calls this "the most demo-dangerous behaviour found". Twice in one QA
+ * ENGINEERING-LOG.md calls this "the most demo-dangerous behaviour found". Twice in one QA
  * campaign, asked for something the product cannot do, Atlas agreed and then
  * explained the mechanism in confident detail:
  *
@@ -178,7 +178,7 @@ describe('it is wired where the reply is composed', () => {
   });
 
   test('on BOTH done paths — this endpoint has two', () => {
-    // CLAUDE.md records a previous fix to this endpoint that was blind to the
+    // ENGINEERING-LOG.md records a previous fix to this endpoint that was blind to the
     // forced-final emitter and left four guards green while the real path was
     // unprotected.
     assert.equal((BUILDER.match(/correctInventedCapability\(\)\) correctInventedNavigation/g) || []).length, 2,

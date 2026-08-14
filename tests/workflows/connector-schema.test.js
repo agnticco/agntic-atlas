@@ -75,7 +75,7 @@ describe('EVERY real capability shape still validates', () => {
     }
     assert.deepEqual(rejected, [],
       'a capability the catalog offers must be one the validator accepts — otherwise the builder ' +
-      'instructs users to build workflows it will then refuse to save (CLAUDE.md, Increment C)');
+      'instructs users to build workflows it will then refuse to save (ENGINEERING-LOG.md, Increment C)');
   });
 });
 
@@ -111,7 +111,7 @@ describe('a hallucinated connector param is REJECTED', () => {
   test('the node\'s OWN schema is true: it declares what run() reads, and nothing else', () => {
     // run() reads exactly cfg.action and cfg.title. `target` used to be declared
     // here and is NOT read by run() — it is Slack's capability param. A schema that
-    // lists keys nothing reads turns the check into theatre (CLAUDE.md, Increment A).
+    // lists keys nothing reads turns the check into theatre (ENGINEERING-LOG.md, Increment A).
     const keys = connectorActionNodeType.configSchema.map(f => f.key).sort();
     assert.deepEqual(keys, ['action', 'title']);
     assert.equal(connectorActionNodeType.configPolicy, 'closed', 'nothing is open any more');

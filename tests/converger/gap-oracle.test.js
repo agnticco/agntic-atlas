@@ -8,7 +8,7 @@
  *   unknown config key
  *
  * A NOTE ON HOW THESE TESTS ARE WRITTEN, because the last increment learned it
- * the hard way (CLAUDE.md, "a green suite proved nothing four times running"):
+ * the hard way (ENGINEERING-LOG.md, "a green suite proved nothing four times running"):
  *
  *   • Every rule gets a POSITIVE case as well as a negative one. A check that
  *     only ever sees bad input would pass if it rejected EVERYTHING — which is
@@ -35,7 +35,7 @@ const validator = () => new WorkflowValidator({ nodeTypes: registerBuiltInNodeTy
  * (builder.js hands the converger `capabilities.channels`, and server.js:542
  * validates WITH a ChannelRegistry).
  *
- * Scoring without one was CLAUDE.md architectural flaw #2 in miniature: the gap
+ * Scoring without one was ENGINEERING-LOG.md architectural flaw #2 in miniature: the gap
  * scorer and the test's validator were BOTH blind to channels, so a spec
  * delivering to a hallucinated `channel: 'discord'` scored complete and the test
  * could not see that publish would reject it. A unit test that hand-passes what
@@ -865,7 +865,7 @@ describe('complete ⇒ publishable, through WorkflowService + WorkflowStore', ()
   // validator: it publishes through WorkflowService.create() → the store → SQLite,
   // and it EDITS through update(), which is a second, entirely separate validation
   // site. Increment B's cross-tenant leak was exactly this shape — a unit test
-  // that hand-passed what production omits (CLAUDE.md, architectural flaw #2).
+  // that hand-passed what production omits (ENGINEERING-LOG.md, architectural flaw #2).
   //
   // The claim under test is the one in workflow-service.js:160: "THE CONTRACT
   // SURVIVES THE EDIT."

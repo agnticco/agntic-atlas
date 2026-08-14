@@ -57,7 +57,7 @@ function allNodes(spec) {
  * Building a run receipt from the wrapper therefore invents a delivery production never
  * makes, and it showed up immediately as a false "the two halves disagree" on a
  * perfectly good loop. A check must construct its subject the way production does; that
- * rule is in CLAUDE.md because checks that don't have hidden real defects, and here it
+ * rule is in ENGINEERING-LOG.md because checks that don't have hidden real defects, and here it
  * nearly manufactured one.
  */
 function writesOf(spec) {

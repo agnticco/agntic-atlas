@@ -21,7 +21,7 @@
  * "Pricing Emails" against a step writing to "Pricing Enquiries", a destination
  * that was a `{{template}}` at build time, `google:` read as `gmail:`. Each cost
  * paid whole-spec rebuilds and twice blocked a correct workflow from going live.
- * Nine defects in that family are recorded in CLAUDE.md; every one is a
+ * Nine defects in that family are recorded in ENGINEERING-LOG.md; every one is a
  * disagreement about what a destination STRING means.
  *
  * The question a test needs to answer is simpler, and the engine was already
@@ -123,7 +123,7 @@ export function evaluateDeliveryRun(spec, example, runResult) {
   // handlers are inconsistent about both — and `deliveriesForStep` is the one
   // rule that reads it. Taking the caller's array means this module's answer
   // depends on how carefully each caller built it, which is precisely how two
-  // halves of this system have drifted nine times (see CLAUDE.md).
+  // halves of this system have drifted nine times (see ENGINEERING-LOG.md).
   //
   // In production the two are identical, so this costs one extra map. What it
   // buys is that a delivery has ONE definition and nobody can pass in a different

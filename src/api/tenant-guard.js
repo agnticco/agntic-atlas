@@ -20,6 +20,7 @@
 
 import { logEvent } from '../utils/event-log.js';
 import { numEnv } from '../utils/env.js';
+import { effectivePlan } from '../entitlements/index.js';
 
 /**
  * Daily USD ceiling, per plan. A single flat limit is not a guard — it was $25/day
@@ -50,7 +51,13 @@ export function createTenantGuard({ workflowStore, tenantStore = null }) {
 
   const dailyLimitFor = (tenantId) => {
     if (DAILY_USD_OVERRIDE > 0) return DAILY_USD_OVERRIDE;
-    const plan = tenantStore?.get?.(tenantId)?.plan;
+    // Read the plan through the SAME rule the entitlement gates use. Self-hosted
+    // resolves to `internal` (ceiling 0 = disabled), so a self-hoster does not end
+    // up with unlimited workflows but a $1/day spend cap — two halves of one
+    // decision drifting apart is the defect shape this codebase has paid for most.
+    // `TENANT_DAILY_USD_LIMIT` above still overrides everything, including this,
+    // which is how a self-hoster opts back into a brake.
+    const plan = effectivePlan(tenantStore?.get?.(tenantId)?.plan);
     // Unknown plan → the tightest ceiling. Failing closed on an unrecognised plan
     // is the safe direction for a spend guard.
     return DAILY_USD_BY_PLAN[plan] ?? DAILY_USD_BY_PLAN.solo;

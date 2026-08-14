@@ -25,7 +25,7 @@
 #
 # answers both "is the phase closed?" and "which increment do I build next?".
 # An unimplemented check does NOT pass. Do not weaken a check to force a pass —
-# if a check is wrong, fix it and record why in CLAUDE.md (CLAUDE.md, Gates).
+# if a check is wrong, fix it and record why in ENGINEERING-LOG.md (ENGINEERING-LOG.md, Gates).
 set -eu
 cd "$(git rev-parse --show-toplevel)"
 
@@ -53,7 +53,7 @@ next() {
 # unset — and then reports a cheerful "6 pass / 1 skip", where the skipped test
 # is the thing under test. Without the env file this gate ran the E2E with no
 # key and passed itself on a suite that had quietly not tested the converger.
-# That is how P11 was nearly closed on a false pass (CLAUDE.md, P11 note).
+# That is how P11 was nearly closed on a false pass (ENGINEERING-LOG.md, P11 note).
 #
 # So: load the env, AND fail closed on ANY skip. A skipped test is not a passed
 # test. If you have no ANTHROPIC_API_KEY, this gate cannot be closed — that is
@@ -102,7 +102,7 @@ grep -q 'UNKNOWN_CONFIG_KEY' "$VALIDATOR" \
           "UNKNOWN_CONFIG_KEY not emitted by $VALIDATOR. This is the highest-leverage check in the phase: it turns 'the converger hallucinated a config field' from a silent production failure into a build-time error."
 
 # The re-cut: these collapse into llm.js behind `mode`, or are unrunnable dead
-# weight (no ToolRegistry exists — CLAUDE.md, Known gotchas).
+# weight (no ToolRegistry exists — ENGINEERING-LOG.md, Known gotchas).
 for dead in summarize extract rewrite daily-digest tool mcp-tool fetch; do
   [ -f "src/workflows/node-types/${dead}.js" ] \
     && next "A — validator hardening + node re-cut" \
@@ -137,7 +137,7 @@ grep -q 'NON_EXHAUSTIVE_BRANCH' "$VALIDATOR" \
 # NOT THEIR POWER — which is why "gate green" and "correct" kept diverging.
 #
 # MUTATION TESTING REMOVED FROM THIS GATE (2026-07-19, operator's explicit
-# direction). Recorded loudly and NOT slipped in: CLAUDE.md states that a diff
+# direction). Recorded loudly and NOT slipped in: ENGINEERING-LOG.md states that a diff
 # against `scripts/` is how a verifier detects a builder quietly weakening their
 # own gate, so a removal must never be silent. This one is deliberate and is the
 # operator's call, not the builder's.
@@ -159,7 +159,7 @@ grep -q 'NON_EXHAUSTIVE_BRANCH' "$VALIDATOR" \
 # green suite; they are cheap and they still run below. The machinery was the
 # cost, not the tests.
 #
-# The discipline itself is NOT repealed — see CLAUDE.md. Re-introduce a bug by
+# The discipline itself is NOT repealed — see ENGINEERING-LOG.md. Re-introduce a bug by
 # hand and watch the test go red when you add a guard. It is now a practice
 # rather than an enforced gate step.
 

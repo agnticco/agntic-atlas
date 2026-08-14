@@ -10,6 +10,7 @@
 
 import { sendMail } from '../utils/mailer.js';
 import { logEvent, errFields } from '../utils/event-log.js';
+import { supportEmail } from '../utils/support-contact.js';
 
 // Neutralize Slack mrkdwn control chars (mirror of tickets.js) so nothing in a
 // customer-controlled field can inject mentions/broadcast tokens into the alert.
@@ -207,7 +208,10 @@ export async function sendPurchaseConfirmation(c) {
     'the period you\'ve already paid for.',
     ...(app ? ['', `  ${app}`] : []),
     '',
-    'Questions or need a hand? Just reply to this email, or reach us at hello@agntic.co.',
+    // Billing receipts only go out when Stripe is configured, i.e. a hosted
+    // deployment — but WHICH deployment is still not knowable at build time.
+    'Questions or need a hand? Just reply to this email'
+      + (supportEmail() ? `, or reach us at ${supportEmail()}.` : '.'),
     '',
     '— The Atlas team',
   ].join('\n');
@@ -226,7 +230,7 @@ export async function sendPurchaseConfirmation(c) {
   <p style="margin:0 0 6px;font-weight:600">Manage or cancel anytime</p>
   <p style="margin:0 0 16px;font-size:14px">Sign in to Atlas, open <strong>Account settings</strong>, and click <strong>Manage billing</strong> to update your payment method or cancel. If you cancel, you keep access through the end of the period you've already paid for.</p>
   ${app ? `<p style="margin:0 0 20px"><a href="${esc(app)}" style="display:inline-block;background:#0A0A0C;color:#fff;text-decoration:none;font-weight:600;font-size:14px;padding:11px 20px;border-radius:9px">Open Atlas</a></p>` : ''}
-  <p style="margin:0;font-size:13px;color:#666">Questions? Reply to this email, or reach us at <a href="mailto:hello@agntic.co" style="color:#666">hello@agntic.co</a>.</p>
+  <p style="margin:0;font-size:13px;color:#666">Questions? Reply to this email${supportEmail() ? `, or reach us at <a href="mailto:${esc(supportEmail())}" style="color:#666">${esc(supportEmail())}</a>` : ''}.</p>
   <p style="margin:14px 0 0;font-size:13px;color:#666">— The Atlas team</p>
 </div>`;
 

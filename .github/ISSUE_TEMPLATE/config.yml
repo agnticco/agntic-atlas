@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Report a security vulnerability
+    url: https://github.com/agnticco/agntic-atlas/security/advisories/new
+    about: Private, visible only to the maintainers. Please do not open a public issue for a security problem.
+  - name: Ask a question or share what you built
+    url: https://github.com/agnticco/agntic-atlas/discussions
+    about: For anything that is not a bug report or a feature request.

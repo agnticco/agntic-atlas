@@ -66,56 +66,14 @@ const PATTERNS = [
   },
 
   // ── Search providers ──────────────────────────────────────────────────
-  {
-    code: 'BRAVE_RATE_LIMIT',
-    match: /Brave HTTP 429/i,
-    render: (_m, ctx) => ({
-      title:       'Brave Search hit its rate limit.',
-      explanation: 'You\'ve used your free quota for this minute. The free tier is 1 query per second, 2,000 per month.',
-      suggestions: [
-        'Wait a minute and retry.',
-        'Reduce the number of search steps that run together.',
-        'Upgrade your Brave Search plan if you need higher throughput.',
-      ],
-    }),
-  },
-  {
-    code: 'BRAVE_AUTH',
-    match: /Brave HTTP 401|Brave HTTP 403/i,
-    render: () => ({
-      title:       'Brave Search rejected the API key.',
-      explanation: 'The BRAVE_SEARCH_API_KEY in the server\'s .env file is missing, expired, or wrong.',
-      suggestions: [
-        'Get a fresh key at https://api.search.brave.com/app/keys',
-        'Add it as BRAVE_SEARCH_API_KEY=… in the server\'s .env file.',
-        'Restart the server.',
-      ],
-    }),
-  },
-  {
-    code: 'DDG_BLOCKED',
-    match: /DuckDuckGo blocked this request/i,
-    render: () => ({
-      title:       'Web search was blocked.',
-      explanation: 'DuckDuckGo\'s HTML scraper rate-limits us aggressively. The fix is to use the Brave Search backend, which is reliable and free.',
-      suggestions: [
-        'Get a free Brave Search API key at https://api.search.brave.com/app/keys',
-        'Add it to .env as BRAVE_SEARCH_API_KEY=… and restart the server.',
-      ],
-    }),
-  },
-  {
-    code: 'BRAVE_KEY_MISSING',
-    match: /requires BRAVE_SEARCH_API_KEY/i,
-    render: () => ({
-      title:       'Image and video search need a Brave Search API key.',
-      explanation: 'You\'re using a step that calls Brave\'s image or video search, but BRAVE_SEARCH_API_KEY isn\'t set on the server.',
-      suggestions: [
-        'Get a free key at https://api.search.brave.com/app/keys',
-        'Add it to .env as BRAVE_SEARCH_API_KEY=… and restart.',
-      ],
-    }),
-  },
+  // DELIBERATELY EMPTY. Four entries lived here (Brave rate-limit, Brave auth,
+  // DuckDuckGo blocked, Brave key missing) describing a search backend Atlas no
+  // longer has: `web_search` calls Anthropic's native web search through the
+  // deployment's own key, and nothing in src/ has referenced Brave or DuckDuckGo
+  // for a long time. None of those messages could ever fire — and had one fired,
+  // it would have told a customer to go and obtain a BRAVE_SEARCH_API_KEY for a
+  // feature that does not exist. An error message for a removed subsystem is not
+  // harmless dead code; it is instructions to nowhere.
 
   // ── Channels / delivery ─────────────────────────────────────────────────
   {

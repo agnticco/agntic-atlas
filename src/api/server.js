@@ -107,7 +107,8 @@ import { createMcpConnectFlow } from '../connectors/mcp-connect.js';
 import { registerMcpCatalog } from '../connectors/mcp-catalog.js';
 import { MCP_DIRECTORY, mcpService } from '../connectors/mcp-directory.js';
 import { mcpConnectedFor, mcpOwnerId, mcpConnectorId, ensureMcpToolsLoaded } from '../connectors/connected-services.js';
-import { entitlementsFor, PUBLIC_PLANS, PLAN_META, isSelfServe } from '../entitlements/index.js';
+import { entitlementsFor, PUBLIC_PLANS, PLAN_META, isSelfServe, isSelfHosted } from '../entitlements/index.js';
+import { printNoModelBanner } from '../llm/no-model.js';
 import { BillingEventStore } from '../billing/billing-event-store.js';
 import { handleStripeLifecycle } from '../billing/lifecycle.js';
 import {
@@ -204,7 +205,13 @@ const CSP_POLICY = [
   "object-src 'none'",
   "frame-ancestors 'self'",
   "form-action 'self'",
-  "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://cdn.jsdelivr.net https://unpkg.com",
+  // jsdelivr was dropped on 2026-08-14 when `marked` was vendored into
+  // public/vendor/. Do not add a CDN back to this list without vendoring being
+  // genuinely impossible: an un-pinned script tag here is arbitrary third-party
+  // code running in the page that holds the session token, on every install.
+  // unpkg remains ONLY for the feedback widget's lazily-loaded React/Babel
+  // (public/support.js), which at least pins versions and checks SRI on React.
+  "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://unpkg.com",
   "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
   "font-src 'self' https://fonts.gstatic.com",
   "img-src 'self' data: blob: https:",
@@ -464,7 +471,7 @@ const CONNECTOR_INJECTORS = [
 //
 // This is the FIFTH site to get this wrong: the validator (F#3), the outcome oracle (F#4),
 // `isWriteNode` (D#4) and `CONTROL_SUBSTEP_TYPES` (E#1) each had to learn it separately.
-// CLAUDE.md's own rule is "a check on a node's config is a check on EVERY node's config,
+// ENGINEERING-LOG.md's own rule is "a check on a node's config is a check on EVERY node's config,
 // wherever the node lives" — these are injections rather than checks, which is presumably
 // how they escaped every sweep, but they traverse the node list exactly like the checks do.
 // Hence ONE pair of helpers, used by all four, rather than four more private fixes.
@@ -983,7 +990,7 @@ async function buildEngine(workflowStore, llm, costTracker = null) {
   // save?" must be constructed the way THIS is — with the channel catalog AND the
   // approval-channel view. A check built without them is a check on a program
   // nobody runs: it was blind to UNKNOWN_CHANNEL in C, and it would be blind to
-  // APPROVAL_CHANNEL_NOT_CONNECTED now (CLAUDE.md — architectural flaw #2).
+  // APPROVAL_CHANNEL_NOT_CONNECTED now (ENGINEERING-LOG.md — architectural flaw #2).
   const workflowValidator = new WorkflowValidator({
     sourceRegistry, channelRegistry, nodeTypes: nodeTypeRegistry,
     approvalChannels: approvalChannelView(
@@ -1131,7 +1138,17 @@ function validateBootConfig() {
     throw new Error('Production boot requires ANTHROPIC_API_KEY or OPENAI_API_KEY — refusing to silently fall back to the local model. Set a cloud key, or unset NODE_ENV=production for local dev.');
   }
   if (!hasCloudLLM) {
-    console.warn('[config] No ANTHROPIC_API_KEY/OPENAI_API_KEY set — LLM will use the local model (dev only).');
+    // Two very different situations, and telling them apart is the whole point.
+    // Local weights present → this is a deliberate dev/offline setup, one line is
+    // enough. No weights either → Atlas cannot build or run ANYTHING, and the
+    // person almost certainly just cloned the repo and does not know that yet.
+    // Boot anyway (sign-in, the console and the whole test suite work keyless),
+    // but say so unmissably rather than letting them find out mid-sentence.
+    if (existsSync(LOCAL_MODEL_PATH)) {
+      console.warn('[config] No ANTHROPIC_API_KEY/OPENAI_API_KEY set — LLM will use the local model (dev only).');
+    } else {
+      printNoModelBanner();
+    }
   }
   if (!process.env.OAUTH_REDIRECT_BASE) {
     console.warn('[config] OAUTH_REDIRECT_BASE is unset — connector OAuth redirects default to localhost; set it for any non-local deployment.');
@@ -2601,7 +2618,11 @@ export function createApp(spine) {
   // body, exactly as the foreground path returns 200 for a failed step (a 5xx here
   // gets replaced by the proxy's error page, which is the whole defect this route
   // exists to route around).
-  app.get('/workflows/run/:jobId', optionalAuth, tenantGuard, (req, res) => {
+  // Authenticated for the same reason as the POST above. The job id is already
+  // matched against the tenant AND the user who started it, but that check is only
+  // reachable once someone is signed in — anonymous callers must not get as far as
+  // probing job ids at all.
+  app.get('/workflows/run/:jobId', requireActiveTenant, tenantGuard, (req, res) => {
     sweepRunJobs();
     const job = TEST_RUN_JOBS.get(String(req.params.jobId));
     // Unknown means the process restarted, or it expired. Say so plainly: the panel
@@ -2703,7 +2724,7 @@ export function createApp(spine) {
     //
     // Errors only: warnings still run, so this cannot block a spec that works today.
     // Returns 200 (not 4xx) — Cloudflare replaces origin 5xx with its own HTML error
-    // page, which would hide the real issue from the UI. See CLAUDE.md gotchas.
+    // page, which would hide the real issue from the UI. See ENGINEERING-LOG.md gotchas.
     try {
       const verdict = spine.engine.workflowValidator?.validate?.(spec);
       // ── ONE RETIRED CHECK MAY NOT BLOCK A RUN (2026-08-02) ──────────────────
@@ -2984,7 +3005,19 @@ export function createApp(spine) {
   // The handler above is UNCHANGED and is the only implementation. Backgrounding
   // swaps the socket for a recorder; it does not fork the logic. There is no second
   // path that can drift from the first.
-  app.post('/workflows/run', optionalAuth, tenantGuard, async (req, res) => {
+  // AUTHENTICATION IS REQUIRED, and it was not until 2026-08-14. This route
+  // executes a workflow spec handed to it IN THE REQUEST BODY, and it sat behind
+  // `optionalAuth` — so on any Atlas reachable from the internet, an anonymous
+  // stranger could POST a spec and have the server run it. Measured, not inferred:
+  // an unauthenticated curl fetched a URL through the server and returned the page
+  // content, and a second one reached the Anthropic API on the deployment's own key
+  // (it failed only because the test key was fake). `tenantGuard` cannot help —
+  // it opens with `if (!tenantId) return next()`, so an anonymous run also escaped
+  // the daily spend ceiling. The two ways that gets abused are somebody else's
+  // inference bill and an open fetching proxy wearing your IP address.
+  // Nothing legitimate is lost: the test panel that calls this runs in a signed-in
+  // browser, and the scheduler never goes through HTTP.
+  app.post('/workflows/run', requireActiveTenant, tenantGuard, async (req, res) => {
     if (req.body?.background !== true) return runWorkflowHandler(req, res);
 
     sweepRunJobs();
@@ -3586,6 +3619,15 @@ export async function start() {
       : process.env.OPENAI_API_KEY    ? 'openai'
       : 'local-model';
     console.log(`atlas spine listening on :${PORT} (engine ok, auth ok, llm ${llmState}, rag ${spine.rag.provider})`);
+    // Say out loud which entitlement mode this process booted in. Self-hosted is
+    // the DEFAULT, so a hosted deployment that forgot ATLAS_SELF_HOSTED=false is
+    // serving every workspace uncapped — that must be visible on every boot, not
+    // discovered on a bill. Printed as its own line so it survives log grepping.
+    console.log(
+      isSelfHosted()
+        ? 'atlas mode: SELF-HOSTED — usage limits off (set ATLAS_SELF_HOSTED=false to meter plans)'
+        : 'atlas mode: HOSTED — per-plan workflow, run and spend limits enforced',
+    );
   });
   // Slowloris hardening: bound how long a client may take to send request
   // headers. requestTimeout stays generous so a slow but legitimate upload of a

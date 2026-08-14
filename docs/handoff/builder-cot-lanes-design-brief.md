@@ -188,4 +188,4 @@ demonstrate fully without any backend change. Wiring real data is the app team's
 | `public/assets/` | SVG/logo assets to reuse | Reference |
 | `src/api/builder.js` | Chat backend — streams the step (`isSignalLine`) events & the `phase` transitions the panel keys off. Read to understand the data, do not edit. | Reference only |
 | `src/converger/elicitation-graph.js`, `src/converger/prompts.js` | Where step proposals/gaps originate; where a future real reasoning feed would come from. | Reference only |
-| `CLAUDE.md` → "Known gotchas" | DC framework guard, `_withParts`, event-attr, NUL-byte rules. | Read |
+| `ENGINEERING-LOG.md` → "Known gotchas" | DC framework guard, `_withParts`, event-attr, NUL-byte rules. | Read |

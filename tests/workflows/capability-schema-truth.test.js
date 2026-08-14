@@ -64,7 +64,7 @@ describe('the test catalog is the PRODUCTION catalog', () => {
     // `deliver.js` run(): `const channelId = cfg.channel ?? 'in_app'`. A catalog in
     // which the default channel does not exist is not the catalog production has, and
     // a validator built on it answers a different question than publish answers
-    // (CLAUDE.md, architectural flaw #2).
+    // (ENGINEERING-LOG.md, architectural flaw #2).
     assert.ok(catalog.get('in_app'), 'in_app is registered by registerBuiltInChannels (server.js:593)');
     assert.deepEqual(errsOn(delivering({ channel: 'in_app', title: 'Morning digest' }), 'out'), []);
   });
@@ -74,7 +74,7 @@ describe('the test catalog is the PRODUCTION catalog', () => {
       assert.ok(catalog.get(id), `${id} is registered by buildEngine() and must be in the catalog`);
     }
     // …and a spec using them publishes. `web_search` as a connector-action is the
-    // primary web path (CLAUDE.md, Web connector) — if the validator cannot resolve
+    // primary web path (ENGINEERING-LOG.md, Web connector) — if the validator cannot resolve
     // it, UNKNOWN_CONNECTOR_ACTION rejects every web step in the product.
     assert.deepEqual(errsOn(acting({ action: 'web_search', query: 'atlas news' }), 'act'), []);
     assert.deepEqual(errsOn(acting({ action: 'filesystem_read', path: '/tmp/x.txt' }), 'act'), []);
@@ -195,6 +195,6 @@ describe('the catalog and the validator agree about every capability', () => {
       if (bad.length) rejected.push(`${cap.id}: ${bad.map(e => `${e.code}(${e.field})`).join(', ')}`);
     }
     assert.deepEqual(rejected, [],
-      'a capability the builder offers must be one publish accepts (CLAUDE.md, Increment C)');
+      'a capability the builder offers must be one publish accepts (ENGINEERING-LOG.md, Increment C)');
   });
 });

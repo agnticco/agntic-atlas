@@ -13,9 +13,9 @@ Verifier's own throwaway attack scripts, run against the live HTTP surface).
 - `git status --porcelain` → empty (clean) before and after verification.
 - HEAD `abcd064` on `feat/p1-multitenancy`. (Note: no git tag points at HEAD;
   "Phase 1" is recorded via the `Phase: 1` commit trailers, not an annotated tag.)
-- Closed-decision reversal recorded: CLAUDE.md:21-29 ("Multi-tenant from the
+- Closed-decision reversal recorded: ENGINEERING-LOG.md:21-29 ("Multi-tenant from the
   foundation … reverses the earlier 'no tenancy in pilot' decision, 2026-06-09").
-- Approved salvage edits recorded: CLAUDE.md:54-64.
+- Approved salvage edits recorded: ENGINEERING-LOG.md:54-64.
 
 ## 2. Objective gates (all exit 0)
 - `bash scripts/gates/cap-multitenancy.sh` → exit 0; all 4 sub-checks PASS

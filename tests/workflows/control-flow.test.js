@@ -1113,7 +1113,7 @@ test('NESTED_FOREACH / HUMAN_IN_FOREACH are rejected', () => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// 8. No NUL bytes in source. CLAUDE.md has a Known-gotchas entry about exactly
+// 8. No NUL bytes in source. ENGINEERING-LOG.md has a Known-gotchas entry about exactly
 //    this: a single stray \x00 in `server.js` makes macOS grep report "Binary
 //    file matches" and return nothing, which once convinced an agent the engine
 //    had been deleted. P12 Increment B re-created it in workflow-validator.js —
@@ -1136,7 +1136,7 @@ test('no source file contains a NUL byte', async () => {
   };
   walk('src');
   assert.deepEqual(offenders, [],
-    `NUL bytes break grep and hide bugs — see CLAUDE.md, "server.js encoding". Found in: ${offenders.join(', ')}`);
+    `NUL bytes break grep and hide bugs — see ENGINEERING-LOG.md, "server.js encoding". Found in: ${offenders.join(', ')}`);
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -2128,7 +2128,7 @@ test('human: decisions given as a comma string are parsed, not silently defaulte
 });
 
 // ── 16.6  the human step records WHO approved (the audit trail) ──────────────
-// CLAUDE.md: the human output "{decision, by, at, channel} … is the audit trail."
+// ENGINEERING-LOG.md: the human output "{decision, by, at, channel} … is the audit trail."
 // Every human test asserts the DECISION; none asserts that `by`/`channel`/`at`
 // are actually carried through. Hard-coding `by: null` in human.js left the whole
 // suite green — the approver's identity, the one thing that makes an approval

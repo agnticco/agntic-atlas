@@ -20,14 +20,34 @@
  * before each run, mirroring the injectInboxContext() / injectTenantTokens() pattern.
  */
 
-import { readFileSync, readdirSync, statSync, existsSync } from 'node:fs';
-import { join, resolve }                                   from 'node:path';
+import { readFileSync, readdirSync, statSync, existsSync, realpathSync } from 'node:fs';
+import { join, resolve }                                                from 'node:path';
+
+/**
+ * Resolve a path for containment checking, following symlinks where possible.
+ *
+ * `resolve()` alone normalises `..` — which stops the obvious traversal — but it
+ * does NOT follow symlinks, so a link sitting inside an approved folder and
+ * pointing at `/etc` would pass a purely textual check and then be read through.
+ * `realpathSync` collapses the link, so the comparison is against where the file
+ * ACTUALLY is rather than where its name suggests.
+ *
+ * Falls back to the textual form when the path does not exist yet: a miss must be
+ * decided by the containment check below (and then fail as "not found"), never by
+ * throwing out of the guard, which would turn a typo into a crash.
+ */
+function realOrResolved(p) {
+  const abs = resolve(p);
+  try { return realpathSync(abs); } catch { return abs; }
+}
 
 function findApprovedRoot(approvedFolders, filePath) {
-  const abs = resolve(filePath);
+  const abs = realOrResolved(filePath);
   for (const entry of approvedFolders) {
     if (!entry.path || !entry.path.startsWith('/')) continue; // no absolute path ⇒ nothing was persisted (image-only upload)
-    const root = resolve(entry.path);
+    // The ROOT is resolved the same way, so an approved folder that is itself a
+    // symlink (a common way to expose a synced drive) still matches its contents.
+    const root = realOrResolved(entry.path);
     if (abs === root || abs.startsWith(root + '/')) return root;
   }
   return null;

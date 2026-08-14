@@ -17,7 +17,7 @@ revert, fixup, and squash commits are exempt.
 
 Phase: <0-7>
 Gate: <the "Done when" this commit satisfies>        # required only when closing a gate
-Verified-by: <agent|self>                            # optional
+Verified-by: <reviewer|self>                         # optional
 ```
 
 ### Header (line 1) — required, max 72 chars
@@ -54,7 +54,7 @@ Combine when useful: `feat(p1-slack): ...`, `feat(p3-converger): ...`.
 ### Body — required for `feat`/`fix`
 
 Explain *what changed and why*, not how. Wrap at ~72 columns. Reference the
-frozen canonical spec by name when relevant (see CLAUDE.md).
+frozen canonical spec by name when relevant (see ENGINEERING-LOG.md).
 
 ### Trailers
 
@@ -62,21 +62,15 @@ frozen canonical spec by name when relevant (see CLAUDE.md).
   digit `0`–`7`. This is what makes the history filterable by build phase.
 - **`Gate:`** — required **only** on the commit that closes a phase's "Done
   when" gate. Quote the gate text from the build plan. Pair it with a passing
-  Verifier check (see CLAUDE.md gating rule).
-- **`Verified-by:`** — optional. `self` or the verifying agent's name.
-- **NO CLAUDE CODE ATTRIBUTION — enforced, not remembered.** No
-  `Co-Authored-By: Claude …` trailer, and no `Generated with Claude Code` line, in
-  a commit message, a PR body or an issue. The agent harness appends both **by
-  default**, so every session is instructed to add them and has to remember not to.
-  Remembering did not work: it drifted into **15 consecutive commits** before anyone
-  noticed, each new session reasoning "the repo does it, so it must be right" from
-  the evidence of the previous drift. `.githooks/commit-msg` now refuses both forms
-  (rule 7), so being wrong about it is cheap.
-  **History was deliberately NOT rewritten.** The commits already carrying the
-  trailer are shipped and deployed, a force-push to `main` is the one operation that
-  can eat a parallel session's work, and rewriting them buys two tidy messages at
-  that price. The line is drawn here instead: everything from this commit on is
-  clean, and the hook — not anyone's memory — is what keeps it that way.
+  independent check (see ENGINEERING-LOG.md gating rule).
+- **`Verified-by:`** — optional. `self`, or who reviewed it.
+- **NO TOOL ATTRIBUTION — enforced, not remembered.** No `Co-Authored-By:`
+  trailer and no `Generated with …` line naming an editor, assistant or generator,
+  in a commit message, a PR body or an issue. Commits record who made a decision,
+  not what software was open at the time. Several tools append these automatically
+  and by default, so `.githooks/commit-msg` (rule 7) refuses both forms rather than
+  relying on anyone remembering — a rule that has to be re-remembered every time is
+  not enforced by anything.
   Both checks are **anchored to the start of a line**, so a message can still
   *describe* the rule in prose. Keep such a mention mid-line: a body line beginning
   `Co-Authored-By: …` is a real trailer as far as git is concerned, whatever you
@@ -104,7 +98,7 @@ on a real inbound message — no converger involved yet.
 
 Phase: 2
 Gate: a hand-authored "email from UPS -> post to Slack" spec fires on a real email
-Verified-by: verifier-agent
+Verified-by: independent review
 ```
 
 Ordinary work-in-progress commit:

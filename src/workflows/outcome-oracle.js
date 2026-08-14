@@ -293,7 +293,7 @@ const CHANNEL_EFFECTS = {
  * capability that only READS gets none, and correctly satisfies nothing.
  *
  * The connector is the id's prefix (`airtable_create_record` → `airtable`), so
- * this stays workflow-agnostic (CLAUDE.md, closed decisions): no branch anywhere
+ * this stays workflow-agnostic (ENGINEERING-LOG.md, closed decisions): no branch anywhere
  * knows about any particular workflow shape.
  */
 const WRITE_VERBS = {
@@ -1321,7 +1321,7 @@ function deliveryConnector(delivery) {
  * this the runtime oracle could only ever confirm a Slack delivery: every inbox,
  * gmail, or airtable delivery read back as "nothing reached …" on a SUCCESSFUL run.
  * (P12 Increment G — the unit tests hand-built deliveries that carried these fields,
- * so they never exercised the real handler shapes; CLAUDE.md flaw #2.)
+ * so they never exercised the real handler shapes; ENGINEERING-LOG.md flaw #2.)
  */
 export function normalizeDelivery(node, output) {
   const o = (output && typeof output === 'object') ? output : {};
@@ -1947,7 +1947,7 @@ export function laneCoverage(spec, results) {
  * Stable identity for a lane. One definition, so producer and consumer agree.
  *
  * JSON, not a delimiter. A separator can COLLIDE (a node id containing it splits
- * the key in the wrong place), and CLAUDE.md's standing rule -- earned when a
+ * the key in the wrong place), and ENGINEERING-LOG.md's standing rule -- earned when a
  * NUL-separated branch/edge key silently matched nothing and made an entire
  * feature unpublishable -- is that an unprintable separator is never acceptable:
  * it is invisible in an editor, in a diff, and in the debugger where you would

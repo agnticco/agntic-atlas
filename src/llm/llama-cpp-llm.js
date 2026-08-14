@@ -6,7 +6,36 @@
 
 import { Runnable } from '../core/runnable.js';
 import { AIMessage, HumanMessage } from '../core/message.js';
-import { getLlama, LlamaChatSession, defineChatSessionFunction } from 'node-llama-cpp';
+/**
+ * `node-llama-cpp` is an OPTIONAL dependency and is loaded on demand.
+ *
+ * It is a native module: installing it means a compiler toolchain and a ~34MB
+ * download, and it is the single most likely step to fail on someone's first
+ * `npm install`. It is also needed by almost nobody — running Atlas against
+ * Anthropic or OpenAI never touches it, and that is the setup nearly everyone uses.
+ * A STATIC import here meant server.js could not even start without it, so the
+ * common case paid the whole cost of the rare one.
+ *
+ * Loading it lazily follows the pattern `src/rag/embedding-model.js` already uses
+ * for the same package. The failure is caught and re-thrown in words that name the
+ * choice a person actually has, because "Cannot find module 'node-llama-cpp'" tells
+ * someone who never asked for a local model nothing about what to do.
+ */
+let _llamaCpp = null;
+async function loadLlamaCpp() {
+  if (_llamaCpp) return _llamaCpp;
+  try {
+    _llamaCpp = await import('node-llama-cpp');
+  } catch {
+    throw new Error(
+      'Running a local model needs the optional package `node-llama-cpp`, which is not installed. '
+      + 'Either install it with `npm install node-llama-cpp` (it needs a build toolchain), '
+      + 'or — much simpler — use a hosted model by setting ANTHROPIC_API_KEY or OPENAI_API_KEY '
+      + 'in your .env file and restarting Atlas.',
+    );
+  }
+  return _llamaCpp;
+}
 import { log } from '../utils/logger.js';
 
 /**
@@ -149,6 +178,7 @@ export class LlamaCppLLM extends Runnable {
     log.info(`[llm] Loading ${modelName}...`);
 
     try {
+      const { getLlama, LlamaChatSession } = await loadLlamaCpp();
       this._llama = await getLlama({ logLevel: 'error' });
 
       this._model = await this._llama.loadModel({
@@ -243,6 +273,10 @@ export class LlamaCppLLM extends Runnable {
    * @returns {Object} functions map for promptWithMeta / prompt
    */
   _buildFunctions(toolRegistry, onApprovalRequired, sessionId) {
+    // Safe to read the cached module synchronously: every caller sits behind an
+    // `await this._initialize()`, which is what loaded it.
+    const { defineChatSessionFunction } = _llamaCpp ?? {};
+    if (!defineChatSessionFunction) throw new Error('local model not initialized — call _initialize() first');
     const functions = {};
     for (const tool of toolRegistry.list()) {
       const name = tool.toolName;

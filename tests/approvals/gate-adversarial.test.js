@@ -13,7 +13,7 @@
  *   4. the person approves what the customer receives    ← falsified (F1)
  *   5. a `human` node ALONE IS NOT A GATE                ← falsified (F2)
  *
- * The shape of every failure below is the shape CLAUDE.md names three times: a
+ * The shape of every failure below is the shape ENGINEERING-LOG.md names three times: a
  * check that is real, and a LAUNDERING HOP one step to the left of it that the
  * check does not look through. In C it was an `assemble` between an `llm` and a
  * `branch`. Here it is `.decision` between a `human` and the case check; a
@@ -24,7 +24,7 @@
  * store, the real ApprovalService, and a validator constructed the way
  * `server.js:buildEngine` constructs it (with a channel registry AND an approval
  * channel view). A check that hands the unit something production omits is
- * testing a program nobody runs (CLAUDE.md, architectural flaw #2).
+ * testing a program nobody runs (ENGINEERING-LOG.md, architectural flaw #2).
  */
 
 import { test } from 'node:test';
@@ -312,7 +312,7 @@ test('the sweeper NEVER hands the engine `approve`, however the spec spells it',
 // `steps`. So the identical write, guarded by the identical email-only approval,
 // is REJECTED at top level and ACCEPTED one hop inside a loop.
 //
-// A loop is N writes per fire — by CLAUDE.md's own words, "the highest-risk write
+// A loop is N writes per fire — by ENGINEERING-LOG.md's own words, "the highest-risk write
 // shape the engine has, and the whole reason `foreach` exists". It is the one
 // place the rule most needs to hold, and the one place it does not.
 // ═══════════════════════════════════════════════════════════════════════════

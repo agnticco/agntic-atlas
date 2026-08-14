@@ -57,7 +57,15 @@
   window.__atlasDiag = { errors: function(){ return errs.slice(); }, network: function(){ return net.slice(); } };
 })();
 </script>
-<script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+<!-- marked: markdown → HTML for chat and inbox content.
+     VENDORED, and it must stay that way. It was loaded from a CDN as
+     `npm/marked/marked.min.js` — no version pin and no integrity hash — which
+     meant every Atlas install worldwide executed whatever that URL returned on
+     the day, inside the page that holds the session token. A hijacked package or
+     a compromised CDN would have been game over everywhere at once, and nobody
+     running Atlas would have changed a line. Pinned at v15.0.7 and served from
+     disk: it now changes only when someone here deliberately updates it. -->
+<script src="./vendor/marked.min.js"></script>
 <!-- Vendored locally (not a CDN dependency) — sanitizes all marked() output
      before it is injected as innerHTML, so untrusted content flowing through
      workflows into the inbox/chat cannot execute script. -->
@@ -440,7 +448,7 @@
                    NO MARKS (2026-07-27, operator's call). Every line here used to carry a
                    `you said / I found / I inferred` chip and word-level highlighting of the
                    customer's own words. The whole mechanism was removed — the complexity was
-                   not worth what it delivered. Do not re-add a reduced version; see CLAUDE.md
+                   not worth what it delivered. Do not re-add a reduced version; see ENGINEERING-LOG.md
                    for the lessons that outlived it. -->
               <!-- PLAN GATE (isPlan · LOCKED · SOP) — the design system's signed operating
                    procedure: letterhead, serif title, PURPOSE / TRIGGER / PROCEDURE (numbered)
@@ -2624,7 +2632,7 @@ function effNodeType(n) {
  * server's word-level span payload into the `you said / I found / I inferred` chips
  * and the highlight of the customer's own words. The plan card now renders plain text
  * and nothing on it makes a claim about who said what. Do not re-add a reduced
- * version — see CLAUDE.md for the lessons that outlived it. */
+ * version — see ENGINEERING-LOG.md for the lessons that outlived it. */
 
 const TUTORIAL_SLIDES = [
   {
@@ -5864,7 +5872,7 @@ class Component extends DCLogic {
     // `you said / I found / I inferred` chip, and the customer's own words were
     // highlighted inside the line from server-supplied spans. The whole mechanism was
     // removed — the complexity was not worth what it delivered. The card now renders
-    // the plan's plain text. Do not re-add a reduced version; see CLAUDE.md.
+    // the plan's plain text. Do not re-add a reduced version; see ENGINEERING-LOG.md.
     if (iv.type === "plan_review") {
       const self = this;
       const p = iv.plan || {};
@@ -7405,7 +7413,7 @@ class Component extends DCLogic {
   // said `LLM · EXTRACT` / `CONNECTOR-ACTION` / `BRANCH`, the on-screen procedure
   // document said `LLM PROMPT` / `EMAIL TRIGGER`, and the EXPORTED document said
   // "AI step" / "Wait for a person" — three answers to one question, on three
-  // screens a customer sees in the same sitting. (CLAUDE.md carried the canvas half
+  // screens a customer sees in the same sitting. (ENGINEERING-LOG.md carried the canvas half
   // as an open residual: "_nodeShape reaches five surfaces including the exported
   // procedure document.")
   //
@@ -8081,7 +8089,7 @@ class Component extends DCLogic {
   // over layout state that nothing outside the render pass can reach; the part
   // that decides WHAT A PERSON IS TOLD must be executable on its own or it is
   // pinned by nothing. Every input arrives as an argument — no `this.state` — so a
-  // check can construct it exactly the way production does. (CLAUDE.md: the
+  // check can construct it exactly the way production does. (ENGINEERING-LOG.md: the
   // destination fix that actually ran when a user built a workflow was pinned by
   // no test at all; reverting it left the whole suite green, because it lived in a
   // closure nobody could reach.)
@@ -8089,7 +8097,7 @@ class Component extends DCLogic {
   // NO RAW IDENTIFIERS WHERE THE USER MUST ACT (QA finding 11). A step is named by
   // what it does. Where a value can only be said in the codebase's vocabulary it
   // is said in English with the identifier in parentheses after it — the rule
-  // CLAUDE.md sets for talking to the operator, applied to the product's own
+  // ENGINEERING-LOG.md sets for talking to the operator, applied to the product's own
   // screens.
 
   // English first, identifier in parentheses — never the bare identifier. The
@@ -8490,7 +8498,7 @@ class Component extends DCLogic {
   //
   // Kept honest by `tests/api/step-approval-card.test.js`, which runs the SERVER's
   // `closedDomainOf` over the same fixtures and fails if the two ever disagree —
-  // CLAUDE.md records a rule grammar living in two functions diverging twice.
+  // ENGINEERING-LOG.md records a rule grammar living in two functions diverging twice.
   _routeDomainOf(node) {
     if (!node || typeof node !== 'object') return [];
     const cfg = node.config || {};
@@ -8557,7 +8565,7 @@ class Component extends DCLogic {
   // EVERY route a branch can take, and where each one actually goes.
   //
   // THE MANDATORY CATCH-ALL IS A SILENT-MISROUTE DETECTOR — NEVER LET IT BECOME A
-  // MASKER (CLAUDE.md). A classifier that can answer four ways wired to a branch
+  // MASKER (ENGINEERING-LOG.md). A classifier that can answer four ways wired to a branch
   // with three cases is a VALID workflow: the "*" case swallows the fourth, the
   // run reports success, and that fourth kind of work quietly takes a path nobody
   // chose for it. Listing the wired routes is therefore not enough — the value
@@ -9165,7 +9173,7 @@ class Component extends DCLogic {
   // nesting it properly needs a real layout pass").
   //
   // An APPROVAL WORKFLOW ALWAYS HAS A SECOND SPLIT — the branch that reads the
-  // person's answer is what makes the gate a gate (CLAUDE.md: "a `human` node alone
+  // person's answer is what makes the gate a gate (ENGINEERING-LOG.md: "a `human` node alone
   // is not a gate"). So on the one shape the product most needs to show, the rows
   // after the approval restarted at the LANE'S LEFT EDGE, far to the left of the
   // fork they descend from. Seen live on a real 16-node spec: the first step sat
@@ -9235,7 +9243,7 @@ class Component extends DCLogic {
 
     // EDGE KEYS ARE JSON, NOT CONCATENATION. `from + '' + to` cannot distinguish
     // ("ab","c") from ("a","bc"), and a key that CAN collide is a silently dropped
-    // edge waiting to happen (CLAUDE.md, twice: the NUL separator, then laneKey).
+    // edge waiting to happen (ENGINEERING-LOG.md, twice: the NUL separator, then laneKey).
     const seen = new Set(); const edgeList = [];
     const addEdge = (from, to) => {
       if (from == null || to == null || from === to) return;
@@ -11320,11 +11328,16 @@ class Component extends DCLogic {
             // Consultative plans always; and with checkout off, EVERY other plan
             // becomes consultative too — otherwise those cards render with no way
             // to act on them at all.
-            consultShow: p.id !== curPlan && (!p.selfServe || !billingOn),
+            // …but only when this deployment has actually named someone to consult.
+            // Self-hosted installs have no sales team, and a "Request a consult"
+            // button that opens a blank mailto — or worse, mails whoever published
+            // the code — is a dead end wearing the costume of an action.
+            consultShow: p.id !== curPlan && (!p.selfServe || !billingOn) && !!(U && U.consultEmail),
             borderColor: p.id === curPlan ? "rgba(127,194,138,.45)" : "rgba(255,255,255,.1)",
             onSelect: () => this.startCheckout(p.id),
             onConsult: () => {
-              const to = (U && U.consultEmail) || "hello@agntic.co";
+              const to = U && U.consultEmail;
+              if (!to) return;   // guarded by consultShow; belt-and-braces, never a mailto to nobody
               const subject = encodeURIComponent("Atlas Business — consult request");
               const body = encodeURIComponent(
                 "Hi Atlas team,\n\nWe'd like to talk about the Business tier.\n\n" +
@@ -11990,7 +12003,7 @@ class Component extends DCLogic {
       // Flip to `true` to restore the flag-gated behaviour — the Stripe module,
       // routes and columns are UNTOUCHED, so this is a one-boolean reversal, not a
       // deletion. (Do not delete the Stripe machinery — that is the irreversible
-      // step CLAUDE.md warns against.)
+      // step ENGINEERING-LOG.md warns against.)
       var SELF_SERVE_SIGNUP_UI = false;
       // Self-serve signup exists only while Stripe is configured on the server AND
       // this UI switch is on. With either off, the entry link stays hidden and a
@@ -12020,7 +12033,7 @@ class Component extends DCLogic {
           if (r.data.workspaceName) m.textContent = "Resubscribe to restore access to " + r.data.workspaceName + ". Nothing was deleted — your workspaces and automations are exactly where you left them.";
           err(document.getElementById("resub-err"), "");
           var rb = document.getElementById("resub-btn");
-          rb.disabled = !reactivationToken; rb.textContent = reactivationToken ? "Resubscribe" : "Contact hello@agntic.co to reactivate";
+          rb.disabled = !reactivationToken; rb.textContent = reactivationToken ? "Resubscribe" : "Contact your Atlas administrator to reactivate";
           showResubscribe();
           return;
         }

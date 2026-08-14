@@ -9,7 +9,7 @@
  *   EVERY pre-existing test of the pause hand-calls `ws.pauseRun(...)` with a
  *   hand-built checkpoint. That covers the RESUME half and leaves the PARK half —
  *   the scheduler reacting to a `run_paused` event the ENGINE emitted, with a
- *   checkpoint the ENGINE built — executed by nothing. It is CLAUDE.md's
+ *   checkpoint the ENGINE built — executed by nothing. It is ENGINEERING-LOG.md's
  *   architectural flaw #2 verbatim: the tests supply what production must
  *   generate, so a mutant and the original behave identically.
  *

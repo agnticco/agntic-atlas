@@ -10,7 +10,7 @@ still v1.6.11; local is v1.6.27.
 > once. What is described after it is still true: **the answer does not take effect.**
 > A destination given twice (`#support`, typed then clicked) still produced a workflow
 > posting to `#ops`. So read this section as one live bug and one fixed one, not two live
-> ones. Tracked as item 1 of CLAUDE.md's open list.
+> ones. Tracked as item 1 of ENGINEERING-LOG.md's open list.
 
 
 **Atlas asks the same set-up questions twice, and the second time it asks them the

@@ -1,7 +1,7 @@
 # Salvage map — `agntic-prod` → Atlas
 
 Grounding for migration. Built by read-only scouts against `~/Desktop/agntic-prod`
-on 2026-06-08. **Line numbers are non-authoritative provenance** (per CLAUDE.md
+on 2026-06-08. **Line numbers are non-authoritative provenance** (per ENGINEERING-LOG.md
 working rules) — they were live-correct when written; re-ground before relying on
 an exact coordinate. The invariants and entry points are the contract.
 

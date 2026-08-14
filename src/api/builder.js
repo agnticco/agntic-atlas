@@ -46,6 +46,8 @@ import { renderInviteEmail } from '../auth/invite-email.js';
 import { oauthRedirectBase } from '../connectors/oauth-redirect.js';
 import { mcpConnectedFor, ensureMcpToolsLoaded } from '../connectors/connected-services.js';
 import { seatLimit, entitlement, entitlementsFor, nextPlan, PLAN_META, BUILD_RUN_COST, PUBLIC_PLANS, isSelfServe } from '../entitlements/index.js';
+import { NO_MODEL_MESSAGE } from '../llm/no-model.js';
+import { supportEmail } from '../utils/support-contact.js';
 import { isBillingConfigured } from '../billing/stripe.js';
 import { randomBytes } from 'node:crypto';
 import { EventEmitter } from 'node:events';
@@ -962,7 +964,7 @@ export function mountBuilderRoutes(app, { spine, requireActiveTenant, requireAut
         billingConfigured: isBillingConfigured(),
         manageable: !!tenantRow?.stripe_customer_id,
         catalog,
-        consultEmail: 'hello@agntic.co',
+        consultEmail: supportEmail(),
         workflows: { used: store.countActiveForTenant(req.tenant.id), limit: cap(ent.activeWorkflows) },
         runs:      { used: store.getRunCount(req.tenant.id), limit: cap(ent.monthlyRuns), resetsOn },
         seats:     { used: activeMembers(req.tenant.id).length, limit: cap(ent.seats) },
@@ -1093,7 +1095,7 @@ Rules:
 
     try {
       const llm = spine.llm;
-      if (!llm?.invoke) { sseWrite({ type: 'error', error: 'LLM unavailable' }); res.end(); return; }
+      if (!llm?.invoke) { sseWrite({ type: 'error', error: NO_MODEL_MESSAGE, code: 'NO_MODEL' }); res.end(); return; }
       // Route through ModelPool (not a raw tier) so _trackUsage() fires.
       const chatSessionId = `chat-${req.user?.id ?? 'anon'}-${Date.now()}`;
       spine.costTracker?.setSessionUser?.(chatSessionId, req.user?.id);
@@ -1356,7 +1358,7 @@ Rules:
        * prevented it is a belief about the model and is pinned by nothing.
        *
        * Called from BOTH places that emit `done` — the ordinary tool-round exit and the
-       * forced-final one. CLAUDE.md records a previous fix to this endpoint that was
+       * forced-final one. ENGINEERING-LOG.md records a previous fix to this endpoint that was
        * blind to the second copy and left four guards green while the real path was
        * unprotected; that is why this is one helper and not two edits.
        */
@@ -1474,7 +1476,7 @@ Rules:
 
         // ── The model answered in PROSE instead of the JSON envelope ────────────
         //
-        // Known behaviour when tools are in play (CLAUDE.md, Known gotchas): the
+        // Known behaviour when tools are in play (ENGINEERING-LOG.md, Known gotchas): the
         // words are fine, but `ready_to_build` is unreadable — so the BUILD BUTTON
         // never renders and the conversation dead-ends on a reply that reads like it
         // is about to build. Observed TWICE in one live session; both times the user
@@ -1711,7 +1713,7 @@ Rules:
   // approval channels, and any knowledge context. Extracted from POST /sessions so
   // a session REHYDRATED after a restart is built from exactly the same picture —
   // a second, drifting copy is how one path ends up certifying against a catalog the
-  // other never saw (CLAUDE.md: CHANNELS_UNVERIFIED).
+  // other never saw (ENGINEERING-LOG.md: CHANNELS_UNVERIFIED).
   // ONE definition of a converger. POST /sessions builds one for a new thread;
   // rehydrateSession() builds an identical one for a thread whose in-memory handle
   // was lost (a restart, a deploy). Two constructions would drift, and the drift
@@ -2642,7 +2644,7 @@ Rules:
     if (!change?.trim()) return res.status(400).json({ error: 'change is required' });
     try {
       const llm = spine.llm;
-      if (!llm?.invoke) return res.status(503).json({ error: 'LLM unavailable' });
+      if (!llm?.invoke) return res.status(503).json({ error: NO_MODEL_MESSAGE, code: 'NO_MODEL' });
       const editSessionId = `edit-change-${req.user?.id ?? 'anon'}-${Date.now()}`;
       spine.costTracker?.setSessionUser?.(editSessionId, req.user?.id);
 
@@ -2719,7 +2721,7 @@ Rules:
     if (!workflow) return res.status(400).json({ error: 'workflow is required' });
     try {
       const llm = spine.llm;
-      if (!llm?.invoke) return res.status(503).json({ error: 'LLM unavailable' });
+      if (!llm?.invoke) return res.status(503).json({ error: NO_MODEL_MESSAGE, code: 'NO_MODEL' });
       const editIntroSessionId = `edit-intro-${req.user?.id ?? 'anon'}-${Date.now()}`;
       spine.costTracker?.setSessionUser?.(editIntroSessionId, req.user?.id);
 

@@ -18,7 +18,7 @@
  *
  * ── This is `connector_event`, one field along ──────────────────────────────
  *
- * CLAUDE.md records that defect and closes with the sentence this file exists to
+ * ENGINEERING-LOG.md records that defect and closes with the sentence this file exists to
  * enforce: *keep the runnable set in step with the consumers.* The publish guard
  * checked `type` and `connector` — both correct here — and never that the event id
  * was present. So a workflow that saves, shows as live and can never fire got

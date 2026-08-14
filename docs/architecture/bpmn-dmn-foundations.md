@@ -7,7 +7,7 @@ This is the study of the two standards before we build against them. It exists b
 designing a "BPMN/DMN-shaped converger" from a vague memory of the standards would poison the
 architecture. Sources at the bottom; the load-bearing claims are cited inline.
 
-**We are not porting to BPMN/DMN.** The proprietary JSON spec stays (CLAUDE.md, closed
+**We are not porting to BPMN/DMN.** The proprietary JSON spec stays (ENGINEERING-LOG.md, closed
 decisions). We are stealing the *semantics* — because they contain a completeness theory we
 cannot invent ourselves, and a division of labour that took the industry twenty years to
 learn.

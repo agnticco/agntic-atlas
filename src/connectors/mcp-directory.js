@@ -23,7 +23,7 @@
  *
  * ── WHAT THE PREVIOUS RECORD GOT WRONG, and how ────────────────────────────
  *
- * CLAUDE.md recorded all six as CIMD-supporting, checked 2026-07-24. Re-measured
+ * ENGINEERING-LOG.md recorded all six as CIMD-supporting, checked 2026-07-24. Re-measured
  * against the live services on 2026-08-03, THREE OF THE SIX DO NOT ADVERTISE IT —
  * Asana, Stripe and Figma identify us by letting Atlas register itself instead.
  * Both routes cost the customer nothing, so the correction changes no promise to

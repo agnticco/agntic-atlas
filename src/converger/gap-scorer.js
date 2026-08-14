@@ -421,7 +421,7 @@ export function scoreGap(spec = {}, { capabilities = {}, validator = null } = {}
   // that same state the model has no catalog in its prompt either, making it MOST
   // likely to invent a channel id.
   //
-  // A silent degradation of a check is not a safety net; it IS the bug (CLAUDE.md
+  // A silent degradation of a check is not a safety net; it IS the bug (ENGINEERING-LOG.md
   // — the `?? 'unscoped'` tenant fallback). So: if a spec delivers somewhere and
   // we cannot see the catalog, we refuse to call it complete. Refusing to certify
   // is always available; certifying without checking is not.
@@ -431,7 +431,7 @@ export function scoreGap(spec = {}, { capabilities = {}, validator = null } = {}
   // (its params are the capability's own). Publish always has the registry, so a
   // scorer without one performs FEWER checks than publish does — which is precisely
   // how a spec scores `complete` and is then rejected at save. Same hole, one node
-  // type along. (CLAUDE.md, Increment C: refusing to certify is always available;
+  // type along. (ENGINEERING-LOG.md, Increment C: refusing to certify is always available;
   // certifying without checking is not.)
   const routed = nodes.filter(n =>
     (n?.type === 'deliver' && n.config?.channel) ||
@@ -524,7 +524,7 @@ export function scoreGap(spec = {}, { capabilities = {}, validator = null } = {}
     // and wrong were treated as different things, and the missing case was the
     // unguarded one** — the same shape as the malformed-trigger defect ("a guard
     // that does not recognise a value must not read that as nothing to check"),
-    // inverted, and the fourth appearance of it in CLAUDE.md.
+    // inverted, and the fourth appearance of it in ENGINEERING-LOG.md.
     //
     // WITNESSED ON PROD 2026-07-31 (`build-platform-1785510779068`), a correct
     // Gmail→Sheets logger: classify, append a row on the "yes" lane, do nothing on
@@ -570,7 +570,7 @@ export function scoreGap(spec = {}, { capabilities = {}, validator = null } = {}
 
     // ── A REAL ROUTE VALUE, BUT NOT THE ONE THAT GATES THIS STEP ──────────────
     // Asking "does SOME branch route on this value?" is the laundering hop from
-    // CLAUDE.md's trap list: it answers a question about the VOCABULARY when the
+    // ENGINEERING-LOG.md's trap list: it answers a question about the VOCABULARY when the
     // question is about THIS STEP. On the canonical classify→approve→route shape the
     // contract said the channel post happens `when: "urgent_complaint"` — a real
     // route value, so this check passed it — but the post sits behind the APPROVAL

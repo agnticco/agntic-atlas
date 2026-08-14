@@ -1,0 +1,33 @@
+# Keep the build context small and, more importantly, keep secrets and local state
+# out of the image. Anything copied in is readable by anyone who pulls it.
+
+.git
+.github
+node_modules
+memory/
+models/
+*.sqlite
+*.sqlite3
+*.db
+
+# Secrets — .env is host state and is mounted at run time via env_file, never baked
+# into a layer. A key copied into an image stays in that layer forever.
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Not needed at run time
+tests/
+docs/
+scripts/
+deploy/
+.claude/
+.githooks/
+tmp-*/
+*-shots/
+*.log
+.DS_Store
+Dockerfile
+docker-compose.yml

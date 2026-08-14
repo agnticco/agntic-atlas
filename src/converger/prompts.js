@@ -346,7 +346,7 @@ the workflow simply runs at an hour nobody chose.
  * this once" are among the most natural things a person asks for, and this file routed
  * them straight at a type that can never publish.
  *
- * The predecessor was `connector_event` (2026-07-27), whose own entry in CLAUDE.md ends:
+ * The predecessor was `connector_event` (2026-07-27), whose own entry in ENGINEERING-LOG.md ends:
  * *"Keep the runnable set in step with the consumers; this check failing a publish is
  * the signal that someone added one without the other."* It happened again because
  * nothing enforced it. Now something does.
@@ -917,7 +917,7 @@ ${outcome.statement ? `  "${outcome.statement}"\n` : ''}${lines.join('\n')}${con
  * fill (fewer regenerations, same-intent → same-structure).
  *
  * The plan carries NO per-line provenance mark (removed 2026-07-27, operator's call —
- * see CLAUDE.md). Every line is plain prose the reader judges for themselves; nothing
+ * see ENGINEERING-LOG.md). Every line is plain prose the reader judges for themselves; nothing
  * on the card makes a claim about who said what.
  *
  * `upload_suggestion` turns an ungrounded JUDGMENT into an invitation: when a step

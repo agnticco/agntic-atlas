@@ -33,7 +33,7 @@ const nodeTypes = registerBuiltInNodeTypes(new NodeTypeRegistry());
  * The production wiring: a real store, a real scheduler, a real FlowTester, and
  * the ApprovalService constructed the way server.js constructs it — with a
  * postSlack, a sendMail and a baseUrl. A harness that omitted them would be
- * testing a deployment nobody runs (CLAUDE.md, architectural flaw #2).
+ * testing a deployment nobody runs (ENGINEERING-LOG.md, architectural flaw #2).
  */
 function harness({ channels, decisions = ['approve', 'reject'], timeout = { after: '48h', then: 'reject' }, slackFails = false, mailer = true } = {}) {
   const ws = new WorkflowStore({ dbPath: ':memory:' });

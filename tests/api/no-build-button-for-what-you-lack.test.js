@@ -213,7 +213,7 @@ describe('it is wired into BOTH doors, and the prompt no longer waits to be aske
    * SOURCE-level, and weaker than the rest — said plainly. The chat endpoint streams
    * through a closure over the response and cannot be lifted and executed here.
    *
-   * It exists because CLAUDE.md records a previous fix to this exact endpoint that was
+   * It exists because ENGINEERING-LOG.md records a previous fix to this exact endpoint that was
    * blind to the SECOND `done` emitter (the forced-final path taken when the model burns
    * its tool budget): four guards stayed green while the real path was unprotected.
    */

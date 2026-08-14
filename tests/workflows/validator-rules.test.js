@@ -13,7 +13,7 @@
  * CHANNEL_MISSING_CONFIG — all survivors. Not one of those rules was pinned by
  * anything. The new C rules were tested; the gate they were bolted onto was not.
  *
- * HOW EACH TEST IS WRITTEN (CLAUDE.md, "a green suite proved nothing four times"):
+ * HOW EACH TEST IS WRITTEN (ENGINEERING-LOG.md, "a green suite proved nothing four times"):
  *
  *   • EVERY rule gets a POSITIVE case. A validator test that only ever feeds bad
  *     input passes identically if the rule is `if (true)` — and in Increment B a
@@ -247,7 +247,7 @@ describe('MISSING_TRIGGER', () => {
   });
   test('a trigger NODE also satisfies it, with no triggers[] (positive)', () => {
     // Both encodings are legal — demanding the node shape wrongly rejected every
-    // runnable event/email spec (CLAUDE.md, P4 salvage edit).
+    // runnable event/email spec (ENGINEERING-LOG.md, P4 salvage edit).
     const spec = base({ triggers: [] });
     spec.nodes.unshift({ id: 'trig', type: 'trigger', config: { time: '09:00' } });
     spec.edges.unshift({ from: 'trig', to: 'sum' });

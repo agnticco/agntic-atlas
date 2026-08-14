@@ -13,7 +13,7 @@
  * `tests/converger/gap-oracle.test.js` already proves `WorkflowService.create/update`
  * persists an `outcome` handed to it — and it passed for the entire life of this bug,
  * because the bug was that the ROUTE never handed it one. A service-level test
- * verifies a program nobody runs (CLAUDE.md, architectural flaw #2). So this suite
+ * verifies a program nobody runs (ENGINEERING-LOG.md, architectural flaw #2). So this suite
  * constructs the subject the way production does:
  *
  *   express + express.json() + mountBuilderRoutes + a REAL WorkflowStore (SQLite)

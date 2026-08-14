@@ -168,7 +168,7 @@ describe('one rule, not two — the surfaces cannot drift apart again', () => {
   // The console rail was built inline inside `renderVals()`, a ~1000-line render
   // method that could not be extracted and executed — so this asserted on the
   // SOURCE, which is the "a grep proves a symbol EXISTS, not that anything
-  // ENFORCES it" weakness CLAUDE.md warns about. It was recorded as weaker than
+  // ENFORCES it" weakness ENGINEERING-LOG.md warns about. It was recorded as weaker than
   // the rest, with a note: "if that rail is ever made extractable, replace this
   // with a real behavioural check."
   //

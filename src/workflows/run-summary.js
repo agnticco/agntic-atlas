@@ -57,7 +57,7 @@
  * It is a pure function on purpose. The step-approval card's derivation was made
  * "pure and separate from the renderer on purpose — the render closure is
  * unreachable from outside the render pass, the same trap that let the destination
- * fix revert silently" (CLAUDE.md). A composer inside the endpoint's request
+ * fix revert silently" (ENGINEERING-LOG.md). A composer inside the endpoint's request
  * handler, or inside a browser render pass, could not be asserted — and until now
  * NOTHING in this codebase asserted the content of this sentence, because it was
  * model-generated.
@@ -71,7 +71,7 @@ import { describeTarget, canonicalConnector } from './outcome-oracle.js';
  * read `"Summary" in inbox deliver` — the capability id with its underscore
  * knocked out, offered to a customer as the name of a place.
  *
- * CLAUDE.md warns that `canonicalConnector` is not a display-name function (it
+ * ENGINEERING-LOG.md warns that `canonicalConnector` is not a display-name function (it
  * answers "do these name the same destination", and grouping BY it once sent
  * every Google capability under a Gmail heading). That warning is about
  * GROUPING. Here it is used to name ONE receipt's own service, and the six

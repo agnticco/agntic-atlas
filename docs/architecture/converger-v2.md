@@ -22,7 +22,7 @@ This is written for a coding agent picking up one increment cold.
   gate. Do one increment per session, end at its gate.
 - **§11 is the list of things that must not break.** Check it before you open a PR.
 
-**Anchors are exported symbol names, not line numbers.** Per CLAUDE.md, line numbers in a brief
+**Anchors are exported symbol names, not line numbers.** Per ENGINEERING-LOG.md, line numbers in a brief
 are non-authoritative provenance — re-ground against the symbol.
 
 ### This document is the handoff. Keep it true.
@@ -365,7 +365,7 @@ scoreGap(spec, { capabilities }) → {
 > it — and in that same state the model has no catalog in its prompt either, making it **most** likely
 > to invent a channel id.
 >
-> **A check that silently degrades is not a safety net; it is the bug** (CLAUDE.md — the
+> **A check that silently degrades is not a safety net; it is the bug** (ENGINEERING-LOG.md — the
 > `?? 'unscoped'` tenant fallback). So the scorer now **refuses to certify** when it cannot see the
 > catalog (`CHANNELS_UNVERIFIED`, blocking), and `builder.js` guarantees one.
 > **Refusing to certify is always available. Certifying without checking is not.**
@@ -373,7 +373,7 @@ scoreGap(spec, { capabilities }) → {
 > And the check built to *prove* this property — `converger-adversarial.mjs` check 6 — was
 > **structurally incapable of failing**: it scored with no capabilities and validated with no
 > registry, so both sides were equally blind and the divergence was invisible *by construction*.
-> That is CLAUDE.md architectural flaw #2 verbatim — *a check that exercises a configuration
+> That is ENGINEERING-LOG.md architectural flaw #2 verbatim — *a check that exercises a configuration
 > production never uses cannot see the bug production has*. It now validates the way production
 > validates.
 
@@ -659,7 +659,7 @@ trip. Meanwhile the shape that *can* run today has exactly the same defect:
 
 A branch matches its cases by **exact value**. Routing on free prose (*"This seems quite urgent, I'd
 say"*) matches no case, so the **mandatory catch-all silently swallows 100% of traffic** — with
-`run_completed` and no error. That is verbatim the `BRANCH_BAD_ON` failure (CLAUDE.md: *"the
+`run_completed` and no error. That is verbatim the `BRANCH_BAD_ON` failure (ENGINEERING-LOG.md: *"the
 catch-all that exists to prevent a silent misroute was masking one"*), arriving through a different
 door. An LLM feeding a decision is an LLM feeding a decision, whichever node type spells it.
 
@@ -859,7 +859,7 @@ become a backlog that fills in as real escalations arrive. This is the mechanism
 demand more rigour **without** demanding more typing — and it is why §7 is a hard dependency,
 not a nice-to-have.
 
-### 6.5 Framework constraints (an agent WILL hit these — CLAUDE.md gotchas)
+### 6.5 Framework constraints (an agent WILL hit these — ENGINEERING-LOG.md gotchas)
 
 - **`sc-if` / `sc-for` are visible DOM nodes until `support.js` compiles them.** The global
   `sc-if, sc-for { display: none; }` rule at `public/index.html:135` is what stops the browser
@@ -1090,7 +1090,7 @@ gaps) and a shape-derivation call.
 
 ## 10. Increments
 
-> One deliverable per session, ending at a gate (CLAUDE.md working rules).
+> One deliverable per session, ending at a gate (ENGINEERING-LOG.md working rules).
 > **Every increment from C on ships its own UI.** The UI is not a phase at the end — a converger
 > that asks more without a surface that makes answering cheap is strictly worse than what we
 > have today.
@@ -1245,7 +1245,7 @@ are not. A `deliver` after a decision sends the draft, not the audit record.
 
 1. **`scripts/gates/p3.sh` is green.** The converger still reproduces the frozen canonical spec
    (`docs/specs/canonical-ups-slack.json`). Structural equivalence + runnability — **never**
-   byte-equality; the converger is non-deterministic (CLAUDE.md, 2026-06-12).
+   byte-equality; the converger is non-deterministic (ENGINEERING-LOG.md, 2026-06-12).
 2. **A v1 spec executes byte-identically.** No `branch` ⇒ no behaviour change.
 3. **`tests/e2e/full-journey.test.js` 7/7.**
 4. **`scripts/checks/p11-cross-tenant-adversarial.mjs` passes.**

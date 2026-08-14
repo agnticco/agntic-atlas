@@ -19,7 +19,7 @@
  * declaration audit, the plain-English step vocabulary. That is the point of the
  * registry, and it is why this is a connector rather than a special case.
  *
- * ── DOES IT PHONE US? (required of every new connector, CLAUDE.md 2026-07-24) ──
+ * ── DOES IT PHONE US? (required of every new connector, ENGINEERING-LOG.md 2026-07-24) ──
  * NO. Knowledge has no trigger and needs none: nothing happens "when a document
  * changes" — a workflow READS it when it runs, and WRITES to it as an action. There is
  * no subscription to register, nothing to renew, nothing to prove genuine and nothing

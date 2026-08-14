@@ -7,7 +7,7 @@
  *     the elicitation prompt, listing it among the types the model may return. Nothing
  *     consumed it — not the scheduler, not the Gmail poller, not the Slack or Airtable
  *     dispatchers. Eight stored workflows carried it; all published, none could ever
- *     fire. That entry in CLAUDE.md ends: *"Keep the runnable set in step with the
+ *     fire. That entry in ENGINEERING-LOG.md ends: *"Keep the runnable set in step with the
  *     consumers; this check failing a publish is the signal that someone added one
  *     without the other."*
  *   · 2026-07-30 — `webhook`. Asked for a contact form that POSTs to a URL, Atlas

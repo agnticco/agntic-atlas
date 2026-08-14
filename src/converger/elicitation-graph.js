@@ -1005,7 +1005,7 @@ export const DRAFT_DEFAULT = {
  * expected, so even fixed it would have fired on every channel rather than the one
  * the person named.
  *
- * THE `connector_event` DEFECT, ONE FIELD ALONG. CLAUDE.md records it: a trigger
+ * THE `connector_event` DEFECT, ONE FIELD ALONG. ENGINEERING-LOG.md records it: a trigger
  * shape the converger emits but no consumer can honour publishes, shows as live,
  * and never fires. The publish guard checked `type` and `connector` — both correct
  * here — and never that the event id was present or the filter well formed.
@@ -2954,7 +2954,7 @@ export function buildElicitationGraph({ llm, checkpointerDir = './memory/converg
     // NOTE (2026-07-27): the plan used to be marked here — every line clamped to a
     // `stated|found|inferred` badge and then word-matched against what the customer
     // typed. The whole mechanism was REMOVED by the operator's decision; the plan
-    // now leaves the server as the plain prose the model wrote. See CLAUDE.md.
+    // now leaves the server as the plain prose the model wrote. See ENGINEERING-LOG.md.
 
     // Unusable projection → skip (fail-safe). A plan with no steps is not worth a turn.
     if (!plan || !Array.isArray(plan.steps) || !plan.steps.length) {

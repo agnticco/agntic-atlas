@@ -21,7 +21,7 @@
  *
  * SO THESE TESTS ASSERT WHAT EACH DESTINATION RECEIVED. Asserting that two
  * deliveries RAN passes on the broken engine — the whole point is what was in
- * them. (CLAUDE.md: a test that asserts a delivery ran, and never what it sent,
+ * them. (ENGINEERING-LOG.md: a test that asserts a delivery ran, and never what it sent,
  * is how the checkpoint-truncation disaster shipped green.)
  */
 

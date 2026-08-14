@@ -17,7 +17,7 @@
  *     registerFilesystemCapabilities ← filesystem_read/_list ✗ missing
  *     registerWebCapabilities        ← web_search/web_fetch  ✗ missing
  *
- * That omission is architectural flaw #2 (CLAUDE.md) inside the very helper written to
+ * That omission is architectural flaw #2 (ENGINEERING-LOG.md) inside the very helper written to
  * fix it: `in_app` is the DEFAULT delivery channel (`deliver.js` — `cfg.channel ?? 'in_app'`),
  * and under `realCatalog()` it resolves to nothing, so every suite built on that helper is
  * blind to the most common delivery in the product. Same for a `connector-action` on

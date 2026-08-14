@@ -36,6 +36,11 @@ before(async () => {
   })) process.env[k] = join(tmp, v);
   process.env.DB_BACKUP_KEEP = '0';
   process.env.SCHEDULER_ENABLED = 'false';
+  // This suite is ABOUT the hosted product's plan machinery — seat caps, PLAN_LIMIT
+  // refusals, per-plan entitlements. Atlas defaults to SELF-HOSTED, where every one
+  // of those limits is off by design, so without this line the seat-limit tests
+  // would assert against a program nobody runs and pass vacuously.
+  process.env.ATLAS_SELF_HOSTED = 'false';
 
   const { bootSpine, createApp } = await import('../../src/api/server.js');
   spine = await bootSpine();
@@ -92,16 +97,16 @@ test('create workspace: validates input + dedupes slugs', async () => {
   assert.equal(noEmail.status, 400, 'missing admin email → 400');
 
   const badPlan = await api('POST', '/admin/tenants', { token: platformToken, body: { name: 'Bad Plan Co', plan: 'wizard', admin: { email: 'a@bad.test' } } });
-  assert.equal(badPlan.data.tenant.plan, 'starter', 'unknown plan falls back to starter');
+  assert.equal(badPlan.data.tenant.plan, 'solo', 'unknown plan falls back to the entry tier');
 
   // Same name again → slug is deduped, not a crash.
-  const dupe = await api('POST', '/admin/tenants', { token: platformToken, body: { name: 'Acme Operations', plan: 'starter', admin: { email: 'boss2@acme.test' } } });
+  const dupe = await api('POST', '/admin/tenants', { token: platformToken, body: { name: 'Acme Operations', plan: 'solo', admin: { email: 'boss2@acme.test' } } });
   assert.equal(dupe.status, 200);
   assert.equal(dupe.data.tenant.slug, 'acme-operations-2', 'duplicate name → -2 slug');
 });
 
 test('lifecycle: suspend / reactivate / archive / restore', async () => {
-  const c = await api('POST', '/admin/tenants', { token: platformToken, body: { name: 'Lifecycle Co', plan: 'starter', admin: { email: 'lc@lifecycle.test' } } });
+  const c = await api('POST', '/admin/tenants', { token: platformToken, body: { name: 'Lifecycle Co', plan: 'solo', admin: { email: 'lc@lifecycle.test' } } });
   const id = c.data.tenant.id;
 
   let r = await api('POST', `/admin/tenants/${id}/suspend`, { token: platformToken });
@@ -124,7 +129,7 @@ test('lifecycle: auth required + platform tenant protected', async () => {
 });
 
 test('pending status: true until the admin actually signs in', async () => {
-  const c = await api('POST', '/admin/tenants', { token: platformToken, body: { name: 'Pending Co', plan: 'starter', admin: { email: 'newadmin@pending.test' } } });
+  const c = await api('POST', '/admin/tenants', { token: platformToken, body: { name: 'Pending Co', plan: 'solo', admin: { email: 'newadmin@pending.test' } } });
   const id = c.data.tenant.id;
   const token = new URL(c.data.inviteLink).searchParams.get('reset');
 
@@ -151,14 +156,16 @@ async function makeAdmin(name, plan, email) {
   return (await api('POST', '/auth/login', { body: { email, password: 'a-Strong-Pass-12345' } })).data.token;
 }
 
-test('team: admin invites a teammate (same invite flow), unlimited on team plan', async () => {
+test('team: admin invites a teammate (same invite flow), within the team seat allowance', async () => {
   const adminToken = await makeAdmin('Teamco', 'team', 'lead@teamco.test');
 
   let team = (await api('GET', '/api/builder/team', { token: adminToken })).data;
   assert.equal(team.members.length, 1);
   assert.equal(team.isAdmin, true);
   assert.equal(team.plan, 'team');
-  assert.equal(team.seats.limit, null, 'team = unlimited seats');
+  // Team is 5 seats, not unlimited. This asserted `null` (unlimited) from the
+  // pre-2026-07-09 ladder and had been failing at baseline ever since.
+  assert.equal(team.seats.limit, 5, 'team = 5 seats');
 
   const inv = await api('POST', '/api/builder/team/invite', { token: adminToken, body: { email: 'mate@teamco.test' } });
   assert.equal(inv.status, 200, `invite ok (got ${inv.status}: ${JSON.stringify(inv.data)})`);
@@ -170,10 +177,10 @@ test('team: admin invites a teammate (same invite flow), unlimited on team plan'
   assert.equal(team.members.find((m) => m.email === 'mate@teamco.test').pending, true, 'teammate is pending until sign-in');
 });
 
-test('team: starter seat limit enforced; auth required', async () => {
-  const adminToken = await makeAdmin('Solo', 'starter', 'solo@solo.test');
+test('team: solo seat limit enforced; auth required', async () => {
+  const adminToken = await makeAdmin('Solo', 'solo', 'solo@solo.test');
   const team = (await api('GET', '/api/builder/team', { token: adminToken })).data;
-  assert.equal(team.seats.limit, 1, 'starter = 1 seat');
+  assert.equal(team.seats.limit, 1, 'solo = 1 seat');
 
   const blocked = await api('POST', '/api/builder/team/invite', { token: adminToken, body: { email: 'extra@solo.test' } });
   assert.equal(blocked.status, 402, 'over seat limit → 402');

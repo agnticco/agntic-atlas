@@ -41,7 +41,8 @@ git push origin main
 ```
 
 ### 4. Deploy on the VPS
-The live box is **AWS Lightsail, static IP `YOUR_SERVER_IP`**. You log in as
+The reference deployment is **a small AWS Lightsail box (Ubuntu)**; substitute your
+own address for `YOUR_SERVER_IP` throughout. You log in as
 `ubuntu` (Lightsail's default SSH user); the app runs as the `atlas` service
 account under `/home/atlas/atlas`. So you SSH as `ubuntu` and `sudo -u atlas` to
 run the deploy. One line, no interactive shell needed:

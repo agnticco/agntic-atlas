@@ -1,0 +1,35 @@
+name: Feature request
+description: Something Atlas should be able to do and cannot
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What are you trying to do?
+      description: Describe the actual job, not the feature you have in mind for it. The best solution is often not the one either of us thought of first.
+      placeholder: |
+        I want the workflow to check whether a customer already exists in our CRM
+        before it creates a new record, and skip the ones that do.
+    validations:
+      required: true
+
+  - type: textarea
+    id: current
+    attributes:
+      label: What happens today instead?
+      description: How do you work around it now, if at all?
+    validations:
+      required: true
+
+  - type: textarea
+    id: idea
+    attributes:
+      label: What you had in mind (optional)
+      description: If you already have a shape in mind, describe it. Skip this if you'd rather leave it open.
+
+  - type: checkboxes
+    id: connector
+    attributes:
+      label: Is this about a service Atlas cannot talk to yet?
+      options:
+        - label: Yes — and I have checked whether it publishes an MCP server, since those can often be connected with no work at all

@@ -116,7 +116,7 @@ disabled button at least explains itself. All three now read one derivation.
 ## Round 2 probe — `digest` (two sources, web + Gmail)
 
 Chosen to exercise machinery nothing else had: two content sources combined into one
-document, a live web connector, and the multi-source `assemble` path that CLAUDE.md
+document, a live web connector, and the multi-source `assemble` path that ENGINEERING-LOG.md
 records as having caused an 11½-minute rebuild loop.
 
 | Measure | Value |

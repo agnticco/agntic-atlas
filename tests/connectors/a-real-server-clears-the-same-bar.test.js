@@ -18,7 +18,7 @@
  * or that the tools still have these shapes. It proves that WHAT NOTION ACTUALLY
  * SENT survives every check Atlas applies. The live half was witnessed in a
  * browser on 2026-08-03 (consent screen → 20 tools in `/capabilities`) and is
- * recorded in CLAUDE.md; re-record this fixture if the contract is ever in doubt.
+ * recorded in ENGINEERING-LOG.md; re-record this fixture if the contract is ever in doubt.
  */
 
 import { test, describe } from 'node:test';

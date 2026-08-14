@@ -47,7 +47,7 @@
 #   (2) THE UI/UX WORKS for the phase's expected outcome — proven by a LIVE, HEADED
 #       browser run the operator can watch (connect a service Atlas never hand-built,
 #       build a workflow with it, run it, see the real read/write). This is attested
-#       by the verifier in docs/gates/p13.md with saved screenshots (CLAUDE.md,
+#       by the verifier in docs/gates/p13.md with saved screenshots (ENGINEERING-LOG.md,
 #       Working rules: visible UI verification). A script cannot drive a headed
 #       browser, so this half is a verifier-attested artifact, not an assertion here.
 #
@@ -65,7 +65,7 @@
 #
 # answers both "is the phase closed?" and "which increment do I build next?".
 # An unimplemented check does NOT pass. Do not weaken a check to force a pass — if a check
-# is wrong, fix it and record why in CLAUDE.md (CLAUDE.md, Gates). A diff against this file
+# is wrong, fix it and record why in ENGINEERING-LOG.md (ENGINEERING-LOG.md, Gates). A diff against this file
 # is how a verifier detects gate-weakening; the behavioral checks are ADDED here, never
 # removed. (Removing the mutation FLOOR is not a weakening — it was never a P13 bar; the
 # BEHAVIORAL and UI/UX proofs are the bar, and those only ratchet up.)
@@ -136,7 +136,7 @@ echo "p13: [P13-0] the catalog is source-agnostic (synthetic capability, no spec
 run_test "$P130_TEST" "P13-0 source-agnostic catalog"
 
 # The seams are behavioural, so this gate EXERCISES them — it does not grep for
-# symbols. A grep proves a symbol exists, not that anything enforces it (CLAUDE.md).
+# symbols. A grep proves a symbol exists, not that anything enforces it (ENGINEERING-LOG.md).
 # The suite above registers a synthetic capability with no code special-casing it
 # anywhere and asserts all four seams fire on it.
 #

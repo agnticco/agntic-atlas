@@ -104,7 +104,7 @@ describe('A. live defects', () => {
   /**
    * A1 — A DECISION'S OUTPUT BECOMES THE DELIVERED BODY INSIDE A `foreach`.
    *
-   * CLAUDE.md (Increment B): "`branch` and `human` are CONTROL nodes — their output
+   * ENGINEERING-LOG.md (Increment B): "`branch` and `human` are CONTROL nodes — their output
    * never becomes `lastOutput`. This holds on BOTH executors — the top-level loop
    * (flow-tester.js, CONTROL_TYPES) *and* the `foreach` sub-loop, which has its own
    * executor (foreach.js, CONTROL_SUBSTEP_TYPES). The sub-loop was missed at first:
@@ -366,7 +366,7 @@ describe('A. live defects', () => {
    * But `decision` is not in flow-tester.js:651-659's carve-out list (only a
    * `foreach`'s `steps` and a `branch`'s `on` stay raw), so `_substitute` REPLACES
    * `{{think.output}}` with the VALUE before run() ever sees it — and a bare value is
-   * indistinguishable from a step id. This is verbatim CLAUDE.md's branch-`on` crash:
+   * indistinguishable from a step id. This is verbatim ENGINEERING-LOG.md's branch-`on` crash:
    * "the engine looked up a step called 'urgent' and killed the run. Data-dependent,
    * which is worse."
    *

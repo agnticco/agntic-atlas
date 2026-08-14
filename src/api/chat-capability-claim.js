@@ -14,7 +14,7 @@
  *    built. That URL becomes the trigger…"
  *       …no part of that exists. There is no webhook trigger and no URL generation.
  *
- * CLAUDE.md calls this "the most demo-dangerous behaviour found", and the reason
+ * ENGINEERING-LOG.md calls this "the most demo-dangerous behaviour found", and the reason
  * is structural: it happens on the FIRST turn, in the most confident register,
  * before the plan, the promise, the self-check or the publish guard can act. Every
  * one of those mechanisms is downstream of a claim that has already been made.

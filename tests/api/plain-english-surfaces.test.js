@@ -11,7 +11,7 @@
  *   · the canvas + approval card said  `LLM · EXTRACT`, `CONNECTOR-ACTION`, `BRANCH`
  *   · the on-screen procedure document said `LLM PROMPT`, `EMAIL TRIGGER`
  *   · the EXPORTED procedure document said "AI step", "Wait for a person"
- * CLAUDE.md carried the first as an open residual ("_nodeShape reaches five
+ * ENGINEERING-LOG.md carried the first as an open residual ("_nodeShape reaches five
  * surfaces including the exported procedure document"); nobody had noticed the
  * other two existed. Plus, on screen, verbatim: `is:unread`, `urgent_complaint`,
  * `← classify_email`, `Instructions: … output EXACTLY: ERROR: required data not f…`,
