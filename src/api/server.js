@@ -87,6 +87,7 @@ import { registerKnowledgeCapabilities, knowledgeState } from '../connectors/kno
 import { mountBuilderRoutes } from './builder.js';
 import { createTenantGuard } from './tenant-guard.js';
 import { mountConsoleRoutes } from './console.js';
+import { mountMcpRoutes } from './mcp.js';
 import { mountAdminRoutes } from '../admin/server.js';
 import { recordSlackEventSeen } from '../connectors/slack/delivery-record.js';
 import { logEvent, errFields } from '../utils/event-log.js';
@@ -3587,6 +3588,9 @@ export function createApp(spine) {
 
   mountBuilderRoutes(app, { spine, requireActiveTenant, requireAuth, readSources, tenantGuard, dryRunSpecForTenant });
   mountConsoleRoutes(app, { spine, requireActiveTenant });
+  // Atlas's workflow API, spoken as MCP. Same auth, same tenant scoping — a second
+  // vocabulary for what the console API already exposes, not a second permission set.
+  mountMcpRoutes(app, { spine, requireActiveTenant, tenantGuard });
   mountTicketRoutes(app, { spine, requireActiveTenant });
   mountAdminRoutes(app, { spine, requireAuth, requirePlatformAdmin, optionalAuth });
 
