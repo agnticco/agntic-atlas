@@ -34,6 +34,7 @@
 import { parseScopes, redirectAllowed, resolveClientIdentity, SCOPES } from '../auth/oauth-provider.js';
 import { logEvent, errFields } from '../utils/event-log.js';
 import { createHash, timingSafeEqual } from 'node:crypto';
+import express from 'express';
 
 const esc = (s) => String(s ?? '')
   .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
@@ -187,6 +188,21 @@ function consentPage({ client, scopes, params, user, error }) {
 </div></body></html>`;
 }
 
+/**
+ * These routes parse their own bodies.
+ *
+ * Both POSTs below are `application/x-www-form-urlencoded` — one is a browser submitting
+ * an HTML form, the other is the RFC 6749 token endpoint, which is form-encoded by
+ * specification. The app mounts `express.json()` globally, which leaves `req.body`
+ * UNDEFINED for those content types, so the consent screen died on `req.body.response_type`
+ * and the token endpoint quietly saw every grant as absent.
+ *
+ * Mounting the parser here rather than adding another `app.use` in server.js is the
+ * difference between a route that works and a route that works as long as nobody reorders
+ * the middleware above it.
+ */
+const form = express.urlencoded({ extended: false, limit: '64kb' });
+
 export function mountOAuthRoutes(app, { spine, oauth, issuer,
                                        loginThrottle = null, setSessionCookie = null,
                                        resolveClient = resolveClientIdentity,
@@ -279,7 +295,7 @@ export function mountOAuthRoutes(app, { spine, oauth, issuer,
     }
   });
 
-  app.post('/oauth/authorize', async (req, res) => {
+  app.post('/oauth/authorize', form, async (req, res) => {
     try {
       const { client, scopes } = await readAuthorizeRequest(req.body);
 
@@ -353,7 +369,7 @@ export function mountOAuthRoutes(app, { spine, oauth, issuer,
 
   // ── token ─────────────────────────────────────────────────────────────────
 
-  app.post('/oauth/token', (req, res) => {
+  app.post('/oauth/token', form, (req, res) => {
     const fail = (code, description) => res.status(400).json({ error: code, error_description: description });
     const wait = throttle(req);
     if (wait) {

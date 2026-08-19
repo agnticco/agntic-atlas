@@ -51,6 +51,7 @@
  *   M15 /oauth/token is unbounded                       → 1 red
  *   M16 loopback match waives path/scheme/host too     → 1 red
  *   M17 exact redirect matching, no loopback exception → 2 red
+ *   M18 the POST routes rely on a global body parser    → 7 red
  *
  * M10–M12 take two apiece because reuse detection, revocation and the liveness read are
  * one mechanism seen from three sides: break any of them and both the "grant ends" and
@@ -85,8 +86,12 @@ async function atlas({ authenticate = async () => null, loginThrottle = null, si
                                                         redirectUris: ['https://c.example/cb'] }),
                      } = {}) {
   const app = express();
+  // DELIBERATELY ONLY express.json(), because that is all the real server mounts globally.
+  // This harness used to add express.urlencoded() too, and every test below passed against
+  // a server that could not parse a single one of its own forms: the consent screen threw
+  // on `req.body.response_type` and the token endpoint saw every request as having no
+  // grant_type. A harness more capable than production tests a server that does not exist.
   app.use(express.json());
-  app.use(express.urlencoded({ extended: false }));
   app.use(cookieParser());
 
   const server = createServer(app);
@@ -363,6 +368,48 @@ describe('scopes default down, never up', () => {
     assert.deepEqual(parseScopes('workflows:read workflows:run'),
       ['workflows:read', 'workflows:run']);
     assert.deepEqual(parseScopes('workflows:run admin'), ['workflows:run']);
+  });
+});
+
+describe('the routes can read the bodies they are sent', () => {
+  // Both POSTs are form-encoded — one is a browser form, the other is form-encoded by
+  // RFC 6749. Neither is JSON, and JSON is all the app parses globally.
+  test('the consent form is parsed, not received as undefined', async () => {
+    const a = await atlas();
+    try {
+      const res = await fetch(`${a.issuer}/oauth/authorize`, {
+        method: 'POST', redirect: 'manual',
+        headers: { 'content-type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams({
+          client_id: 'https://c.example/id.json', redirect_uri: 'https://c.example/cb',
+          response_type: 'code', scope: 'workflows:read', code_challenge: 'x'.repeat(43),
+          code_challenge_method: 'S256', decision: 'allow',
+        }),
+      });
+      const text = await res.text();
+      assert.ok(!/Cannot read properties of undefined/.test(text),
+        'req.body was undefined, so approving the connection threw instead of granting it');
+      assert.notEqual(res.status, 500);
+    } finally { await a.close(); }
+  });
+
+  test('the token endpoint reads a form-encoded grant', async () => {
+    const a = await atlas();
+    try {
+      const res = await fetch(`${a.issuer}/oauth/token`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams({ grant_type: 'authorization_code', code: 'nope',
+                                    code_verifier: 'v', client_id: 'c',
+                                    redirect_uri: 'https://c.example/cb' }),
+      });
+      const doc = await res.json();
+      // The point is that it got AS FAR AS the grant being wrong. An unparsed body fails
+      // earlier and blames the grant_type instead, which sends a client hunting the wrong bug.
+      assert.match(doc.error_description ?? doc.error ?? '', /code|grant/i);
+      assert.ok(!/unsupported_grant_type/.test(doc.error ?? ''),
+        'the form was not parsed, so a perfectly good authorization_code looked absent');
+    } finally { await a.close(); }
   });
 });
 
