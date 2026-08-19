@@ -44,6 +44,11 @@
  * by tenant itself, so what that test actually pins is narrower — that the tool forwards
  * the CALLER's tenant to the store rather than a default or another's. That is worth
  * having and is not the same guard as the other two.
+ *
+ * A LATER MUTATION, run by hand: dropping the `aud` comparison in mcpAuth → 1 red. The
+ * token stubs here carry `aud` for the same reason — one without it is rejected before
+ * the scope and tenant comparisons these tests are actually about, which would have made
+ * them pass while proving nothing.
  */
 
 import { test, describe } from 'node:test';
@@ -68,7 +73,9 @@ const WORKFLOW = {
  * the code under test and are the real thing. A test that re-implements its subject
  * proves that the test can call a function.
  */
-function appFor(tenantId, { runNow = async () => {}, tenantGuard = null } = {}) {
+function appFor(tenantId, { runNow = async () => {}, tenantGuard = null,
+                           accessToken = null, issuer = 'https://atlas.test',
+                           session = true, grantIsLive = () => true } = {}) {
   const ran = [];
   const store = {
     list: ({ tenantId: t }) => (t === TENANT_A ? [WORKFLOW] : []),
@@ -82,14 +89,26 @@ function appFor(tenantId, { runNow = async () => {}, tenantGuard = null } = {}) 
 
   const app = express();
   app.use(express.json());
-  const requireActiveTenant = (req, _res, next) => {
+  // `session: false` is a caller with no Atlas cookie — the only way to see what the
+  // bearer path decided on its own. With a session always available, a rejected token
+  // silently falls through to it and every token test passes for the wrong reason.
+  const requireActiveTenant = (req, res, next) => {
+    if (!session) return res.status(401).json({ error: 'Unauthorized' });
     req.user = { id: 'user-1' };
     req.tenant = { id: tenantId };
     next();
   };
+  // `accessToken` stands in for a token minted by the consent flow: {token: claims}.
+  // Verifying a real JWT is token-service's job and is tested there; what is under test
+  // here is what the endpoint does with the claims once it has them.
+  const tokenService = { verify: (t) => (accessToken && accessToken.token === t ? accessToken.claims : null) };
+  const userStore = { findById: (id) => ({ id, tenant_id: accessToken?.claims?.tid, disabled_at: null }) };
+
   mountMcpRoutes(app, {
-    spine: { engine: { workflowStore: store, workflowScheduler: scheduler }, interactionStore: null },
-    requireActiveTenant, tenantGuard,
+    spine: { engine: { workflowStore: store, workflowScheduler: scheduler },
+             interactionStore: null, auth: { tokenService, userStore } },
+    requireActiveTenant, tenantGuard, issuer,
+    oauth: accessToken ? { grantIsLive } : null,
   });
   return { app, ran };
 }
@@ -194,6 +213,108 @@ describe('spend and concurrency are guarded where they are spent', () => {
     const { app, ran } = appFor(TENANT_A, { tenantGuard: allowing });
     await rpc(app, call('run_workflow', { id: 'wf-1' }));
     assert.equal(seen, 1, 'the guard was never consulted for a costly call');
+    assert.equal(ran.length, 1);
+  });
+});
+
+describe('an OAuth token carries only what was consented to', () => {
+  // `aud` is part of a real access token: the endpoint refuses one addressed to another
+  // resource. A stub without it is not a token this server would ever accept.
+  const tokenFor = (scope) => ({
+    token: 'access-tok',
+    claims: { typ: 'access', sub: 'user-1', tid: TENANT_A, scope,
+              aud: 'https://atlas.test', gid: 'grant-1' },
+  });
+
+  /** Send with a bearer token rather than relying on the session stub. */
+  async function rpcAs(app, token, message) {
+    const { createServer } = await import('node:http');
+    const server = createServer(app);
+    await new Promise(r => server.listen(0, r));
+    try {
+      const res = await fetch(`http://127.0.0.1:${server.address().port}/mcp`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` },
+        body: JSON.stringify(message),
+      });
+      const text = await res.text();
+      return { status: res.status, headers: res.headers, body: text ? JSON.parse(text) : null };
+    } finally { await new Promise(r => server.close(r)); }
+  }
+
+  test('revoking the grant stops the access token that was already issued', async () => {
+    const { app } = appFor(TENANT_A, {
+      session: false,
+      accessToken: tokenFor('workflows:read workflows:run'),
+      grantIsLive: () => false,   // the user disconnected it, or reuse was detected
+    });
+    const { status } = await rpcAs(app, 'access-tok',
+      { jsonrpc: '2.0', id: 1, method: 'tools/list' });
+    assert.equal(status, 401,
+      'a revoked connection kept working until its JWT expired — up to 8 hours during which '
+      + 'the disconnect button, and the refresh-reuse detection that relies on it, did nothing');
+  });
+
+  test('a token addressed to another resource is not accepted here', async () => {
+    const { app } = appFor(TENANT_A, { session: false, accessToken: {
+      token: 'access-tok',
+      claims: { typ: 'access', sub: 'user-1', tid: TENANT_A,
+                scope: 'workflows:read workflows:run',
+                aud: 'https://other-mcp.example', gid: 'grant-1' },
+    } });
+    const { status, headers } = await rpcAs(app, 'access-tok',
+      { jsonrpc: '2.0', id: 1, method: 'tools/list' });
+    assert.equal(status, 401,
+      'a token minted for another service was spent here — the resource binding this server '
+      + 'advertises in its metadata would be a claim it does not keep');
+    assert.match(headers.get('www-authenticate') ?? '', /resource_metadata="/);
+  });
+
+  test('a read-only token is not even shown run_workflow', async () => {
+    const { app } = appFor(TENANT_A, { accessToken: tokenFor('workflows:read') });
+    const { body } = await rpcAs(app, 'access-tok', { jsonrpc: '2.0', id: 1, method: 'tools/list' });
+    const names = body.result.tools.map(t => t.name);
+    assert.ok(names.includes('list_workflows'), names.join(', '));
+    assert.ok(!names.includes('run_workflow'),
+      'advertising a tool the caller cannot use spends a model turn discovering a boundary '
+      + 'it could have been told about');
+  });
+
+  test('a read-only token calling run_workflow is refused, readably', async () => {
+    const { app, ran } = appFor(TENANT_A, { accessToken: tokenFor('workflows:read') });
+    const { body } = await rpcAs(app, 'access-tok', call('run_workflow', { id: 'wf-1' }));
+    assert.equal(ran.length, 0, 'a scope check that runs after the side effect is not a check');
+    assert.equal(body.result.isError, true);
+    assert.match(body.result.content[0].text, /workflows:run/,
+      'the refusal must name the missing scope, or nobody knows what to reconnect for');
+  });
+
+  test('a token granted run may run', async () => {
+    const { app, ran } = appFor(TENANT_A, { accessToken: tokenFor('workflows:read workflows:run') });
+    const { body } = await rpcAs(app, 'access-tok', call('run_workflow', { id: 'wf-1' }));
+    assert.equal(body.result.isError, undefined, body.result.content?.[0]?.text);
+    assert.equal(ran.length, 1);
+  });
+
+  test('a token for another tenant cannot reach this one', async () => {
+    const { app } = appFor(TENANT_A, {
+      // Addressed to us and otherwise valid — the ONLY thing wrong with it is the tenant,
+      // which is what this test is about. Drop `aud` and it is rejected an inch earlier,
+      // and the tenant comparison below is never reached.
+      accessToken: { token: 'access-tok',
+                     claims: { typ: 'access', sub: 'user-9', tid: TENANT_B, scope: 'workflows:read',
+                               aud: 'https://atlas.test', gid: 'grant-9' } },
+    });
+    const { body } = await rpcAs(app, 'access-tok', call('get_workflow', { id: 'wf-1' }));
+    assert.equal(body.result.isError, true, 'an access token reached another tenant\'s workflow');
+  });
+
+  test('a session token is not narrowed by scopes it never had', async () => {
+    // A session already grants everything its holder can do; the scoped credential is the
+    // new thing, and it must not retroactively restrict the old one.
+    const { app, ran } = appFor(TENANT_A);
+    const { body } = await rpcAs(app, 'not-an-access-token', call('run_workflow', { id: 'wf-1' }));
+    assert.equal(body.result.isError, undefined, body.result.content?.[0]?.text);
     assert.equal(ran.length, 1);
   });
 });

@@ -42,6 +42,7 @@
 
 import { logEvent, errFields } from '../utils/event-log.js';
 import { generateSopMarkdown } from '../workflows/sop-generator.js';
+import { SCOPES, ALL_SCOPES } from '../auth/oauth-provider.js';
 
 /** Protocol revisions this server implements; the first is what it offers by default. */
 const PROTOCOL_VERSION = '2025-06-18';
@@ -55,12 +56,78 @@ const METHOD_NOT_FOUND = -32601;
 const INVALID_PARAMS = -32602;
 const INTERNAL_ERROR = -32603;
 
-export function mountMcpRoutes(app, { spine, requireActiveTenant, tenantGuard = null }) {
+export function mountMcpRoutes(app, { spine, requireActiveTenant, tenantGuard = null,
+                                     oauth = null, issuer = null }) {
   // Same default as mountBuilderRoutes: a passthrough when none is supplied, so a test
   // or a self-hosted boot without the guard behaves exactly as before.
   const guard = tenantGuard ?? ((_req, _res, next) => next());
   const store = spine.engine.workflowStore;
   const scheduler = spine.engine.workflowScheduler;
+  const { tokenService, userStore } = spine.auth;
+
+  /**
+   * Two credentials, one door.
+   *
+   * A SESSION token is the app's own: it already grants everything its holder can do, so
+   * it arrives with every scope. An OAUTH ACCESS TOKEN is what a client obtained through
+   * the consent screen, and it carries only what was approved there.
+   *
+   * The access-token path is checked first and does NOT delegate to requireActiveTenant,
+   * because an access token has no session row and would be rejected by it. It equally
+   * cannot be spent anywhere else in the app: it has no `jti`, and `authenticate()`
+   * requires one. A scoped credential must not open a door that has never heard of scopes.
+   */
+  function mcpAuth(req, res, next) {
+    const header = req.headers?.authorization ?? '';
+    const bearer = header.startsWith('Bearer ') ? header.slice(7).trim() : null;
+
+    if (bearer && oauth) {
+      const claims = tokenService.verify(bearer);
+      // `aud` IS CHECKED HERE, not only when the token was minted. The authorization
+      // server binds a token to one resource (RFC 8707) so it cannot be replayed against
+      // another service trusting the same issuer — a guarantee that means nothing unless
+      // the resource itself refuses tokens addressed elsewhere. `verify()` does not check
+      // audience, so without this line the binding was advertised and never enforced.
+      const audience = Array.isArray(claims?.aud) ? claims.aud : [claims?.aud];
+      const addressedToUs = !issuer || audience.includes(issuer);
+      // AND THE GRANT BEHIND IT MUST STILL EXIST. A JWT is only a claim about the moment
+      // it was signed; without this, revoking a connection — or the reuse detection in
+      // oauth-provider deciding a refresh token has been copied — left the attacker
+      // working normally for the rest of the access token's 8 hours.
+      const live = claims?.gid ? oauth.grantIsLive(claims.gid) : false;
+      if (claims?.typ === 'access' && claims.sub && claims.tid && addressedToUs && live) {
+        const user = userStore.findById(claims.sub);
+        if (user && !user.disabled_at && user.tenant_id === claims.tid) {
+          req.user = user;
+          req.tenant = { id: claims.tid };
+          req.scopes = String(claims.scope ?? '').split(/\s+/).filter(Boolean);
+          req.viaOAuth = true;
+          return next();
+        }
+      }
+    }
+
+    // Fall back to the session path — the real check, not a copy of it. The challenge is
+    // set first so a 401 from that chain carries it, and removed when it does not fire:
+    // a spec-compliant client 401-probes to find out where to authenticate, and a 401
+    // with nowhere to look reads as "this server does not support being connected".
+    if (issuer) {
+      res.set('WWW-Authenticate',
+        `Bearer resource_metadata="${issuer}/.well-known/oauth-protected-resource"`);
+    }
+    const chain = Array.isArray(requireActiveTenant) ? requireActiveTenant : [requireActiveTenant];
+    let i = 0;
+    const step = (err) => {
+      if (err) return next(err);
+      if (i >= chain.length) {
+        res.removeHeader('WWW-Authenticate');
+        req.scopes = ALL_SCOPES;      // a session already grants everything
+        return next();
+      }
+      chain[i++](req, res, step);
+    };
+    step();
+  }
 
   /**
    * Resolve a workflow for this caller, or throw.
@@ -88,6 +155,7 @@ export function mountMcpRoutes(app, { spine, requireActiveTenant, tenantGuard = 
   const TOOLS = [
     {
       name: 'list_workflows',
+      scope: SCOPES.READ,
       description:
         'List the automations in this Atlas workspace. Returns id, name and status for '
         + 'each. Call this first for any question about existing automations.',
@@ -108,6 +176,7 @@ export function mountMcpRoutes(app, { spine, requireActiveTenant, tenantGuard = 
 
     {
       name: 'get_workflow',
+      scope: SCOPES.READ,
       description:
         'Read one automation in full, including its steps. Use after list_workflows when '
         + 'you need to know what an automation actually does.',
@@ -122,6 +191,7 @@ export function mountMcpRoutes(app, { spine, requireActiveTenant, tenantGuard = 
 
     {
       name: 'get_workflow_sop',
+      scope: SCOPES.READ,
       description:
         'Read an automation as a plain-language standard operating procedure. Better than '
         + 'get_workflow when the answer is for a person rather than for further tool calls.',
@@ -147,6 +217,7 @@ export function mountMcpRoutes(app, { spine, requireActiveTenant, tenantGuard = 
 
     {
       name: 'list_workflow_runs',
+      scope: SCOPES.READ,
       description:
         'List past runs of an automation, newest first. Use to answer whether something '
         + 'ran, when, and whether it succeeded.',
@@ -168,6 +239,7 @@ export function mountMcpRoutes(app, { spine, requireActiveTenant, tenantGuard = 
 
     {
       name: 'run_workflow',
+      scope: SCOPES.RUN,
       // The only tool here that spends money: a run executes LLM steps and connector
       // calls. Everything else is a store read.
       costly: true,
@@ -193,8 +265,16 @@ export function mountMcpRoutes(app, { spine, requireActiveTenant, tenantGuard = 
 
   const BY_NAME = new Map(TOOLS.map(t => [t.name, t]));
 
-  /** The `tools/list` projection — nothing internal (`run`) crosses the wire. */
-  const advertised = () => TOOLS.map(t => ({
+  const permitted = (req, tool) => !req.scopes || req.scopes.includes(tool.scope);
+
+  /**
+   * The `tools/list` projection — nothing internal (`run`) crosses the wire.
+   *
+   * Filtered by scope, so a read-only client is not shown a tool it would be refused.
+   * Advertising everything and failing on use is how a model spends a turn discovering
+   * a permission boundary it could have been told about.
+   */
+  const advertised = (req) => TOOLS.filter(t => permitted(req, t)).map(t => ({
     name: t.name,
     description: t.description,
     inputSchema: t.inputSchema,
@@ -275,11 +355,16 @@ export function mountMcpRoutes(app, { spine, requireActiveTenant, tenantGuard = 
         return rpcOk(id, {});
 
       case 'tools/list':
-        return rpcOk(id, { tools: advertised() });
+        return rpcOk(id, { tools: advertised(req) });
 
       case 'tools/call': {
         const tool = BY_NAME.get(params.name);
         if (!tool) return rpcError(id, INVALID_PARAMS, `No tool named "${params.name}".`);
+        if (!permitted(req, tool)) {
+          return rpcOk(id, { ...asContent(
+            `This connection was granted ${(req.scopes ?? []).join(', ') || 'no scopes'} and `
+            + `"${tool.name}" needs ${tool.scope}. Reconnect and approve that access.`), isError: true });
+        }
         try {
           return rpcOk(id, asContent(await tool.run(params.arguments ?? {}, req)));
         } catch (err) {
@@ -307,7 +392,7 @@ export function mountMcpRoutes(app, { spine, requireActiveTenant, tenantGuard = 
     res.set('Allow', 'POST').status(405).json({ error: 'This MCP endpoint is POST-only.' });
   });
 
-  app.post('/mcp', requireActiveTenant, async (req, res) => {
+  app.post('/mcp', mcpAuth, async (req, res) => {
     const body = req.body;
     if (!body || typeof body !== 'object') {
       return res.status(400).json(rpcError(null, PARSE_ERROR, 'Body must be a JSON-RPC message.'));

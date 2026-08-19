@@ -107,6 +107,30 @@ export class TokenService {
   }
 
   /**
+   * Sign an OAuth access token: a user, a tenant, a scope and the resource it is bound to.
+   *
+   * DELIBERATELY NOT A SESSION, and the difference is load-bearing. `authenticate()` in
+   * middleware.js requires `sub` AND `jti` AND a live session row; this carries no `jti`,
+   * so an access token cannot be spent as a session cookie anywhere in the app. It is
+   * accepted only where scopes are enforced — the MCP endpoint — because a credential that
+   * says "read workflows" must not open a door that has never heard of scopes.
+   *
+   * `aud` binds the token to the resource it was issued for (RFC 8707): without it a token
+   * minted for one MCP server can be replayed against another that trusts the same
+   * authorization server, which is the confused-deputy shape.
+   */
+  signAccess({ userId, tenantId, scope, resource, ttlMs, grantId }) {
+    if (!userId || !tenantId || !scope || !resource || !ttlMs || !grantId) {
+      throw new Error('signAccess() requires userId, tenantId, scope, resource, ttlMs, grantId');
+    }
+    return jwt.sign(
+      { sub: userId, tid: tenantId, scope, typ: 'access', gid: grantId },
+      this._secret,
+      { algorithm: ALGO, expiresIn: Math.floor(ttlMs / 1000), issuer: ISSUER, audience: resource },
+    );
+  }
+
+  /**
    * Verify + decode a token. Returns the claims on success, null on any failure.
    * Swallows jsonwebtoken errors to a uniform null — callers should treat null
    * as "unauthorized" without needing to distinguish failure modes.

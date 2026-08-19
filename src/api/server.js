@@ -88,6 +88,8 @@ import { mountBuilderRoutes } from './builder.js';
 import { createTenantGuard } from './tenant-guard.js';
 import { mountConsoleRoutes } from './console.js';
 import { mountMcpRoutes } from './mcp.js';
+import { mountOAuthRoutes } from './oauth.js';
+import { createOAuthProvider } from '../auth/oauth-provider.js';
 import { mountAdminRoutes } from '../admin/server.js';
 import { recordSlackEventSeen } from '../connectors/slack/delivery-record.js';
 import { logEvent, errFields } from '../utils/event-log.js';
@@ -3590,7 +3592,21 @@ export function createApp(spine) {
   mountConsoleRoutes(app, { spine, requireActiveTenant });
   // Atlas's workflow API, spoken as MCP. Same auth, same tenant scoping — a second
   // vocabulary for what the console API already exposes, not a second permission set.
-  mountMcpRoutes(app, { spine, requireActiveTenant, tenantGuard });
+  // Atlas as an authorization server, so a client can connect by URL alone: it discovers
+  // where to authenticate, sends its user to a consent screen, and leaves with a scoped
+  // token. `oauthIssuer` is the public origin those documents advertise — a mismatch here
+  // and every discovered endpoint points somewhere the client cannot reach.
+  const oauthIssuer = (process.env.OAUTH_ISSUER || oauthRedirectBase() || '').replace(/\/+$/, '');
+  const oauthProvider = createOAuthProvider({
+    db: spine.auth.db, tokenService: spine.auth.tokenService,
+    userStore: spine.auth.userStore, issuer: oauthIssuer,
+  });
+  mountOAuthRoutes(app, {
+    spine, oauth: oauthProvider, issuer: oauthIssuer, setSessionCookie,
+    loginThrottle: { retryAfter: loginRetryAfter, recordFail: recordLoginFail, clearFails: clearLoginFails },
+  });
+  mountMcpRoutes(app, { spine, requireActiveTenant, tenantGuard,
+                        oauth: oauthProvider, issuer: oauthIssuer });
   mountTicketRoutes(app, { spine, requireActiveTenant });
   mountAdminRoutes(app, { spine, requireAuth, requirePlatformAdmin, optionalAuth });
 
