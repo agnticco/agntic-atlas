@@ -119,6 +119,7 @@ const carried = (src = {}) => Object.fromEntries(
 const SCOPE_WORDS = {
   [SCOPES.READ]: 'See your automations, their steps and their run history',
   [SCOPES.RUN]: 'Run your automations — which sends messages and writes documents through the services they use',
+  [SCOPES.MANAGE]: 'Pause, resume and delete your automations — a deleted one stays recoverable for 30 days',
 };
 
 /**

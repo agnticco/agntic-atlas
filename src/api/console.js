@@ -18,7 +18,7 @@ import { logEvent, errFields } from '../utils/event-log.js';
 import { generateSopMarkdown } from '../workflows/sop-generator.js';
 import { generateRoiMarkdown } from '../workflows/roi-report.js';
 import { timeSavedMinutesForRun, isLiveRun } from '../workflows/time-saved.js';
-import { syncAirtableWebhooksForTenant } from '../connectors/airtable/webhook-sync.js';
+import { setWorkflowStatus } from '../workflows/lifecycle.js';
 
 export function mountConsoleRoutes(app, { spine, requireActiveTenant }) {
   const store = spine.engine.workflowStore;
@@ -143,70 +143,25 @@ export function mountConsoleRoutes(app, { spine, requireActiveTenant }) {
 
   // ── Pause / resume ────────────────────────────────────────────────────────
   //
-  // This used to be `wf.status === 'active' ? 'paused' : 'active'`, which promoted
-  // ANY non-active status to live — including `draft`. A workflow that had never
-  // been tested, never had its promise checked and never had a trigger armed could
-  // be made live and scheduled with no error shown. Observed during QA: a real draft
-  // went draft -> active -> paused through this endpoint and was live for 42 seconds.
-  //
-  // Two things were missing, and they are the two things publish does
-  // (`builder.js` — activate only from draft/error AFTER verification, then arm the
-  // triggers and refuse to leave the workflow live if arming fails):
-  //
-  //   1. Only a PAUSED workflow may resume. A draft becomes live exactly one way —
-  //      by being published, which is the path that verifies it. Refuse, loudly,
-  //      rather than silently promoting it.
-  //   2. Resuming must ARM the workflow's triggers. Without this, resuming an
-  //      Airtable-triggered workflow marks it live while no webhook exists — the
-  //      "shows as live, can never fire" shape this codebase has already shipped
-  //      once. Pausing reconciles too, so a paused workflow stops receiving events
-  //      rather than quietly still being subscribed.
+  // The rules — only a paused workflow may resume, and the trigger must be reconciled
+  // either way — live in workflows/lifecycle.js, because MCP performs the same operation
+  // and a second copy of a guard is a guard that only gets fixed once.
   app.post('/api/console/workflows/:id/pause', requireActiveTenant, async (req, res) => {
     try {
       const wf = store.get(req.params.id, { userId: req.user.id });
       if (!wf || wf.tenant_id !== req.tenant.id) return res.status(404).json({ error: 'Not found' });
 
-      if (wf.status !== 'active' && wf.status !== 'paused') {
-        // FAIL CLOSED. `draft` and `error` are the states that have not earned live.
-        logEvent('console.workflow.pause.refused', {
-          workflowId: req.params.id, status: wf.status, tenant: req.tenant.id,
-        });
-        return res.status(409).json({
-          error: wf.status === 'draft'
-            ? 'This workflow has never been published. Open it in the builder, test it, and use Go live.'
-            : `A workflow in "${wf.status}" cannot be resumed here. Re-publish it from the builder.`,
-          code: 'NOT_RESUMABLE',
-          status: wf.status,
-        });
+      // The toggle is this route's own idea; lifecycle takes an explicit target so a
+      // caller can never mean "the other one" and get something it did not expect.
+      const to = wf.status === 'active' ? 'paused' : 'active';
+      const out = await setWorkflowStatus(spine, {
+        workflowId: req.params.id, userId: req.user.id, tenantId: req.tenant.id, to,
+      });
+      if (!out.ok) {
+        const status = out.code === 'NOT_FOUND' ? 404 : out.code === 'NOT_RESUMABLE' ? 409 : 400;
+        return res.status(status).json({ error: out.error, code: out.code, status: out.status });
       }
-
-      const newStatus = wf.status === 'active' ? 'paused' : 'active';
-      store.update(req.params.id, { status: newStatus }, { userId: req.user.id });
-
-      // Reconcile subscriptions in BOTH directions — the sync is authoritative, so
-      // it creates what a live workflow needs and prunes what a paused one no longer
-      // does. Awaited: if resuming cannot arm the trigger the user must be told, not
-      // left with something that looks live.
-      let triggerWarning = null;
-      try {
-        const armed = await syncAirtableWebhooksForTenant(spine, req.tenant.id);
-        // `not_connected` is the ordinary state for a tenant with no Airtable — it
-        // is not a warning, and reporting it as one would train people to ignore the
-        // field that matters when a trigger genuinely fails to arm.
-        if (armed && armed.ok === false && armed.reason !== 'not_connected') {
-          triggerWarning = armed.error ?? 'This workflow\'s trigger could not be armed — it may not fire.';
-        }
-      } catch (err) {
-        triggerWarning = err?.message ?? String(err);
-      }
-      if (triggerWarning) {
-        logEvent('console.workflow.pause.trigger_warning', {
-          workflowId: req.params.id, newStatus, tenant: req.tenant.id, detail: triggerWarning,
-        });
-      }
-
-      logEvent('console.workflow.pause', { workflowId: req.params.id, newStatus, tenant: req.tenant.id });
-      res.json({ status: newStatus, ...(triggerWarning ? { triggerWarning } : {}) });
+      res.json({ status: out.status, ...(out.triggerWarning ? { triggerWarning: out.triggerWarning } : {}) });
     } catch (err) {
       logEvent('console.workflow.pause.error', errFields(err));
       res.status(500).json({ error: err.message });

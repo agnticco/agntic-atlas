@@ -75,15 +75,21 @@ const WORKFLOW = {
  */
 function appFor(tenantId, { runNow = async () => {}, tenantGuard = null,
                            accessToken = null, issuer = 'https://atlas.test',
-                           session = true, grantIsLive = () => true } = {}) {
-  const ran = [];
+                           session = true, grantIsLive = () => true,
+                           workflow = WORKFLOW } = {}) {
+  const ran = [], updates = [], softDeleted = [], hardDeleted = [];
   const store = {
-    list: ({ tenantId: t }) => (t === TENANT_A ? [WORKFLOW] : []),
+    list: ({ tenantId: t }) => (t === TENANT_A ? [workflow] : []),
     // Scoped by user in production; here the tenant comparison in ownedWorkflow is what
     // is under test, so the store deliberately returns the row to ANY caller.
-    get: (id) => (id === WORKFLOW.id ? WORKFLOW : null),
+    get: (id) => (id === workflow.id ? workflow : null),
     getRuns: () => [{ id: 'run-1', status: 'succeeded' }],
     getLastRun: () => ({ id: 'run-1', status: 'succeeded' }),
+    update: (id, fields) => { updates.push({ id, fields }); return { ...workflow, ...fields }; },
+    softDelete: (id) => { softDeleted.push(id); return true; },
+    // Present so a test can prove it is NOT the one called. A hard delete here would
+    // throw away a workflow somebody built, with no restore path.
+    delete: (id) => { hardDeleted.push(id); return true; },
   };
   const scheduler = { runNow: async (id, opts) => { ran.push({ id, opts }); return runNow(id, opts); } };
 
@@ -106,11 +112,14 @@ function appFor(tenantId, { runNow = async () => {}, tenantGuard = null,
 
   mountMcpRoutes(app, {
     spine: { engine: { workflowStore: store, workflowScheduler: scheduler },
-             interactionStore: null, auth: { tokenService, userStore } },
+             interactionStore: null,
+             // The trigger reconcile runs on every status change; with no Airtable token
+             // it reports `not_connected`, which is the ordinary state and not a warning.
+             auth: { tokenService, userStore, oauthTokenStore: { get: () => null }, tokenCipher: {} } },
     requireActiveTenant, tenantGuard, issuer,
     oauth: accessToken ? { grantIsLive } : null,
   });
-  return { app, ran };
+  return { app, ran, updates, softDeleted, hardDeleted };
 }
 
 /** Drive the endpoint the way a client does, without binding a port. */
@@ -417,5 +426,128 @@ describe('it speaks JSON-RPC the way a client expects', () => {
       'run_workflow sends messages and writes documents; a client that believes it is '
       + 'read-only will not gate it');
     assert.equal(byName.list_workflows.annotations.readOnlyHint, true);
+  });
+});
+
+describe('managing an automation is not the same permission as running it', () => {
+  const tokenFor = (scope) => ({
+    token: 'access-tok',
+    claims: { typ: 'access', sub: 'user-1', tid: TENANT_A, scope,
+              aud: 'https://atlas.test', gid: 'grant-1' },
+  });
+
+  async function rpcAs(app, token, message) {
+    const { createServer } = await import('node:http');
+    const server = createServer(app);
+    await new Promise(r => server.listen(0, r));
+    try {
+      const res = await fetch(`http://127.0.0.1:${server.address().port}/mcp`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` },
+        body: JSON.stringify(message),
+      });
+      return { status: res.status, body: JSON.parse(await res.text()) };
+    } finally { await new Promise(r => server.close(r)); }
+  }
+
+  const MANAGE_TOOLS = ['pause_workflow', 'resume_workflow', 'delete_workflow'];
+
+  test('a token that can run automations cannot pause or delete them', async () => {
+    const { app, updates, softDeleted } = appFor(TENANT_A, {
+      accessToken: tokenFor('workflows:read workflows:run'),
+    });
+    for (const name of MANAGE_TOOLS) {
+      const { body } = await rpcAs(app, 'access-tok', call(name, { id: 'wf-1' }));
+      assert.equal(body.result.isError, true,
+        `${name} ran on a token that was only granted read and run. Somebody who approved `
+        + '"run my automations" would have had them deleted by the same connection');
+    }
+    assert.deepEqual(updates, []);
+    assert.deepEqual(softDeleted, []);
+  });
+
+  test('nor is it shown them', async () => {
+    const { app } = appFor(TENANT_A, { accessToken: tokenFor('workflows:read workflows:run') });
+    const { body } = await rpcAs(app, 'access-tok', { jsonrpc: '2.0', id: 1, method: 'tools/list' });
+    const names = body.result.tools.map(t => t.name);
+    for (const name of MANAGE_TOOLS) assert.ok(!names.includes(name), `${name} was advertised`);
+    assert.ok(names.includes('run_workflow'));
+  });
+
+  test('a manage token pauses, and the workflow is updated', async () => {
+    const { app, updates } = appFor(TENANT_A, { accessToken: tokenFor('workflows:manage') });
+    const { body } = await rpcAs(app, 'access-tok', call('pause_workflow', { id: 'wf-1' }));
+    assert.equal(body.result.isError, undefined, body.result.content?.[0]?.text);
+    assert.deepEqual(updates, [{ id: 'wf-1', fields: { status: 'paused' } }]);
+  });
+
+  test('deleting is recoverable, never a hard delete', async () => {
+    const { app, softDeleted, hardDeleted } = appFor(TENANT_A, { accessToken: tokenFor('workflows:manage') });
+    const { body } = await rpcAs(app, 'access-tok', call('delete_workflow', { id: 'wf-1' }));
+    assert.equal(body.result.isError, undefined, body.result.content?.[0]?.text);
+    assert.deepEqual(softDeleted, ['wf-1']);
+    assert.deepEqual(hardDeleted, [],
+      'a hard delete throws away a workflow somebody built, with no restore path — and '
+      + 'workflow-service.delete() is exactly that, which is why this does not call it');
+  });
+
+  test("another tenant's automation cannot be paused or deleted", async () => {
+    for (const name of ['pause_workflow', 'delete_workflow']) {
+      const { app, updates, softDeleted } = appFor(TENANT_A, {
+        accessToken: { token: 'access-tok',
+                       claims: { typ: 'access', sub: 'user-9', tid: TENANT_B, scope: 'workflows:manage',
+                                 aud: 'https://atlas.test', gid: 'grant-9' } },
+      });
+      const { body } = await rpcAs(app, 'access-tok', call(name, { id: 'wf-1' }));
+      assert.equal(body.result.isError, true, `${name} reached another tenant's automation`);
+      assert.deepEqual(updates, []);
+      assert.deepEqual(softDeleted, []);
+    }
+  });
+});
+
+describe('a draft cannot be made live through a side door', () => {
+  // The console route grew this guard after a real draft went draft -> active -> paused
+  // and was live for 42 seconds. MCP is a second door onto the same operation, and a guard
+  // that exists on one door only is not a guard. Both now call workflows/lifecycle.js.
+  const manage = { token: 'access-tok',
+                   claims: { typ: 'access', sub: 'user-1', tid: TENANT_A, scope: 'workflows:manage',
+                             aud: 'https://atlas.test', gid: 'grant-1' } };
+
+  async function callAs(app, message) {
+    const { createServer } = await import('node:http');
+    const server = createServer(app);
+    await new Promise(r => server.listen(0, r));
+    try {
+      const res = await fetch(`http://127.0.0.1:${server.address().port}/mcp`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', authorization: 'Bearer access-tok' },
+        body: JSON.stringify(message),
+      });
+      return JSON.parse(await res.text());
+    } finally { await new Promise(r => server.close(r)); }
+  }
+
+  for (const status of ['draft', 'error']) {
+    test(`a workflow in "${status}" is refused, and told where to go`, async () => {
+      const { app, updates } = appFor(TENANT_A, {
+        accessToken: manage, workflow: { ...WORKFLOW, status },
+      });
+      const body = await callAs(app, call('resume_workflow', { id: 'wf-1' }));
+      assert.equal(body.result.isError, true,
+        `a ${status} workflow was made live without ever being verified`);
+      assert.match(body.result.content[0].text, /builder/i,
+        'the refusal must say where this is actually done, or it is a dead end');
+      assert.deepEqual(updates, [], 'the status was written despite the refusal');
+    });
+  }
+
+  test('a paused workflow resumes normally', async () => {
+    const { app, updates } = appFor(TENANT_A, {
+      accessToken: manage, workflow: { ...WORKFLOW, status: 'paused' },
+    });
+    const body = await callAs(app, call('resume_workflow', { id: 'wf-1' }));
+    assert.equal(body.result.isError, undefined, body.result.content?.[0]?.text);
+    assert.deepEqual(updates, [{ id: 'wf-1', fields: { status: 'active' } }]);
   });
 });

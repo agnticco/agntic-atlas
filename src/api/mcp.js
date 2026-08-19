@@ -41,6 +41,7 @@
  */
 
 import { logEvent, errFields } from '../utils/event-log.js';
+import { setWorkflowStatus, deleteWorkflow } from '../workflows/lifecycle.js';
 import { generateSopMarkdown } from '../workflows/sop-generator.js';
 import { SCOPES, ALL_SCOPES } from '../auth/oauth-provider.js';
 
@@ -261,7 +262,59 @@ export function mountMcpRoutes(app, { spine, requireActiveTenant, tenantGuard = 
         return store.getLastRun(args.id, { userId: req.user.id });
       },
     },
+    {
+      name: 'pause_workflow',
+      scope: SCOPES.MANAGE,
+      description:
+        'Stop an automation from running on its schedule or trigger. It keeps everything '
+        + 'it has — history, configuration, steps — and can be resumed. Use this rather '
+        + 'than deleting when the automation should stop for now.',
+      readOnly: false,
+      inputSchema: { type: 'object', properties: { id: { type: 'string' } }, required: ['id'] },
+      run: async (args, req) => lifecycleResult(await setWorkflowStatus(spine, {
+        workflowId: args.id, userId: req.user.id, tenantId: req.tenant.id, to: 'paused',
+      })),
+    },
+    {
+      name: 'resume_workflow',
+      scope: SCOPES.MANAGE,
+      description:
+        'Make a PAUSED automation live again, and re-arm its trigger. Only a paused '
+        + 'automation can be resumed: one that is a draft, or that is in an error state, '
+        + 'has to be published from the Atlas builder instead, because that is the path '
+        + 'that verifies it works.',
+      readOnly: false,
+      inputSchema: { type: 'object', properties: { id: { type: 'string' } }, required: ['id'] },
+      run: async (args, req) => lifecycleResult(await setWorkflowStatus(spine, {
+        workflowId: args.id, userId: req.user.id, tenantId: req.tenant.id, to: 'active',
+      })),
+    },
+    {
+      name: 'delete_workflow',
+      scope: SCOPES.MANAGE,
+      description:
+        'Delete an automation. It stops immediately and stays recoverable for 30 days, '
+        + 'after which it is purged. Prefer pause_workflow if the automation may be '
+        + 'wanted again — this is not how you temporarily switch something off.',
+      readOnly: false,
+      inputSchema: { type: 'object', properties: { id: { type: 'string' } }, required: ['id'] },
+      run: async (args, req) => lifecycleResult(await deleteWorkflow(spine, {
+        workflowId: args.id, userId: req.user.id, tenantId: req.tenant.id,
+      })),
+    },
   ];
+
+  /**
+   * Turn a lifecycle refusal into a TOOL result, not a protocol error.
+   *
+   * "This workflow has never been published" is the answer, and it is addressed to
+   * whoever asked. Raising it as a JSON-RPC error would replace a sentence that says what
+   * to do next with a transport failure, and a model that receives one retries.
+   */
+  function lifecycleResult(out) {
+    if (!out.ok) throw new Error(out.error);   // tools/call turns a throw into isError
+    return out;
+  }
 
   const BY_NAME = new Map(TOOLS.map(t => [t.name, t]));
 

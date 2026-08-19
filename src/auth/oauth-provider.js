@@ -43,8 +43,12 @@ import { logEvent } from '../utils/event-log.js';
 export const SCOPES = Object.freeze({
   READ: 'workflows:read',
   RUN: 'workflows:run',
+  // Pausing and deleting are neither reading nor running. A connection granted "run my
+  // automations" must not thereby be able to delete them — that is a different question
+  // to ask a person, so it is a different consent.
+  MANAGE: 'workflows:manage',
 });
-export const ALL_SCOPES = Object.freeze([SCOPES.READ, SCOPES.RUN]);
+export const ALL_SCOPES = Object.freeze([SCOPES.READ, SCOPES.RUN, SCOPES.MANAGE]);
 
 const CODE_TTL_MS = 60_000;
 const ACCESS_TTL_MS = 8 * 60 * 60 * 1000;        // 8 hours
