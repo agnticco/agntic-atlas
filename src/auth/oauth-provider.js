@@ -103,6 +103,35 @@ export function parseScopes(requested) {
  *
  * @returns {Promise<{clientId:string, name:string, redirectUris:string[], uri:string|null}>}
  */
+const LOOPBACK_HOSTS = new Set(['127.0.0.1', '[::1]']);
+const isLoopback = (u) => u.protocol === 'http:' && LOOPBACK_HOSTS.has(u.hostname);
+
+/**
+ * May a code be sent to `requested`, given what the client's document registered?
+ *
+ * Exact match, plus the one exception RFC 8252 §7.3 requires: a native app receives its
+ * code on a loopback listener, and it CANNOT RESERVE A PORT — whatever is free at launch
+ * is what it gets. A published document therefore cannot name the port, and an exact-match
+ * rule locks out every desktop client there will ever be, Claude Desktop included.
+ *
+ * The port is the only part waived. Scheme, host and path must still match, and only for
+ * loopback IP literals: the code is travelling to a listener on the user's own machine, so
+ * a variable port there discloses nothing. `localhost` is deliberately NOT in that set —
+ * it resolves through DNS and can be pointed elsewhere, which is why RFC 8252 tells
+ * clients to use the literal.
+ */
+export function redirectAllowed(registered, requested) {
+  if (registered.includes(requested)) return true;
+  let want;
+  try { want = new URL(requested); } catch { return false; }
+  if (!isLoopback(want)) return false;
+  return registered.some((r) => {
+    let have;
+    try { have = new URL(r); } catch { return false; }
+    return isLoopback(have) && have.hostname === want.hostname && have.pathname === want.pathname;
+  });
+}
+
 export async function resolveClientIdentity(clientId, { fetchImpl = fetch } = {}) {
   if (!/^https:\/\//i.test(String(clientId ?? ''))) {
     throw new Error('client_id must be an https URL (this server identifies clients by document).');

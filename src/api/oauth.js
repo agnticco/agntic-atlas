@@ -31,7 +31,7 @@
  * come back, which loses the query string that IS the request.
  */
 
-import { parseScopes, resolveClientIdentity, SCOPES } from '../auth/oauth-provider.js';
+import { parseScopes, redirectAllowed, resolveClientIdentity, SCOPES } from '../auth/oauth-provider.js';
 import { logEvent, errFields } from '../utils/event-log.js';
 import { createHash, timingSafeEqual } from 'node:crypto';
 
@@ -208,6 +208,29 @@ export function mountOAuthRoutes(app, { spine, oauth, issuer,
   // Public and unauthenticated by design: a client must be able to learn how to ask
   // before it has anything to ask with.
 
+  /**
+   * Agent Deployer's client-ID document.
+   *
+   * A desktop app has no website of its own to publish this at, and CIMD requires a real
+   * https URL. Agntic publishes both the app and this server, so it is served here — the
+   * document only has to be reachable, stable and truthful about who is asking. Moving it
+   * to agntic.co later changes this route into a redirect and nothing else.
+   *
+   * The port-less loopback entry is the whole point of redirectAllowed(): the app binds
+   * whatever port is free when it starts.
+   */
+  app.get('/clients/agent-deployer.json', (_req, res) => {
+    res.type('application/json').json({
+      client_id: `${issuer}/clients/agent-deployer.json`,
+      client_name: 'Agent Deployer',
+      client_uri: 'https://agntic.co',
+      redirect_uris: ['http://127.0.0.1/callback'],
+      grant_types: ['authorization_code', 'refresh_token'],
+      response_types: ['code'],
+      token_endpoint_auth_method: 'none',
+    });
+  });
+
   app.get('/.well-known/oauth-protected-resource', (_req, res) => {
     res.json(oauth.protectedResourceMetadata());
   });
@@ -229,7 +252,7 @@ export function mountOAuthRoutes(app, { spine, oauth, issuer,
     const client = await resolveClient(q.client_id);
     // An unregistered redirect_uri is the open-redirect hole; the document is the only
     // thing that may say where a code is allowed to land.
-    if (!client.redirectUris.includes(q.redirect_uri)) {
+    if (!redirectAllowed(client.redirectUris, q.redirect_uri)) {
       throw new Error('redirect_uri is not listed in the client_id document');
     }
     return { client, scopes: parseScopes(q.scope) };

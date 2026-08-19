@@ -49,6 +49,8 @@
  *   M13 /mcp does not check the grant behind the token  → 1 red
  *   M14 the consent form accepts any csrf value         → 1 red
  *   M15 /oauth/token is unbounded                       → 1 red
+ *   M16 loopback match waives path/scheme/host too     → 1 red
+ *   M17 exact redirect matching, no loopback exception → 2 red
  *
  * M10–M12 take two apiece because reuse detection, revocation and the liveness read are
  * one mechanism seen from three sides: break any of them and both the "grant ends" and
@@ -68,7 +70,8 @@ import { createHash, randomBytes } from 'node:crypto';
 
 import { mountOAuthRoutes } from '../../src/api/oauth.js';
 import { mountMcpRoutes } from '../../src/api/mcp.js';
-import { createOAuthProvider, resolveClientIdentity, parseScopes } from '../../src/auth/oauth-provider.js';
+import { createOAuthProvider, resolveClientIdentity, parseScopes,
+         redirectAllowed } from '../../src/auth/oauth-provider.js';
 import { discoverAuthServer } from '../../src/connectors/mcp-connect.js';
 
 const b64url = (b) => Buffer.from(b).toString('base64')
@@ -499,6 +502,57 @@ describe('the token endpoint is bounded', () => {
         + 'attempt can now revoke a grant — so a stale token becomes a way to keep somebody '
         + "else's connection dead");
       assert.ok(last.headers.get('retry-after'));
+    } finally { await a.close(); }
+  });
+});
+
+describe('a desktop app can be a client at all', () => {
+  // RFC 8252 §7.3. A native app takes whatever loopback port is free at launch, so its
+  // published document cannot name one. Exact matching locks out every desktop client.
+  const REGISTERED = ['http://127.0.0.1/callback'];
+
+  test('the port is waived for a loopback listener', () => {
+    for (const uri of ['http://127.0.0.1:54321/callback', 'http://127.0.0.1:1/callback',
+                       'http://127.0.0.1/callback']) {
+      assert.equal(redirectAllowed(REGISTERED, uri), true, uri);
+    }
+    assert.equal(redirectAllowed(['http://[::1]/callback'], 'http://[::1]:9/callback'), true);
+  });
+
+  test('nothing else about the address is waived', () => {
+    for (const uri of [
+      'http://127.0.0.1:54321/stolen',        // a different path is a different listener
+      'https://127.0.0.1:54321/callback',     // scheme
+      'http://127.0.0.2:54321/callback',      // not loopback
+      'http://localhost:54321/callback',      // resolves through DNS; RFC 8252 says use the literal
+      'http://evil.example/callback',
+      'http://127.0.0.1:54321@evil.example/callback',
+    ]) {
+      assert.equal(redirectAllowed(REGISTERED, uri), false, `accepted ${uri}`);
+    }
+  });
+
+  test('a non-loopback client is still matched exactly', () => {
+    const web = ['https://c.example/cb'];
+    assert.equal(redirectAllowed(web, 'https://c.example/cb'), true);
+    assert.equal(redirectAllowed(web, 'https://c.example/cb2'), false);
+    assert.equal(redirectAllowed(web, 'https://c.example:8443/cb'), false,
+      'port flexibility outside loopback would send codes to a listener on another port '
+      + 'of a public host, which is not the same origin in any sense that matters');
+  });
+
+  test('Atlas publishes a document Atlas would accept', async () => {
+    const a = await atlas();
+    try {
+      const res = await fetch(`${a.issuer}/clients/agent-deployer.json`);
+      assert.equal(res.status, 200);
+      const doc = await res.json();
+      assert.equal(doc.client_id, `${a.issuer}/clients/agent-deployer.json`,
+        'the address IS the identity — resolveClientIdentity rejects a document that '
+        + 'declares any other id, so a wrong one here is unusable rather than merely odd');
+      assert.ok(doc.redirect_uris.length && doc.client_name);
+      assert.equal(redirectAllowed(doc.redirect_uris, 'http://127.0.0.1:49876/callback'), true,
+        'the app could not receive a code at the document it publishes');
     } finally { await a.close(); }
   });
 });
